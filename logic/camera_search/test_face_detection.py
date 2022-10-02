@@ -1,28 +1,44 @@
+# face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_alt.xml')
+import os
+
 import cv2
 
-cap = cv2.VideoCapture(0)
+cam = cv2.VideoCapture(0)
+cam.set(3, 640)  # set video width
+cam.set(4, 480)  # set video height
 
-if not (cap.isOpened()):
-    print("Could not open video device")
+face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_alt.xml')
 
-# cap.set(cv2.CAP_PROP_FRAME_WIDTH, 600)
-# cap.set(cv2.CAP_PROP_FRAME_HEIGHT,800)
+# For each person, enter one numeric face id
+face_id = input('\n enter user id end press <return> ==>  ')
 
-while(True):    
-    # Capture frame-by-frame    
-    ret, frame = cap.read()    
-    
-    # Display the resulting frame    
-    # cv2.imshow('preview',frame)    
-    
-    #gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-    #cv2.imshow('frame', gray)
+print("\n [INFO] Initializing face capture. Look the camera and wait ...")
+# Initialize individual sampling face count
+count = 0
+print(count)
+while (True):
+    ret, img = cam.read()
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    faces = face_detector.detectMultiScale(gray, 1.3, 5)
 
-    cv2.imshow('frame', frame)
-    
-    #Waits for a user input to quit the application    
-    if cv2.waitKey(1) & 0xFF == ord('q'):    
+    for (x, y, w, h) in faces:
+        cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 2)
+        count += 1
+        print(count)
+        # Save the captured image into the datasets folder
+        #cv2.imwrite('positives/{}.jpg'.format(loop_time), resized_cropped)
+        #gray[y:y + h, x:x + w]
+        cv2.imwrite("../dataset/User." + str(face_id) + '.' + str(count) + ".jpg", gray[y:y + h, x:x + w])
+
+    cv2.imshow('image', img)
+
+    k = cv2.waitKey(100) & 0xff  # Press 'ESC' for exiting video
+    if k == 27:
         break
-    
-cap.release()
+    elif count >= 30:  # Take 30 face sample and stop video
+        break
+
+# Do a bit of cleanup
+print("\n [INFO] Exiting Program and cleanup stuff")
+cam.release()
 cv2.destroyAllWindows()
