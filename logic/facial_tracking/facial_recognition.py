@@ -2,15 +2,46 @@ import os
 import cv2
 import numpy as np
 from PIL import Image
-import tkinter as tk
-from tkinter import simpledialog, messagebox
+from PyQt5.QtWidgets import QWidget, QInputDialog, QLineEdit, QLabel, QPushButton, QDialogButtonBox, QVBoxLayout, \
+    QMessageBox
 
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
 
-root = tk.Tk()
-root.tk.eval(f'tk::PlaceWindow {root._w} center')
-root.withdraw()
 
+def enterNameDialog():
+    # window = QWidget().availableGeometry().center()
+    # window.setGeometry(400, 400, 250, 250)
+    # window.setWindowTitle("Register Face Process")
+    text, pressed = QInputDialog.getText(QWidget(), "Register Face Process", "Enter Your Name: ",
+                                         QLineEdit.Normal, "")
+    if pressed:
+        return text
+
+
+def show_critical_messagebox():
+    msg = QMessageBox()
+    msg.setIcon(QMessageBox.Critical)
+    # setting message for Message Box
+    msg.setText("Register Face Process")
+    # setting Message box window title
+    msg.setWindowTitle("Critical MessageBox")
+    # declaring buttons on Message Box
+    msg.setStandardButtons(QMessageBox.Ok)
+    # start the app
+    retval = msg.exec_()
+
+
+def show_info_messagebox(str):
+    msg = QMessageBox()
+    msg.setIcon(QMessageBox.Information)
+    # setting message for Message Box
+    msg.setText(str)
+    # setting Message box window title
+    msg.setWindowTitle("Information")
+    # declaring buttons on Message Box
+    msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+    # start the app
+    retval = msg.exec_()
 
 def register_person():
     print("\n [INFO] Attempting To Draw Frame")
@@ -21,19 +52,22 @@ def register_person():
 
     count = 0
     # Initialize individual sampling face count
-    nameID = simpledialog.askstring(title="Register Face Process", prompt="Enter Your Name: ", parent=root).lower()
+
+    nameID = enterNameDialog()
     path = './images/' + nameID
     isExist = os.path.exists(path)
 
     while isExist:
-        messagebox.showerror('Error', 'Name Already Taken')
+        # messagebox.showerror('Error', 'Name Already Taken')
+        show_critical_messagebox()
         print("\n [INFO] Name Already Taken")
         # allow user to add more to the image list
-        nameID = simpledialog.askstring(title="Register Face Process", prompt="Enter Your Name: ", parent=root).lower()
+        nameID = enterNameDialog()
     else:
         os.makedirs(path)
 
-    messagebox.showinfo("Register Face Process", "Initializing face capture. Look the camera and wait...", parent=root)
+    # messagebox.showinfo("Register Face Process", "Initializing face capture. Look the camera and wait...", parent=root)
+    show_info_messagebox("Initializing face capture. \nLook the camera and wait...")
     print("\n [INFO] Initializing face capture. Look the camera and wait ...")
 
     while True:
@@ -54,7 +88,8 @@ def register_person():
             break
 
     # Do a bit of cleanup
-    messagebox.showinfo("Register Face Process", "Exiting Facial Registration, Cleaning Up..", parent=root)
+    # messagebox.showinfo("Register Face Process", "Exiting Facial Registration, Cleaning Up..", parent=root)
+    show_info_messagebox("Exiting Facial Registration, Cleaning Up...")
     print("\n [INFO] Exiting Facial Registration, Cleaning Up...")
     video.release()
     cv2.destroyAllWindows()
@@ -67,7 +102,8 @@ def register_person():
 
 
 def train_face():
-    messagebox.showinfo("Training Faces Process", "It will take a few seconds to minutes. Please Wait ...", parent=root)
+    show_info_messagebox("It will take a few seconds to minutes.\n Please Wait ...")
+    # messagebox.showinfo("Training Faces Process", "It will take a few seconds to minutes. Please Wait ...", parent=root)
     print("\n [INFO] Training faces. It will take a few seconds to minutes. Please Wait ...")
 
     # Path for face image database
@@ -97,9 +133,10 @@ def train_face():
     # Save the model into trainer/trainer.yml
     recognizer.save('./trainer/trainer.yml')  # recognizer.write() worked on Pi
     # Print the numer of faces trained and end program
-    messagebox.showinfo("Training Faces Process",
-                        "{0} faces trained. Opening Basic Recognition Software".format(len(np.unique(ids))),
-                        parent=root)
+    # messagebox.showinfo("Training Faces Process",
+    #  "{0} faces trained. Opening Basic Recognition Software".format(len(np.unique(ids))),
+    # parent=root)
+    show_info_messagebox("{0} faces trained.\nOpening Basic Recognition Software".format(len(np.unique(ids))))
     print("\n [INFO] {0} faces trained. Opening Basic Recognition Software".format(len(np.unique(ids))))
     return 0
 

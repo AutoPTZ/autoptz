@@ -2,10 +2,11 @@ import sys
 
 from PyQt5 import QtCore, QtWidgets as qtw
 from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QDialogButtonBox, QVBoxLayout, QLabel, QDialog
 
 from logic.facial_tracking.facial_recognition import register_person, recognize_face
 
-
+#UI Creation
 class startAutoNDI(qtw.QWidget):
     def __init__(self):
         super(startAutoNDI, self).__init__()
@@ -21,6 +22,8 @@ class startAutoNDI(qtw.QWidget):
         self.title = None
         self.topBarLayout = None
         self.search_ndi()
+
+
 
     def search_ndi(self):
         self.setWindowTitle("AutoPTZ")
