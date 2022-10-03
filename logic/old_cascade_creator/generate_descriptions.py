@@ -23,5 +23,5 @@ if __name__ == '__main__':
     generate_positive_description_file()
 
 #create annotation
-##logic\cascade_creator\utils\opencv_annotation.exe --annotations=logic\cascade_creator\pos.txt --images=logic\cascade_creator\positives\
+##logic\old_cascade_creator\utils\opencv_annotation.exe --annotations=logic\old_cascade_creator\pos.txt --images=logic\old_cascade_creator\positives\
 
