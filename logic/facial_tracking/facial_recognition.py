@@ -114,10 +114,12 @@ def train_face():
     ids = []
 
     print(os.listdir(path))
+    labels_file = open("./trainer/labels.txt", "w")
 
     for folder in os.listdir(path):
         current_folder = path + '/' + folder
         print("\n [INFO] Looking at " + current_folder + " now")
+        labels_file.write(folder + "\n")
         for image in os.listdir(current_folder):
             PIL_img = Image.open(current_folder + '/' + image).convert('L')  # convert it to grayscale
             img_numpy = np.array(PIL_img, 'uint8')
@@ -127,6 +129,7 @@ def train_face():
             for (x, y, w, h) in faces:
                 faceSamples.append(img_numpy[y:y + h, x:x + w])
                 ids.append(id)
+    labels_file.close()
 
     # Send to trainer
     recognizer.train(faceSamples, np.array(ids))
@@ -146,7 +149,7 @@ def recognize_face():
     print("\n [INFO] Opening Basic Recognition Software")
     recognizer = cv2.face.LBPHFaceRecognizer_create()
     recognizer.read('./trainer/trainer.yml')
-    faceCascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml");
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml");
 
     font = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -154,7 +157,10 @@ def recognize_face():
     id = 0
 
     # names related to ids: example ==> Steve: id=1 | try moving to trainer/labels.txt
-    names = ['Steve']
+    labels_file = open("./trainer/labels.txt", "r")
+    names = labels_file.read().splitlines()
+    print(names)
+    labels_file.close()
 
     # Initialize and start realtime video capture
     cam = cv2.VideoCapture(0)
@@ -166,7 +172,7 @@ def recognize_face():
     while True:
         ret, img = cam.read()
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        faces = faceCascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(int(minW), int(minH)))
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(int(minW), int(minH)))
 
         for (x, y, w, h) in faces:
             cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)

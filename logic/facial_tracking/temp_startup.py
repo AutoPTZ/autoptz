@@ -6,7 +6,16 @@ from PyQt5.QtWidgets import QDialogButtonBox, QVBoxLayout, QLabel, QDialog
 
 from logic.facial_tracking.facial_recognition import register_person, recognize_face
 
-#UI Creation
+
+# UI Creation
+def run_face_recognition_click():
+    recognize_face()
+
+
+def new_face_click():
+    register_person()
+
+
 class startAutoNDI(qtw.QWidget):
     def __init__(self):
         super(startAutoNDI, self).__init__()
@@ -22,8 +31,6 @@ class startAutoNDI(qtw.QWidget):
         self.title = None
         self.topBarLayout = None
         self.search_ndi()
-
-
 
     def search_ndi(self):
         self.setWindowTitle("AutoPTZ")
@@ -51,19 +58,19 @@ class startAutoNDI(qtw.QWidget):
         self.middleBodyLayout = qtw.QVBoxLayout()
         self.timer = QTimer()
         self.timer.start(2000)
-        #self.sourceList = get_ndi_sources()
+        # self.sourceList = get_ndi_sources()
 
         for i, s in enumerate(self.sourceList):
             self.sourceWidgets.addItem(qtw.QListWidgetItem('%s. %s' % (i + 1, s.ndi_name)))
 
         self.continue_btn = qtw.QPushButton("Old Method (Doesn't Do Anything)", self)
-        #self.continue_btn.clicked.connect(self.continue_click)
+        # self.continue_btn.clicked.connect(self.continue_click)
 
         self.new_face_btn = qtw.QPushButton("Add New Face", self)
-        self.new_face_btn.clicked.connect(self.new_face_click)
+        self.new_face_btn.clicked.connect(new_face_click)
 
         self.face_recognition_btn = qtw.QPushButton("Run Recognition", self)
-        self.face_recognition_btn.clicked.connect(self.run_face_recognition_click)
+        self.face_recognition_btn.clicked.connect(run_face_recognition_click)
 
         self.middleBodyLayout.addWidget(self.sourceWidgets)
         self.middleBodyLayout.addWidget(self.continue_btn)
@@ -80,11 +87,6 @@ class startAutoNDI(qtw.QWidget):
     #     print('Selected: ' + self.sourceWidgets.currentItem().text())
     #     drawFrame(self.sourceList[self.sourceWidgets.currentRow()])
     #
-    def new_face_click(self):
-        register_person()
-
-    def run_face_recognition_click(self):
-        recognize_face()
 
 
 def main():
