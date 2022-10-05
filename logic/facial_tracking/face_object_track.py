@@ -12,21 +12,18 @@ track_started = None
 tracker = cv2.TrackerCSRT_create()
 
 
-def click(event, x, y, flags, param):
+def click(event, x_pos, y_pos, flags, param):
     global enable_motion
     if event == cv2.EVENT_LBUTTONDOWN:
-        enable_motion = not enable_motion
+        if (x_pos > x) & (y_pos > y) * (x_pos < x + w) & (y_pos < y + h):
+            enable_motion = not enable_motion
 
 
-cv2.namedWindow("Basic Recognition Software")
-cv2.setMouseCallback("Basic Recognition Software", click)
-
-
-def temp_face_object_track():
+def face_object_track():
     # messagebox.showinfo("Basic Recognition Software", "Opening Basic Recognition Software", parent=ROOT)
-    print("\n [INFO] Opening Basic Recognition Software")
+    print("\n [INFO] Opening Advanced Recognition Software")
     recognizer = cv2.face.LBPHFaceRecognizer_create()
-    recognizer.read('../trainer/trainer.yml')
+    recognizer.read('./trainer/trainer.yml')
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml");
 
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -35,13 +32,14 @@ def temp_face_object_track():
     id = 0
 
     # names related to ids: example ==> Steve: id=1 | try moving to trainer/labels.txt
-    labels_file = open("../trainer/labels.txt", "r")
+    labels_file = open("./trainer/labels.txt", "r")
     names = labels_file.read().splitlines()
     print(names)
     labels_file.close()
 
     # Initialize and start realtime video capture
     cam = cv2.VideoCapture(0)
+    cam.set(cv2.CAP_PROP_BUFFERSIZE, 3)
 
     # Define min window size to be recognized as a face
     minW = 0.1 * cam.get(3)
@@ -58,7 +56,7 @@ def temp_face_object_track():
         timer = cv2.getTickCount()
         ret, img = cam.read()
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(int(minW), int(minH)))
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5, minSize=(int(minW), int(minH)))
         for (x_face, y_face, w_face, h_face) in faces:
             x = x_face
             w = w_face
@@ -95,7 +93,8 @@ def temp_face_object_track():
 
         fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
         cv2.putText(img, str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        cv2.imshow('Basic Recognition Software', img)
+        cv2.imshow('Advanced Recognition Software', img)
+        cv2.setMouseCallback("Advanced Recognition Software", click)
 
         key = cv2.waitKey(10) & 0xff  # Press 'ESC' for exiting video
         if key == 27:
@@ -105,11 +104,3 @@ def temp_face_object_track():
     print("\n [INFO] Exiting Program and cleanup stuff")
     cam.release()
     cv2.destroyAllWindows()
-
-
-def main():
-    temp_face_object_track()
-
-
-if __name__ == '__main__':
-    main()

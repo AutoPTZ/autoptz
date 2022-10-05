@@ -2,26 +2,35 @@ import sys
 
 from PyQt5 import QtCore, QtWidgets as qtw
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QDialogButtonBox, QVBoxLayout, QLabel, QDialog
 
+from logic.facial_tracking.face_object_track import face_object_track
 from logic.facial_tracking.facial_recognition import register_person, recognize_face
 
 
-# UI Creation
-def run_face_recognition_click():
-    recognize_face()
-
+# def continue_click(self):
+#     print('Selected: ' + self.sourceWidgets.currentItem().text())
+#     drawFrame(self.sourceList[self.sourceWidgets.currentRow()])
 
 def new_face_click():
     register_person()
 
 
+def run_face_recognition_click():
+    recognize_face()
+
+
+def run_adv_face_track_click():
+    face_object_track()
+
+
+# UI Creation
 class startAutoNDI(qtw.QWidget):
     def __init__(self):
         super(startAutoNDI, self).__init__()
         self.continue_btn = None
         self.new_face_btn = None
         self.face_recognition_btn = None
+        self.adv_face_tracker_btn = None
         self.sourceWidgets = qtw.QListWidget()
         self.sourceList = []
         self.timer = None
@@ -69,24 +78,23 @@ class startAutoNDI(qtw.QWidget):
         self.new_face_btn = qtw.QPushButton("Add New Face", self)
         self.new_face_btn.clicked.connect(new_face_click)
 
-        self.face_recognition_btn = qtw.QPushButton("Run Recognition", self)
+        self.face_recognition_btn = qtw.QPushButton("Run Simple Recognition", self)
         self.face_recognition_btn.clicked.connect(run_face_recognition_click)
+
+        self.adv_face_tracker_btn = qtw.QPushButton("Run Advanced Tracker", self)
+        self.adv_face_tracker_btn.clicked.connect(face_object_track)
 
         self.middleBodyLayout.addWidget(self.sourceWidgets)
         self.middleBodyLayout.addWidget(self.continue_btn)
         self.middleBodyLayout.addWidget(self.new_face_btn)
         self.middleBodyLayout.addWidget(self.face_recognition_btn)
+        self.middleBodyLayout.addWidget(self.adv_face_tracker_btn)
 
         # Add Layouts Together
         self.layout().addLayout(self.topBarLayout)
         self.layout().addLayout(self.middleBodyLayout)
 
         self.show()
-
-    # def continue_click(self):
-    #     print('Selected: ' + self.sourceWidgets.currentItem().text())
-    #     drawFrame(self.sourceList[self.sourceWidgets.currentRow()])
-    #
 
 
 def main():

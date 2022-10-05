@@ -31,17 +31,18 @@ def show_critical_messagebox():
     retval = msg.exec_()
 
 
-def show_info_messagebox(str):
+def show_info_messagebox(string):
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Information)
     # setting message for Message Box
-    msg.setText(str)
+    msg.setText(string)
     # setting Message box window title
     msg.setWindowTitle("Information")
     # declaring buttons on Message Box
     msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
     # start the app
     retval = msg.exec_()
+
 
 def register_person():
     print("\n [INFO] Attempting To Draw Frame")
@@ -58,7 +59,6 @@ def register_person():
     isExist = os.path.exists(path)
 
     while isExist:
-        # messagebox.showerror('Error', 'Name Already Taken')
         show_critical_messagebox()
         print("\n [INFO] Name Already Taken")
         # allow user to add more to the image list
@@ -66,7 +66,6 @@ def register_person():
     else:
         os.makedirs(path)
 
-    # messagebox.showinfo("Register Face Process", "Initializing face capture. Look the camera and wait...", parent=root)
     show_info_messagebox("Initializing face capture. \nLook the camera and wait...")
     print("\n [INFO] Initializing face capture. Look the camera and wait ...")
 
@@ -139,8 +138,8 @@ def train_face():
     # messagebox.showinfo("Training Faces Process",
     #  "{0} faces trained. Opening Basic Recognition Software".format(len(np.unique(ids))),
     # parent=root)
-    show_info_messagebox("{0} faces trained.\nOpening Basic Recognition Software".format(len(np.unique(ids))))
-    print("\n [INFO] {0} faces trained. Opening Basic Recognition Software".format(len(np.unique(ids))))
+    show_info_messagebox("{0} faces trained.\nOpening Advanced Recognition Software".format(len(np.unique(ids))))
+    print("\n [INFO] {0} faces trained. Opening Advanced Recognition Software".format(len(np.unique(ids))))
     return 0
 
 
@@ -178,7 +177,7 @@ def recognize_face():
             cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
             id, confidence = recognizer.predict(gray[y:y + h, x:x + w])
             # Check if confidence is less them 100 ==> "0" is perfect match
-            if (confidence < 100):
+            if confidence < 100:
                 id = names[id]
                 confidence = "  {0}%".format(round(100 - confidence))
             else:
