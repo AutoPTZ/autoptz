@@ -1,0 +1,48 @@
+# This creates a new window
+MDScreen:
+
+    # This handles things like switching to different screen designs without creating a new window
+    MDScreenManager:
+
+        # Current Home Page Design
+        MDScreen:
+            
+            # Splits the window in two with the horizontal orientation
+            MDBoxLayout:
+                orientation: "horizontal"
+                
+                #Left side of the window
+                MDList:
+                    # size_hint_x is the scale of how much room it takes up in the window
+                    # 0 being no space is taken up and 1 being all of it
+                    size_hint_x: 0.4
+                    TwoLineListItem:
+                        text: "Two-line item"
+                        secondary_text: "Secondary text here"
+                    TwoLineListItem:
+                        text: "Two-line item"
+                        secondary_text: "Secondary text here"
+                    TwoLineListItem:
+                        text: "Two-line item"
+                        secondary_text: "Secondary text here"
+
+                # Right side of the window
+                MDBoxLayout:
+                    orientation: "vertical"
+                    MDScrollView:
+                        MDGridLayout:
+                            cols: 3 
+                            rows: 2
+
+                            Button:       
+                                text: 'Hello 1'
+                            Button:
+                                text: 'Hello 2'
+                            Button:
+                                text: 'Hello 3'
+                            Button:       
+                                text: 'World 1'
+                            Button:       
+                                text: 'World 2'
+                            Button:       
+                                text: 'World 3'
