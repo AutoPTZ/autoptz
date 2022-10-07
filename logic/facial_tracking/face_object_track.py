@@ -6,10 +6,19 @@ y = None
 h = None
 
 img = None
+gray = None
 
 enable_motion = None
 track_started = None
+track_name = None
 tracker = cv2.TrackerCSRT_create()
+recognizer = cv2.face.LBPHFaceRecognizer_create()
+recognizer.read('./trainer/trainer.yml')
+
+# names related to ids: example ==> Steve: id=1 | try moving to trainer/labels.txt
+labels_file = open("./trainer/labels.txt", "r")
+names = labels_file.read().splitlines()
+labels_file.close()
 
 
 def click(event, x_pos, y_pos, flags, param):
@@ -20,22 +29,13 @@ def click(event, x_pos, y_pos, flags, param):
 
 
 def face_object_track():
-    # messagebox.showinfo("Basic Recognition Software", "Opening Basic Recognition Software", parent=ROOT)
     print("\n [INFO] Opening Advanced Recognition Software")
-    recognizer = cv2.face.LBPHFaceRecognizer_create()
-    recognizer.read('./trainer/trainer.yml')
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml");
 
     font = cv2.FONT_HERSHEY_SIMPLEX
 
     # iniciate id counter
     id = 0
-
-    # names related to ids: example ==> Steve: id=1 | try moving to trainer/labels.txt
-    labels_file = open("./trainer/labels.txt", "r")
-    names = labels_file.read().splitlines()
-    print(names)
-    labels_file.close()
 
     # Initialize and start realtime video capture
     cam = cv2.VideoCapture(0)
@@ -51,6 +51,8 @@ def face_object_track():
     global h
     global enable_motion
     global track_started
+    global track_name
+    global gray
 
     while True:
         timer = cv2.getTickCount()
@@ -80,13 +82,17 @@ def face_object_track():
             if not track_started:
                 tracker.init(img, [x, y, w, h])
                 print("Tracking Started @: " + str(x) + ' ' + str(y) + ' ' + str(w) + ' ' + str(h))
+                track_name = id
                 track_started = True
             success, bbox = tracker.update(img)
             if len(faces) == 0:
                 cv2.rectangle(img, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])), (255, 0, 255), 3, 1)
             else:
-                tracker.init(img, [x, y, w, h])
-                cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 255), 3, 1)
+                if id == track_name:
+                    tracker.init(img, [x, y, w, h])
+                    cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 255), 3, 1)
+                else:
+                    cv2.rectangle(img, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])), (255, 0, 255), 3, 1)
         else:
             cv2.putText(img, "Tracking Disabled", (75, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             track_started = False
