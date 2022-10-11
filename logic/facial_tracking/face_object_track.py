@@ -1,4 +1,5 @@
 import cv2
+import imutils
 
 x = None
 w = None
@@ -13,7 +14,6 @@ track_started = None
 track_name = None
 tracker = cv2.TrackerCSRT_create()
 recognizer = cv2.face.LBPHFaceRecognizer_create()
-recognizer.read('./trainer/trainer.yml')
 
 # names related to ids: example ==> Steve: id=1 | try moving to trainer/labels.txt
 labels_file = open("./trainer/labels.txt", "r")
@@ -29,6 +29,7 @@ def click(event, x_pos, y_pos, flags, param):
 
 
 def face_object_track():
+    recognizer.read('./trainer/trainer.yml')
     print("\n [INFO] Opening Advanced Recognition Software")
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml");
 
@@ -56,15 +57,15 @@ def face_object_track():
 
     while True:
         timer = cv2.getTickCount()
-        ret, img = cam.read()
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        ret, frame = cam.read()
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5, minSize=(int(minW), int(minH)))
         for (x_face, y_face, w_face, h_face) in faces:
             x = x_face
             w = w_face
             y = y_face
             h = h_face
-            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
             id, confidence = recognizer.predict(gray[y_face:y_face + h, x:x + w])
             # Check if confidence is less them 100 ==> "0" is perfect match
             if confidence < 100:
@@ -74,32 +75,32 @@ def face_object_track():
                 id = "unknown"
                 confidence = "  {0}%".format(round(100 - confidence))
 
-            cv2.putText(img, str(id), (x + 5, y_face - 5), font, 1, (255, 255, 255), 2)
-            cv2.putText(img, str(confidence), (x + 5, y + h - 5), font, 1, (255, 255, 0), 1)
+            cv2.putText(frame, str(id), (x + 5, y_face - 5), font, 1, (255, 255, 255), 2)
+            cv2.putText(frame, str(confidence), (x + 5, y + h - 5), font, 1, (255, 255, 0), 1)
 
         if enable_motion:
-            cv2.putText(img, "Tracking Enabled", (75, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(frame, "Tracking Enabled", (75, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             if not track_started:
-                tracker.init(img, [x, y, w, h])
+                tracker.init(frame, [x, y, w, h])
                 print("Tracking Started @: " + str(x) + ' ' + str(y) + ' ' + str(w) + ' ' + str(h))
                 track_name = id
                 track_started = True
-            success, bbox = tracker.update(img)
+            success, bbox = tracker.update(frame)
             if len(faces) == 0:
-                cv2.rectangle(img, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])), (255, 0, 255), 3, 1)
+                cv2.rectangle(frame, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])), (255, 0, 255), 3, 1)
             else:
                 if id == track_name:
-                    tracker.init(img, [x, y, w, h])
-                    cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 255), 3, 1)
+                    tracker.init(frame, [x, y, w, h])
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 255), 3, 1)
                 else:
-                    cv2.rectangle(img, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])), (255, 0, 255), 3, 1)
+                    cv2.rectangle(frame, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])), (255, 0, 255), 3, 1)
         else:
-            cv2.putText(img, "Tracking Disabled", (75, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(frame, "Tracking Disabled", (75, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             track_started = False
 
         fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
-        cv2.putText(img, str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        cv2.imshow('Advanced Recognition Software', img)
+        cv2.putText(frame, str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        cv2.imshow('Advanced Recognition Software', frame)
         cv2.setMouseCallback("Advanced Recognition Software", click)
 
         key = cv2.waitKey(10) & 0xff  # Press 'ESC' for exiting video

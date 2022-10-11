@@ -1,5 +1,5 @@
-numpy~=1.22
-pillow==9.2.0
-opencv-contrib-python~=4.6.0.66
-PyQT5~=5.15.7
-kivymd~=1.1.0.dev0
+numpy
+pillow
+opencv-contrib-python
+PyQT5
+kivymd
