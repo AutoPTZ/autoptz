@@ -138,8 +138,8 @@ def train_face():
     # messagebox.showinfo("Training Faces Process",
     #  "{0} faces trained. Opening Basic Recognition Software".format(len(np.unique(ids))),
     # parent=root)
-    show_info_messagebox("{0} faces trained.\nOpening Advanced Recognition Software".format(len(np.unique(ids))))
-    print("\n [INFO] {0} faces trained. Opening Advanced Recognition Software".format(len(np.unique(ids))))
+    show_info_messagebox("{0} faces trained.\nOpening Basic Recognition Software".format(len(np.unique(ids))))
+    print("\n [INFO] {0} faces trained. Opening Basic Recognition Software".format(len(np.unique(ids))))
     return 0
 
 
