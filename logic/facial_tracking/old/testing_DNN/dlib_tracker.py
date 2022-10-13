@@ -25,6 +25,7 @@ fps = FPS().start()
 
 # loop over frames from the video file stream
 while True:
+    timer = cv2.getTickCount()
     # grab the next frame from the video file
     (grabbed, frame) = vs.read()
     # check to see if we have reached the end of the video file
@@ -98,6 +99,8 @@ while True:
         cv2.putText(frame, label, (startX, startY - 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 2)
     # show the output frame
+    fps2 = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
+    cv2.putText(frame, str(int(fps2)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
     cv2.imshow("Frame", frame)
     key = cv2.waitKey(1) & 0xFF
     # if the `q` key was pressed, break from the loop

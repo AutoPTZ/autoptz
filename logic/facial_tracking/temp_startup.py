@@ -3,7 +3,8 @@ import sys
 from PyQt5 import QtCore, QtWidgets as qtw
 from PyQt5.QtCore import QTimer
 
-from logic.facial_tracking.face_object_track import face_object_track
+from logic.facial_tracking.face_recognition_tracker_dlib import face_object_track_dlib
+# from logic.facial_tracking.old.org_face_recognition_tracker import face_object_track
 from logic.facial_tracking.facial_recognition import register_person, recognize_face
 
 
@@ -20,7 +21,7 @@ def run_face_recognition_click():
 
 
 def run_adv_face_track_click():
-    face_object_track()
+    face_object_track_dlib()
 
 
 # UI Creation
@@ -82,7 +83,7 @@ class startAutoNDI(qtw.QWidget):
         self.face_recognition_btn.clicked.connect(run_face_recognition_click)
 
         self.adv_face_tracker_btn = qtw.QPushButton("Run Advanced Tracker", self)
-        self.adv_face_tracker_btn.clicked.connect(face_object_track)
+        self.adv_face_tracker_btn.clicked.connect(face_object_track_dlib)
 
         self.middleBodyLayout.addWidget(self.sourceWidgets)
         self.middleBodyLayout.addWidget(self.continue_btn)
