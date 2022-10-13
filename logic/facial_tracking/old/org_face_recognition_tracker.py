@@ -16,7 +16,7 @@ tracker = cv2.TrackerCSRT_create()
 recognizer = cv2.face.LBPHFaceRecognizer_create()
 
 # names related to ids: example ==> Steve: id=1 | try moving to trainer/labels.txt
-labels_file = open("./trainer/labels.txt", "r")
+labels_file = open("../trainer/labels.txt", "r")
 names = labels_file.read().splitlines()
 labels_file.close()
 
@@ -29,7 +29,7 @@ def click(event, x_pos, y_pos, flags, param):
 
 
 def face_object_track():
-    recognizer.read('./trainer/trainer.yml')
+    recognizer.read('../trainer/trainer.yml')
     print("\n [INFO] Opening Advanced Recognition Software")
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml");
 
@@ -43,8 +43,8 @@ def face_object_track():
     cam.set(cv2.CAP_PROP_BUFFERSIZE, 3)
 
     # Define min window size to be recognized as a face
-    minW = 0.1 * cam.get(3)
-    minH = 0.1 * cam.get(4)
+    minW = int(0.1 * cam.get(3))
+    minH = int(0.1 * cam.get(4))
 
     global x
     global w
@@ -57,7 +57,8 @@ def face_object_track():
 
     while True:
         timer = cv2.getTickCount()
-        ret, frame = cam.read()
+        ret, orgFrame = cam.read()
+        frame = imutils.resize(orgFrame, width=600)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5, minSize=(int(minW), int(minH)))
         for (x_face, y_face, w_face, h_face) in faces:
@@ -111,3 +112,7 @@ def face_object_track():
     print("\n [INFO] Exiting Program and cleanup stuff")
     cam.release()
     cv2.destroyAllWindows()
+
+
+if __name__ == '__main__':
+    face_object_track()
