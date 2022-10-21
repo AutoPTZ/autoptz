@@ -5,12 +5,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/autoptz.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/autoptz.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/homepage/homepage.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/homepage.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/camera_widget.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -35,13 +32,14 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/Users/bethlehemchurch/development/autoptz-1&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "RunOnceActivity.OpenProjectViewOnStart": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "last_opened_file_path": "/Users/bethlehemchurch/development/autoptz-1",
+    "settings.editor.selected.configurable": "project.propDebugger"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/ui/widgets" />

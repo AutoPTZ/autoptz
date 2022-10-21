@@ -217,23 +217,20 @@ class Ui_AutoPTZ(object):
         if countRow == 3:
             countRow = 0
             countCol = countCol + 1
-
+        tempR = countRow
+        tempC = countCol
         if source == -1:
             camera = NDICameraWidget(self.screen_width // 3, self.screen_height // 3, ndi_source=ndi_source, aspect_ratio=True)
             camera.setObjectName('NDI ' + str(countRow) + ' ' + str(countCol))
             self.gridLayout.addWidget(camera.get_video_frame(), countRow, countCol, 1, 1)
-            tempR = countRow
-            tempC = countCol
             menuItem.disconnect()
             menuItem.triggered.connect(lambda: self.deleteCameraSource(source = -1, ndi_source = ndi_source, menuItem = menuItem, sourceRow= tempR, sourceCol = tempC))
         else:
             camera = CameraWidget(self.screen_width // 3, self.screen_height // 3, source, aspect_ratio=True)
             camera.setObjectName('Camera ' + str(countRow) + ' ' + str(countCol))
             self.gridLayout.addWidget(camera.get_video_frame(), countRow, countCol, 1, 1)
-            tempR = countRow
-            tempC = countCol
             menuItem.disconnect()
-            menuItem.triggered.connect(lambda: self.deleteCameraSource(source, menuItem, tempR, tempC))
+            menuItem.triggered.connect(lambda: self.deleteCameraSource(source=source, menuItem=menuItem, sourceRow=tempR, sourceCol=tempC, ndi_source=None))
 
         countRow = countRow + 1
 

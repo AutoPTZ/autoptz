@@ -75,18 +75,24 @@ class NDICameraWidget(QtWidgets.QWidget):
         """Reads frame, resizes, and converts image to pixmap"""
         while True:
             try:
-                timer = cv2.getTickCount()
                 t, v, _, _ = ndi.recv_capture_v3(self.ndi_recv, 5000)
                 if self.online:
                     # Read next frame from stream and insert into deque
                     try:
-                        self.capture = np.copy(v.data)
                         frame = np.copy(v.data)
-                        fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
-                        frame = cv2.putText(frame, str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+
+                        # if t == ndi.FRAME_TYPE_VIDEO:
+                        #     self.timer = cv2.getTickCount()
+                        #     fps = cv2.getTickFrequency() / (cv2.getTickCount() - self.timer)
+                        #     frame = cv2.putText(np.copy(v.data), str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        #                         (0, 0, 255), 2)
+                        # else:
+                        #     frame = np.copy(v.data)
+
                         self.deque.append(frame)
                     except:
-                         self.online = False
+                        self.online = False
                 else:
                     # Attempt to reconnect
                     print('attempting to reconnect', self.ndi_source_object.ndi_name)
@@ -120,11 +126,11 @@ class NDICameraWidget(QtWidgets.QWidget):
             # Keep frame aspect ratio
             if self.maintain_aspect_ratio:
                 self.frame = frame
-                #self.frame = imutils.resize(frame, width=self.screen_width)
+                # self.frame = imutils.resize(frame, width=self.screen_width)
             # Force resize
             else:
                 self.frame = frame
-                #self.frame = cv2.resize(frame, (self.screen_width, self.screen_height))
+                # self.frame = cv2.resize(frame, (self.screen_width, self.screen_height))
 
             # Convert to pixmap and set to video frame
             self.img = QtGui.QImage(self.frame, self.frame.shape[1], self.frame.shape[0], self.frame.strides[0],
