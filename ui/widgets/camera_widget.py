@@ -18,7 +18,7 @@ class CameraWidget(QtWidgets.QWidget):
     @param aspect_ratio - Whether to maintain frame aspect ratio or force into fraame
     """
 
-    def __init__(self, width, height, stream_link=0, aspect_ratio=False, parent=None, deque_size=1):
+    def __init__(self, width, height, camera_link=-1, aspect_ratio=False, parent=None, deque_size=1):
         super(CameraWidget, self).__init__(parent)
 
         # Initialize deque used to store frames read from the stream
@@ -31,7 +31,7 @@ class CameraWidget(QtWidgets.QWidget):
         self.screen_height = height - self.offset
         self.maintain_aspect_ratio = aspect_ratio
 
-        self.camera_stream_link = stream_link
+        self.camera_stream_link = camera_link
 
         # Flag to check if camera is valid/working
         self.online = False
@@ -48,7 +48,7 @@ class CameraWidget(QtWidgets.QWidget):
         # Periodically set video frame to display
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.set_frame)
-        self.timer.start(.5)
+        self.timer.start(1)
 
         print('Started camera: {}'.format(self.camera_stream_link))
 
@@ -78,10 +78,13 @@ class CameraWidget(QtWidgets.QWidget):
 
         while True:
             try:
+                timer = cv2.getTickCount()
                 if self.capture.isOpened() and self.online:
                     # Read next frame from stream and insert into deque
                     try:
                         status, frame = self.capture.read()
+                        fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
+                        frame = cv2.putText(frame, str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                         if status:
                             self.deque.append(frame)
                         else:

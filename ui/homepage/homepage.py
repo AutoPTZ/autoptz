@@ -1,7 +1,9 @@
 import cv2
 from PyQt5 import QtCore, QtWidgets
 
+from logic.camera_search.search_ndi import get_ndi_sources
 from ui.widgets.camera_widget import CameraWidget
+from ui.widgets.ndi_cam_widget import NDICameraWidget
 
 countRow = 0
 countCol = 1
@@ -106,10 +108,12 @@ class Ui_AutoPTZ(object):
         self.actionAdd_IP = QtWidgets.QAction(AutoPTZ)
 
         self.actionAdd_IP.setObjectName("actionAdd_IP")
-        self.actionAdd_NDI = QtWidgets.QAction(AutoPTZ)
-        self.actionAdd_NDI.setObjectName("actionAdd_NDI")
+        self.menuAdd_NDI = QtWidgets.QMenu(AutoPTZ)
+        self.menuAdd_NDI.setObjectName("menuAdd_NDI")
         self.menuAdd_Hardware = QtWidgets.QMenu(AutoPTZ)
         self.menuAdd_Hardware.setObjectName("menuAdd_Hardware")
+
+        self.getNDISourceList()
         self.getPhysicalSourcesList()
 
         # self.actionAdd_Hardware.triggered.connect(lambda: self.addCameraSource())
@@ -140,7 +144,7 @@ class Ui_AutoPTZ(object):
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionClose)
         self.menuSource.addAction(self.actionAdd_IP)
-        self.menuSource.addAction(self.actionAdd_NDI)
+        self.menuSource.addMenu(self.menuAdd_NDI)
         self.menuSource.addMenu(self.menuAdd_Hardware)
         self.menuSource.addSeparator()
         self.menuSource.addAction(self.actionEdit)
@@ -187,13 +191,26 @@ class Ui_AutoPTZ(object):
             dev_port += 1
         return
 
+    def getNDISourceList(self):
+        self.sourceList = get_ndi_sources()
+
+        for i, s in enumerate(self.sourceList):
+            self.addNDISource(s)
+            #self.sourceWidgets.addItem(QtWidgets.QListWidgetItem('%s. %s' % (i + 1, s.ndi_name)))
+
+    def addNDISource(self, ndi_source_id):
+        ndiSource = QtWidgets.QAction(ndi_source_id.ndi_name, self)
+        ndiSource.setCheckable(True)
+        ndiSource.triggered.connect(lambda: self.addCamera(-1, ndi_source_id, ndiSource))
+        self.menuAdd_NDI.addAction(ndiSource)
+
     def addPhysicalSource(self, sourceName, sourceNumber):
         cameraSource = QtWidgets.QAction(sourceName, self)
         cameraSource.setCheckable(True)
-        cameraSource.triggered.connect(lambda: self.addCameraSource(sourceNumber, cameraSource))
+        cameraSource.triggered.connect(lambda: self.addCamera(sourceNumber, menuItem= cameraSource, ndi_source=None))
         self.menuAdd_Hardware.addAction(cameraSource)
 
-    def addCameraSource(self, source, cameraMenu):
+    def addCamera(self, source, ndi_source, menuItem):
         global countRow
         global countCol
 
@@ -201,21 +218,33 @@ class Ui_AutoPTZ(object):
             countRow = 0
             countCol = countCol + 1
 
-        camera = CameraWidget(self.screen_width // 3, self.screen_height // 3, source, aspect_ratio=True)
-        camera.setObjectName('Camera ' + str(countRow) + ' ' + str(countCol))
-        self.gridLayout.addWidget(camera.get_video_frame(), countRow, countCol, 1, 1)
-        tempR = countRow
-        tempC = countCol
-        cameraMenu.disconnect()
-        cameraMenu.triggered.connect(lambda: self.deleteCameraSource(source, cameraMenu, tempR, tempC))
+        if source == -1:
+            camera = NDICameraWidget(self.screen_width // 3, self.screen_height // 3, ndi_source=ndi_source, aspect_ratio=True)
+            camera.setObjectName('NDI ' + str(countRow) + ' ' + str(countCol))
+            self.gridLayout.addWidget(camera.get_video_frame(), countRow, countCol, 1, 1)
+            tempR = countRow
+            tempC = countCol
+            menuItem.disconnect()
+            menuItem.triggered.connect(lambda: self.deleteCameraSource(source = -1, ndi_source = ndi_source, menuItem = menuItem, sourceRow= tempR, sourceCol = tempC))
+        else:
+            camera = CameraWidget(self.screen_width // 3, self.screen_height // 3, source, aspect_ratio=True)
+            camera.setObjectName('Camera ' + str(countRow) + ' ' + str(countCol))
+            self.gridLayout.addWidget(camera.get_video_frame(), countRow, countCol, 1, 1)
+            tempR = countRow
+            tempC = countCol
+            menuItem.disconnect()
+            menuItem.triggered.connect(lambda: self.deleteCameraSource(source, menuItem, tempR, tempC))
 
         countRow = countRow + 1
 
-    def deleteCameraSource(self, source, cameraMenu, sourceRow, sourceCol):
+    def deleteCameraSource(self, source, ndi_source, menuItem, sourceRow, sourceCol):
         cameraWidget = self.gridLayout.itemAtPosition(sourceRow, sourceCol).widget()
         cameraWidget.deleteLater()
-        cameraMenu.disconnect()
-        cameraMenu.triggered.connect(lambda: self.addCameraSource(source, cameraMenu))
+        menuItem.disconnect()
+        if source == -1:
+            menuItem.triggered.connect(lambda: self.addCamera(source=-1, ndi_source=ndi_source, menuItem=menuItem))
+        else:
+            menuItem.triggered.connect(lambda: self.addCamera(source=source, ndi_source=None, menuItem=menuItem))
 
     def retranslateUi(self, AutoPTZ):
         _translate = QtCore.QCoreApplication.translate
@@ -231,7 +260,7 @@ class Ui_AutoPTZ(object):
         self.actionSave_as_2.setText(_translate("AutoPTZ", "Save as"))
         self.actionClose.setText(_translate("AutoPTZ", "Close"))
         self.actionAdd_IP.setText(_translate("AutoPTZ", "Add IP"))
-        self.actionAdd_NDI.setText(_translate("AutoPTZ", "Add NDI"))
+        self.menuAdd_NDI.setTitle(_translate("AutoPTZ", "Add NDI"))
         self.menuAdd_Hardware.setTitle(_translate("AutoPTZ", "Add Hardware"))
         self.actionEdit.setText(_translate("AutoPTZ", "Edit Setup"))
         self.actionContact.setText(_translate("AutoPTZ", "Contact"))
