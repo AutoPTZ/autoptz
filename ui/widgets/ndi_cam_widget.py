@@ -92,7 +92,7 @@ class NDICameraWidget(QtWidgets.QWidget):
 
                         self.deque.append(frame)
                     except:
-                        self.online = False
+                         self.online = False
                 else:
                     # Attempt to reconnect
                     print('attempting to reconnect', self.ndi_source_object.ndi_name)
@@ -119,10 +119,6 @@ class NDICameraWidget(QtWidgets.QWidget):
         if self.deque and self.online:
             # Grab latest frame
             frame = self.deque[-1]
-            try:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            except:
-                print("temp pause")
             # Keep frame aspect ratio
             if self.maintain_aspect_ratio:
                 self.frame = frame
@@ -134,7 +130,7 @@ class NDICameraWidget(QtWidgets.QWidget):
 
             # Convert to pixmap and set to video frame
             self.img = QtGui.QImage(self.frame, self.frame.shape[1], self.frame.shape[0], self.frame.strides[0],
-                                    QtGui.QImage.Format_RGB888)
+                                    QtGui.QImage.Format_RGBX8888).rgbSwapped()
 
             try:
                 self.video_frame.setPixmap(QtGui.QPixmap.fromImage(self.img))

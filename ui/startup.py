@@ -8,6 +8,7 @@ from ui.homepage.homepage import Ui_AutoPTZ
 class AutoPTZ(QtWidgets.QMainWindow, Ui_AutoPTZ):
     def __init__(self, parent=None):
         super(AutoPTZ, self).__init__(parent)
+
         self.setupUi(self)
 
 
