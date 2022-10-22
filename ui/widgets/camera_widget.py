@@ -70,6 +70,7 @@ class CameraWidget(QtWidgets.QWidget):
         cap = cv2.VideoCapture(link)
         if not cap.isOpened():
             return False
+
         cap.release()
         return True
 
