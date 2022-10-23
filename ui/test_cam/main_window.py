@@ -46,7 +46,7 @@ class MainWindow(QWidget):
         # if timer is stopped
         if not self.timer.isActive():
             # create video capture
-            self.cap = cv2.VideoCapture(0)
+            self.cap = cv2.VideoCapture(2)
             # start timer
             self.timer.start(20)
             # update control_bt text

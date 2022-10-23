@@ -1,5 +1,7 @@
 import cv2
 from PyQt5 import QtCore, QtWidgets
+
+from ui.homepage.flow_layout_test import FlowLayout
 from visca import camera
 import time
 import datetime
@@ -10,8 +12,7 @@ from logic.camera_search.search_ndi import get_ndi_sources
 from ui.widgets.camera_widget import CameraWidget
 from ui.widgets.ndi_cam_widget import NDICameraWidget
 
-countRow = 0
-countCol = 1
+camera_widget_list = []
 
 current_manual_device = None
 
@@ -24,6 +25,10 @@ class Ui_AutoPTZ(object):
         AutoPTZ.setTabShape(QtWidgets.QTabWidget.Rounded)
         AutoPTZ.setDockNestingEnabled(False)
         self.centralwidget = QtWidgets.QWidget(AutoPTZ)
+
+        self.screen_width = QtWidgets.QApplication.desktop().screenGeometry().width()
+        self.screen_height = QtWidgets.QApplication.desktop().screenGeometry().height()
+
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
@@ -289,8 +294,14 @@ class Ui_AutoPTZ(object):
         self.formTabWidget.addTab(self.manualControlPage, "")
         self.gridLayout.addWidget(self.formTabWidget, 0, 0, 3, 1)
 
-        self.screen_width = QtWidgets.QApplication.desktop().screenGeometry().width()
-        self.screen_height = QtWidgets.QApplication.desktop().screenGeometry().height()
+
+        self.shown_cameras = QtWidgets.QWidget()
+        self.flowLayout = FlowLayout()
+        self.flowLayout.setSizeConstraint(QtWidgets.QLayout.SetNoConstraint)
+        self.shown_cameras.setLayout(self.flowLayout)
+        self.shown_cameras.setSizePolicy(sizePolicy)
+        self.gridLayout.addWidget(self.shown_cameras, 0, 1, 1, 1)
+
 
         # Menu
         AutoPTZ.setCentralWidget(self.centralwidget)
@@ -552,45 +563,40 @@ class Ui_AutoPTZ(object):
         self.menuAdd_Hardware.addAction(cameraSource)
 
     def addCamera(self, source, ndi_source, menuItem):
-        global countRow
-        global countCol
+        cameraWidget = QtWidgets.QWidget()
 
-        if countRow == 3:
-            countRow = 0
-            countCol = countCol + 1
-        tempR = countRow
-        tempC = countCol
         if source == -1:
             camera = NDICameraWidget(self.screen_width // 3, self.screen_height // 3, ndi_source=ndi_source,
                                      aspect_ratio=True)
-            camera.setObjectName('NDI ' + str(countRow) + ' ' + str(countCol))
+            cameraWidget.setObjectName('NDI ' + str(camera))
             menuItem.disconnect()
             menuItem.triggered.connect(
-                lambda: self.deleteCameraSource(source=-1, ndi_source=ndi_source, menuItem=menuItem, sourceRow=tempR,
-                                                sourceCol=tempC))
+                lambda: self.deleteCameraSource(source=-1, ndi_source=ndi_source, menuItem=menuItem, camera=camera, cameraWidget=cameraWidget))
         else:
             camera = CameraWidget(self.screen_width // 3, self.screen_height // 3, source, aspect_ratio=True)
-            camera.setObjectName('Camera ' + str(countRow) + ' ' + str(countCol))
+            cameraWidget.setObjectName('Serial ' + str(camera))
             menuItem.disconnect()
             menuItem.triggered.connect(
-                lambda: self.deleteCameraSource(source=source, menuItem=menuItem, sourceRow=tempR, sourceCol=tempC,
-                                                ndi_source=None))
+                lambda: self.deleteCameraSource(source=source, menuItem=menuItem,
+                                                ndi_source=None, camera=camera, cameraWidget=cameraWidget))
         # create internal grid layout for camera
-        cameragridLayout = QtWidgets.QGridLayout(self.gridLayout.widget())
-        cameragridLayout.setObjectName('Camera Grid: ' + str(countRow) + ' ' + str(countCol))
+
+        cameragridLayout = QtWidgets.QGridLayout()
+        cameragridLayout.setObjectName('Camera Grid: ' + str(camera))
 
         cameragridLayout.addWidget(camera.get_video_frame(), 0, 0, 1, 1)
-
+        cameraWidget.setLayout(cameragridLayout)
         select_cam_btn = QtWidgets.QPushButton("Select Camera")
         select_cam_btn.clicked.connect(lambda: print(camera.objectName()))
         cameragridLayout.addWidget(select_cam_btn, 1, 0, 1, 1)
 
-        self.gridLayout.addLayout(cameragridLayout, countRow, countCol, 1, 1)
-        countRow = countRow + 1
+        self.flowLayout.addWidget(cameraWidget)
 
-    def deleteCameraSource(self, source, ndi_source, menuItem, sourceRow, sourceCol):
-        cameraWidget = self.gridLayout.itemAtPosition(sourceRow, sourceCol).widget()
-        cameraWidget.deleteLater()
+    def deleteCameraSource(self, source, ndi_source, menuItem, camera, cameraWidget):
+
+        self.flowLayout.removeWidget(cameraWidget)
+        camera.deleteLater()
+
         menuItem.disconnect()
         if source == -1:
             menuItem.triggered.connect(lambda: self.addCamera(source=-1, ndi_source=ndi_source, menuItem=menuItem))

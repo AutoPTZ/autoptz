@@ -2,6 +2,6 @@ numpy
 pillow
 opencv-contrib-python
 PyQT5
-kivymd
 dlib
 imutils
+scipy
