@@ -1,12 +1,19 @@
 import cv2
 from PyQt5 import QtCore, QtWidgets
+from visca import camera
+import time
+import datetime
+import threading
 
+from logic.camera_search.get_serial_cameras import COMPorts
 from logic.camera_search.search_ndi import get_ndi_sources
 from ui.widgets.camera_widget import CameraWidget
 from ui.widgets.ndi_cam_widget import NDICameraWidget
 
 countRow = 0
 countCol = 1
+
+current_manual_device = None
 
 
 class Ui_AutoPTZ(object):
@@ -42,8 +49,8 @@ class Ui_AutoPTZ(object):
         self.selectedCamPage.setMaximumSize(QtCore.QSize(16777215, 428))
         self.selectedCamPage.setObjectName("selectedCamPage")
         self.formLayout = QtWidgets.QFormLayout(self.selectedCamPage)
-        self.formLayout.setLabelAlignment(QtCore.Qt.AlignLeading|QtCore.Qt.AlignLeft|QtCore.Qt.AlignTop)
-        self.formLayout.setFormAlignment(QtCore.Qt.AlignLeading|QtCore.Qt.AlignLeft|QtCore.Qt.AlignTop)
+        self.formLayout.setLabelAlignment(QtCore.Qt.AlignLeading | QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        self.formLayout.setFormAlignment(QtCore.Qt.AlignLeading | QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
         self.formLayout.setObjectName("formLayout")
         self.select_face_dropdown = QtWidgets.QComboBox(self.selectedCamPage)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed)
@@ -98,6 +105,16 @@ class Ui_AutoPTZ(object):
         sizePolicy.setHeightForWidth(self.select_camera_dropdown.sizePolicy().hasHeightForWidth())
         self.select_camera_dropdown.setSizePolicy(sizePolicy)
         self.select_camera_dropdown.setObjectName("select_camera_dropdown")
+
+        self.select_camera_dropdown.addItem("")
+        data_list = COMPorts.get_com_ports().data
+        for port in data_list:
+            if "USB" in port.description:
+                print(port.device, port.description, data_list.index(port))
+                self.select_camera_dropdown.addItem(port.device)
+
+        self.select_camera_dropdown.currentTextChanged.connect(self.init_manual_control)
+
         self.gridLayoutWidget = QtWidgets.QWidget(self.manualControlPage)
         self.gridLayoutWidget.setGeometry(QtCore.QRect(0, 100, 162, 131))
         self.gridLayoutWidget.setObjectName("gridLayoutWidget")
@@ -237,14 +254,6 @@ class Ui_AutoPTZ(object):
         self.menu_layout = QtWidgets.QHBoxLayout(self.horizontalLayoutWidget_3)
         self.menu_layout.setContentsMargins(0, 0, 0, 0)
         self.menu_layout.setObjectName("menu_layout")
-        self.enter_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget_3)
-        sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
-        sizePolicy.setHorizontalStretch(0)
-        sizePolicy.setVerticalStretch(0)
-        sizePolicy.setHeightForWidth(self.enter_btn.sizePolicy().hasHeightForWidth())
-        self.enter_btn.setSizePolicy(sizePolicy)
-        self.enter_btn.setObjectName("enter_btn")
-        self.menu_layout.addWidget(self.enter_btn)
         self.menu_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget_3)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
         sizePolicy.setHorizontalStretch(0)
@@ -253,9 +262,32 @@ class Ui_AutoPTZ(object):
         self.menu_btn.setSizePolicy(sizePolicy)
         self.menu_btn.setObjectName("menu_btn")
         self.menu_layout.addWidget(self.menu_btn)
+        self.reset_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget_3)
+        sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.reset_btn.sizePolicy().hasHeightForWidth())
+        self.reset_btn.setSizePolicy(sizePolicy)
+        self.reset_btn.setObjectName("reset_btn")
+        self.menu_layout.addWidget(self.reset_btn)
+
+        # Button Commands
+        self.up_left_btn.clicked.connect(self.move_left_up)
+        self.up_btn.clicked.connect(self.move_up)
+        self.up_right_btn.clicked.connect(self.move_right_up)
+        self.left_btn.clicked.connect(self.move_left)
+        self.right_btn.clicked.connect(self.move_right)
+        self.down_left_btn.clicked.connect(self.move_left_down)
+        self.down_btn.clicked.connect(self.move_down)
+        self.down_right_btn.clicked.connect(self.move_right_down)
+        self.home_btn.clicked.connect(self.move_home)
+        self.zoom_in_btn.clicked.connect(self.zoom_in)
+        self.zoom_out_btn.clicked.connect(self.zoom_out)
+        self.menu_btn.clicked.connect(self.menu)
+        self.reset_btn.clicked.connect(self.reset)
+
         self.formTabWidget.addTab(self.manualControlPage, "")
         self.gridLayout.addWidget(self.formTabWidget, 0, 0, 3, 1)
-
 
         self.screen_width = QtWidgets.QApplication.desktop().screenGeometry().width()
         self.screen_height = QtWidgets.QApplication.desktop().screenGeometry().height()
@@ -371,6 +403,135 @@ class Ui_AutoPTZ(object):
             dev_port += 1
         return
 
+    def init_manual_control(self, device):
+        global current_manual_device
+        try:
+            current_manual_device = camera.D100(device)
+            current_manual_device.init()
+            print("Camera Initialized")
+        except:
+            print("Please initialize another camera")
+
+    def move_up(self):
+        global current_manual_device
+        try:
+            current_manual_device.up(5)
+            S = threading.Timer(0.4, self.move_stop)
+            S.start()
+        except:
+            print("Please initialize a camera")
+    def move_left(self):
+        global current_manual_device
+        try:
+            current_manual_device.left(5)
+            S = threading.Timer(0.4, self.move_stop)
+            S.start()
+        except:
+            print("Please initialize a camera")
+
+    def move_right(self):
+        global current_manual_device
+        try:
+            current_manual_device.right(5)
+            S = threading.Timer(0.4, self.move_stop)
+            S.start()
+        except:
+            print("Please initialize a camera")
+
+    def move_down(self):
+        global current_manual_device
+        try:
+            current_manual_device.down(5)
+            S = threading.Timer(0.4, self.move_stop)
+            S.start()
+        except:
+            print("Please initialize a camera")
+
+    def move_left_up(self):
+        global current_manual_device
+        try:
+            current_manual_device.left_up(5, 5)
+            S = threading.Timer(0.4, self.move_stop)
+            S.start()
+        except:
+            print("Please initialize a camera")
+
+    def move_right_up(self):
+        global current_manual_device
+        try:
+            current_manual_device.right_up(5, 5)
+            S = threading.Timer(0.4, self.move_stop)
+            S.start()
+        except:
+            print("Please initialize a camera")
+    def move_left_down(self):
+        global current_manual_device
+        try:
+            current_manual_device.left_down(5, 5)
+            S = threading.Timer(0.4, self.move_stop)
+            S.start()
+        except:
+            print("Please initialize a camera")
+    def move_right_down(self):
+        global current_manual_device
+        try:
+            current_manual_device.right_down(5, 5)
+            S = threading.Timer(0.4, self.move_stop)
+            S.start()
+        except:
+            print("Please initialize a camera")
+
+    def move_home(self):
+        global current_manual_device
+        try:
+            current_manual_device.home()
+            S = threading.Timer(3, self.move_stop)
+            S.start()
+        except:
+            print("Please initialize a camera")
+
+    def move_stop(self):
+        global current_manual_device
+        try:
+            current_manual_device.stop()
+        except:
+            print("Please initialize a camera")
+    def menu(self):
+        global current_manual_device
+        try:
+            current_manual_device.menu()
+        except:
+            print("Please initialize a camera")
+    def zoom_in(self):
+        global current_manual_device
+        try:
+            current_manual_device.zoom_in()
+            S = threading.Timer(0.5, self.zoom_stop)
+            S.start()
+        except:
+            print("Please initialize a camera")
+    def zoom_out(self):
+        global current_manual_device
+        try:
+            current_manual_device.zoom_out()
+            S = threading.Timer(0.5, self.zoom_stop)
+            S.start()
+        except:
+            print("Please initialize a camera")
+
+    def zoom_stop(self):
+        global current_manual_device
+        try:
+            current_manual_device.zoom_stop()
+        except:
+            print("Please initialize a camera")
+    def reset(self):
+        global current_manual_device
+        try:
+            current_manual_device.reset()
+        except:
+            print("Please initialize a camera")
+
     def getNDISourceList(self):
         self.sourceList = get_ndi_sources()
 
@@ -456,9 +617,10 @@ class Ui_AutoPTZ(object):
         self.zoom_out_btn.setText(_translate("AutoPTZ", "Zoom -"))
         self.focus_plus_btn.setText(_translate("AutoPTZ", "Focus +"))
         self.focus_minus_btn.setText(_translate("AutoPTZ", "Focus -"))
-        self.enter_btn.setText(_translate("AutoPTZ", "Menu"))
-        self.menu_btn.setText(_translate("AutoPTZ", "Enter"))
-        self.formTabWidget.setTabText(self.formTabWidget.indexOf(self.manualControlPage), _translate("AutoPTZ", "Manual"))
+        self.menu_btn.setText(_translate("AutoPTZ", "Menu"))
+        self.reset_btn.setText(_translate("AutoPTZ", "Reset"))
+        self.formTabWidget.setTabText(self.formTabWidget.indexOf(self.manualControlPage),
+                                      _translate("AutoPTZ", "Manual"))
         self.menuFile.setTitle(_translate("AutoPTZ", "File"))
         self.menuSource.setTitle(_translate("AutoPTZ", "Sources"))
         self.menuAdd_Face.setTitle(_translate("AutoPTZ", "Facial Recognition"))

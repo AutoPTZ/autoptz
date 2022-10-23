@@ -41,7 +41,7 @@ class Camera(object):
             self._output.write(binascii.unhexlify(com))
             return True
         except Exception as e:
-            print (com, e)
+            print(com, e)
             return False
 
     @staticmethod
@@ -56,7 +56,7 @@ class Camera(object):
             serial_port.close()
             return True
         else:
-            print ("Error closing serial port: Already closed.")
+            print("Error closing serial port: Already closed.")
             return False
 
     @staticmethod
@@ -71,7 +71,7 @@ class Camera(object):
             serial_port.open()
             return True
         else:
-            print ("Error opening serial port: Already open.")
+            print("Error opening serial port: Already open.")
             return False
 
     def read(self, amount=3):
@@ -160,7 +160,7 @@ class D100(Camera):
         up, down = ud
         coeff = np.cos(angle)
 
-        movement = (left * dis * 148.466, )
+        movement = (left * dis * 148.466,)
 
     @staticmethod
     def multi_replace(text, rep):
@@ -223,6 +223,15 @@ class D100(Camera):
 
         return self.comm('81010604FF')
 
+    def menu(self):
+        """Opens/Closes Camera Menu
+
+        :return: True if successful, False if not.
+        :rtype: bool
+        """
+
+        return self.comm('8101060602ff')
+
     def zoom_in(self):
         """Zooms in Came.
 
@@ -230,7 +239,7 @@ class D100(Camera):
         :rtype: bool
         """
 
-        return self.comm('8101060602ff')
+        return self.comm('8101040702FF')
 
     def zoom_out(self):
         """Zooms in Came.

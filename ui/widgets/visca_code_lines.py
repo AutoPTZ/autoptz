@@ -1,19 +1,12 @@
 from visca import camera
 import time
 
+cam = camera.D100('/dev/cu.usbserial-144210')
+cam.init()
 
-# cam = camera.D100(output='/dev/cu.usbserial-144310')  # set serial port
-# cam.init()  # initialize camera object and connect to serial port
-# #cam.home()
-# # cam.wide_off()
-# #cam.focus_near()
-# #cam.zoom_in()
-# #cam.left(20)
-# cam.right(20)
-# time.sleep(0.4)
-# cam.zoom_stop()
-# cam.stop()
-# # cam.right(23)
+cam.zoom_out()
+time.sleep(1)
+cam.zoom_stop()
 
 
 """
@@ -100,6 +93,5 @@ import time
 { "pantilt",		"reset",	"81010605ff",		NO_ARGS	},
 
 { "limit",		"set",		"8101060700000000000000000000ff", PT_LMT_SET },
-{ "limit",		"clear",	"810106070100070f0f0f070f0f0fff", PT_LMT_CLR }, 
-
+{ "limit",		"clear",	"810106070100070f0f0f070f0f0fff", PT_LMT_CLR },
 """

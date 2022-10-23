@@ -1,5 +1,6 @@
 import serial.tools.list_ports
 
+
 class COMPorts:
 
     def __init__(self, data: list):
@@ -37,5 +38,7 @@ class Object:
 
 
 if __name__ == "__main__":
-    for port in COMPorts.get_com_ports().data:
-        print(port.device, port.description)
+    data_list = COMPorts.get_com_ports().data
+    for port in data_list:
+        if "USB" in port.description:
+            print(port.device, port.description, data_list.index(port))
