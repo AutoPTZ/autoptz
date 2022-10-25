@@ -38,7 +38,7 @@ def face_object_track_dlib():
     font = cv2.FONT_HERSHEY_SIMPLEX
 
     # Initialize and start realtime video capture
-    cam = cv2.VideoCapture(0)
+    cam = cv2.VideoCapture(2)
     cam.set(cv2.CAP_PROP_BUFFERSIZE, 3)
 
     # Define min window size to be recognized as a face
