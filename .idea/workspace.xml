@@ -17,6 +17,7 @@
       <change beforePath="$PROJECT_DIR$/ui/startup.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/startup.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/test_cam/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/test_cam/main_window.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/camera_widget.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

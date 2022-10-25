@@ -151,3 +151,10 @@ class CameraWidget(QtWidgets.QWidget):
 
     def get_tracker(self):
         print(self.tracking)
+        
+    def kill_video(self):
+        print("Killing Camera Object")
+        self.capture.release()
+        self.online = False
+        self.capture = None
+        cv2.destroyAllWindows()

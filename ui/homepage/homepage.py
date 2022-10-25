@@ -656,7 +656,9 @@ class Ui_AutoPTZ(object):
     def deleteCameraSource(self, source, ndi_source, menuItem, camera, cameraWidget):
 
         self.flowLayout.removeWidget(cameraWidget)
-        camera.deleteLater()
+        camera.kill_video()
+        cameraWidget.destroy()
+
 
         menuItem.disconnect()
         if source == -1:

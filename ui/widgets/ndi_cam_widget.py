@@ -74,21 +74,21 @@ class NDICameraWidget(QtWidgets.QWidget):
     def get_frame(self):
         """Reads frame, resizes, and converts image to pixmap"""
         while True:
+            timer = cv2.getTickCount()
             try:
                 t, v, _, _ = ndi.recv_capture_v3(self.ndi_recv, 5000)
                 if self.online:
                     # Read next frame from stream and insert into deque
                     try:
-                        frame = np.copy(v.data)
+                        if t == ndi.FRAME_TYPE_VIDEO:
 
-
-                        # if t == ndi.FRAME_TYPE_VIDEO:
-                        #     self.timer = cv2.getTickCount()
-                        #     fps = cv2.getTickFrequency() / (cv2.getTickCount() - self.timer)
-                        #     frame = cv2.putText(np.copy(v.data), str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                        #                         (0, 0, 255), 2)
-                        # else:
-                        #     frame = np.copy(v.data)
+                            fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
+                            print(fps, self.ndi_source_object.ndi_name)
+                            frame = np.copy(v.data)
+                            frame = cv2.putText(frame, str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                                                     (0, 0, 255), 2)
+                        else:
+                            frame = np.copy(v.data)
 
                         self.deque.append(frame)
                     except:
@@ -119,6 +119,7 @@ class NDICameraWidget(QtWidgets.QWidget):
         if self.deque and self.online:
             # Grab latest frame
             frame = self.deque[-1]
+
             # Keep frame aspect ratio
             if self.maintain_aspect_ratio:
                 self.frame = frame
@@ -144,3 +145,11 @@ class NDICameraWidget(QtWidgets.QWidget):
 
     def get_video_frame(self):
         return self.video_frame
+
+    def kill_video(self):
+        print("Killing Camera Object")
+        ndi.recv_destroy(self.ndi_recv)
+        ndi.destroy()
+        self.online = False
+        self.capture = None
+        cv2.destroyAllWindows()
