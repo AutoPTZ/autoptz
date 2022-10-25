@@ -1,5 +1,6 @@
 import sys
 
+import imutils
 # import some PyQt5 modules
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import QWidget
@@ -11,6 +12,7 @@ from PyQt5.QtCore import QTimer
 import cv2
 
 from ui_main_window import *
+
 
 class MainWindow(QWidget):
     # class constructor
@@ -33,6 +35,7 @@ class MainWindow(QWidget):
         ret, image = self.cap.read()
         # convert image to RGB format
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        #imageResize = imutils.resize(image, width=self.width)
         # get image infos
         height, width, channel = image.shape
         step = channel * width
@@ -53,6 +56,7 @@ class MainWindow(QWidget):
             self.ui.control_bt.setText("Stop")
         # if timer is started
         else:
+            self.width = int(mainWindow.frameGeometry().width())
             # stop timer
             self.timer.stop()
             # release video capture

@@ -5,12 +5,18 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/ui/homepage/assign_ptz_ui.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/autoptz.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/autoptz.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/face_recognition_tracker_dlib.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/face_recognition_tracker_dlib.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/facial_recognition.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/facial_recognition.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/trainer/labels.txt" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/trainer/labels.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/homepage/flow_layout_test.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/flow_layout_test.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/homepage/homepage.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/homepage.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/startup.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/startup.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/test_cam/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/test_cam/main_window.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/camera_widget.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -51,7 +57,7 @@
       <recent name="$PROJECT_DIR$/ui" />
     </key>
   </component>
-  <component name="RunManager">
+  <component name="RunManager" selected="Python.startup">
     <configuration name="autoptz_ui_2" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="autoptz" />
       <option name="INTERPRETER_OPTIONS" value="" />

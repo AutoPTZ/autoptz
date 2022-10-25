@@ -1,6 +1,7 @@
 import cv2
 from PyQt5 import QtCore, QtWidgets
 
+from ui.homepage.assign_ptz_ui import AssignCamDlg
 from ui.homepage.flow_layout_test import FlowLayout
 from visca import camera
 import time
@@ -13,21 +14,20 @@ from ui.widgets.camera_widget import CameraWidget
 from ui.widgets.ndi_cam_widget import NDICameraWidget
 
 camera_widget_list = []
+assigned_ptz_camera = []
 
 current_manual_device = None
 
 
 class Ui_AutoPTZ(object):
     def setupUi(self, AutoPTZ):
+        self.assigned_ptz_camera = assigned_ptz_camera
         AutoPTZ.setObjectName("AutoPTZ")
         AutoPTZ.resize(200, 450)
         AutoPTZ.setAutoFillBackground(False)
         AutoPTZ.setTabShape(QtWidgets.QTabWidget.Rounded)
         AutoPTZ.setDockNestingEnabled(False)
         self.centralwidget = QtWidgets.QWidget(AutoPTZ)
-
-        self.screen_width = QtWidgets.QApplication.desktop().screenGeometry().width()
-        self.screen_height = QtWidgets.QApplication.desktop().screenGeometry().height()
 
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
         sizePolicy.setHorizontalStretch(0)
@@ -276,6 +276,16 @@ class Ui_AutoPTZ(object):
         self.reset_btn.setObjectName("reset_btn")
         self.menu_layout.addWidget(self.reset_btn)
 
+        self.assign_to_camera_btn = QtWidgets.QPushButton(self.manualControlPage)
+        self.assign_to_camera_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
+        self.assign_to_camera_btn.setObjectName("assign_to_camera_btn")
+        self.assign_to_camera_btn.hide()
+
+        self.unassign_to_camera_btn = QtWidgets.QPushButton(self.manualControlPage)
+        self.unassign_to_camera_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
+        self.unassign_to_camera_btn.setObjectName("unassign_to_camera_btn")
+        self.unassign_to_camera_btn.hide()
+
         # Button Commands
         self.up_left_btn.clicked.connect(self.move_left_up)
         self.up_btn.clicked.connect(self.move_up)
@@ -290,10 +300,11 @@ class Ui_AutoPTZ(object):
         self.zoom_out_btn.clicked.connect(self.zoom_out)
         self.menu_btn.clicked.connect(self.menu)
         self.reset_btn.clicked.connect(self.reset)
+        self.assign_to_camera_btn.clicked.connect(self.assign_ptz_dialog)
+        self.unassign_to_camera_btn.clicked.connect(self.unassign_ptz)
 
         self.formTabWidget.addTab(self.manualControlPage, "")
         self.gridLayout.addWidget(self.formTabWidget, 0, 0, 3, 1)
-
 
         self.shown_cameras = QtWidgets.QWidget()
         self.flowLayout = FlowLayout()
@@ -302,6 +313,9 @@ class Ui_AutoPTZ(object):
         self.shown_cameras.setSizePolicy(sizePolicy)
         self.gridLayout.addWidget(self.shown_cameras, 0, 1, 1, 1)
 
+        # handling camera window sizing
+        self.screen_width = QtWidgets.QApplication.desktop().screenGeometry().width()
+        self.screen_height = QtWidgets.QApplication.desktop().screenGeometry().height()
 
         # Menu
         AutoPTZ.setCentralWidget(self.centralwidget)
@@ -338,9 +352,6 @@ class Ui_AutoPTZ(object):
 
         self.getNDISourceList()
         self.getPhysicalSourcesList()
-
-        # self.actionAdd_Hardware.triggered.connect(lambda: self.addCameraSource())
-        # self.actionAdd_Hardware.triggered.connect(lambda: self.list_ports())
 
         self.actionEdit = QtWidgets.QAction(AutoPTZ)
         self.actionEdit.setObjectName("actionEdit")
@@ -387,6 +398,32 @@ class Ui_AutoPTZ(object):
         self.retranslateUi(AutoPTZ)
         QtCore.QMetaObject.connectSlotsByName(AutoPTZ)
 
+    def assign_ptz_dialog(self):
+        """Launch the employee dialog."""
+        if not camera_widget_list or self.select_camera_dropdown.currentText() == "":
+            print("Need to select or add a camera")
+        else:
+            dlg = AssignCamDlg(self, cameraList=camera_widget_list, assignedList=assigned_ptz_camera,ptz_id=self.select_camera_dropdown.currentText())
+            dlg.closeEvent = self.refreshBtnOnClose
+            dlg.exec()
+
+    def unassign_ptz(self):
+        index = self.assigned_ptz_camera.index(self.select_camera_dropdown.currentText())
+
+        camera = self.assigned_ptz_camera[index+1]
+        camera.set_tracker(None)
+        self.assigned_ptz_camera.remove(camera)
+        self.assigned_ptz_camera.remove(self.select_camera_dropdown.currentText())
+
+        self.unassign_to_camera_btn.hide()
+        self.assign_to_camera_btn.show()
+
+    def refreshBtnOnClose(self, event):
+        if self.select_camera_dropdown.currentText() in self.assigned_ptz_camera:
+            self.unassign_to_camera_btn.show()
+        else:
+            self.assign_to_camera_btn.show()
+
     def getPhysicalSourcesList(self):
         """
         Test the ports and returns a tuple with the available ports and the ones that are working.
@@ -420,7 +457,14 @@ class Ui_AutoPTZ(object):
             current_manual_device = camera.D100(device)
             current_manual_device.init()
             print("Camera Initialized")
+
+            if device in self.assigned_ptz_camera:
+                self.unassign_to_camera_btn.show()
+            else:
+                self.assign_to_camera_btn.show()
         except:
+            self.assign_to_camera_btn.hide()
+            self.unassign_to_camera_btn.hide()
             print("Please initialize another camera")
 
     def move_up(self):
@@ -431,6 +475,7 @@ class Ui_AutoPTZ(object):
             S.start()
         except:
             print("Please initialize a camera")
+
     def move_left(self):
         global current_manual_device
         try:
@@ -468,6 +513,9 @@ class Ui_AutoPTZ(object):
             print("Please initialize a camera")
 
     def move_right_up(self):
+        self.window_width = self.shown_cameras.window().width()
+        self.window_height = self.shown_cameras.window().height()
+        self.sizeFind()
         global current_manual_device
         try:
             current_manual_device.right_up(5, 5)
@@ -475,6 +523,7 @@ class Ui_AutoPTZ(object):
             S.start()
         except:
             print("Please initialize a camera")
+
     def move_left_down(self):
         global current_manual_device
         try:
@@ -483,6 +532,7 @@ class Ui_AutoPTZ(object):
             S.start()
         except:
             print("Please initialize a camera")
+
     def move_right_down(self):
         global current_manual_device
         try:
@@ -507,12 +557,14 @@ class Ui_AutoPTZ(object):
             current_manual_device.stop()
         except:
             print("Please initialize a camera")
+
     def menu(self):
         global current_manual_device
         try:
             current_manual_device.menu()
         except:
             print("Please initialize a camera")
+
     def zoom_in(self):
         global current_manual_device
         try:
@@ -521,6 +573,7 @@ class Ui_AutoPTZ(object):
             S.start()
         except:
             print("Please initialize a camera")
+
     def zoom_out(self):
         global current_manual_device
         try:
@@ -536,12 +589,16 @@ class Ui_AutoPTZ(object):
             current_manual_device.zoom_stop()
         except:
             print("Please initialize a camera")
+
     def reset(self):
         global current_manual_device
         try:
             current_manual_device.reset()
         except:
             print("Please initialize a camera")
+
+    def sizeFind(self):
+        print(self.window_width, self.window_height)
 
     def getNDISourceList(self):
         self.sourceList = get_ndi_sources()
@@ -568,17 +625,21 @@ class Ui_AutoPTZ(object):
         if source == -1:
             camera = NDICameraWidget(self.screen_width // 3, self.screen_height // 3, ndi_source=ndi_source,
                                      aspect_ratio=True)
-            cameraWidget.setObjectName('NDI ' + str(camera))
+            camera.setObjectName('NDI Camera: ' + ndi_source.ndi_name)
+            cameraWidget.setObjectName('NDI Camera: ' + ndi_source.ndi_name)
             menuItem.disconnect()
             menuItem.triggered.connect(
-                lambda: self.deleteCameraSource(source=-1, ndi_source=ndi_source, menuItem=menuItem, camera=camera, cameraWidget=cameraWidget))
+                lambda: self.deleteCameraSource(source=-1, ndi_source=ndi_source, menuItem=menuItem, camera=camera,
+                                                cameraWidget=cameraWidget))
         else:
             camera = CameraWidget(self.screen_width // 3, self.screen_height // 3, source, aspect_ratio=True)
-            cameraWidget.setObjectName('Serial ' + str(camera))
+            camera.setObjectName('Camera: ' + str(source + 1))
+            cameraWidget.setObjectName('Camera ' + str(source + 1))
             menuItem.disconnect()
             menuItem.triggered.connect(
                 lambda: self.deleteCameraSource(source=source, menuItem=menuItem,
                                                 ndi_source=None, camera=camera, cameraWidget=cameraWidget))
+            camera_widget_list.append(camera)
         # create internal grid layout for camera
 
         cameragridLayout = QtWidgets.QGridLayout()
@@ -587,7 +648,7 @@ class Ui_AutoPTZ(object):
         cameragridLayout.addWidget(camera.get_video_frame(), 0, 0, 1, 1)
         cameraWidget.setLayout(cameragridLayout)
         select_cam_btn = QtWidgets.QPushButton("Select Camera")
-        select_cam_btn.clicked.connect(lambda: print(camera.objectName()))
+        select_cam_btn.clicked.connect(lambda: camera.get_tracker())
         cameragridLayout.addWidget(select_cam_btn, 1, 0, 1, 1)
 
         self.flowLayout.addWidget(cameraWidget)
@@ -600,6 +661,7 @@ class Ui_AutoPTZ(object):
         menuItem.disconnect()
         if source == -1:
             menuItem.triggered.connect(lambda: self.addCamera(source=-1, ndi_source=ndi_source, menuItem=menuItem))
+            camera_widget_list.remove(cameraWidget)
         else:
             menuItem.triggered.connect(lambda: self.addCamera(source=source, ndi_source=None, menuItem=menuItem))
 
@@ -625,6 +687,8 @@ class Ui_AutoPTZ(object):
         self.focus_minus_btn.setText(_translate("AutoPTZ", "Focus -"))
         self.menu_btn.setText(_translate("AutoPTZ", "Menu"))
         self.reset_btn.setText(_translate("AutoPTZ", "Reset"))
+        self.assign_to_camera_btn.setText(_translate("AutoPTZ", "Assign PTZ"))
+        self.unassign_to_camera_btn.setText(_translate("AutoPTZ", "Unassign PTZ"))
         self.formTabWidget.setTabText(self.formTabWidget.indexOf(self.manualControlPage),
                                       _translate("AutoPTZ", "Manual"))
         self.menuFile.setTitle(_translate("AutoPTZ", "File"))

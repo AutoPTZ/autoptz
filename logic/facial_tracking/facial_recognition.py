@@ -46,7 +46,7 @@ def show_info_messagebox(string):
 
 def register_person():
     print("\n [INFO] Attempting To Draw Frame")
-    video = cv2.VideoCapture(0)
+    video = cv2.VideoCapture(2)
 
     cv2.startWindowThread()
     print("\n [INFO] Frame Drawn")
@@ -162,7 +162,7 @@ def recognize_face():
     labels_file.close()
 
     # Initialize and start realtime video capture
-    cam = cv2.VideoCapture(0)
+    cam = cv2.VideoCapture(2)
 
     # Define min window size to be recognized as a face
     minW = 0.1 * cam.get(3)

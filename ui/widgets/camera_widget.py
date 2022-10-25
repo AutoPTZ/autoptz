@@ -18,7 +18,7 @@ class CameraWidget(QtWidgets.QWidget):
     @param aspect_ratio - Whether to maintain frame aspect ratio or force into fraame
     """
 
-    def __init__(self, width, height, camera_link=-1, aspect_ratio=False, parent=None, deque_size=1):
+    def __init__(self, width, height, camera_link=-1, aspect_ratio=False, parent=None, deque_size=1, tracking=None):
         super(CameraWidget, self).__init__(parent)
 
         # Initialize deque used to store frames read from the stream
@@ -51,6 +51,9 @@ class CameraWidget(QtWidgets.QWidget):
         self.timer.start(1)
 
         print('Started camera: {}'.format(self.camera_stream_link))
+
+        # Camera Tracking for VISCA
+        self.tracking = tracking
 
     def load_network_stream(self):
         """Verifies stream link and open new stream if valid"""
@@ -142,3 +145,9 @@ class CameraWidget(QtWidgets.QWidget):
 
     def get_video_frame(self):
         return self.video_frame
+
+    def set_tracker(self, tracking):
+        self.tracking = tracking
+
+    def get_tracker(self):
+        print(self.tracking)
