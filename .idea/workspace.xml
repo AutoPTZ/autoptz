@@ -5,19 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/ui/homepage/assign_ptz_ui.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/autoptz.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/autoptz.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/ui/homepage/move_visca_ptz.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/face_recognition_tracker_dlib.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/face_recognition_tracker_dlib.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/facial_recognition.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/facial_recognition.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/trainer/labels.txt" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/trainer/labels.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/flow_layout_test.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/flow_layout_test.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/homepage/assign_ptz_ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/assign_ptz_ui.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/homepage/flow_layout_test.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/flow_layout.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/homepage/homepage.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/homepage.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/startup.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/startup.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/test_cam/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/test_cam/main_window.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/camera_widget.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -36,6 +28,9 @@
   </component>
   <component name="MarkdownSettingsMigration">
     <option name="stateVersion" value="1" />
+  </component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="CurrentFile" />
   </component>
   <component name="ProjectId" id="2G5UlvkeEckFZ7APx1GRpTIhrk8" />
   <component name="ProjectViewState">
@@ -80,7 +75,7 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
-    <configuration name="flow_layout_test" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+    <configuration name="flow_layout" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="autoptz" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
@@ -92,7 +87,7 @@
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/ui/homepage/flow_layout_test.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/ui/homepage/flow_layout.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
