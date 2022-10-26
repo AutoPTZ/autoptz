@@ -7,13 +7,13 @@ class Window(QWidget):
     def __init__(self):
         super(Window, self).__init__()
 
-        flowLayout = FlowLayout()
-        flowLayout.addWidget(QPushButton("Short"))
-        flowLayout.addWidget(QPushButton("Longer"))
-        flowLayout.addWidget(QPushButton("Different text"))
-        flowLayout.addWidget(QPushButton("More text"))
-        flowLayout.addWidget(QPushButton("Even longer button text"))
-        self.setLayout(flowLayout)
+        flow_layout = FlowLayout()
+        flow_layout.addWidget(QPushButton("Short"))
+        flow_layout.addWidget(QPushButton("Longer"))
+        flow_layout.addWidget(QPushButton("Different text"))
+        flow_layout.addWidget(QPushButton("More text"))
+        flow_layout.addWidget(QPushButton("Even longer button text"))
+        self.setLayout(flow_layout)
 
         self.setWindowTitle("Flow Layout")
 
@@ -80,31 +80,31 @@ class FlowLayout(QLayout):
         size += QSize(2 * margin, 2 * margin)
         return size
 
-    def doLayout(self, rect, testOnly):
+    def doLayout(self, rect, test_only):
         x = rect.x()
         y = rect.y()
-        lineHeight = 0
+        line_height = 0
 
         for item in self.itemList:
             wid = item.widget()
-            spaceX = self.spacing() + wid.style().layoutSpacing(QSizePolicy.PushButton, QSizePolicy.PushButton,
-                                                                Qt.Horizontal)
-            spaceY = self.spacing() + wid.style().layoutSpacing(QSizePolicy.PushButton, QSizePolicy.PushButton,
-                                                                Qt.Vertical)
-            nextX = x + item.sizeHint().width() + spaceX
-            if nextX - spaceX > rect.right() and lineHeight > 0:
+            space_x = self.spacing() + wid.style().layoutSpacing(QSizePolicy.PushButton, QSizePolicy.PushButton,
+                                                                 Qt.Horizontal)
+            space_y = self.spacing() + wid.style().layoutSpacing(QSizePolicy.PushButton, QSizePolicy.PushButton,
+                                                                 Qt.Vertical)
+            next_x = x + item.sizeHint().width() + space_x
+            if next_x - space_x > rect.right() and line_height > 0:
                 x = rect.x()
-                y = y + lineHeight + spaceY
-                nextX = x + item.sizeHint().width() + spaceX
-                lineHeight = 0
+                y = y + line_height + space_y
+                next_x = x + item.sizeHint().width() + space_x
+                line_height = 0
 
-            if not testOnly:
+            if not test_only:
                 item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
 
-            x = nextX
-            lineHeight = max(lineHeight, item.sizeHint().height())
+            x = next_x
+            line_height = max(line_height, item.sizeHint().height())
 
-        return y + lineHeight - rect.y()
+        return y + line_height - rect.y()
 
 
 if __name__ == '__main__':
