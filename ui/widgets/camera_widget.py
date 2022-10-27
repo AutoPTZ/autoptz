@@ -1,11 +1,13 @@
-from PyQt5 import QtCore, QtGui, QtWidgets
-from threading import Thread
-from collections import deque
-from datetime import datetime
+import threading
 import time
-import sys
+from collections import deque
+from threading import Thread
+
 import cv2
 import imutils
+from PyQt5 import QtCore, QtGui, QtWidgets
+
+from logic.facial_tracking.train_face import Trainer
 
 
 class CameraWidget(QtWidgets.QWidget):
@@ -15,16 +17,17 @@ class CameraWidget(QtWidgets.QWidget):
     @param width - Width of the video frame
     @param height - Height of the video frame
     @param stream_link - IP/RTSP/Webcam link
-    @param aspect_ratio - Whether to maintain frame aspect ratio or force into fraame
+    @param aspect_ratio - Whether to maintain frame aspect ratio or force into frame
     """
 
     def __init__(self, width, height, camera_link=-1, aspect_ratio=False, parent=None, deque_size=1, tracking=None):
         super(CameraWidget, self).__init__(parent)
 
         # Initialize deque used to store frames read from the stream
+        self.load_stream_thread = None
         self.deque = deque(maxlen=deque_size)
 
-        # Slight offset is needed since PyQt layouts have a built in padding
+        # Slight offset is needed since PyQt layouts have a built-in padding
         # So add offset to counter the padding
         self.offset = 16
         self.screen_width = width - self.offset
@@ -55,6 +58,28 @@ class CameraWidget(QtWidgets.QWidget):
         # Camera Tracking for VISCA
         self.tracking = tracking
 
+        # Facial Recognition & Object Tracking
+        self.is_adding_face = False
+        self.adding_to_name = None
+        self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
+        self.count = 0
+
+        try:
+            self.recognizer = cv2.face.LBPHFaceRecognizer_create()
+            self.recognizer.read('../logic/facial_tracking/trainer/trainer.yml')
+            # names related to ids: example ==> Steve: id=1 | try moving to trainer/labels.txt
+            labels_file = open("../logic/facial_tracking/trainer/labels.txt", "r")
+            self.names = labels_file.read().splitlines()
+            labels_file.close()
+        except:
+            self.recognizer = None
+            self.names = None
+
+        self.font = cv2.FONT_HERSHEY_SIMPLEX
+
+        # iniciate id counter
+        self.id = 0
+
     def load_network_stream(self):
         """Verifies stream link and open new stream if valid"""
 
@@ -67,16 +92,6 @@ class CameraWidget(QtWidgets.QWidget):
         self.load_stream_thread.daemon = True
         self.load_stream_thread.start()
 
-    def verify_network_stream(self, link):
-        """Attempts to receive a frame from given link"""
-
-        cap = cv2.VideoCapture(link)
-        if not cap.isOpened():
-            return False
-
-        cap.release()
-        return True
-
     def get_frame(self):
         """Reads frame, resizes, and converts image to pixmap"""
 
@@ -87,8 +102,23 @@ class CameraWidget(QtWidgets.QWidget):
                     # Read next frame from stream and insert into deque
                     try:
                         status, frame = self.capture.read()
+                        # Keep frame aspect ratio
+                        if self.maintain_aspect_ratio:
+                            frame = imutils.resize(frame, width=self.screen_width)
+                        # Force resize
+                        else:
+                            frame = cv2.resize(frame, (self.screen_width, self.screen_height))
+
+                        if self.is_adding_face:
+                            frame = self.add_face(frame)
+                        elif self.recognizer is not None:
+                            frame = self.recognize_face(frame)
+                        else:
+                            pass
+
                         fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
-                        frame = cv2.putText(frame, str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        frame = cv2.putText(frame, str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255),
+                                            2)
                         if status:
                             self.deque.append(frame)
                         else:
@@ -105,12 +135,68 @@ class CameraWidget(QtWidgets.QWidget):
             except AttributeError:
                 pass
 
-    def spin(self, seconds):
-        """Pause for set amount of seconds, replaces time.sleep so program doesnt stall"""
+    def add_face(self, frame):
+        faces = self.face_cascade.detectMultiScale(frame, 1.3, 5)
+        for x, y, w, h in faces:
+            self.count = self.count + 1
+            name = '../logic/facial_tracking/images/' + self.adding_to_name + '/' + str(self.count) + '.jpg'
+            print("\n [INFO] Creating Images........." + name)
+            cv2.imwrite(name, frame[y:y + h, x:x + w])
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
 
-        time_end = time.time() + seconds
-        while time.time() < time_end:
-            QtWidgets.QApplication.processEvents()
+        if self.count >= 50:  # Take 5000 face sample and stop video
+            self.adding_to_name = None
+            self.is_adding_face = False
+
+            # MacOS only allows UI things to show on the main thread.
+            # Since this camera is on a separate thread,
+            # we can't automatically train model here nor put it on its own thread
+            # result = Trainer().train_face()
+            # if result == "done":
+            #
+            # else:
+            #     print(result)
+
+            th = Thread(target=Trainer().train_face)
+            th.daemon = True
+            th.start()
+
+            th.join()
+            self.recognizer = cv2.face.LBPHFaceRecognizer_create()
+            self.recognizer.read('../logic/facial_tracking/trainer/trainer.yml')
+
+            # names related to ids: example ==> Steve: id=1 | try moving to trainer/labels.txt
+            labels_file = open("../logic/facial_tracking/trainer/labels.txt", "r")
+            self.names = labels_file.read().splitlines()
+            labels_file.close()
+            return frame
+        else:
+            return frame
+
+    def recognize_face(self, frame):
+        # Define min window size to be recognized as a face
+        minW = 0.1 * frame.shape[1]
+        minH = 0.1 * frame.shape[0]
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5,
+                                                   minSize=(int(minW), int(minH)))
+
+        for (x, y, w, h) in faces:
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            id, confidence = self.recognizer.predict(gray[y:y + h, x:x + w])
+            # Check if confidence is less them 100 ==> "0" is perfect match
+            if confidence < 100:
+                id = self.names[id]
+                confidence = "  {0}%".format(round(100 - confidence))
+            else:
+                id = "unknown"
+                confidence = "  {0}%".format(round(100 - confidence))
+
+            cv2.putText(frame, str(id), (x + 5, y - 5), self.font, 1, (255, 255, 255), 2)
+            cv2.putText(frame, str(confidence), (x + 5, y + h - 5), self.font, 1, (255, 255, 0), 1)
+
+        return frame
 
     def set_frame(self):
         """Sets pixmap image to video frame"""
@@ -123,25 +209,37 @@ class CameraWidget(QtWidgets.QWidget):
             # Grab latest frame
             frame = self.deque[-1]
 
-            # Keep frame aspect ratio
-            if self.maintain_aspect_ratio:
-                self.frame = imutils.resize(frame, width=self.screen_width)
-            # Force resize
-            else:
-                self.frame = cv2.resize(frame, (self.screen_width, self.screen_height))
-
             # Convert to pixmap and set to video frame
-            self.img = QtGui.QImage(self.frame, self.frame.shape[1], self.frame.shape[0], self.frame.strides[0],
-                                    QtGui.QImage.Format_RGB888).rgbSwapped()
+            img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], frame.strides[0],
+                               QtGui.QImage.Format_RGB888).rgbSwapped()
 
             try:
-                self.video_frame.setPixmap(QtGui.QPixmap.fromImage(self.img))
+                self.video_frame.setPixmap(QtGui.QPixmap.fromImage(img))
             except:
                 print("Killing Camera Object")
                 self.capture.release()
                 self.online = False
                 self.capture = None
                 cv2.destroyAllWindows()
+
+    @staticmethod
+    def verify_network_stream(link):
+        """Attempts to receive a frame from given link"""
+
+        cap = cv2.VideoCapture(link)
+        if not cap.isOpened():
+            return False
+
+        cap.release()
+        return True
+
+    @staticmethod
+    def spin(seconds):
+        """Pause for set amount of seconds, replaces time.sleep so program doesnt stall"""
+
+        time_end = time.time() + seconds
+        while time.time() < time_end:
+            QtWidgets.QApplication.processEvents()
 
     def get_video_frame(self):
         return self.video_frame
@@ -151,10 +249,15 @@ class CameraWidget(QtWidgets.QWidget):
 
     def get_tracker(self):
         print(self.tracking)
-        
+
     def kill_video(self):
         print("Killing Camera Object")
         self.capture.release()
         self.online = False
         self.capture = None
+        CameraWidget.close(self)
         cv2.destroyAllWindows()
+
+    def config_add_face(self, name):
+        self.adding_to_name = name
+        self.is_adding_face = True
