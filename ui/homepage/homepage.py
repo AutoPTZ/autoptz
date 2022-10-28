@@ -1,5 +1,7 @@
 import cv2
 from PyQt5 import QtCore, QtWidgets
+import watchdog.events
+import watchdog.observers
 
 from logic.facial_tracking.add_face import AddFaceDlg
 from ui.homepage.move_visca_ptz import ViscaPTZ
@@ -7,12 +9,14 @@ from ui.homepage.assign_ptz_ui import AssignPTZDlg
 from ui.homepage.flow_layout import FlowLayout
 from logic.camera_search.get_serial_cameras import COMPorts
 from logic.camera_search.search_ndi import get_ndi_sources
+from ui.shared.watch_trainer_directory import WatchTrainer
 from ui.widgets.camera_widget import CameraWidget
 from ui.widgets.ndi_cam_widget import NDICameraWidget
 
 
 class Ui_AutoPTZ(object):
     def __init__(self):
+        self.watch_trainer = None
         self.current_manual_device = None
         self.current_selected_source = None
         self.actionReset_Database = None
@@ -406,7 +410,10 @@ class Ui_AutoPTZ(object):
         self.getPhysicalSourcesList()
         self.assigned_ptz_camera = []
         self.serial_widget_list = []
-
+        self.watch_trainer = WatchTrainer()
+        observer = watchdog.observers.Observer()
+        observer.schedule(self.watch_trainer, path="../logic/facial_tracking/trainer/", recursive=True)
+        observer.start()
         self.translateUi(AutoPTZ)
         QtCore.QMetaObject.connectSlotsByName(AutoPTZ)
 
@@ -485,9 +492,6 @@ class Ui_AutoPTZ(object):
             print("Opening Face Dialog")
             dlg = AddFaceDlg(self, camera=self.current_selected_source)
             dlg.exec()
-
-    def setCurrentSource(self, camera):
-        self.current_selected_source = camera
 
     def refreshBtnOnClose(self, event):
         """Check is VISCA PTZ is assigned and change assignment button if so"""
@@ -569,6 +573,7 @@ class Ui_AutoPTZ(object):
 
         camera_grid_layout.addWidget(camera.get_video_frame(), 0, 0, 1, 1)
         camera_widget.setLayout(camera_grid_layout)
+
         select_cam_btn = QtWidgets.QPushButton("Select Camera")
         select_cam_btn.clicked.connect(lambda: self.selectCameraSource(camera=camera, select_cam_btn=select_cam_btn, unselect_cam_btn=unselect_cam_btn))
         unselect_cam_btn = QtWidgets.QPushButton("Unselect Camera")
@@ -578,23 +583,20 @@ class Ui_AutoPTZ(object):
         unselect_cam_btn.hide()
 
         self.flowLayout.addWidget(camera_widget)
+        self.watch_trainer.add_camera(camera=camera)
 
     def selectCameraSource(self, camera, select_cam_btn, unselect_cam_btn):
-        self.setCurrentSource(camera=camera)
+        self.current_selected_source = camera
         select_cam_btn.hide()
         unselect_cam_btn.show()
 
     def unselectCameraSource(self, select_cam_btn, unselect_cam_btn):
-        self.setCurrentSource(camera=None)
+        self.current_selected_source = None
         unselect_cam_btn.hide()
         select_cam_btn.show()
 
     def deleteCameraSource(self, source, ndi_source, menu_item, camera, camera_widget):
         """Remove NDI/Serial camera source from camera grid"""
-        self.flowLayout.removeWidget(camera_widget)
-        camera.kill_video()
-        camera_widget.destroy()
-
         menu_item.disconnect()
         if source == -1:
             # Remove NDI source widget
@@ -603,6 +605,11 @@ class Ui_AutoPTZ(object):
             # Remove Serial source widget
             menu_item.triggered.connect(lambda: self.addCamera(source=source, ndi_source=None, menu_item=menu_item))
             self.serial_widget_list.remove(camera)
+
+        self.watch_trainer.remove_camera(camera=camera)
+        camera.close()
+        camera_widget.close()
+        self.flowLayout.removeWidget(camera_widget)
 
     def translateUi(self, AutoPTZ):
         """Translate Menu, Buttons, and Labels through localization"""

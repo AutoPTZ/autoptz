@@ -1,7 +1,9 @@
-numpy
-pillow
+numpy~=1.23.4
+pillow~=9.2.0
 opencv-contrib-python
-PyQT5
-dlib
-imutils
-scipy
+PyQT5~=5.15.7
+dlib~=19.24.0
+imutils~=0.5.4
+scipy~=1.7.3
+watchdog~=2.1.9
+pyserial~=3.5

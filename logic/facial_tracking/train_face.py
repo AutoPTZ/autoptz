@@ -13,7 +13,7 @@ class Trainer:
 
     @staticmethod
     def train_face():
-        #show_info_messagebox("It will take a few seconds to minutes.\n Please Wait ...")
+        # show_info_messagebox("It will take a few seconds to minutes.\n Please Wait ...")
         print("\n [INFO] Training faces. It will take a few seconds to minutes. Please Wait ...")
 
         # Path for face image database
@@ -44,17 +44,7 @@ class Trainer:
         # Send to trainer
         recognizer.train(faceSamples, np.array(ids))
         # Save the model into trainer/trainer.yml
-        recognizer.save('../logic/facial_tracking/trainer/trainer.yml')  # recognizer.write() worked on Pi
-        # Print the numer of faces trained and end program
-        # messagebox.showinfo("Training Faces Process",
-        #  "{0} faces trained. Opening Basic Recognition Software".format(len(np.unique(ids))),
-        # parent=root)
-        #show_info_messagebox("{0} faces trained.\nOpening Basic Recognition Software".format(len(np.unique(ids))))
+        recognizer.save('../logic/facial_tracking/trainer/trainer.yml')
+        # show_info_messagebox("{0} faces trained.\nOpening Basic Recognition Software".format(len(np.unique(ids))))
         print("\n [INFO] {0} faces trained.".format(len(np.unique(ids))))
-        return "done"
-# def run_trainer(recognizer):
-#     th = threading.Thread(target=train_face)
-#     th.start()
-#
-#     th.join()
-#     recognizer =s
+        return

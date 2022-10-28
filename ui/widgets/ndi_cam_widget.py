@@ -58,6 +58,17 @@ class NDICameraWidget(QtWidgets.QWidget):
 
         print('Started camera: {}'.format(self.ndi_source_object.ndi_name))
 
+        # Facial Recognition & Object Tracking
+        self.is_adding_face = False
+        self.adding_to_name = None
+        self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
+        self.count = 0
+        self.recognizer = None
+        self.names = None
+        self.resetFacialRecognition()
+        self.font = cv2.FONT_HERSHEY_SIMPLEX
+        self.id = 0
+
     def load_network_stream(self):
         """Verifies NDI source and open stream if valid"""
 
@@ -81,12 +92,23 @@ class NDICameraWidget(QtWidgets.QWidget):
                     # Read next frame from stream and insert into deque
                     try:
                         if t == ndi.FRAME_TYPE_VIDEO:
+                            frame = np.copy(v.data)
+
+                            # # Keep frame aspect ratio
+                            # if self.maintain_aspect_ratio:
+                            #     frame = imutils.resize(frame, width=self.screen_width)
+                            # # Force resize
+                            # else:
+                            #     frame = cv2.resize(frame, (self.screen_width, self.screen_height))
+
+                            if self.is_adding_face:
+                                frame = self.add_face(frame)
+                            elif self.recognizer is not None:
+                                frame = self.recognize_face(frame)
 
                             fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
-                            print(fps, self.ndi_source_object.ndi_name)
-                            frame = np.copy(v.data)
-                            frame = cv2.putText(frame, str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                                                     (0, 0, 255), 2)
+                            frame = cv2.putText(frame, str(int(fps)), (75, 50), self.font, 0.7, (0, 0, 255),
+                                                2)
                         else:
                             frame = np.copy(v.data)
 
@@ -120,17 +142,8 @@ class NDICameraWidget(QtWidgets.QWidget):
             # Grab latest frame
             frame = self.deque[-1]
 
-            # Keep frame aspect ratio
-            if self.maintain_aspect_ratio:
-                self.frame = frame
-                # self.frame = imutils.resize(frame, width=self.screen_width)
-            # Force resize
-            else:
-                self.frame = frame
-                # self.frame = cv2.resize(frame, (self.screen_width, self.screen_height))
-
             # Convert to pixmap and set to video frame
-            self.img = QtGui.QImage(self.frame, self.frame.shape[1], self.frame.shape[0], self.frame.strides[0],
+            self.img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], frame.strides[0],
                                     QtGui.QImage.Format_RGBX8888).rgbSwapped()
 
             try:

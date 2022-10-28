@@ -1,7 +1,8 @@
-import threading
+import os.path
 import time
 from collections import deque
-from threading import Thread
+from threading import Thread, Lock
+import time
 
 import cv2
 import imutils
@@ -24,6 +25,8 @@ class CameraWidget(QtWidgets.QWidget):
         super(CameraWidget, self).__init__(parent)
 
         # Initialize deque used to store frames read from the stream
+        self.break_loop_lock = Lock()
+        self.break_loop = False
         self.load_stream_thread = None
         self.deque = deque(maxlen=deque_size)
 
@@ -42,6 +45,8 @@ class CameraWidget(QtWidgets.QWidget):
         self.video_frame = QtWidgets.QLabel()
 
         self.load_network_stream()
+
+        self.load_counter = 0
 
         # Start background frame grabbing
         self.get_frame_thread = Thread(target=self.get_frame, args=())
@@ -63,21 +68,10 @@ class CameraWidget(QtWidgets.QWidget):
         self.adding_to_name = None
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
         self.count = 0
-
-        try:
-            self.recognizer = cv2.face.LBPHFaceRecognizer_create()
-            self.recognizer.read('../logic/facial_tracking/trainer/trainer.yml')
-            # names related to ids: example ==> Steve: id=1 | try moving to trainer/labels.txt
-            labels_file = open("../logic/facial_tracking/trainer/labels.txt", "r")
-            self.names = labels_file.read().splitlines()
-            labels_file.close()
-        except:
-            self.recognizer = None
-            self.names = None
-
+        self.recognizer = None
+        self.names = None
+        self.resetFacialRecognition()
         self.font = cv2.FONT_HERSHEY_SIMPLEX
-
-        # iniciate id counter
         self.id = 0
 
     def load_network_stream(self):
@@ -96,44 +90,59 @@ class CameraWidget(QtWidgets.QWidget):
         """Reads frame, resizes, and converts image to pixmap"""
 
         while True:
-            try:
-                timer = cv2.getTickCount()
-                if self.capture.isOpened() and self.online:
-                    # Read next frame from stream and insert into deque
-                    try:
-                        status, frame = self.capture.read()
-                        # Keep frame aspect ratio
-                        if self.maintain_aspect_ratio:
-                            frame = imutils.resize(frame, width=self.screen_width)
-                        # Force resize
-                        else:
-                            frame = cv2.resize(frame, (self.screen_width, self.screen_height))
-
-                        if self.is_adding_face:
-                            frame = self.add_face(frame)
-                        elif self.recognizer is not None:
-                            frame = self.recognize_face(frame)
-                        else:
-                            pass
-
-                        fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
-                        frame = cv2.putText(frame, str(int(fps)), (75, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255),
-                                            2)
-                        if status:
-                            self.deque.append(frame)
-                        else:
-                            self.capture.release()
-                            self.online = False
-                    except:
-                        pass
+            with self.break_loop_lock:
+                if self.break_loop:
+                    break
                 else:
-                    # Attempt to reconnect
-                    print('attempting to reconnect', self.camera_stream_link)
-                    self.load_network_stream()
-                    self.spin(2)
-                self.spin(.001)
-            except AttributeError:
-                pass
+                    try:
+                        timer = cv2.getTickCount()
+                        if self.capture.isOpened() and self.online:
+                            # Read next frame from stream and insert into deque
+                            status, frame = self.capture.read()
+
+                            # Keep frame aspect ratio
+                            if self.maintain_aspect_ratio:
+                                frame = imutils.resize(frame, width=self.screen_width)
+                            # Force resize
+                            else:
+                                frame = cv2.resize(frame, (self.screen_width, self.screen_height))
+
+                            try:
+                                if self.is_adding_face:
+                                    frame = self.add_face(frame)
+                                elif self.recognizer is not None:
+                                    frame = self.recognize_face(frame)
+                            except:
+                                self.resetFacialRecognition()
+                                print("something went wrong")
+
+                            fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
+                            frame = cv2.putText(frame, str(int(fps)), (75, 50), self.font, 0.7, (0, 0, 255),
+                                                2)
+                            if status:
+                                self.deque.append(frame)
+                            else:
+                                self.capture.release()
+                                self.online = False
+                        else:
+                            # Attempt to reconnect
+                            print('attempting to reconnect', self.camera_stream_link)
+                            self.load_network_stream()
+                            self.spin(2)
+                        self.spin(.01)
+                    except AttributeError:
+                        pass
+
+                # print(self.count_for_reset)
+                # break
+                # if self.count_for_reset is None:
+                #     self.count_for_reset = 0
+                # elif self.count_for_reset < 2000:
+                #     self.count_for_reset = self.count_for_reset + 1
+                #     pass
+                # else:
+                #     self.kill_video()
+                #     break
 
     def add_face(self, frame):
         faces = self.face_cascade.detectMultiScale(frame, 1.3, 5)
@@ -160,18 +169,28 @@ class CameraWidget(QtWidgets.QWidget):
             th = Thread(target=Trainer().train_face)
             th.daemon = True
             th.start()
-
             th.join()
+            self.resetFacialRecognition()
+            self.count = 0
+            return frame
+        else:
+            return frame
+
+    def resetFacialRecognition(self):
+        if os.path.exists("../logic/facial_tracking/trainer/trainer.yml"):
             self.recognizer = cv2.face.LBPHFaceRecognizer_create()
-            self.recognizer.read('../logic/facial_tracking/trainer/trainer.yml')
+            try:
+                self.recognizer.read('../logic/facial_tracking/trainer/trainer.yml')
+            except:
+                self.resetFacialRecognition()
 
             # names related to ids: example ==> Steve: id=1 | try moving to trainer/labels.txt
             labels_file = open("../logic/facial_tracking/trainer/labels.txt", "r")
             self.names = labels_file.read().splitlines()
             labels_file.close()
-            return frame
         else:
-            return frame
+            self.recognizer = None
+            self.names = None
 
     def recognize_face(self, frame):
         # Define min window size to be recognized as a face
@@ -199,28 +218,28 @@ class CameraWidget(QtWidgets.QWidget):
         return frame
 
     def set_frame(self):
-        """Sets pixmap image to video frame"""
-
-        if not self.online:
-            self.spin(1)
+        if self.break_loop:
+            self.kill_video()
             return
+        else:
+            """Sets pixmap image to video frame"""
+            if not self.online:
+                self.spin(3)
+                return
 
-        if self.deque and self.online:
-            # Grab latest frame
-            frame = self.deque[-1]
+            if self.deque and self.online:
+                # Grab latest frame
+                frame = self.deque[-1]
 
-            # Convert to pixmap and set to video frame
-            img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], frame.strides[0],
-                               QtGui.QImage.Format_RGB888).rgbSwapped()
+                # Convert to pixmap and set to video frame
+                img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], frame.strides[0],
+                                   QtGui.QImage.Format_RGB888).rgbSwapped()
 
-            try:
-                self.video_frame.setPixmap(QtGui.QPixmap.fromImage(img))
-            except:
-                print("Killing Camera Object")
-                self.capture.release()
-                self.online = False
-                self.capture = None
-                cv2.destroyAllWindows()
+                try:
+                    self.video_frame.setPixmap(QtGui.QPixmap.fromImage(img))
+                except:
+                    self.kill_video()
+
 
     @staticmethod
     def verify_network_stream(link):
@@ -252,11 +271,15 @@ class CameraWidget(QtWidgets.QWidget):
 
     def kill_video(self):
         print("Killing Camera Object")
+        with self.break_loop_lock:
+            self.break_loop = True
         self.capture.release()
-        self.online = False
-        self.capture = None
-        CameraWidget.close(self)
         cv2.destroyAllWindows()
+        self.load_stream_thread = None
+        self.capture = None
+        self.online = False
+        # self.video_frame.close()
+        print("Camera Object Done")
 
     def config_add_face(self, name):
         self.adding_to_name = name
