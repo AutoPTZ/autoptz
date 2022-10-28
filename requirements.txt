@@ -1,9 +1,11 @@
-numpy~=1.23.4
-pillow~=9.2.0
+numpy
+pillow
 opencv-contrib-python
-PyQT5~=5.15.7
-dlib~=19.24.0
-imutils~=0.5.4
-scipy~=1.7.3
-watchdog~=2.1.9
-pyserial~=3.5
+PyQT5
+imutils
+scipy
+watchdog
+pyserial
+ndi-python
+
+# conda install -c conda-forge dlib
