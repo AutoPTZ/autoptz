@@ -18,5 +18,4 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
     def on_any_event(self, event):
         print("Watchdog received an event at - % s." % event.src_path)
         for camera in self.camera_widget_list:
-            print(camera)
             camera.resetFacialRecognition()

@@ -1,5 +1,4 @@
 import os.path
-import time
 from collections import deque
 from threading import Thread, Lock
 import time
@@ -45,8 +44,6 @@ class CameraWidget(QtWidgets.QWidget):
         self.video_frame = QtWidgets.QLabel()
 
         self.load_network_stream()
-
-        self.load_counter = 0
 
         # Start background frame grabbing
         self.get_frame_thread = Thread(target=self.get_frame, args=())
@@ -114,7 +111,7 @@ class CameraWidget(QtWidgets.QWidget):
                                     frame = self.recognize_face(frame)
                             except:
                                 self.resetFacialRecognition()
-                                print("something went wrong")
+                                print("resetting facial recognition")
 
                             fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
                             frame = cv2.putText(frame, str(int(fps)), (75, 50), self.font, 0.7, (0, 0, 255),
@@ -271,9 +268,13 @@ class CameraWidget(QtWidgets.QWidget):
 
     def kill_video(self):
         print("Killing Camera Object")
+
         with self.break_loop_lock:
             self.break_loop = True
-        self.capture.release()
+        try:
+            self.capture.release()
+        except:
+            pass
         cv2.destroyAllWindows()
         self.load_stream_thread = None
         self.capture = None
