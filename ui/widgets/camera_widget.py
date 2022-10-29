@@ -154,16 +154,7 @@ class CameraWidget(QtWidgets.QWidget):
             self.adding_to_name = None
             self.is_adding_face = False
 
-            # MacOS only allows UI things to show on the main thread.
-            # Since this camera is on a separate thread,
-            # we can't automatically train model here nor put it on its own thread
-            # result = Trainer().train_face()
-            # if result == "done":
-            #
-            # else:
-            #     print(result)
-
-            th = Thread(target=Trainer().train_face)
+            th = Thread(target=Trainer().train_face(False))
             th.daemon = True
             th.start()
             th.join()

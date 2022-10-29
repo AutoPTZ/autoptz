@@ -3,7 +3,10 @@ from PyQt5 import QtCore, QtWidgets
 import watchdog.events
 import watchdog.observers
 
+from logic.facial_tracking import train_face
 from logic.facial_tracking.add_face import AddFaceDlg
+from logic.facial_tracking.remove_face import RemoveFaceDlg
+from logic.facial_tracking.train_face import Trainer
 from ui.homepage.move_visca_ptz import ViscaPTZ
 from ui.homepage.assign_ptz_ui import AssignPTZDlg
 from ui.homepage.flow_layout import FlowLayout
@@ -377,8 +380,10 @@ class Ui_AutoPTZ(object):
         self.actionAdd_Face.triggered.connect(self.add_face)
         self.actionTrain_Model = QtWidgets.QAction(AutoPTZ)
         self.actionTrain_Model.setObjectName("actionTrain_Model")
+        self.actionTrain_Model.triggered.connect(self.retrain_face)
         self.actionRemove_Face = QtWidgets.QAction(AutoPTZ)
         self.actionRemove_Face.setObjectName("actionRemove_Face")
+        self.actionRemove_Face.triggered.connect(self.remove_face)
         self.actionReset_Database = QtWidgets.QAction(AutoPTZ)
         self.actionReset_Database.setObjectName("actionReset_Database")
         self.menuFile.addAction(self.actionOpen)
@@ -493,6 +498,15 @@ class Ui_AutoPTZ(object):
             dlg = AddFaceDlg(self, camera=self.current_selected_source)
             dlg.exec()
 
+    @staticmethod
+    def retrain_face():
+        Trainer().train_face(True)
+
+    def remove_face(self):
+        """Launch the Remove Face dialog based on the currently selected camera."""
+        print("Opening Face Dialog")
+        dlg = RemoveFaceDlg(self)
+        dlg.exec()
     def refreshBtnOnClose(self, event):
         """Check is VISCA PTZ is assigned and change assignment button if so"""
         if self.select_camera_dropdown.currentText() in self.assigned_ptz_camera:
@@ -653,6 +667,6 @@ class Ui_AutoPTZ(object):
         self.actionContact.setText(_translate("AutoPTZ", "Contact"))
         self.actionAbout.setText(_translate("AutoPTZ", "About"))
         self.actionAdd_Face.setText(_translate("AutoPTZ", "Add Face"))
-        self.actionTrain_Model.setText(_translate("AutoPTZ", "Train Model"))
+        self.actionTrain_Model.setText(_translate("AutoPTZ", "Retrain Model"))
         self.actionRemove_Face.setText(_translate("AutoPTZ", "Remove Face"))
         self.actionReset_Database.setText(_translate("AutoPTZ", "Reset Database"))

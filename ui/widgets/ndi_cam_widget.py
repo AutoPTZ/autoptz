@@ -158,7 +158,7 @@ class NDICameraWidget(QtWidgets.QWidget):
             # else:
             #     print(result)
 
-            th = Thread(target=Trainer().train_face)
+            th = Thread(target=Trainer().train_face(False))
             th.daemon = True
             th.start()
             th.join()
