@@ -72,22 +72,6 @@ class AddFaceUI(object):
                 self.camera.config_add_face(name=self.name_line.text().strip())
                 self.window.close()
 
-    """ Potentially move add_face imaging to this file """
-    # def add_face(self, frame):
-    #     while True:
-    #         faces = face_cascade.detectMultiScale(frame, 1.3, 5)
-    #         for x, y, w, h in faces:
-    #             self.count = self.count + 1
-    #             name = './images/' + self.name_line.text().strip() + '/' + str(self.count) + '.jpg'
-    #             print("\n [INFO] Creating Images........." + name)
-    #             cv2.imwrite(name, frame[y:y + h, x:x + w])
-    #             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
-    #
-    #         if self.count >= 50:  # Take 5000 face sample and stop video
-    #             break
-    #
-    #         return frame
-
     def translate_ui(self, add_face):
         _translate = QtCore.QCoreApplication.translate
         add_face.setWindowTitle(_translate("add_face", "Add Face"))

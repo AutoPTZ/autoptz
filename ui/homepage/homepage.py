@@ -1,17 +1,20 @@
+import os
+
 import cv2
 from PyQt5 import QtCore, QtWidgets
 import watchdog.events
 import watchdog.observers
 
-from logic.facial_tracking import train_face
 from logic.facial_tracking.add_face import AddFaceDlg
 from logic.facial_tracking.remove_face import RemoveFaceDlg
+from logic.facial_tracking.reset_database import ResetDatabaseDlg
 from logic.facial_tracking.train_face import Trainer
 from ui.homepage.move_visca_ptz import ViscaPTZ
 from ui.homepage.assign_ptz_ui import AssignPTZDlg
 from ui.homepage.flow_layout import FlowLayout
 from logic.camera_search.get_serial_cameras import COMPorts
 from logic.camera_search.search_ndi import get_ndi_sources
+from ui.shared.message_prompts import show_info_messagebox
 from ui.shared.watch_trainer_directory import WatchTrainer
 from ui.widgets.camera_widget import CameraWidget
 from ui.widgets.ndi_cam_widget import NDICameraWidget
@@ -386,6 +389,7 @@ class Ui_AutoPTZ(object):
         self.actionRemove_Face.triggered.connect(self.remove_face)
         self.actionReset_Database = QtWidgets.QAction(AutoPTZ)
         self.actionReset_Database.setObjectName("actionReset_Database")
+        self.actionReset_Database.triggered.connect(self.reset_database)
         self.menuFile.addAction(self.actionOpen)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionSave)
@@ -492,7 +496,7 @@ class Ui_AutoPTZ(object):
     def add_face(self):
         """Launch the Add Face dialog based on the currently selected camera."""
         if self.flowLayout.count() == 0 or self.current_selected_source is None:
-            print("Need to select or add a camera")
+            show_info_messagebox("Please add and select a camera.")
         else:
             print("Opening Face Dialog")
             dlg = AddFaceDlg(self, camera=self.current_selected_source)
@@ -500,13 +504,26 @@ class Ui_AutoPTZ(object):
 
     @staticmethod
     def retrain_face():
-        Trainer().train_face(True)
+        if not os.path.isdir('../logic/facial_tracking/images/'):
+            show_info_messagebox("No Faces to train.")
+        else:
+            Trainer().train_face(True)
 
     def remove_face(self):
         """Launch the Remove Face dialog based on the currently selected camera."""
+        if not os.path.isdir('../logic/facial_tracking/images/'):
+            show_info_messagebox("No Faces to remove.")
+        else:
+            print("Opening Face Dialog")
+            dlg = RemoveFaceDlg(self)
+            dlg.exec()
+
+    def reset_database(self):
+        """Launch the Remove Face dialog based on the currently selected camera."""
         print("Opening Face Dialog")
-        dlg = RemoveFaceDlg(self)
+        dlg = ResetDatabaseDlg(self)
         dlg.exec()
+
     def refreshBtnOnClose(self, event):
         """Check is VISCA PTZ is assigned and change assignment button if so"""
         if self.select_camera_dropdown.currentText() in self.assigned_ptz_camera:
@@ -589,9 +606,11 @@ class Ui_AutoPTZ(object):
         camera_widget.setLayout(camera_grid_layout)
 
         select_cam_btn = QtWidgets.QPushButton("Select Camera")
-        select_cam_btn.clicked.connect(lambda: self.selectCameraSource(camera=camera, select_cam_btn=select_cam_btn, unselect_cam_btn=unselect_cam_btn))
+        select_cam_btn.clicked.connect(lambda: self.selectCameraSource(camera=camera, select_cam_btn=select_cam_btn,
+                                                                       unselect_cam_btn=unselect_cam_btn))
         unselect_cam_btn = QtWidgets.QPushButton("Unselect Camera")
-        unselect_cam_btn.clicked.connect(lambda: self.unselectCameraSource(select_cam_btn=select_cam_btn, unselect_cam_btn=unselect_cam_btn))
+        unselect_cam_btn.clicked.connect(
+            lambda: self.unselectCameraSource(select_cam_btn=select_cam_btn, unselect_cam_btn=unselect_cam_btn))
         camera_grid_layout.addWidget(select_cam_btn, 1, 0, 1, 1)
         camera_grid_layout.addWidget(unselect_cam_btn, 2, 0, 1, 1)
         unselect_cam_btn.hide()

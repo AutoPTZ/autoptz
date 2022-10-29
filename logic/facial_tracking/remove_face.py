@@ -74,12 +74,9 @@ class RemoveFaceUI(object):
 class RemoveFaceDlg(QDialog):
     """Setup Add Face Dialog"""
 
-    def __init__(self, parent=None, camera=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
         # Create an instance of the GUI
-
-        if camera is None:
-            camera = ''
         self.ui = RemoveFaceUI()
         # Run the .setupUi() method to show the GUI
         self.ui.setupUi(self)
