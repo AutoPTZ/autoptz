@@ -22,6 +22,7 @@ from ui.widgets.ndi_cam_widget import NDICameraWidget
 
 class Ui_AutoPTZ(object):
     def __init__(self):
+        self.image_path = None
         self.watch_trainer = None
         self.current_manual_device = None
         self.current_selected_source = None
@@ -131,6 +132,9 @@ class Ui_AutoPTZ(object):
         size_policy.setHeightForWidth(self.select_face_dropdown.sizePolicy().hasHeightForWidth())
         self.select_face_dropdown.setSizePolicy(size_policy)
         self.select_face_dropdown.setObjectName("select_face_dropdown")
+        self.image_path = '../logic/facial_tracking/images/'
+        self.select_face_dropdown.currentTextChanged.connect(self.selected_face_change)
+
         self.formLayout.setWidget(2, QtWidgets.QFormLayout.SpanningRole, self.select_face_dropdown)
         self.enable_track = QtWidgets.QCheckBox(self.selectedCamPage)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed)
@@ -531,6 +535,20 @@ class Ui_AutoPTZ(object):
         else:
             self.assign_ptz_btn.show()
 
+    def check_all_faces(self):
+        self.select_face_dropdown.clear()
+        self.select_face_dropdown.addItem("")
+        # Path for face image database
+        if os.path.exists(self.image_path):
+            for folder in os.listdir(self.image_path):
+                self.select_face_dropdown.addItem(folder)
+
+    def selected_face_change(self):
+        try:
+            self.current_selected_source.changeFace(self.select_face_dropdown.currentText())
+        except:
+            self.current_selected_source.changeFace('')
+
     def getPhysicalSourcesList(self):
         """Test ports 0-6 and adds all camera sources to the physical source list"""
         non_working_ports = []
@@ -622,11 +640,14 @@ class Ui_AutoPTZ(object):
         self.current_selected_source = camera
         select_cam_btn.hide()
         unselect_cam_btn.show()
+        self.check_all_faces()
 
     def unselectCameraSource(self, select_cam_btn, unselect_cam_btn):
         self.current_selected_source = None
         unselect_cam_btn.hide()
         select_cam_btn.show()
+        self.select_face_dropdown.clear()
+
 
     def deleteCameraSource(self, source, ndi_source, menu_item, camera, camera_widget):
         """Remove NDI/Serial camera source from camera grid"""

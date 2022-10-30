@@ -4,6 +4,7 @@ from threading import Thread, Lock
 import time
 
 import cv2
+import dlib
 import imutils
 from PyQt5 import QtCore, QtGui, QtWidgets
 
@@ -70,6 +71,14 @@ class CameraWidget(QtWidgets.QWidget):
         self.resetFacialRecognition()
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self.id = 0
+        self.name_id = None
+        self.tracked_name = None
+        self.track_started = None
+        self.tracker = None
+        self.track_x = None
+        self.track_y = None
+        self.track_w = None
+        self.track_h = None
 
     def load_network_stream(self):
         """Verifies stream link and open new stream if valid"""
@@ -104,14 +113,19 @@ class CameraWidget(QtWidgets.QWidget):
                             else:
                                 frame = cv2.resize(frame, (self.screen_width, self.screen_height))
 
-                            try:
-                                if self.is_adding_face:
-                                    frame = self.add_face(frame)
-                                elif self.recognizer is not None:
-                                    frame = self.recognize_face(frame)
-                            except:
-                                self.resetFacialRecognition()
-                                print("resetting facial recognition")
+                            if self.is_adding_face:
+                                frame = self.add_face(frame)
+                            elif self.recognizer is not None:
+                                frame = self.recognize_face(frame)
+
+                            # try:
+                            #     if self.is_adding_face:
+                            #         frame = self.add_face(frame)
+                            #     elif self.recognizer is not None:
+                            #         frame = self.recognize_face(frame)
+                            # except:
+                            #     self.resetFacialRecognition()
+                            #     print("resetting facial recognition")
 
                             fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
                             frame = cv2.putText(frame, str(int(fps)), (75, 50), self.font, 0.7, (0, 0, 255),
@@ -130,16 +144,11 @@ class CameraWidget(QtWidgets.QWidget):
                     except AttributeError:
                         pass
 
-                # print(self.count_for_reset)
-                # break
-                # if self.count_for_reset is None:
-                #     self.count_for_reset = 0
-                # elif self.count_for_reset < 2000:
-                #     self.count_for_reset = self.count_for_reset + 1
-                #     pass
-                # else:
-                #     self.kill_video()
-                #     break
+    def changeFace(self, name):
+        if name == '':
+            self.tracked_name = None
+        else:
+            self.tracked_name = name
 
     def add_face(self, frame):
         faces = self.face_cascade.detectMultiScale(frame, 1.3, 5)
@@ -194,15 +203,49 @@ class CameraWidget(QtWidgets.QWidget):
             id, confidence = self.recognizer.predict(gray[y:y + h, x:x + w])
             # Check if confidence is less them 100 ==> "0" is perfect match
             if confidence < 100:
-                id = self.names[id]
+                self.name_id = self.names[id]
                 confidence = "  {0}%".format(round(100 - confidence))
             else:
-                id = "unknown"
+                self.name_id = "unknown"
                 confidence = "  {0}%".format(round(100 - confidence))
-
-            cv2.putText(frame, str(id), (x + 5, y - 5), self.font, 1, (255, 255, 255), 2)
+            if self.name_id == self.tracked_name:
+                self.track_x = x
+                self.track_y = y
+                self.track_w = w
+                self.track_h = h
+            cv2.putText(frame, str(self.name_id), (x + 5, y - 5), self.font, 1, (255, 255, 255), 2)
             cv2.putText(frame, str(confidence), (x + 5, y + h - 5), self.font, 1, (255, 255, 0), 1)
 
+        if self.tracked_name is not None:
+            frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
+
+        return frame
+
+    def track_face(self, frame, x, y, w, h):
+        rgbFrame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if self.tracked_name is not None:
+            cv2.putText(frame, "Tracking Enabled", (75, 75), self.font, 0.7, (0, 0, 255), 2)
+            if not self.track_started:
+                self.tracker = dlib.correlation_tracker()
+                rect = dlib.rectangle(x, y, x + w, y + h)
+                self.tracker.start_track(rgbFrame, rect)
+                self.track_started = True
+                cv2.rectangle(frame, (int(x), int(y)), (int(w), int(h)), (255, 0, 255), 3, 1)
+            if self.name_id == self.tracked_name:
+                rect = dlib.rectangle(x, y, x + w, y + h)
+                self.tracker.start_track(rgbFrame, rect)
+                cv2.rectangle(frame, (int(x), int(y)), (int(w + x), int(h + y)), (255, 0, 255), 3, 1)
+                cv2.putText(frame, "tracking", (int(x), int(h + 15)), self.font, 0.45, (0, 255, 0), 1)
+            else:
+                self.tracker.update(rgbFrame)
+                pos = self.tracker.get_position()
+                # unpack the position object
+                startX = int(pos.left())
+                startY = int(pos.top())
+                endX = int(pos.right())
+                endY = int(pos.bottom())
+                cv2.rectangle(frame, (int(startX), int(startY)), (int(endX), int(endY)), (255, 0, 255), 3, 1)
+                cv2.putText(frame, "tracking", (int(startX), int(endY + 15)), self.font, 0.45, (0, 255, 0), 1)
         return frame
 
     def set_frame(self):
@@ -227,7 +270,6 @@ class CameraWidget(QtWidgets.QWidget):
                     self.video_frame.setPixmap(QtGui.QPixmap.fromImage(img))
                 except:
                     self.kill_video()
-
 
     @staticmethod
     def verify_network_stream(link):
