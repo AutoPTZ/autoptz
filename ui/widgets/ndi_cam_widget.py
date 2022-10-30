@@ -283,7 +283,7 @@ class NDICameraWidget(QtWidgets.QWidget):
             cv2.putText(frame, "tracking", (int(startX), int(endY + 15)), self.font, 0.45, (0, 255, 0), 1)
 
         if self.camera_control is not None:
-            if x > 217 and x < 423:
+            if 217 < x < 423:
                 if self.movementX:
                     self.camera_control.stop_move()
                     self.movementX = False

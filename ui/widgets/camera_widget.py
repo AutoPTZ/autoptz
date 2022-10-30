@@ -9,6 +9,7 @@ import imutils
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from logic.facial_tracking.train_face import Trainer
+from ui.homepage.move_visca_ptz import ViscaPTZ
 
 
 class CameraWidget(QtWidgets.QWidget):
@@ -58,8 +59,9 @@ class CameraWidget(QtWidgets.QWidget):
 
         print('Started camera: {}'.format(self.camera_stream_link))
 
-        # Camera Tracking for VISCA
-        self.tracking = tracking
+        # VISCA PTZ Control
+        self.camera_control = None
+        self.movementX = False
 
         # Facial Recognition & Object Tracking
         self.is_adding_face = False
@@ -79,6 +81,7 @@ class CameraWidget(QtWidgets.QWidget):
         self.track_y = None
         self.track_w = None
         self.track_h = None
+        self.enable_track_checked = False
 
     def load_network_stream(self):
         """Verifies stream link and open new stream if valid"""
@@ -219,37 +222,70 @@ class CameraWidget(QtWidgets.QWidget):
             cv2.putText(frame, str(self.name_id), (x + 5, y - 5), self.font, 1, (255, 255, 255), 2)
             cv2.putText(frame, str(confidence), (x + 5, y + h - 5), self.font, 1, (255, 255, 0), 1)
 
-        if self.tracked_name is not None:
+        if len(faces) == 0:
+            self.name_id = "none"
+
+        if self.enable_track_checked:
             frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
 
         return frame
 
     def track_face(self, frame, x, y, w, h):
         rgbFrame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        if self.tracked_name is not None:
-            cv2.putText(frame, "Tracking Enabled", (75, 75), self.font, 0.7, (0, 0, 255), 2)
-            if not self.track_started:
-                self.tracker = dlib.correlation_tracker()
-                rect = dlib.rectangle(x, y, x + w, y + h)
-                self.tracker.start_track(rgbFrame, rect)
-                self.track_started = True
-                cv2.rectangle(frame, (int(x), int(y)), (int(w), int(h)), (255, 0, 255), 3, 1)
-            if self.name_id == self.tracked_name:
-                rect = dlib.rectangle(x, y, x + w, y + h)
-                self.tracker.start_track(rgbFrame, rect)
-                cv2.rectangle(frame, (int(x), int(y)), (int(w + x), int(h + y)), (255, 0, 255), 3, 1)
-                cv2.putText(frame, "tracking", (int(x), int(h + 15)), self.font, 0.45, (0, 255, 0), 1)
-            else:
-                self.tracker.update(rgbFrame)
-                pos = self.tracker.get_position()
-                # unpack the position object
-                startX = int(pos.left())
-                startY = int(pos.top())
-                endX = int(pos.right())
-                endY = int(pos.bottom())
-                cv2.rectangle(frame, (int(startX), int(startY)), (int(endX), int(endY)), (255, 0, 255), 3, 1)
-                cv2.putText(frame, "tracking", (int(startX), int(endY + 15)), self.font, 0.45, (0, 255, 0), 1)
+        cv2.putText(frame, "Tracking Enabled", (75, 75), self.font, 0.7, (0, 0, 255), 2)
+        if not self.track_started:
+            self.tracker = dlib.correlation_tracker()
+            rect = dlib.rectangle(x, y, x + w, y + h)
+            self.tracker.start_track(rgbFrame, rect)
+            self.track_started = True
+            cv2.rectangle(frame, (int(x), int(y)), (int(w), int(h)), (255, 0, 255), 3, 1)
+        if self.name_id == self.tracked_name:
+            rect = dlib.rectangle(x, y, x + w, y + h)
+            self.tracker.start_track(rgbFrame, rect)
+            cv2.rectangle(frame, (int(x), int(y)), (int(w + x), int(h + y)), (255, 0, 255), 3, 1)
+            cv2.putText(frame, "tracking", (int(x), int(h + 15)), self.font, 0.45, (0, 255, 0), 1)
+        else:
+            self.tracker.update(rgbFrame)
+            pos = self.tracker.get_position()
+            # unpack the position object
+            startX = int(pos.left())
+            startY = int(pos.top())
+            endX = int(pos.right())
+            endY = int(pos.bottom())
+            cv2.rectangle(frame, (int(startX), int(startY)), (int(endX), int(endY)), (255, 0, 255), 3, 1)
+            cv2.putText(frame, "tracking", (int(startX), int(endY + 15)), self.font, 0.45, (0, 255, 0), 1)
+
+        print("move?")
+        if self.camera_control is not None:
+            if 217 < x < 423:
+                self.camera_control.move_stop()
+
+            if x > 423:
+                self.camera_control.move_right_track()
+                print("Out of Best Bounds")
+            elif x < 217:
+                self.camera_control.move_left_track()
+                print("Out of Best Bounds")
+        print("ds")
         return frame
+
+    def changeFace(self, name):
+        if name == '':
+            self.tracked_name = None
+        else:
+            self.tracked_name = name
+
+    def checkFace(self):
+        if self.tracked_name is None:
+            return 'nothing'
+        else:
+            return self.tracked_name
+
+    def config_enable_track(self):
+        self.enable_track_checked = not self.enable_track_checked
+
+    def is_track_enabled(self):
+        return self.enable_track_checked
 
     def set_frame(self):
         if self.break_loop:
@@ -296,11 +332,14 @@ class CameraWidget(QtWidgets.QWidget):
     def get_video_frame(self):
         return self.video_frame
 
-    def set_tracker(self, tracking):
-        self.tracking = tracking
+    def set_tracker(self, control):
+        if control is not None:
+            self.camera_control = ViscaPTZ(device_id=control)
+        else:
+            self.camera_control = None
 
     def get_tracker(self):
-        print(self.tracking)
+        print(self.camera_control)
 
     def kill_video(self):
         print("Killing Camera Object")

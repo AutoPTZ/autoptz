@@ -26,7 +26,6 @@ class AssignPTZUI(object):
         self.assign_title_label = QtWidgets.QLabel(assign_ptz)
 
         self.assign_title_label.setText("Assign PTZ " + ptz_id)
-        # self.assign_title_label.setText(ptz_id)
         self.verticalLayout.addWidget(self.assign_title_label)
         self.usable_camera_list = QtWidgets.QListWidget(assign_ptz)
         self.usable_camera_list.setObjectName("usable_camera_list")
