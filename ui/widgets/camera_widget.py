@@ -150,6 +150,9 @@ class CameraWidget(QtWidgets.QWidget):
         else:
             self.tracked_name = name
 
+    def is_ptz_ready(self):
+        return "not network source"
+
     def add_face(self, frame):
         faces = self.face_cascade.detectMultiScale(frame, 1.3, 5)
         for x, y, w, h in faces:

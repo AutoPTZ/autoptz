@@ -7,5 +7,5 @@ scipy
 watchdog
 pyserial
 ndi-python
-
+sensecam-control
 # conda install -c conda-forge dlib

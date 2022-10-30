@@ -5,7 +5,7 @@ import watchdog.observers
 class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
     def __init__(self):
         # Set the patterns for PatternMatchingEventHandler
-        watchdog.events.PatternMatchingEventHandler.__init__(self, patterns=['*.txt', '*.yml'],
+        watchdog.events.PatternMatchingEventHandler.__init__(self, patterns=['*.yml'],
                                                              ignore_directories=True, case_sensitive=False)
         self.camera_widget_list = []
 

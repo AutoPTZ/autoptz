@@ -62,7 +62,7 @@ class AssignPTZUI(object):
         self.cancel_btn.setText(_translate("assign_ptz", "Cancel"))
 
 
-class AssignPTZDlg(QDialog):
+class AssignViscaPTZDlg(QDialog):
     """Assign PTZ to Serial Camera dialog."""
 
     def __init__(self, parent=None, camera_list=None, assigned_list=None, ptz_id=''):
