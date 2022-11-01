@@ -574,6 +574,7 @@ class Ui_AutoPTZ(object):
         """Launch the Remove Face dialog based on the currently selected camera."""
         print("Opening Face Dialog")
         dlg = ResetDatabaseDlg(self)
+        dlg.closeEvent = self.update_face_selection
         dlg.exec()
 
     def refreshViscaBtn(self, event):

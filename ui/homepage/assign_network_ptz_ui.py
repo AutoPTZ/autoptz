@@ -61,14 +61,16 @@ class AssignNetworkPTZIU(object):
             return
         else:
             try:
-                ip_address = re.findall(r'(?:\d{1,3}\.)+(?:\d{1,3})',self.camera.objectName())
-                Camera = onvif_control.CameraControl(ip_address[0], self.username_line.text().strip(), self.password_line.text().strip())
-                Camera.camera_start()
-                self.camera.config_camera_control(control=Camera)
+                ip_address = re.findall(r'(?:\d{1,3}\.)+(?:\d{1,3})', self.camera.objectName())
+                camera_control = onvif_control.CameraControl(ip_address[0], self.username_line.text().strip(),
+                                                             self.password_line.text().strip())
+                camera_control.camera_start()
+                self.camera.image_processor_thread.config_camera_control(control=camera_control)
                 self.window.close()
             except:
-                show_critical_messagebox(window_title="ONVIF Camera Control", critical_message="Username or password is incorrect.\nPlease check if ONVIF is enabled in your camera settings.")
-
+                show_critical_messagebox(window_title="ONVIF Camera Control",
+                                         critical_message="Username or password is incorrect.\nPlease check if ONVIF "
+                                                          "is enabled in your camera settings.")
 
     def translate_ui(self, add_face):
         _translate = QtCore.QCoreApplication.translate
@@ -86,10 +88,8 @@ class AssignNetworkPTZDlg(QDialog):
 
     def __init__(self, parent=None, camera=None):
         super().__init__(parent)
-        # Create an instance of the GUI
 
-        if camera is None:
-            return
+        # Create an instance of the GUI
         self.ui = AssignNetworkPTZIU()
         # Run the .setupUi() method to show the GUI
         self.ui.setupUi(self, camera=camera)

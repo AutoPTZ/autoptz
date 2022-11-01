@@ -5,18 +5,19 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/add_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/add_face.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/remove_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/remove_face.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/reset_database.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/reset_database.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/train_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/trainer/labels.txt" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/trainer/labels.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/original_facial_tracking/face_recognition_tracker_dlib.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/original_facial_tracking/facial_recognition.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/original_facial_tracking/temp_startup.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/original_facial_tracking/trainer/labels.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/homepage/assign_network_ptz_ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/assign_network_ptz_ui.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/homepage/homepage.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/homepage.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/shared/watch_trainer_directory.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/shared/watch_trainer_directory.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/camera_widget.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/startup.py" beforeDir="false" afterPath="$PROJECT_DIR$/startup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/test_cam/best_cam_example.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_cam/best_cam_example.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/test_cam/model_webcam_test.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_cam/model_webcam_test.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/widgets/visca_code_lines.py" beforeDir="false" afterPath="$PROJECT_DIR$/visca/visca_code_lines.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -58,11 +59,11 @@
       <recent name="$PROJECT_DIR$/logic/facial_tracking" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/visca" />
+      <recent name="$PROJECT_DIR$" />
       <recent name="$PROJECT_DIR$/logic/facial_tracking" />
       <recent name="$PROJECT_DIR$/logic/facial_tracking/dialogs" />
       <recent name="$PROJECT_DIR$/ui/homepage" />
-      <recent name="$PROJECT_DIR$" />
-      <recent name="$PROJECT_DIR$/ui/widgets" />
     </key>
   </component>
   <component name="RunManager" selected="Python.startup">
@@ -78,7 +79,7 @@
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/ui/startup.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/startup.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
