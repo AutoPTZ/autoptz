@@ -59,14 +59,11 @@ class CameraWidget(QtWidgets.QWidget):
 
         print('Started camera: {}'.format(self.camera_stream_link))
 
-        # VISCA PTZ Control
-        self.camera_control = None
-        self.movementX = False
-
         # Facial Recognition & Object Tracking
         self.is_adding_face = False
         self.adding_to_name = None
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
+        self.image_path = '../logic/facial_tracking/images/'
         self.count = 0
         self.recognizer = None
         self.names = None
@@ -74,6 +71,7 @@ class CameraWidget(QtWidgets.QWidget):
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self.id = 0
         self.name_id = None
+        self.enable_track_checked = False
         self.tracked_name = None
         self.track_started = None
         self.tracker = None
@@ -81,7 +79,10 @@ class CameraWidget(QtWidgets.QWidget):
         self.track_y = None
         self.track_w = None
         self.track_h = None
-        self.enable_track_checked = False
+
+        # VISCA PTZ Control
+        self.camera_control = None
+        self.movementX = False
 
     def load_network_stream(self):
         """Verifies stream link and open new stream if valid"""
@@ -121,15 +122,6 @@ class CameraWidget(QtWidgets.QWidget):
                             elif self.recognizer is not None:
                                 frame = self.recognize_face(frame)
 
-                            # try:
-                            #     if self.is_adding_face:
-                            #         frame = self.add_face(frame)
-                            #     elif self.recognizer is not None:
-                            #         frame = self.recognize_face(frame)
-                            # except:
-                            #     self.resetFacialRecognition()
-                            #     print("resetting facial recognition")
-
                             fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
                             frame = cv2.putText(frame, str(int(fps)), (75, 50), self.font, 0.7, (0, 0, 255),
                                                 2)
@@ -146,15 +138,6 @@ class CameraWidget(QtWidgets.QWidget):
                         self.spin(.01)
                     except AttributeError:
                         pass
-
-    def changeFace(self, name):
-        if name == '':
-            self.tracked_name = None
-        else:
-            self.tracked_name = name
-
-    def is_ptz_ready(self):
-        return "not network source"
 
     def add_face(self, frame):
         faces = self.face_cascade.detectMultiScale(frame, 1.3, 5)
@@ -182,18 +165,12 @@ class CameraWidget(QtWidgets.QWidget):
     def resetFacialRecognition(self):
         if os.path.exists("../logic/facial_tracking/trainer/trainer.yml"):
             self.recognizer = cv2.face.LBPHFaceRecognizer_create()
-            try:
-                self.recognizer.read('../logic/facial_tracking/trainer/trainer.yml')
-            except:
-                self.resetFacialRecognition()
-
-            # names related to ids: example ==> Steve: id=1 | try moving to trainer/labels.txt
-            labels_file = open("../logic/facial_tracking/trainer/labels.txt", "r")
-            self.names = labels_file.read().splitlines()
-            labels_file.close()
+            self.recognizer.read('../logic/facial_tracking/trainer/trainer.yml')
         else:
             self.recognizer = None
-            self.names = None
+        self.names = []
+        for folder in os.listdir(self.image_path):
+            self.names.append(folder)
 
     def recognize_face(self, frame):
         # Define min window size to be recognized as a face
@@ -225,7 +202,7 @@ class CameraWidget(QtWidgets.QWidget):
         if len(faces) == 0:
             self.name_id = "none"
 
-        if self.enable_track_checked:
+        if self.enable_track_checked and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
             frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
 
         return frame
@@ -255,7 +232,6 @@ class CameraWidget(QtWidgets.QWidget):
             cv2.rectangle(frame, (int(startX), int(startY)), (int(endX), int(endY)), (255, 0, 255), 3, 1)
             cv2.putText(frame, "tracking", (int(startX), int(endY + 15)), self.font, 0.45, (0, 255, 0), 1)
 
-        print("move?")
         if self.camera_control is not None:
             if 217 < x < 423:
                 self.camera_control.move_stop()
@@ -266,26 +242,7 @@ class CameraWidget(QtWidgets.QWidget):
             elif x < 217:
                 self.camera_control.move_left_track()
                 print("Out of Best Bounds")
-        print("ds")
         return frame
-
-    def changeFace(self, name):
-        if name == '':
-            self.tracked_name = None
-        else:
-            self.tracked_name = name
-
-    def checkFace(self):
-        if self.tracked_name is None:
-            return 'nothing'
-        else:
-            return self.tracked_name
-
-    def config_enable_track(self):
-        self.enable_track_checked = not self.enable_track_checked
-
-    def is_track_enabled(self):
-        return self.enable_track_checked
 
     def set_frame(self):
         if self.break_loop:
@@ -332,14 +289,31 @@ class CameraWidget(QtWidgets.QWidget):
     def get_video_frame(self):
         return self.video_frame
 
+    def config_add_face(self, name):
+        self.adding_to_name = name
+        self.is_adding_face = True
+
+    def changeFace(self, name):
+        self.tracked_name = name
+
+    def checkFace(self):
+        return self.tracked_name
+
+    @staticmethod
+    def is_ptz_ready():
+        return "not network source"
+
+    def config_enable_track(self):
+        self.enable_track_checked = not self.enable_track_checked
+
+    def is_track_enabled(self):
+        return self.enable_track_checked
+
     def set_tracker(self, control):
         if control is not None:
             self.camera_control = ViscaPTZ(device_id=control)
         else:
             self.camera_control = None
-
-    def get_tracker(self):
-        print(self.camera_control)
 
     def kill_video(self):
         print("Killing Camera Object")
@@ -354,9 +328,4 @@ class CameraWidget(QtWidgets.QWidget):
         self.load_stream_thread = None
         self.capture = None
         self.online = False
-        # self.video_frame.close()
         print("Camera Object Done")
-
-    def config_add_face(self, name):
-        self.adding_to_name = name
-        self.is_adding_face = True

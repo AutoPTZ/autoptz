@@ -83,7 +83,7 @@ class Ui_AutoPTZ(object):
         self.assign_network_ptz_btn = None
         self.select_face_label = None
         self.select_face_dropdown = None
-        self.enable_track = None
+        self.enable_track = QtWidgets.QCheckBox()
         self.formLayout = None
         self.selectedCamPage = None
         self.formTabWidget = None
@@ -138,6 +138,9 @@ class Ui_AutoPTZ(object):
         self.select_face_dropdown.setEnabled(False)
         self.image_path = '../logic/facial_tracking/images/'
         self.select_face_dropdown.currentTextChanged.connect(self.selected_face_change)
+        self.select_face_dropdown.addItem('')
+        for folder in os.listdir(self.image_path):
+            self.select_face_dropdown.addItem(folder)
 
         # assign VISCA PTZ to Serial Camera Source
         self.assign_network_ptz_btn = QtWidgets.QPushButton(self.selectedCamPage)
@@ -537,22 +540,33 @@ class Ui_AutoPTZ(object):
         else:
             print("Opening Face Dialog")
             dlg = AddFaceDlg(self, camera=self.current_selected_source)
+            dlg.closeEvent = self.update_face_selection
             dlg.exec()
+
+    def update_face_selection(self, event):
+        current_text_temp = self.select_face_dropdown.currentText()
+        self.select_face_dropdown.clear()
+        self.select_face_dropdown.addItem('')
+        for folder in os.listdir(self.image_path):
+            self.select_face_dropdown.addItem(folder)
+        if self.select_face_dropdown.findText(current_text_temp) != -1:
+            self.select_face_dropdown.setCurrentText(current_text_temp)
 
     @staticmethod
     def retrain_face():
-        if not os.path.isdir('../logic/facial_tracking/images/'):
+        if not os.listdir('../logic/facial_tracking/images/'):
             show_info_messagebox("No Faces to train.")
         else:
             Trainer().train_face(True)
 
     def remove_face(self):
         """Launch the Remove Face dialog based on the currently selected camera."""
-        if not os.path.isdir('../logic/facial_tracking/images/'):
+        if not os.listdir('../logic/facial_tracking/images/'):
             show_info_messagebox("No Faces to remove.")
         else:
             print("Opening Face Dialog")
             dlg = RemoveFaceDlg(self)
+            dlg.closeEvent = self.update_face_selection
             dlg.exec()
 
     def reset_database(self):
@@ -579,47 +593,28 @@ class Ui_AutoPTZ(object):
             self.assign_network_ptz_btn.show()
             self.unassign_network_ptz_btn.hide()
 
-    def check_all_faces(self):
-        self.select_face_dropdown.setEnabled(True)
-        self.select_face_dropdown.clear()
-        self.select_face_dropdown.addItem('')
-        # Path for face image database
-        if os.path.exists(self.image_path):
-            for folder in os.listdir(self.image_path):
-                self.select_face_dropdown.addItem(folder)
-
-        temp = self.current_selected_source.checkFace()
-        print(temp)
-        if self.select_face_dropdown.currentText() == 'nothing':
-            self.enable_track.setEnabled(False)
-            self.select_face_dropdown.setCurrentText('')
-        else:
-            self.enable_track.setEnabled(True)
-            self.select_face_dropdown.setCurrentText(temp)
-
-        if self.current_selected_source.is_track_enabled():
-            self.enable_track.setChecked(True)
-        else:
-            self.enable_track.setChecked(False)
-
-
     def selected_face_change(self):
         if self.current_selected_source is not None:
-            try:
-                self.current_selected_source.changeFace(self.select_face_dropdown.currentText())
-                self.enable_track.setEnabled(True)
-                self.enable_track.setChecked(self.current_selected_source.is_track_enabled())
-            except:
-                self.current_selected_source.changeFace('')
+            if self.select_face_dropdown.currentText() == '':
+                self.current_selected_source.changeFace(None)
                 self.enable_track.setEnabled(False)
                 self.enable_track.setChecked(False)
+            else:
+                self.current_selected_source.changeFace(self.select_face_dropdown.currentText())
+                self.enable_track.setEnabled(True)
+        else:
+            self.enable_track.setEnabled(False)
+            self.enable_track.setChecked(False)
 
     def config_enable_track(self):
-        try:
-            self.current_selected_source.config_enable_track()
-            self.enable_track.setChecked(self.current_selected_source.is_track_enabled())
-        except:
-            self.enable_track.setChecked(False)
+        if self.current_selected_source is not None and self.current_selected_source.is_track_enabled() and self.enable_track.isChecked():
+            pass
+        else:
+            try:
+                self.current_selected_source.config_enable_track()
+                self.enable_track.setChecked(self.current_selected_source.is_track_enabled())
+            except:
+                self.enable_track.setChecked(False)
 
     def getPhysicalSourcesList(self):
         """Test ports 0-6 and adds all camera sources to the physical source list"""
@@ -723,17 +718,31 @@ class Ui_AutoPTZ(object):
 
         select_cam_btn.hide()
         unselect_cam_btn.show()
-        self.check_all_faces()
+
+        self.select_face_dropdown.setEnabled(True)
+        # Path for face image database
+
+        if self.current_selected_source.checkFace() is None:
+            self.select_face_dropdown.setCurrentText('')
+            self.enable_track.setEnabled(False)
+        else:
+            self.select_face_dropdown.setCurrentText(self.current_selected_source.checkFace())
+            self.enable_track.setEnabled(True)
+
+        # problem with when checked event
+        if self.current_selected_source.is_track_enabled():
+            self.enable_track.setChecked(True)
+        else:
+            self.enable_track.setChecked(False)
 
     def unselectCameraSource(self, select_cam_btn, unselect_cam_btn):
         self.current_selected_source = None
-        self.select_face_dropdown.clear()
+        self.select_face_dropdown.setCurrentText('')
         self.select_face_dropdown.setEnabled(False)
         self.enable_track.setChecked(False)
         self.enable_track.setEnabled(False)
         unselect_cam_btn.hide()
         select_cam_btn.show()
-
 
     def deleteCameraSource(self, source, ndi_source, menu_item, camera, camera_widget):
         """Remove NDI/Serial camera source from camera grid"""

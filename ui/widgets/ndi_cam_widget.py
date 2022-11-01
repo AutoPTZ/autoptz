@@ -32,7 +32,7 @@ class NDICameraWidget(QtWidgets.QWidget):
         self.load_stream_thread = None
         self.deque = deque(maxlen=deque_size)
 
-        # Slight offset is needed since PyQt layouts have a built in padding
+        # Slight offset is needed since PyQt layouts have a built-in padding
         # So add offset to counter the padding
         self.offset = 16
         self.screen_width = width - self.offset
@@ -129,36 +129,9 @@ class NDICameraWidget(QtWidgets.QWidget):
                                     elif self.recognizer is not None:
                                         frame = self.recognize_face(frame)
 
-                                    # try:
-                                    #     if self.is_adding_face:
-                                    #         frame = self.add_face(frame)
-                                    #     elif self.recognizer is not None:
-                                    #         frame = self.recognize_face(frame)
-                                    # except:
-                                    #     self.resetFacialRecognition()
-                                    #     print("resetting facial recognition")
-
                                     fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
                                     frame = cv2.putText(frame, str(int(fps)), (75, 50), self.font, 0.7, (0, 0, 255), 2)
 
-                                    # try:
-                                    #     # Keep frame aspect ratio
-                                    #     if self.maintain_aspect_ratio:
-                                    #         frame = imutils.resize(frame, width=self.screen_width)
-                                    #     # Force resize
-                                    #     else:
-                                    #         frame = cv2.resize(frame, (self.screen_width, self.screen_height))
-                                    #
-                                    #     if self.is_adding_face:
-                                    #         frame = self.add_face(frame)
-                                    #     elif self.recognizer is not None:
-                                    #         frame = self.recognize_face(frame)
-                                    # except:
-                                    #     self.resetFacialRecognition()
-                                    #     print("resetting facial recognition")
-                                    #
-                                    # fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
-                                    # frame = cv2.putText(frame, str(int(fps)), (75, 50), self.font, 0.7, (0, 0, 255),2)
                                 else:
                                     frame = np.copy(v.data)
 
@@ -170,7 +143,7 @@ class NDICameraWidget(QtWidgets.QWidget):
                             print('attempting to reconnect', self.ndi_source_object.ndi_name)
                             self.load_network_stream()
                             self.spin(2)
-                        self.spin(.001)
+                        self.spin(.01)
                     except AttributeError:
                         pass
 
@@ -186,15 +159,6 @@ class NDICameraWidget(QtWidgets.QWidget):
         if self.count >= 200:  # Take 5000 face sample and stop video
             self.adding_to_name = None
             self.is_adding_face = False
-
-            # MacOS only allows UI things to show on the main thread.
-            # Since this camera is on a separate thread,
-            # we can't automatically train model here nor put it on its own thread
-            # result = Trainer().train_face()
-            # if result == "done":
-            #
-            # else:
-            #     print(result)
 
             th = Thread(target=Trainer().train_face(False))
             th.daemon = True
@@ -300,18 +264,6 @@ class NDICameraWidget(QtWidgets.QWidget):
 
         return frame
 
-    def changeFace(self, name):
-        if name == '':
-            self.tracked_name = None
-        else:
-            self.tracked_name = name
-
-    def checkFace(self):
-        if self.tracked_name is None:
-            return 'nothing'
-        else:
-            return self.tracked_name
-
     def spin(self, seconds):
         """Pause for set amount of seconds, replaces time.sleep so program doesnt stall"""
 
@@ -348,6 +300,12 @@ class NDICameraWidget(QtWidgets.QWidget):
     def config_add_face(self, name):
         self.adding_to_name = name
         self.is_adding_face = True
+
+    def changeFace(self, name):
+        self.tracked_name = name
+
+    def checkFace(self):
+        return self.tracked_name
 
     def config_camera_control(self, control):
         self.camera_control = control
