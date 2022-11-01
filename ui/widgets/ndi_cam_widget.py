@@ -10,7 +10,7 @@ import cv2
 import imutils
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from logic.facial_tracking.train_face import Trainer
+from logic.facial_tracking.dialogs.train_face import Trainer
 
 
 class NDICameraWidget(QtWidgets.QWidget):

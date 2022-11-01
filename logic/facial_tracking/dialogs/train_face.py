@@ -10,7 +10,6 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_fronta
 
 
 class Trainer:
-
     @staticmethod
     def train_face(show_message_box):
         if show_message_box:
@@ -20,7 +19,7 @@ class Trainer:
         # Image path for face image database
         image_path = '../logic/facial_tracking/images/'
         labels_loc = '../logic/facial_tracking/trainer/labels.txt'
-        trainer_loc = '../logic/facial_tracking/trainer/trainer.yml'
+        trainer_loc = '../logic/facial_tracking/trainer/trainer.json'
 
         recognizer = cv2.face.LBPHFaceRecognizer_create()
         faceSamples = []
@@ -46,8 +45,10 @@ class Trainer:
         try:
             # Send to trainer
             recognizer.train(faceSamples, np.array(ids))
-            # Save the model into trainer/trainer.yml
-            recognizer.save(trainer_loc)
+            # Save the model into trainer/trainer.json
+            if os.path.exists(trainer_loc):
+                os.remove(trainer_loc)
+            recognizer.write(trainer_loc)
         except:
             os.remove(trainer_loc)
         if show_message_box:

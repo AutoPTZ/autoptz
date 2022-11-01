@@ -5,10 +5,10 @@ from PyQt5 import QtCore, QtWidgets
 import watchdog.events
 import watchdog.observers
 
-from logic.facial_tracking.add_face import AddFaceDlg
-from logic.facial_tracking.remove_face import RemoveFaceDlg
-from logic.facial_tracking.reset_database import ResetDatabaseDlg
-from logic.facial_tracking.train_face import Trainer
+from logic.facial_tracking.dialogs.add_face import AddFaceDlg
+from logic.facial_tracking.dialogs.remove_face import RemoveFaceDlg
+from logic.facial_tracking.dialogs.reset_database import ResetDatabaseDlg
+from logic.facial_tracking.dialogs.train_face import Trainer
 from ui.homepage.assign_network_ptz_ui import AssignNetworkPTZDlg
 from ui.homepage.move_visca_ptz import ViscaPTZ
 from ui.homepage.assign_visca_ptz_ui import AssignViscaPTZDlg
@@ -139,8 +139,9 @@ class Ui_AutoPTZ(object):
         self.image_path = '../logic/facial_tracking/images/'
         self.select_face_dropdown.currentTextChanged.connect(self.selected_face_change)
         self.select_face_dropdown.addItem('')
-        for folder in os.listdir(self.image_path):
-            self.select_face_dropdown.addItem(folder)
+        if os.path.isdir(self.image_path):
+            for folder in os.listdir(self.image_path):
+                self.select_face_dropdown.addItem(folder)
 
         # assign VISCA PTZ to Serial Camera Source
         self.assign_network_ptz_btn = QtWidgets.QPushButton(self.selectedCamPage)
@@ -529,7 +530,7 @@ class Ui_AutoPTZ(object):
 
     def unassign_network_ptz(self):
         """Allow User to Unassign current Network PTZ device from Camera Source"""
-        self.current_selected_source.config_camera_control(control=None)
+        self.current_selected_source.image_processor_thread.set_ptz_tracker(control=None)
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.show()
 
@@ -554,14 +555,14 @@ class Ui_AutoPTZ(object):
 
     @staticmethod
     def retrain_face():
-        if not os.listdir('../logic/facial_tracking/images/'):
+        if not os.path.isdir('../logic/facial_tracking/images/') or not os.listdir('../logic/facial_tracking/images/'):
             show_info_messagebox("No Faces to train.")
         else:
             Trainer().train_face(True)
 
     def remove_face(self):
         """Launch the Remove Face dialog based on the currently selected camera."""
-        if not os.listdir('../logic/facial_tracking/images/'):
+        if not os.path.isdir('../logic/facial_tracking/images/') or not os.listdir('../logic/facial_tracking/images/'):
             show_info_messagebox("No Faces to remove.")
         else:
             print("Opening Face Dialog")
@@ -586,7 +587,7 @@ class Ui_AutoPTZ(object):
 
     def refreshOnvifBtn(self, event):
         """Check is Network PTZ is assigned and change assignment button if so"""
-        if self.current_selected_source.is_ptz_ready() == "ready":
+        if self.current_selected_source.image_processor_thread.get_ptz_ready() == "ready":
             self.unassign_network_ptz_btn.show()
             self.assign_network_ptz_btn.hide()
         else:
@@ -596,23 +597,23 @@ class Ui_AutoPTZ(object):
     def selected_face_change(self):
         if self.current_selected_source is not None:
             if self.select_face_dropdown.currentText() == '':
-                self.current_selected_source.changeFace(None)
+                self.current_selected_source.image_processor_thread.set_face(None)
                 self.enable_track.setEnabled(False)
                 self.enable_track.setChecked(False)
             else:
-                self.current_selected_source.changeFace(self.select_face_dropdown.currentText())
+                self.current_selected_source.image_processor_thread.set_face(self.select_face_dropdown.currentText())
                 self.enable_track.setEnabled(True)
         else:
             self.enable_track.setEnabled(False)
             self.enable_track.setChecked(False)
 
     def config_enable_track(self):
-        if self.current_selected_source is not None and self.current_selected_source.is_track_enabled() and self.enable_track.isChecked():
+        if self.current_selected_source is not None and self.current_selected_source.image_processor_thread.is_track_enabled() and self.enable_track.isChecked():
             pass
         else:
             try:
-                self.current_selected_source.config_enable_track()
-                self.enable_track.setChecked(self.current_selected_source.is_track_enabled())
+                self.current_selected_source.image_processor_thread.config_enable_track()
+                self.enable_track.setChecked(self.current_selected_source.image_processor_thread.is_track_enabled())
             except:
                 self.enable_track.setChecked(False)
 
@@ -706,10 +707,10 @@ class Ui_AutoPTZ(object):
     def selectCameraSource(self, camera, select_cam_btn, unselect_cam_btn):
         self.current_selected_source = camera
 
-        if self.current_selected_source.is_ptz_ready() == "ready":
+        if self.current_selected_source.image_processor_thread.get_ptz_ready() == "ready":
             self.assign_network_ptz_btn.hide()
             self.unassign_network_ptz_btn.show()
-        elif self.current_selected_source.is_ptz_ready() == "not ready":
+        elif self.current_selected_source.image_processor_thread.get_ptz_ready() == "not ready":
             self.assign_network_ptz_btn.show()
             self.unassign_network_ptz_btn.hide()
         else:
@@ -722,15 +723,15 @@ class Ui_AutoPTZ(object):
         self.select_face_dropdown.setEnabled(True)
         # Path for face image database
 
-        if self.current_selected_source.checkFace() is None:
+        if self.current_selected_source.image_processor_thread.get_face() is None:
             self.select_face_dropdown.setCurrentText('')
             self.enable_track.setEnabled(False)
         else:
-            self.select_face_dropdown.setCurrentText(self.current_selected_source.checkFace())
+            self.select_face_dropdown.setCurrentText(self.current_selected_source.image_processor_thread.get_face())
             self.enable_track.setEnabled(True)
 
         # problem with when checked event
-        if self.current_selected_source.is_track_enabled():
+        if self.current_selected_source.image_processor_thread.is_track_enabled():
             self.enable_track.setChecked(True)
         else:
             self.enable_track.setChecked(False)

@@ -69,7 +69,7 @@ class AddFaceUI(object):
                 print("\n [INFO] New Path Created")
                 show_info_messagebox("Initializing face capture. \nLook at the select camera and wait...")
                 print("\n [INFO] Initializing face capture. Look at the select camera and wait...")
-                self.camera.config_add_face(name=self.name_line.text().strip())
+                self.camera.image_processor_thread.config_add_face(name=self.name_line.text().strip())
                 self.window.close()
 
     def translate_ui(self, add_face):
@@ -86,9 +86,6 @@ class AddFaceDlg(QDialog):
     def __init__(self, parent=None, camera=None):
         super().__init__(parent)
         # Create an instance of the GUI
-
-        if camera is None:
-            camera = ''
         self.ui = AddFaceUI()
         # Run the .setupUi() method to show the GUI
         self.ui.setupUi(self, camera=camera)

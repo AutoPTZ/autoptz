@@ -8,7 +8,7 @@ from PyQt5 import QtWidgets
 class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
     def __init__(self):
         # Set the patterns for PatternMatchingEventHandler
-        watchdog.events.PatternMatchingEventHandler.__init__(self, patterns=['*.yml'],
+        watchdog.events.PatternMatchingEventHandler.__init__(self, patterns=['*.json'],
                                                              ignore_directories=True, case_sensitive=False)
         self.camera_widget_list = []
 
@@ -20,10 +20,9 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
 
     def on_any_event(self, event):
         print("Watchdog received an event at - % s." % event.src_path)
-        print("Will reconfigure all inuse camera facial recognition")
-        self.spin(15)
+        self.spin(1)
         for camera in self.camera_widget_list:
-            camera.resetFacialRecognition()
+            camera.image_processor_thread.resetFacialRecognition()
 
     @staticmethod
     def spin(seconds):
