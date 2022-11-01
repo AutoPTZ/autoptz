@@ -1,22 +1,37 @@
+import os
+
 import cv2
 from PyQt5 import QtCore, QtWidgets
+import watchdog.events
+import watchdog.observers
 
+from logic.facial_tracking.add_face import AddFaceDlg
+from logic.facial_tracking.remove_face import RemoveFaceDlg
+from logic.facial_tracking.reset_database import ResetDatabaseDlg
+from logic.facial_tracking.train_face import Trainer
+from ui.homepage.assign_network_ptz_ui import AssignNetworkPTZDlg
 from ui.homepage.move_visca_ptz import ViscaPTZ
-from ui.homepage.assign_ptz_ui import AssignPTZDlg
+from ui.homepage.assign_visca_ptz_ui import AssignViscaPTZDlg
 from ui.homepage.flow_layout import FlowLayout
 from logic.camera_search.get_serial_cameras import COMPorts
 from logic.camera_search.search_ndi import get_ndi_sources
+from ui.shared.message_prompts import show_info_messagebox
+from ui.shared.watch_trainer_directory import WatchTrainer
 from ui.widgets.camera_widget import CameraWidget
 from ui.widgets.ndi_cam_widget import NDICameraWidget
 
 
 class Ui_AutoPTZ(object):
     def __init__(self):
+        self.image_path = None
+        self.watch_trainer = None
         self.current_manual_device = None
+        self.current_selected_source = None
         self.actionReset_Database = None
         self.actionRemove_Face = None
         self.actionTrain_Model = None
-        self.actionFacial_Recognition = None
+        self.actionAdd_Face = None
+        self.menuFacial_Recognition = None
         self.actionAbout = None
         self.actionContact = None
         self.actionEdit = None
@@ -26,9 +41,9 @@ class Ui_AutoPTZ(object):
         self.actionClose = None
         self.actionSave_as = None
         self.actionSave = None
+        self.actionOpen = None
         self.statusbar = None
         self.menuHelp = None
-        self.menuAdd_Face = None
         self.menuSource = None
         self.menuFile = None
         self.menubar = None
@@ -36,8 +51,8 @@ class Ui_AutoPTZ(object):
         self.screen_width = None
         self.flowLayout = None
         self.shown_cameras = None
-        self.unassign_ptz_btn = None
-        self.assign_ptz_btn = None
+        self.unassign_visca_ptz_btn = None
+        self.assign_visca_ptz_btn = None
         self.reset_btn = None
         self.menu_btn = None
         self.menu_layout = None
@@ -64,16 +79,18 @@ class Ui_AutoPTZ(object):
         self.select_camera_dropdown = None
         self.select_camera_label = None
         self.manualControlPage = None
+        self.unassign_network_ptz_btn = None
+        self.assign_network_ptz_btn = None
         self.select_face_label = None
         self.select_face_dropdown = None
-        self.enable_track = None
+        self.enable_track = QtWidgets.QCheckBox()
         self.formLayout = None
         self.selectedCamPage = None
         self.formTabWidget = None
         self.gridLayout = None
         self.central_widget = None
         self.assigned_ptz_camera = None
-        self.camera_widget_list = None
+        self.serial_widget_list = None
 
     def setupUi(self, AutoPTZ):
         # setting up home window
@@ -118,14 +135,35 @@ class Ui_AutoPTZ(object):
         size_policy.setHeightForWidth(self.select_face_dropdown.sizePolicy().hasHeightForWidth())
         self.select_face_dropdown.setSizePolicy(size_policy)
         self.select_face_dropdown.setObjectName("select_face_dropdown")
+        self.select_face_dropdown.setEnabled(False)
+        self.image_path = '../logic/facial_tracking/images/'
+        self.select_face_dropdown.currentTextChanged.connect(self.selected_face_change)
+        self.select_face_dropdown.addItem('')
+        for folder in os.listdir(self.image_path):
+            self.select_face_dropdown.addItem(folder)
+
+        # assign VISCA PTZ to Serial Camera Source
+        self.assign_network_ptz_btn = QtWidgets.QPushButton(self.selectedCamPage)
+        self.assign_network_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
+        self.assign_network_ptz_btn.setObjectName("assign_network_ptz_btn")
+        self.assign_network_ptz_btn.hide()
+        self.unassign_network_ptz_btn = QtWidgets.QPushButton(self.selectedCamPage)
+        self.unassign_network_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
+        self.unassign_network_ptz_btn.setObjectName("unassign_visca_ptz_btn")
+        self.unassign_network_ptz_btn.hide()
+        self.assign_network_ptz_btn.clicked.connect(self.assign_network_ptz_dlg)
+        self.unassign_network_ptz_btn.clicked.connect(self.unassign_network_ptz)
+
         self.formLayout.setWidget(2, QtWidgets.QFormLayout.SpanningRole, self.select_face_dropdown)
         self.enable_track = QtWidgets.QCheckBox(self.selectedCamPage)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed)
         size_policy.setHeightForWidth(self.enable_track.sizePolicy().hasHeightForWidth())
         self.enable_track.setSizePolicy(size_policy)
         self.enable_track.setChecked(False)
+        self.enable_track.setEnabled(False)
         self.enable_track.setAutoRepeat(False)
         self.enable_track.setAutoExclusive(False)
+        self.enable_track.stateChanged.connect(self.config_enable_track)
         self.enable_track.setObjectName("enable_track")
         self.formLayout.setWidget(3, QtWidgets.QFormLayout.LabelRole, self.enable_track)
         self.select_face_label = QtWidgets.QLabel(self.selectedCamPage)
@@ -303,16 +341,16 @@ class Ui_AutoPTZ(object):
         self.menu_layout.addWidget(self.reset_btn)
 
         # assign VISCA PTZ to Serial Camera Source
-        self.assign_ptz_btn = QtWidgets.QPushButton(self.manualControlPage)
-        self.assign_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
-        self.assign_ptz_btn.setObjectName("assign_ptz_btn")
-        self.assign_ptz_btn.hide()
-        self.unassign_ptz_btn = QtWidgets.QPushButton(self.manualControlPage)
-        self.unassign_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
-        self.unassign_ptz_btn.setObjectName("unassign_ptz_btn")
-        self.unassign_ptz_btn.hide()
-        self.assign_ptz_btn.clicked.connect(self.assign_ptz_dialog)
-        self.unassign_ptz_btn.clicked.connect(self.unassign_ptz)
+        self.assign_visca_ptz_btn = QtWidgets.QPushButton(self.manualControlPage)
+        self.assign_visca_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
+        self.assign_visca_ptz_btn.setObjectName("assign_visca_ptz_btn")
+        self.assign_visca_ptz_btn.hide()
+        self.unassign_visca_ptz_btn = QtWidgets.QPushButton(self.manualControlPage)
+        self.unassign_visca_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
+        self.unassign_visca_ptz_btn.setObjectName("unassign_visca_ptz_btn")
+        self.unassign_visca_ptz_btn.hide()
+        self.assign_visca_ptz_btn.clicked.connect(self.assign_visca_ptz_dlg)
+        self.unassign_visca_ptz_btn.clicked.connect(self.unassign_visca_ptz)
         self.formTabWidget.addTab(self.manualControlPage, "")
         self.gridLayout.addWidget(self.formTabWidget, 0, 0, 3, 1)
 
@@ -337,14 +375,16 @@ class Ui_AutoPTZ(object):
         self.menuFile.setObjectName("menuFile")
         self.menuSource = QtWidgets.QMenu(self.menubar)
         self.menuSource.setObjectName("menuSource")
-        self.menuAdd_Face = QtWidgets.QMenu(self.menubar)
-        self.menuAdd_Face.setObjectName("menuAdd_Face")
+        self.menuFacial_Recognition = QtWidgets.QMenu(self.menubar)
+        self.menuFacial_Recognition.setObjectName("menuFacial_Recognition")
         self.menuHelp = QtWidgets.QMenu(self.menubar)
         self.menuHelp.setObjectName("menuHelp")
         AutoPTZ.setMenuBar(self.menubar)
         self.statusbar = QtWidgets.QStatusBar(AutoPTZ)
         self.statusbar.setObjectName("statusbar")
         AutoPTZ.setStatusBar(self.statusbar)
+        self.actionOpen = QtWidgets.QAction(AutoPTZ)
+        self.actionOpen.setObjectName("actionOpen")
         self.actionSave = QtWidgets.QAction(AutoPTZ)
         self.actionSave.setObjectName("actionSave")
         self.actionSave_as = QtWidgets.QAction(AutoPTZ)
@@ -363,16 +403,21 @@ class Ui_AutoPTZ(object):
         self.actionContact.setObjectName("actionContact")
         self.actionAbout = QtWidgets.QAction(AutoPTZ)
         self.actionAbout.setObjectName("actionAbout")
-        self.actionFacial_Recognition = QtWidgets.QAction(AutoPTZ)
-        self.actionFacial_Recognition.setObjectName("actionFacial_Recognition")
+        self.actionAdd_Face = QtWidgets.QAction(AutoPTZ)
+        self.actionAdd_Face.setObjectName("actionAdd_Face")
+        self.actionAdd_Face.triggered.connect(self.add_face)
         self.actionTrain_Model = QtWidgets.QAction(AutoPTZ)
         self.actionTrain_Model.setObjectName("actionTrain_Model")
+        self.actionTrain_Model.triggered.connect(self.retrain_face)
         self.actionRemove_Face = QtWidgets.QAction(AutoPTZ)
         self.actionRemove_Face.setObjectName("actionRemove_Face")
+        self.actionRemove_Face.triggered.connect(self.remove_face)
         self.actionReset_Database = QtWidgets.QAction(AutoPTZ)
         self.actionReset_Database.setObjectName("actionReset_Database")
-        self.menuFile.addAction(self.actionSave)
+        self.actionReset_Database.triggered.connect(self.reset_database)
+        self.menuFile.addAction(self.actionOpen)
         self.menuFile.addSeparator()
+        self.menuFile.addAction(self.actionSave)
         self.menuFile.addAction(self.actionSave_as)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionClose)
@@ -381,25 +426,28 @@ class Ui_AutoPTZ(object):
         self.menuSource.addMenu(self.menuAdd_Hardware)
         self.menuSource.addSeparator()
         self.menuSource.addAction(self.actionEdit)
-        self.menuAdd_Face.addAction(self.actionFacial_Recognition)
-        self.menuAdd_Face.addAction(self.actionTrain_Model)
-        self.menuAdd_Face.addAction(self.actionRemove_Face)
-        self.menuAdd_Face.addSeparator()
-        self.menuAdd_Face.addAction(self.actionReset_Database)
+        self.menuFacial_Recognition.addAction(self.actionAdd_Face)
+        self.menuFacial_Recognition.addAction(self.actionTrain_Model)
+        self.menuFacial_Recognition.addAction(self.actionRemove_Face)
+        self.menuFacial_Recognition.addSeparator()
+        self.menuFacial_Recognition.addAction(self.actionReset_Database)
         self.menuHelp.addAction(self.actionAbout)
         self.menuHelp.addSeparator()
         self.menuHelp.addAction(self.actionContact)
         self.menubar.addAction(self.menuFile.menuAction())
         self.menubar.addAction(self.menuSource.menuAction())
-        self.menubar.addAction(self.menuAdd_Face.menuAction())
+        self.menubar.addAction(self.menuFacial_Recognition.menuAction())
         self.menubar.addAction(self.menuHelp.menuAction())
 
         # other setup variables and methods
         self.getNDISourceList()
         self.getPhysicalSourcesList()
         self.assigned_ptz_camera = []
-        self.camera_widget_list = []
-
+        self.serial_widget_list = []
+        self.watch_trainer = WatchTrainer()
+        observer = watchdog.observers.Observer()
+        observer.schedule(self.watch_trainer, path="../logic/facial_tracking/trainer/", recursive=True)
+        observer.start()
         self.translateUi(AutoPTZ)
         QtCore.QMetaObject.connectSlotsByName(AutoPTZ)
 
@@ -441,24 +489,24 @@ class Ui_AutoPTZ(object):
         # shows button depending on if device has already been assigned to a camera source
         try:
             if device in self.assigned_ptz_camera:
-                self.unassign_ptz_btn.show()
+                self.unassign_visca_ptz_btn.show()
             else:
-                self.assign_ptz_btn.show()
+                self.assign_visca_ptz_btn.show()
         except:
-            self.assign_ptz_btn.hide()
-            self.unassign_ptz_btn.hide()
+            self.assign_visca_ptz_btn.hide()
+            self.unassign_visca_ptz_btn.hide()
 
-    def assign_ptz_dialog(self):
-        """Launch the Assign PTZ to Camera Source dialog."""
-        if not self.camera_widget_list or self.select_camera_dropdown.currentText() == "":
+    def assign_visca_ptz_dlg(self):
+        """Launch the Assign VISCA PTZ to Camera Source dialog."""
+        if not self.serial_widget_list or self.select_camera_dropdown.currentText() == "":
             print("Need to select or add a camera")
         else:
-            dlg = AssignPTZDlg(self, camera_list=self.camera_widget_list, assigned_list=self.assigned_ptz_camera,
-                               ptz_id=self.select_camera_dropdown.currentText())
-            dlg.closeEvent = self.refreshBtnOnClose
+            dlg = AssignViscaPTZDlg(self, camera_list=self.serial_widget_list, assigned_list=self.assigned_ptz_camera,
+                                    ptz_id=self.select_camera_dropdown.currentText())
+            dlg.closeEvent = self.refreshViscaBtn
             dlg.exec()
 
-    def unassign_ptz(self):
+    def unassign_visca_ptz(self):
         """Allow User to Unassign current VISCA PTZ device from Camera Source"""
         index = self.assigned_ptz_camera.index(self.select_camera_dropdown.currentText())
 
@@ -467,15 +515,106 @@ class Ui_AutoPTZ(object):
         self.assigned_ptz_camera.remove(camera)
         self.assigned_ptz_camera.remove(self.select_camera_dropdown.currentText())
 
-        self.unassign_ptz_btn.hide()
-        self.assign_ptz_btn.show()
+        self.unassign_visca_ptz_btn.hide()
+        self.assign_visca_ptz_btn.show()
 
-    def refreshBtnOnClose(self, event):
+    def assign_network_ptz_dlg(self):
+        """Launch the Assign Network PTZ to Camera Source dialog."""
+        if not self.current_selected_source:
+            print("Need to select or add a camera")
+        else:
+            dlg = AssignNetworkPTZDlg(self, camera=self.current_selected_source)
+            dlg.closeEvent = self.refreshOnvifBtn
+            dlg.exec()
+
+    def unassign_network_ptz(self):
+        """Allow User to Unassign current Network PTZ device from Camera Source"""
+        self.current_selected_source.config_camera_control(control=None)
+        self.unassign_network_ptz_btn.hide()
+        self.assign_network_ptz_btn.show()
+
+    def add_face(self):
+        """Launch the Add Face dialog based on the currently selected camera."""
+        if self.flowLayout.count() == 0 or self.current_selected_source is None:
+            show_info_messagebox("Please add and select a camera.")
+        else:
+            print("Opening Face Dialog")
+            dlg = AddFaceDlg(self, camera=self.current_selected_source)
+            dlg.closeEvent = self.update_face_selection
+            dlg.exec()
+
+    def update_face_selection(self, event):
+        current_text_temp = self.select_face_dropdown.currentText()
+        self.select_face_dropdown.clear()
+        self.select_face_dropdown.addItem('')
+        for folder in os.listdir(self.image_path):
+            self.select_face_dropdown.addItem(folder)
+        if self.select_face_dropdown.findText(current_text_temp) != -1:
+            self.select_face_dropdown.setCurrentText(current_text_temp)
+
+    @staticmethod
+    def retrain_face():
+        if not os.listdir('../logic/facial_tracking/images/'):
+            show_info_messagebox("No Faces to train.")
+        else:
+            Trainer().train_face(True)
+
+    def remove_face(self):
+        """Launch the Remove Face dialog based on the currently selected camera."""
+        if not os.listdir('../logic/facial_tracking/images/'):
+            show_info_messagebox("No Faces to remove.")
+        else:
+            print("Opening Face Dialog")
+            dlg = RemoveFaceDlg(self)
+            dlg.closeEvent = self.update_face_selection
+            dlg.exec()
+
+    def reset_database(self):
+        """Launch the Remove Face dialog based on the currently selected camera."""
+        print("Opening Face Dialog")
+        dlg = ResetDatabaseDlg(self)
+        dlg.exec()
+
+    def refreshViscaBtn(self, event):
         """Check is VISCA PTZ is assigned and change assignment button if so"""
         if self.select_camera_dropdown.currentText() in self.assigned_ptz_camera:
-            self.unassign_ptz_btn.show()
+            self.unassign_visca_ptz_btn.show()
+            self.assign_visca_ptz_btn.hide()
         else:
-            self.assign_ptz_btn.show()
+            self.assign_visca_ptz_btn.show()
+            self.unassign_visca_ptz_btn.hide()
+
+    def refreshOnvifBtn(self, event):
+        """Check is Network PTZ is assigned and change assignment button if so"""
+        if self.current_selected_source.is_ptz_ready() == "ready":
+            self.unassign_network_ptz_btn.show()
+            self.assign_network_ptz_btn.hide()
+        else:
+            self.assign_network_ptz_btn.show()
+            self.unassign_network_ptz_btn.hide()
+
+    def selected_face_change(self):
+        if self.current_selected_source is not None:
+            if self.select_face_dropdown.currentText() == '':
+                self.current_selected_source.changeFace(None)
+                self.enable_track.setEnabled(False)
+                self.enable_track.setChecked(False)
+            else:
+                self.current_selected_source.changeFace(self.select_face_dropdown.currentText())
+                self.enable_track.setEnabled(True)
+        else:
+            self.enable_track.setEnabled(False)
+            self.enable_track.setChecked(False)
+
+    def config_enable_track(self):
+        if self.current_selected_source is not None and self.current_selected_source.is_track_enabled() and self.enable_track.isChecked():
+            pass
+        else:
+            try:
+                self.current_selected_source.config_enable_track()
+                self.enable_track.setChecked(self.current_selected_source.is_track_enabled())
+            except:
+                self.enable_track.setChecked(False)
 
     def getPhysicalSourcesList(self):
         """Test ports 0-6 and adds all camera sources to the physical source list"""
@@ -542,7 +681,7 @@ class Ui_AutoPTZ(object):
             menu_item.triggered.connect(
                 lambda: self.deleteCameraSource(source=source, menu_item=menu_item,
                                                 ndi_source=None, camera=camera, camera_widget=camera_widget))
-            self.camera_widget_list.append(camera)
+            self.serial_widget_list.append(camera)
 
         # create internal grid layout for camera
         camera_grid_layout = QtWidgets.QGridLayout()
@@ -550,18 +689,63 @@ class Ui_AutoPTZ(object):
 
         camera_grid_layout.addWidget(camera.get_video_frame(), 0, 0, 1, 1)
         camera_widget.setLayout(camera_grid_layout)
+
         select_cam_btn = QtWidgets.QPushButton("Select Camera")
-        select_cam_btn.clicked.connect(lambda: camera.get_tracker())
+        select_cam_btn.clicked.connect(lambda: self.selectCameraSource(camera=camera, select_cam_btn=select_cam_btn,
+                                                                       unselect_cam_btn=unselect_cam_btn))
+        unselect_cam_btn = QtWidgets.QPushButton("Unselect Camera")
+        unselect_cam_btn.clicked.connect(
+            lambda: self.unselectCameraSource(select_cam_btn=select_cam_btn, unselect_cam_btn=unselect_cam_btn))
         camera_grid_layout.addWidget(select_cam_btn, 1, 0, 1, 1)
+        camera_grid_layout.addWidget(unselect_cam_btn, 2, 0, 1, 1)
+        unselect_cam_btn.hide()
 
         self.flowLayout.addWidget(camera_widget)
+        self.watch_trainer.add_camera(camera=camera)
+
+    def selectCameraSource(self, camera, select_cam_btn, unselect_cam_btn):
+        self.current_selected_source = camera
+
+        if self.current_selected_source.is_ptz_ready() == "ready":
+            self.assign_network_ptz_btn.hide()
+            self.unassign_network_ptz_btn.show()
+        elif self.current_selected_source.is_ptz_ready() == "not ready":
+            self.assign_network_ptz_btn.show()
+            self.unassign_network_ptz_btn.hide()
+        else:
+            self.assign_network_ptz_btn.hide()
+            self.unassign_network_ptz_btn.hide()
+
+        select_cam_btn.hide()
+        unselect_cam_btn.show()
+
+        self.select_face_dropdown.setEnabled(True)
+        # Path for face image database
+
+        if self.current_selected_source.checkFace() is None:
+            self.select_face_dropdown.setCurrentText('')
+            self.enable_track.setEnabled(False)
+        else:
+            self.select_face_dropdown.setCurrentText(self.current_selected_source.checkFace())
+            self.enable_track.setEnabled(True)
+
+        # problem with when checked event
+        if self.current_selected_source.is_track_enabled():
+            self.enable_track.setChecked(True)
+        else:
+            self.enable_track.setChecked(False)
+
+    def unselectCameraSource(self, select_cam_btn, unselect_cam_btn):
+        self.current_selected_source = None
+        self.select_face_dropdown.setCurrentText('')
+        self.select_face_dropdown.setEnabled(False)
+        self.enable_track.setChecked(False)
+        self.enable_track.setEnabled(False)
+        unselect_cam_btn.hide()
+        select_cam_btn.show()
 
     def deleteCameraSource(self, source, ndi_source, menu_item, camera, camera_widget):
         """Remove NDI/Serial camera source from camera grid"""
-        self.flowLayout.removeWidget(camera_widget)
-        camera.kill_video()
-        camera_widget.destroy()
-
         menu_item.disconnect()
         if source == -1:
             # Remove NDI source widget
@@ -569,7 +753,12 @@ class Ui_AutoPTZ(object):
         else:
             # Remove Serial source widget
             menu_item.triggered.connect(lambda: self.addCamera(source=source, ndi_source=None, menu_item=menu_item))
-            self.camera_widget_list.remove(camera)
+            self.serial_widget_list.remove(camera)
+
+        self.watch_trainer.remove_camera(camera=camera)
+        camera.close()
+        camera_widget.close()
+        self.flowLayout.removeWidget(camera_widget)
 
     def translateUi(self, AutoPTZ):
         """Translate Menu, Buttons, and Labels through localization"""
@@ -577,6 +766,8 @@ class Ui_AutoPTZ(object):
         AutoPTZ.setWindowTitle(_translate("AutoPTZ", "AutoPTZ"))
         self.enable_track.setText(_translate("AutoPTZ", "Enable Tracking"))
         self.select_face_label.setText(_translate("AutoPTZ", "Select Face"))
+        self.assign_network_ptz_btn.setText(_translate("AutoPTZ", "Assign Network PTZ"))
+        self.unassign_network_ptz_btn.setText(_translate("AutoPTZ", "Unassign Network PTZ"))
         self.formTabWidget.setTabText(self.formTabWidget.indexOf(self.selectedCamPage), _translate("AutoPTZ", "Auto"))
         self.select_camera_label.setText(_translate("AutoPTZ", "Select Camera"))
         self.down_right_btn.setText(_translate("AutoPTZ", "↘"))
@@ -594,16 +785,17 @@ class Ui_AutoPTZ(object):
         self.focus_minus_btn.setText(_translate("AutoPTZ", "Focus -"))
         self.menu_btn.setText(_translate("AutoPTZ", "Menu"))
         self.reset_btn.setText(_translate("AutoPTZ", "Reset"))
-        self.assign_ptz_btn.setText(_translate("AutoPTZ", "Assign PTZ"))
-        self.unassign_ptz_btn.setText(_translate("AutoPTZ", "Unassign PTZ"))
+        self.assign_visca_ptz_btn.setText(_translate("AutoPTZ", "Assign VISCA PTZ"))
+        self.unassign_visca_ptz_btn.setText(_translate("AutoPTZ", "Unassign VISCA PTZ"))
         self.formTabWidget.setTabText(self.formTabWidget.indexOf(self.manualControlPage),
                                       _translate("AutoPTZ", "Manual"))
         self.menuFile.setTitle(_translate("AutoPTZ", "File"))
         self.menuSource.setTitle(_translate("AutoPTZ", "Sources"))
-        self.menuAdd_Face.setTitle(_translate("AutoPTZ", "Facial Recognition"))
+        self.menuFacial_Recognition.setTitle(_translate("AutoPTZ", "Facial Recognition"))
         self.menuHelp.setTitle(_translate("AutoPTZ", "Help"))
-        self.actionSave.setText(_translate("AutoPTZ", "Open"))
-        self.actionSave_as.setText(_translate("AutoPTZ", "Save"))
+        self.actionOpen.setText(_translate("AutoPTZ", "Open"))
+        self.actionSave.setText(_translate("AutoPTZ", "Save"))
+        self.actionSave_as.setText(_translate("AutoPTZ", "Save As"))
         self.actionClose.setText(_translate("AutoPTZ", "Close"))
         self.actionAdd_IP.setText(_translate("AutoPTZ", "Add IP"))
         self.menuAdd_NDI.setTitle(_translate("AutoPTZ", "Add NDI"))
@@ -611,7 +803,7 @@ class Ui_AutoPTZ(object):
         self.actionEdit.setText(_translate("AutoPTZ", "Edit Setup"))
         self.actionContact.setText(_translate("AutoPTZ", "Contact"))
         self.actionAbout.setText(_translate("AutoPTZ", "About"))
-        self.actionFacial_Recognition.setText(_translate("AutoPTZ", "Add Face"))
-        self.actionTrain_Model.setText(_translate("AutoPTZ", "Train Model"))
+        self.actionAdd_Face.setText(_translate("AutoPTZ", "Add Face"))
+        self.actionTrain_Model.setText(_translate("AutoPTZ", "Retrain Model"))
         self.actionRemove_Face.setText(_translate("AutoPTZ", "Remove Face"))
         self.actionReset_Database.setText(_translate("AutoPTZ", "Reset Database"))

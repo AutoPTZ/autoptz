@@ -5,11 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/ui/homepage/move_visca_ptz.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/assign_ptz_ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/assign_ptz_ui.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/flow_layout_test.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/flow_layout.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/trainer/labels.txt" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/trainer/labels.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/homepage/homepage.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/homepage.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/shared/watch_trainer_directory.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/shared/watch_trainer_directory.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/vapix.log" beforeDir="false" afterPath="$PROJECT_DIR$/ui/vapix.log" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/camera_widget.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -39,13 +41,17 @@
   </component>
   <component name="PropertiesComponent">{
   &quot;keyToString&quot;: {
+    &quot;ASKED_ADD_EXTERNAL_FILES&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/Users/bethlehemchurch/development/autoptz-1&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;project.propDebugger&quot;
+    &quot;last_opened_file_path&quot;: &quot;/Users/prince/development/autoptz/logic/facial_tracking&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
   }
 }</component>
   <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/logic/facial_tracking" />
+    </key>
     <key name="MoveFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/ui/homepage" />
       <recent name="$PROJECT_DIR$" />
@@ -54,69 +60,6 @@
     </key>
   </component>
   <component name="RunManager" selected="Python.startup">
-    <configuration name="autoptz_ui_2" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
-      <module name="autoptz" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/ui/homepage" />
-      <option name="IS_MODULE_SDK" value="true" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/ui/homepage/autoptz_ui_2.py" />
-      <option name="PARAMETERS" value="" />
-      <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
-      <option name="MODULE_MODE" value="false" />
-      <option name="REDIRECT_INPUT" value="false" />
-      <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration name="flow_layout" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
-      <module name="autoptz" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/ui/homepage" />
-      <option name="IS_MODULE_SDK" value="true" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/ui/homepage/flow_layout.py" />
-      <option name="PARAMETERS" value="" />
-      <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
-      <option name="MODULE_MODE" value="false" />
-      <option name="REDIRECT_INPUT" value="false" />
-      <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration name="get_serial_cameras" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
-      <module name="autoptz" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/logic/camera_search" />
-      <option name="IS_MODULE_SDK" value="true" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/logic/camera_search/get_serial_cameras.py" />
-      <option name="PARAMETERS" value="" />
-      <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
-      <option name="MODULE_MODE" value="false" />
-      <option name="REDIRECT_INPUT" value="false" />
-      <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
     <configuration name="startup" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="autoptz" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -138,7 +81,7 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
-    <configuration name="visca_code_lines" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+    <configuration name="train_face" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="autoptz" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
@@ -146,11 +89,11 @@
         <env name="PYTHONUNBUFFERED" value="1" />
       </envs>
       <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/ui/widgets" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/logic/facial_tracking" />
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/ui/widgets/visca_code_lines.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/logic/facial_tracking/train_face.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
@@ -162,10 +105,7 @@
     <recent_temporary>
       <list>
         <item itemvalue="Python.startup" />
-        <item itemvalue="Python.flow_layout_test" />
-        <item itemvalue="Python.get_serial_cameras" />
-        <item itemvalue="Python.autoptz_ui_2" />
-        <item itemvalue="Python.visca_code_lines" />
+        <item itemvalue="Python.train_face" />
       </list>
     </recent_temporary>
   </component>

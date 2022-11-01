@@ -33,6 +33,18 @@ class ViscaPTZ:
         except:
             print("Please initialize a camera")
 
+    def move_left_track(self):
+        try:
+            self.visca_ptz.left(5)
+        except:
+            print("Please initialize a camera")
+
+    def move_right_track(self):
+        try:
+            self.visca_ptz.right(5)
+        except:
+            print("Please initialize a camera")
+
     def move_down(self):
         try:
             self.visca_ptz.down(5)

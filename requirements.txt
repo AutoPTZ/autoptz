@@ -2,6 +2,10 @@ numpy
 pillow
 opencv-contrib-python
 PyQT5
-dlib
 imutils
 scipy
+watchdog
+pyserial
+ndi-python
+sensecam-control
+# conda install -c conda-forge dlib
