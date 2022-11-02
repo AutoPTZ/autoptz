@@ -198,5 +198,5 @@ class ImageProcessor(Thread):
     def is_track_enabled(self):
         return self.enable_track_checked
 
-    def set_ptz_tracker(self, control):
+    def set_ptz_controller(self, control):
         self.camera_control = control

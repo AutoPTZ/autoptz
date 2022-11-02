@@ -123,7 +123,7 @@ class Ui_AutoPTZ(object):
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Preferred)
         size_policy.setHeightForWidth(self.selectedCamPage.sizePolicy().hasHeightForWidth())
         self.selectedCamPage.setSizePolicy(size_policy)
-        self.selectedCamPage.setMinimumSize(QtCore.QSize(150, 0))
+        self.selectedCamPage.setMinimumSize(QtCore.QSize(163, 0))
         self.selectedCamPage.setMaximumSize(QtCore.QSize(16777215, 428))
         self.selectedCamPage.setObjectName("selectedCamPage")
         self.formLayout = QtWidgets.QFormLayout(self.selectedCamPage)
@@ -145,11 +145,11 @@ class Ui_AutoPTZ(object):
 
         # assign VISCA PTZ to Serial Camera Source
         self.assign_network_ptz_btn = QtWidgets.QPushButton(self.selectedCamPage)
-        self.assign_network_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
+        self.assign_network_ptz_btn.setGeometry(QtCore.QRect(10, 380, 150, 32))
         self.assign_network_ptz_btn.setObjectName("assign_network_ptz_btn")
         self.assign_network_ptz_btn.hide()
         self.unassign_network_ptz_btn = QtWidgets.QPushButton(self.selectedCamPage)
-        self.unassign_network_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
+        self.unassign_network_ptz_btn.setGeometry(QtCore.QRect(0, 380, 162, 32))
         self.unassign_network_ptz_btn.setObjectName("unassign_visca_ptz_btn")
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.clicked.connect(self.assign_network_ptz_dlg)
@@ -180,7 +180,7 @@ class Ui_AutoPTZ(object):
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.MinimumExpanding)
         size_policy.setHeightForWidth(self.manualControlPage.sizePolicy().hasHeightForWidth())
         self.manualControlPage.setSizePolicy(size_policy)
-        self.manualControlPage.setMinimumSize(QtCore.QSize(162, 0))
+        self.manualControlPage.setMinimumSize(QtCore.QSize(163, 0))
         self.manualControlPage.setMaximumSize(QtCore.QSize(16777215, 428))
         self.manualControlPage.setObjectName("manualControlPage")
         self.select_camera_label = QtWidgets.QLabel(self.manualControlPage)
@@ -512,7 +512,7 @@ class Ui_AutoPTZ(object):
         index = self.assigned_ptz_camera.index(self.select_camera_dropdown.currentText())
 
         camera = self.assigned_ptz_camera[index + 1]
-        camera.image_processor_thread.set_ptz_tracker(None)
+        camera.image_processor_thread.set_ptz_controller(None)
         self.assigned_ptz_camera.remove(camera)
         self.assigned_ptz_camera.remove(self.select_camera_dropdown.currentText())
 
@@ -530,7 +530,7 @@ class Ui_AutoPTZ(object):
 
     def unassign_network_ptz(self):
         """Allow User to Unassign current Network PTZ device from Camera Source"""
-        self.current_selected_source.image_processor_thread.set_ptz_tracker(control=None)
+        self.current_selected_source.image_processor_thread.set_ptz_controller(control=None)
         self.current_selected_source.image_processor_thread.set_ptz_ready("not ready")
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.show()
@@ -732,7 +732,6 @@ class Ui_AutoPTZ(object):
             self.select_face_dropdown.setCurrentText(self.current_selected_source.image_processor_thread.get_face())
             self.enable_track.setEnabled(True)
 
-        # problem with when checked event
         if self.current_selected_source.image_processor_thread.is_track_enabled():
             self.enable_track.setChecked(True)
         else:
@@ -744,6 +743,8 @@ class Ui_AutoPTZ(object):
         self.select_face_dropdown.setEnabled(False)
         self.enable_track.setChecked(False)
         self.enable_track.setEnabled(False)
+        self.assign_network_ptz_btn.hide()
+        self.unassign_network_ptz_btn.hide()
         unselect_cam_btn.hide()
         select_cam_btn.show()
 

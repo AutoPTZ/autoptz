@@ -62,10 +62,11 @@ class AssignNetworkPTZIU(object):
         else:
             try:
                 ip_address = re.findall(r'(?:\d{1,3}\.)+(?:\d{1,3})', self.camera.objectName())
+                print(ip_address[0], self.username_line.text().strip(), self.password_line.text().strip())
                 camera_control = onvif_control.CameraControl(ip_address[0], self.username_line.text().strip(),
                                                              self.password_line.text().strip())
                 camera_control.camera_start()
-                self.camera.image_processor_thread.config_camera_control(control=camera_control)
+                self.camera.image_processor_thread.set_ptz_controller(control=camera_control)
                 self.camera.image_processor_thread.set_ptz_ready("ready")
                 self.window.close()
             except:
