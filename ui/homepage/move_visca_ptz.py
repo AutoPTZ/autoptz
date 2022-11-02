@@ -9,6 +9,30 @@ class ViscaPTZ:
             self.visca_ptz.init()
             print("Camera Initialized")
 
+    def move_left_track(self):
+        try:
+            self.visca_ptz.left(5)
+        except:
+            print("Please initialize a camera")
+
+    def move_right_track(self):
+        try:
+            self.visca_ptz.right(5)
+        except:
+            print("Please initialize a camera")
+
+    def move_up_track(self):
+        try:
+            self.visca_ptz.up(5)
+        except:
+            print("Please initialize a camera")
+
+    def move_down_track(self):
+        try:
+            self.visca_ptz.down(5)
+        except:
+            print("Please initialize a camera")
+
     def move_up(self):
         try:
             self.visca_ptz.up(5)
@@ -30,18 +54,6 @@ class ViscaPTZ:
             self.visca_ptz.right(5)
             S = threading.Timer(0.4, self.move_stop)
             S.start()
-        except:
-            print("Please initialize a camera")
-
-    def move_left_track(self):
-        try:
-            self.visca_ptz.left(5)
-        except:
-            print("Please initialize a camera")
-
-    def move_right_track(self):
-        try:
-            self.visca_ptz.right(5)
         except:
             print("Please initialize a camera")
 

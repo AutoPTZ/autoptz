@@ -110,6 +110,7 @@ class ImageProcessor(Thread):
     def track_face(self, frame, x, y, w, h):
         rgbFrame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.putText(frame, "Tracking Enabled", (75, 75), self.font, 0.7, (0, 0, 255), 2)
+        cv2.rectangle(frame, (50, 40), (530, 280), (255, 0, 0), 2)
         if not self.track_started:
             self.tracker = dlib.correlation_tracker()
             rect = dlib.rectangle(x, y, x + w, y + h)
@@ -125,22 +126,44 @@ class ImageProcessor(Thread):
             self.tracker.update(rgbFrame)
             pos = self.tracker.get_position()
             # unpack the position object
-            startX = int(pos.left())
-            startY = int(pos.top())
-            endX = int(pos.right())
-            endY = int(pos.bottom())
-            cv2.rectangle(frame, (int(startX), int(startY)), (int(endX), int(endY)), (255, 0, 255), 3, 1)
-            cv2.putText(frame, "tracking", (int(startX), int(endY + 15)), self.font, 0.45, (0, 255, 0), 1)
+            x = int(pos.left())
+            y = int(pos.top())
+            w = int(pos.right())
+            h = int(pos.bottom())
+            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
+            cv2.putText(frame, "tracking", (x, h + 15), self.font, 0.45, (0, 255, 0), 1)
 
         if self.camera_control is not None:
-            if 217 < x < 423:
-                self.camera_control.move_stop()
-            if x > 423:
-                self.camera_control.move_right_track()
-                print("Out of Best Bounds")
-            elif x < 217:
-                self.camera_control.move_left_track()
-                print("Out of Best Bounds")
+            if self.ptz_ready is None:
+                # For VISCA PTZ
+                if 75 < x < 410 and y > 50 and h < 280:
+                    self.camera_control.move_stop()
+                if x > 410:
+                    self.camera_control.move_right_track()
+                elif x < 75:
+                    self.camera_control.move_left_track()
+                if h > 280:
+                    self.camera_control.move_down_track()
+                elif y < 50:
+                    self.camera_control.move_up_track()
+            else:
+                # For ONVIF PTZ
+                if 75 < x < 410 and y > 50 and h < 280:
+                    self.camera_control.stop_move()
+                    # movementX = False
+                    # faster_movement = False
+                if x > 410:
+                    self.camera_control.continuous_move(0.05, 0, 0)
+                    # movementX = False
+                elif x < 75:
+                    self.camera_control.continuous_move(-0.05, 0, 0)
+                    # movementX = False
+                if h > 280:
+                    self.camera_control.continuous_move(0, -0.05, 0)
+                    # movementY = False
+                elif y < 50:
+                    self.camera_control.continuous_move(0, 0.05, 0)
+                    # movementY = False
         return frame
 
     def resetFacialRecognition(self):
@@ -175,8 +198,5 @@ class ImageProcessor(Thread):
     def is_track_enabled(self):
         return self.enable_track_checked
 
-    def set_ptz_tracker(self, control, isVISCA):
-        if control is not None and isVISCA:
-            self.camera_control = ViscaPTZ(device_id=control)
-        else:
-            self.camera_control = None
+    def set_ptz_tracker(self, control):
+        self.camera_control = control

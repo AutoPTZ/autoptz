@@ -512,7 +512,7 @@ class Ui_AutoPTZ(object):
         index = self.assigned_ptz_camera.index(self.select_camera_dropdown.currentText())
 
         camera = self.assigned_ptz_camera[index + 1]
-        camera.set_tracker(None)
+        camera.image_processor_thread.set_ptz_tracker(None)
         self.assigned_ptz_camera.remove(camera)
         self.assigned_ptz_camera.remove(self.select_camera_dropdown.currentText())
 
