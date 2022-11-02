@@ -1,11 +1,12 @@
 import os
 import shutil
 
+from threading import Thread
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QDialog
 
-from logic.facial_tracking.train_face import Trainer
-from ui.shared.message_prompts import show_critical_messagebox, show_info_messagebox
+from logic.facial_tracking.dialogs.train_face import Trainer
+from ui.shared.message_prompts import show_info_messagebox
 
 
 class RemoveFaceUI(object):
@@ -60,7 +61,10 @@ class RemoveFaceUI(object):
         selected_face = self.path + self.name_list.currentItem().text()
         shutil.rmtree(selected_face)
         show_info_messagebox("Face Removed. \nRetraining model,  please wait...")
-        Trainer.train_face(True)
+        trainer_thread = Thread(target=Trainer().train_face(True))
+        trainer_thread.daemon = True
+        trainer_thread.start()
+        trainer_thread.join()
         self.window.close()
 
     def translate_ui(self, remove_face):

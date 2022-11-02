@@ -1,5 +1,4 @@
 /logic/facial_tracking/images/
-/logic/facial_tracking/trainer/trainer.yml
 /visca/__pycache__
 /ui/widgets/__pycache__
 /ui/shared/__pycache__
@@ -7,3 +6,5 @@
 /logic/facial_tracking/__pycache__
 /logic/camera_search/__pycache__
 /ui/vapix.log
+/logic/facial_tracking/trainer/trainer.json
+/logic/facial_tracking/dialogs/__pycache__

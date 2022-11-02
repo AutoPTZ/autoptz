@@ -1,6 +1,8 @@
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QDialog
 
+from ui.homepage.move_visca_ptz import ViscaPTZ
+
 
 class AssignPTZUI(object):
     def __init__(self):
@@ -48,7 +50,7 @@ class AssignPTZUI(object):
     def assign_ptz(self):
         print("Assigning PTZ")
         camera_widget = self.camera_list[self.usable_camera_list.currentRow()]
-        camera_widget.set_tracker(self.ptz_id)
+        camera_widget.image_processor_thread.set_ptz_controller(ViscaPTZ(device_id=self.ptz_id))
         self.assigned_list.append(self.ptz_id)
         self.assigned_list.append(camera_widget)
 

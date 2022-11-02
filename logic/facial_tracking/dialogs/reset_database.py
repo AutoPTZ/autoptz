@@ -59,7 +59,7 @@ class ResetDatabaseUI(object):
             # check if phrase is correct, if so delete all images + trainer.yml
             if self.confirm_line.text().strip() == 'RESET ALL':
                 image_path = '../logic/facial_tracking/images/'
-                trainer_path = '../logic/facial_tracking/trainer/trainer.yml'
+                trainer_path = '../logic/facial_tracking/trainer/trainer.json'
                 if os.path.exists(image_path):
                     shutil.rmtree(image_path)
                 if os.path.exists(trainer_path):
@@ -83,12 +83,10 @@ class ResetDatabaseUI(object):
 class ResetDatabaseDlg(QDialog):
     """Setup Add Face Dialog"""
 
-    def __init__(self, parent=None, camera=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
         # Create an instance of the GUI
 
-        if camera is None:
-            camera = ''
         self.ui = ResetDatabaseUI()
         # Run the .setupUi() method to show the GUI
         self.ui.setupUi(self)
