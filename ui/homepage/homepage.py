@@ -531,6 +531,7 @@ class Ui_AutoPTZ(object):
     def unassign_network_ptz(self):
         """Allow User to Unassign current Network PTZ device from Camera Source"""
         self.current_selected_source.image_processor_thread.set_ptz_tracker(control=None)
+        self.current_selected_source.image_processor_thread.set_ptz_ready("not ready")
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.show()
 

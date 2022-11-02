@@ -57,7 +57,9 @@ class NDICameraWidget(QtWidgets.QWidget):
 
         # Start Image Processor for Facial Recognition + Tracking
         self.image_processor_thread = ImageProcessor()
+        self.image_processor_thread.daemon = True
         self.image_processor_thread.start()
+        self.image_processor_thread.set_ptz_ready("not ready")
 
         # Periodically set video frame to display
         self.timer = QtCore.QTimer()
@@ -154,12 +156,6 @@ class NDICameraWidget(QtWidgets.QWidget):
 
     def get_video_frame(self):
         return self.video_frame
-
-    def is_ptz_ready(self):
-        if self.camera_control is None:
-            return "not ready"
-        else:
-            return "ready"
 
     def kill_video(self):
         print("Killing Camera Object")

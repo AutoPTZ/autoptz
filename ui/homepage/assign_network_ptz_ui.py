@@ -66,6 +66,7 @@ class AssignNetworkPTZIU(object):
                                                              self.password_line.text().strip())
                 camera_control.camera_start()
                 self.camera.image_processor_thread.config_camera_control(control=camera_control)
+                self.camera.image_processor_thread.set_ptz_ready("ready")
                 self.window.close()
             except:
                 show_critical_messagebox(window_title="ONVIF Camera Control",

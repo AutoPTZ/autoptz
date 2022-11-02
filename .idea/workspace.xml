@@ -6,18 +6,9 @@
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/original_facial_tracking/face_recognition_tracker_dlib.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/original_facial_tracking/facial_recognition.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/original_facial_tracking/temp_startup.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/original_facial_tracking/trainer/labels.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/homepage/assign_network_ptz_ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/assign_network_ptz_ui.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/homepage/homepage.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/homepage.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/startup.py" beforeDir="false" afterPath="$PROJECT_DIR$/startup.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/test_cam/best_cam_example.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_cam/best_cam_example.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/test_cam/model_webcam_test.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_cam/model_webcam_test.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/widgets/visca_code_lines.py" beforeDir="false" afterPath="$PROJECT_DIR$/visca/visca_code_lines.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
