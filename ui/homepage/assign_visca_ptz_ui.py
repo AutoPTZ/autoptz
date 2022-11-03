@@ -1,7 +1,7 @@
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QDialog
 
-from ui.homepage.move_visca_ptz import ViscaPTZ
+from logic.facial_tracking.move_visca_ptz import ViscaPTZ
 
 
 class AssignPTZUI(object):

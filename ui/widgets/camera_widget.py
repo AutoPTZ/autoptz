@@ -131,7 +131,6 @@ class CameraWidget(QtWidgets.QWidget):
                 # Convert to pixmap and set to video frame
                 img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], frame.strides[0],
                                    QtGui.QImage.Format_RGB888).rgbSwapped()
-
                 try:
                     self.video_frame.setPixmap(QtGui.QPixmap.fromImage(img))
                 except:
