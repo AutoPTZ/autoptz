@@ -4,7 +4,6 @@ from threading import Thread
 import dlib
 
 from logic.facial_tracking.dialogs.train_face import Trainer
-from ui.homepage.move_visca_ptz import ViscaPTZ
 
 
 class ImageProcessor(Thread):
