@@ -2,8 +2,13 @@ import os
 import cv2
 from threading import Thread
 import dlib
+import pickle
 
 from logic.facial_tracking.dialogs.train_face import Trainer
+
+from logic.facial_tracking.utils import face_rects
+from logic.facial_tracking.utils import face_encodings
+from logic.facial_tracking.utils import nb_of_matches
 
 
 class ImageProcessor(Thread):
@@ -20,7 +25,7 @@ class ImageProcessor(Thread):
         self.count = 0
         self.recognizer = None
         self.names = None
-        self.resetFacialRecognition()
+        # self.resetFacialRecognition()
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self.id = 0
         self.name_id = None
@@ -37,6 +42,15 @@ class ImageProcessor(Thread):
         self.ptz_ready = None
         self.camera_control = None
 
+        self.process_frame = True
+        self.names = []
+        self.temp_zip = None
+
+        if os.path.exists("../logic/facial_tracking/models/encodings.pickle"):
+            with open("../logic/facial_tracking/models/encodings.pickle", "rb") as f:
+                self.name_encodings_dict = pickle.load(f)
+            self.recognizer = 1
+
     def get_frame(self, frame):
         if self.is_adding_face:
             return self.add_face(frame)
@@ -47,6 +61,7 @@ class ImageProcessor(Thread):
         return frame
 
     def add_face(self, frame):
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = self.face_cascade.detectMultiScale(frame, 1.3, 5)
         for x, y, w, h in faces:
             self.count = self.count + 1
@@ -70,39 +85,44 @@ class ImageProcessor(Thread):
             return frame
 
     def recognize_face(self, frame):
-        # Define min window size to be recognized as a face
-        minW = 0.1 * frame.shape[1]
-        minH = 0.1 * frame.shape[0]
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5,
-                                                   minSize=(int(minW), int(minH)))
-
-        for (x, y, w, h) in faces:
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            try:
-                id, confidence = self.recognizer.predict(gray[y:y + h, x:x + w])
-                # Check if confidence is less them 100 ==> "0" is perfect match
-                if confidence < 100:
-                    self.name_id = self.names[id]
-                    confidence = "  {0}%".format(round(100 - confidence))
+        if self.process_frame:
+            small_frame = cv2.resize(frame, (0, 0), fx=1/3, fy=1/3)
+            encodings = face_encodings(small_frame)
+            # this list will contain the names of each face detected in the frame
+            self.names = []
+            self.temp_zip = []
+            # loop over the encodings
+            for encoding in encodings:
+                # initialize a dictionary to store the name of the
+                # person and the number of times it was matched
+                counts = {}
+                # loop over the known encodings
+                for (name, encodings) in self.name_encodings_dict.items():
+                    # compute the number of matches between the current encoding and the encodings
+                    # of the known faces and store the number of matches in the dictionary
+                    counts[name] = nb_of_matches(encodings, encoding)
+                # check if all the number of matches are equal to 0
+                # if there is no match for any name, then we set the name to "Unknown"
+                if all(count == 0 for count in counts.values()):
+                    name = "Unknown"
+                # otherwise, we get the name with the highest number of matches
                 else:
-                    self.name_id = "unknown"
-                    confidence = "  {0}%".format(round(100 - confidence))
-                if self.name_id == self.tracked_name:
-                    self.track_x = x
-                    self.track_y = y
-                    self.track_w = w
-                    self.track_h = h
-            except:
-                self.resetFacialRecognition()
-                self.spin(2)
-                return frame
-            cv2.putText(frame, str(self.name_id), (x + 5, y - 5), self.font, 1, (255, 255, 255), 2)
-            cv2.putText(frame, str(confidence), (x + 5, y + h - 5), self.font, 1, (255, 255, 0), 1)
+                    name = max(counts, key=counts.get)
 
-        if len(faces) == 0:
-            self.name_id = "none"
+                # add the name to the list of names
+                self.names.append(name)
+                self.temp_zip = zip(face_rects(small_frame), self.names)
+
+        self.process_frame = not self.process_frame
+        # loop over the `rectangles` of the faces in the
+        # input frame using the `face_rects` function
+        for rect, name in self.temp_zip:
+            # get the bounding box for each face using the `rect` variable
+            x1, y1, x2, y2 = rect.left() * 3, rect.top() * 3, rect.right() * 3, rect.bottom() * 3
+            # draw the bounding box of the face along with the name of the person
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, name, (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 0), 2)
 
         return frame
 
