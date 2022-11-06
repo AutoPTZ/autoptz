@@ -47,7 +47,11 @@ class ImageProcessor(Thread):
         return frame
 
     def add_face(self, frame):
-        faces = self.face_cascade.detectMultiScale(frame, 1.3, 5)
+        minW = 0.1 * frame.shape[1]
+        minH = 0.1 * frame.shape[0]
+
+        faces = self.face_cascade.detectMultiScale(frame, scaleFactor=1.1, minNeighbors=10,
+                                                   minSize=(int(minW), int(minH)))
         for x, y, w, h in faces:
             self.count = self.count + 1
             name = self.image_path + self.adding_to_name + '/' + str(self.count) + '.jpg'
@@ -75,7 +79,7 @@ class ImageProcessor(Thread):
         minH = 0.1 * frame.shape[0]
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5,
+        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=3,
                                                    minSize=(int(minW), int(minH)))
 
         for (x, y, w, h) in faces:
@@ -98,8 +102,8 @@ class ImageProcessor(Thread):
                 self.resetFacialRecognition()
                 self.spin(2)
                 return frame
-            cv2.putText(frame, str(self.name_id), (x + 5, y - 5), self.font, 1, (255, 255, 255), 2)
-            cv2.putText(frame, str(confidence), (x + 5, y + h - 5), self.font, 1, (255, 255, 0), 1)
+            cv2.putText(frame, str(self.name_id), (x + 5, y - 5), self.font, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, str(confidence), (x + w - 50, y + h - 5), self.font, 0.45, (255, 255, 0), 1)
 
         if len(faces) == 0:
             self.name_id = "none"
@@ -109,18 +113,23 @@ class ImageProcessor(Thread):
     def track_face(self, frame, x, y, w, h):
         rgbFrame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.putText(frame, "Tracking Enabled", (75, 75), self.font, 0.7, (0, 0, 255), 2)
-        cv2.rectangle(frame, (50, 40), (530, 280), (255, 0, 0), 2)
+        min_x = int(frame.shape[1]/11.5)
+        max_x = int(frame.shape[1]/1.1)
+        min_y = int(frame.shape[0]/8.5)
+        max_y = int(frame.shape[0]/1.3)
+        cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (255, 0, 0), 2)
+        # cv2.rectangle(frame, (frame.shape[1] / 11.5, 40), (530, 280), (255, 0, 0), 2)
         if not self.track_started:
             self.tracker = dlib.correlation_tracker()
             rect = dlib.rectangle(x, y, x + w, y + h)
             self.tracker.start_track(rgbFrame, rect)
             self.track_started = True
-            cv2.rectangle(frame, (int(x), int(y)), (int(w), int(h)), (255, 0, 255), 3, 1)
+            cv2.rectangle(frame, (int(x), int(y)), (int(w + x), int(h + y)), (255, 0, 255), 3, 1)
         if self.name_id == self.tracked_name:
             rect = dlib.rectangle(x, y, x + w, y + h)
             self.tracker.start_track(rgbFrame, rect)
             cv2.rectangle(frame, (int(x), int(y)), (int(w + x), int(h + y)), (255, 0, 255), 3, 1)
-            cv2.putText(frame, "tracking", (int(x), int(h + 15)), self.font, 0.45, (0, 255, 0), 1)
+            cv2.putText(frame, "tracking", (x, y + h + 15), self.font, 0.45, (0, 255, 0), 1)
         else:
             self.tracker.update(rgbFrame)
             pos = self.tracker.get_position()
@@ -129,38 +138,38 @@ class ImageProcessor(Thread):
             y = int(pos.top())
             w = int(pos.right())
             h = int(pos.bottom())
-            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
-            cv2.putText(frame, "tracking", (x, h + 15), self.font, 0.45, (0, 255, 0), 1)
+            cv2.rectangle(frame, (x - 5, y - 5), (w + 5, h + 5), (255, 0, 255), 3, 1)
+            cv2.putText(frame, "tracking", (x, h + 20), self.font, 0.45, (0, 255, 0), 1)
 
         if self.camera_control is not None:
             if self.ptz_ready is None:
                 # For VISCA PTZ
-                if 75 < x < 410 and y > 50 and h < 280:
+                if x > min_x and w < max_x and y > min_y and h < max_y:
                     self.camera_control.move_stop()
-                if x > 410:
+                if w > max_x:
                     self.camera_control.move_right_track()
-                elif x < 75:
+                elif x < min_x:
                     self.camera_control.move_left_track()
-                if h > 280:
+                if h > max_y:
                     self.camera_control.move_down_track()
-                elif y < 50:
+                elif y < min_y:
                     self.camera_control.move_up_track()
             else:
                 # For ONVIF PTZ
-                if 75 < x < 410 and y > 50 and h < 280:
+                if x > min_x and w < max_x and y > min_y and h < max_y:
                     self.camera_control.stop_move()
                     # movementX = False
                     # faster_movement = False
-                if x > 410:
+                if w > max_x:
                     self.camera_control.continuous_move(0.05, 0, 0)
                     # movementX = False
-                elif x < 75:
+                elif x < min_x:
                     self.camera_control.continuous_move(-0.05, 0, 0)
                     # movementX = False
-                if h > 280:
+                if h > min_y:
                     self.camera_control.continuous_move(0, -0.05, 0)
                     # movementY = False
-                elif y < 50:
+                elif y < max_y:
                     self.camera_control.continuous_move(0, 0.05, 0)
                     # movementY = False
         return frame
@@ -192,6 +201,15 @@ class ImageProcessor(Thread):
         return self.ptz_ready
 
     def config_enable_track(self):
+        self.track_x = None
+        self.track_y = None
+        self.track_w = None
+        self.track_h = None
+        if self.camera_control is not None:
+            if self.ptz_ready is None:
+                self.camera_control.move_stop()
+            else:
+                self.camera_control.stop_move()
         self.enable_track_checked = not self.enable_track_checked
 
     def is_track_enabled(self):

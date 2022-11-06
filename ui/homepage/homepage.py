@@ -447,6 +447,8 @@ class Ui_AutoPTZ(object):
         self.getPhysicalSourcesList()
         self.assigned_ptz_camera = []
         self.serial_widget_list = []
+        if os.path.exists("../logic/facial_tracking/trainer/") is False:
+            os.mkdir("../logic/facial_tracking/trainer/")
         self.watch_trainer = WatchTrainer()
         observer = watchdog.observers.Observer()
         observer.schedule(self.watch_trainer, path="../logic/facial_tracking/trainer/", recursive=True)
@@ -551,10 +553,11 @@ class Ui_AutoPTZ(object):
         current_text_temp = self.select_face_dropdown.currentText()
         self.select_face_dropdown.clear()
         self.select_face_dropdown.addItem('')
-        for folder in os.listdir(self.image_path):
-            self.select_face_dropdown.addItem(folder)
-        if self.select_face_dropdown.findText(current_text_temp) != -1:
-            self.select_face_dropdown.setCurrentText(current_text_temp)
+        if os.path.exists(self.image_path):
+            for folder in os.listdir(self.image_path):
+                self.select_face_dropdown.addItem(folder)
+            if self.select_face_dropdown.findText(current_text_temp) != -1:
+                self.select_face_dropdown.setCurrentText(current_text_temp)
 
     @staticmethod
     def retrain_face():
@@ -628,8 +631,8 @@ class Ui_AutoPTZ(object):
         for cam in available_cameras:
             if cam.description() != "NDI Video":
                 if platform.system() == "Darwin":  # MacOS messes up the number scheme so this was the best fix
-                    index = 1 + index
                     self.addPhysicalSource(source_number=index, source_name=cam.description())
+                    index = 1 + index
                 else:
                     self.addPhysicalSource(source_number=index, source_name=cam.description())
                     index = 1 + index

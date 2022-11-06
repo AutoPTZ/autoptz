@@ -36,16 +36,16 @@ class Trainer:
                 for (x, y, w, h) in faces:
                     faceSamples.append(img_numpy[y:y + h, x:x + w])
                     ids.append(id)
-
-        try:
+        if faceSamples:
             # Send to trainer
             recognizer.train(faceSamples, np.array(ids))
             # Save the model into trainer/trainer.json
             if os.path.exists(trainer_loc):
                 os.remove(trainer_loc)
             recognizer.write(trainer_loc)
-        except:
-            os.remove(trainer_loc)
+        else:
+            if os.path.exists(trainer_loc):
+                os.remove(trainer_loc)
         if show_message_box:
             show_info_messagebox("{0} faces trained.\nOpening Basic Recognition Software".format(len(np.unique(ids))))
         print("\n [INFO] {0} faces trained.".format(len(np.unique(ids))))
