@@ -61,7 +61,9 @@ class AssignNetworkPTZIU(object):
             ip_address = re.findall(r'(?:\d{1,3}\.)+(?:\d{1,3})', self.camera.objectName())
             camera_control = onvif_control.CameraControl(ip_address[0], self.username_line.text().strip(),
                                                          self.password_line.text().strip())
+            camera_control.setDaemon(True)
             camera_control.camera_start()
+            camera_control.start()
             print("camera control started for " + ip_address[0])
             self.camera.image_processor_thread.set_ptz_controller(control=camera_control)
             self.camera.image_processor_thread.set_ptz_ready("ready")
