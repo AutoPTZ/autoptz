@@ -65,7 +65,7 @@ class AssignNetworkPTZIU(object):
             camera_control.camera_start()
             camera_control.start()
             print("camera control started for " + ip_address[0])
-            self.camera.image_processor_thread.set_ptz_controller(control=camera_control)
+            self.camera.image_processor_thread.set_ptz_controller(control=camera_control, isONVIF=True)
             self.camera.image_processor_thread.set_ptz_ready("ready")
             self.window.close()
         except:

@@ -56,7 +56,8 @@ class ImageProcessor(Thread):
             return self.add_face(frame)
         if self.recognizer is not None:
             frame = self.recognize_face(frame)
-        if self.enable_track_checked and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
+        if self.enable_track_checked and self.track_x is not None and self.track_y is not None and \
+                self.track_w is not None and self.track_h is not None:
             frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
         return frame
 
@@ -127,10 +128,10 @@ class ImageProcessor(Thread):
     def track_face(self, frame, x, y, w, h):
         rgbFrame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.putText(frame, "Tracking Enabled", (75, 75), self.font, 0.7, (0, 0, 255), 2)
-        self.min_x = int(frame.shape[1]/11.5)
-        self.max_x = int(frame.shape[1]/1.1)
-        self.min_y = int(frame.shape[0]/8.5)
-        self.max_y = int(frame.shape[0]/1.3)
+        self.min_x = int(frame.shape[1] / 11.5)
+        self.max_x = int(frame.shape[1] / 1.1)
+        self.min_y = int(frame.shape[0] / 8.5)
+        self.max_y = int(frame.shape[0] / 1.3)
         cv2.rectangle(frame, (self.min_x, self.min_y), (self.max_x, self.max_y), (255, 0, 0), 2)
         # cv2.rectangle(frame, (frame.shape[1] / 11.5, 40), (530, 280), (255, 0, 0), 2)
         if not self.track_started:
@@ -159,27 +160,16 @@ class ImageProcessor(Thread):
         self.current_y = y
         self.current_w = w
         self.current_h = h
-        if self.start_thread is False:
+        if self.start_thread is False and self.camera_control_thread is not None:
             self.camera_control_thread.start()
             self.start_thread = True
+        else:
+            self.move_camera(False)
         return frame
 
-    def move_camera(self):
-        print("running move script", self.enable_track_checked, self.ptz_ready)
-        while self.enable_track_checked:
-            if self.ptz_ready is None:
-                # For VISCA PTZ
-                if self.current_x > self.min_x and self.current_w < self.max_x and self.current_y > self.min_y and self.current_h < self.max_y:
-                    self.camera_control.move_stop()
-                if self.current_w > self.max_x:
-                    self.camera_control.move_right_track()
-                elif self.current_x < self.min_x:
-                    self.camera_control.move_left_track()
-                if self.current_h > self.max_y:
-                    self.camera_control.move_down_track()
-                elif self.current_y < self.min_y:
-                    self.camera_control.move_up_track()
-            else:
+    def move_camera(self, isONVIF):
+        if isONVIF:
+            while self.enable_track_checked:
                 # For ONVIF PTZ
                 if self.is_moving_left or self.is_moving_up or self.is_moving_right or self.is_moving_down and self.current_x > self.min_x and self.current_w < self.max_x and self.current_y > self.min_y and self.current_h < self.max_y:
                     self.camera_control.stop_move()
@@ -204,6 +194,25 @@ class ImageProcessor(Thread):
                     print("moving up")
                     self.camera_control.continuous_move(-0.05, 0, 0)
                     self.is_moving_up = True
+        else:
+            if self.is_moving_left or self.is_moving_up or self.is_moving_right or self.is_moving_down and self.current_x > self.min_x and self.current_w < self.max_x and self.current_y > self.min_y and self.current_h < self.max_y:
+                self.camera_control.move_stop()
+                self.is_moving_left = False
+                self.is_moving_right = False
+                self.is_moving_up = False
+                self.is_moving_down = False
+            if self.current_w > self.max_x and self.is_moving_right is False:
+                self.camera_control.move_right_track()
+                self.is_moving_right = True
+            elif self.current_x < self.min_x and self.is_moving_left is False:
+                self.camera_control.move_left_track()
+                self.is_moving_left = True
+            if self.current_h > self.max_y and self.is_moving_down is False:
+                self.camera_control.move_down_track()
+                self.is_moving_down = True
+            elif self.current_y < self.min_y and self.is_moving_up is False:
+                self.camera_control.move_up_track()
+                self.is_moving_up = True
 
     def resetFacialRecognition(self):
         self.names = []
@@ -250,13 +259,16 @@ class ImageProcessor(Thread):
             else:
                 self.camera_control.stop_move()
         self.enable_track_checked = not self.enable_track_checked
-        if not self.enable_track_checked:
+        if not self.enable_track_checked and self.camera_control_thread is not None:
             self.camera_control_thread.join()
 
     def is_track_enabled(self):
         return self.enable_track_checked
 
-    def set_ptz_controller(self, control):
+    def set_ptz_controller(self, control, isONVIF):
         self.camera_control = control
-        self.camera_control_thread = Thread(target=self.move_camera)
-        self.camera_control_thread.setDaemon(True)
+        if isONVIF:
+            self.camera_control_thread = Thread(target=self.move_camera, args=(isONVIF))
+            self.camera_control_thread.setDaemon(True)
+        else:
+            self.camera_control_thread = None

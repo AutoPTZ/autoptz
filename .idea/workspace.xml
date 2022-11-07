@@ -10,6 +10,8 @@
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/homepage/assign_network_ptz_ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/assign_network_ptz_ui.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/homepage/assign_visca_ptz_ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/assign_visca_ptz_ui.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/visca/visca_code_lines.py" beforeDir="false" afterPath="$PROJECT_DIR$/visca/visca_code_lines.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

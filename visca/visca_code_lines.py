@@ -1,10 +1,10 @@
 from visca import camera
 import time
 
-cam = camera.D100('/dev/cu.usbserial-144210')
+cam = camera.D100('/dev/cu.usbserial-144410')
 cam.init()
 
-cam.zoom_out()
+cam.left(4)
 time.sleep(1)
 cam.zoom_stop()
 

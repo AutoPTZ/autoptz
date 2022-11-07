@@ -50,7 +50,7 @@ class AssignPTZUI(object):
     def assign_ptz(self):
         print("Assigning PTZ")
         camera_widget = self.camera_list[self.usable_camera_list.currentRow()]
-        camera_widget.image_processor_thread.set_ptz_controller(ViscaPTZ(device_id=self.ptz_id))
+        camera_widget.image_processor_thread.set_ptz_controller(ViscaPTZ(device_id=self.ptz_id), isONVIF=False)
         self.assigned_list.append(self.ptz_id)
         self.assigned_list.append(camera_widget)
 
