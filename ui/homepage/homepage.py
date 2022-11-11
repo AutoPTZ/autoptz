@@ -1,7 +1,6 @@
 import os
 import platform
 
-import cv2
 from PyQt5 import QtCore, QtWidgets
 import watchdog.events
 import watchdog.observers
@@ -17,8 +16,8 @@ from ui.homepage.assign_visca_ptz_ui import AssignViscaPTZDlg
 from ui.homepage.flow_layout import FlowLayout
 from logic.camera_search.get_serial_cameras import COMPorts
 from logic.camera_search.search_ndi import get_ndi_sources
-from ui.shared.message_prompts import show_info_messagebox
-from ui.shared.watch_trainer_directory import WatchTrainer
+from shared.message_prompts import show_info_messagebox
+from shared.watch_trainer_directory import WatchTrainer
 from ui.widgets.camera_widget import CameraWidget
 from ui.widgets.ndi_cam_widget import NDICameraWidget
 

@@ -6,7 +6,7 @@ from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QDialog
 
 from logic.facial_tracking.dialogs.train_face import Trainer
-from ui.shared.message_prompts import show_info_messagebox
+from shared.message_prompts import show_info_messagebox
 
 
 class RemoveFaceUI(object):

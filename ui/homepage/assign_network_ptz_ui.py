@@ -1,10 +1,9 @@
-import os
 import re
 from sensecam_control import onvif_control
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QDialog
 
-from ui.shared.message_prompts import show_critical_messagebox, show_info_messagebox
+from shared.message_prompts import show_critical_messagebox
 
 
 class AssignNetworkPTZIU(object):
