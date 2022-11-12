@@ -1,6 +1,5 @@
 import os
 import pickle
-
 import cv2
 from threading import Thread
 import dlib
@@ -46,7 +45,7 @@ class ImageProcessor(Thread):
         if self.is_adding_face:
             return self.add_face(frame)
         if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
-            frame = self.track_handler.show_recognized_faces(frame)
+            frame = self.track_handler.recognize_face(frame)
         if self.enable_track_checked and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
             frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
         return frame

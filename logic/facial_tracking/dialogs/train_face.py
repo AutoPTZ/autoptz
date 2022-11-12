@@ -33,15 +33,15 @@ class Trainer:
             for encoding in encodings:
                 knownEncodings.append(encoding)
                 knownNames.append(name)
-        # if show_message_box:
-        #     show_info_messagebox("{0} faces trained.\nOpening Basic Recognition Software".format(len(np.unique(ids))))
-        # print("\n [INFO] {0} faces trained.".format(len(np.unique(ids))))
         print("Saving encodings to encodings.pickle ...")
         data = {"encodings": knownEncodings, "names": knownNames}
         f = open(trainer_loc, "wb")
         f.write(pickle.dumps(data))
         f.close()
         print("Encodings have been saved successfully.")
+        if show_message_box:
+            show_info_messagebox("{0} faces trained.\nOpening Basic Recognition Software".format(len(knownNames)))
+        print("\n [INFO] {0} faces trained.".format(len(knownNames)))
         return
 
 
