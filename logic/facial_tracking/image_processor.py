@@ -16,7 +16,6 @@ class ImageProcessor(Thread):
         Thread.__init__(self)
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
         self.image_path = '../logic/facial_tracking/images/'
-        # self.trainer_path = '../logic/facial_tracking/trainer/trainer.json'
 
         # Facial Recognition & Object Tracking
         self.is_adding_face = False
@@ -25,7 +24,6 @@ class ImageProcessor(Thread):
         self.recognizer = None
         self.names = None
         self.font = cv2.FONT_HERSHEY_SIMPLEX
-        self.id = 0
         self.name_id = None
         self.enable_track_checked = False
         self.tracked_name = None
@@ -45,12 +43,14 @@ class ImageProcessor(Thread):
         if self.is_adding_face:
             return self.add_face(frame)
         if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
-            # frame = self.track_handler.recognize_face(frame)
+            face_locations, face_names = self.track_handler.recognize_face(frame)
+            frame = self.draw_recognized_face(frame, face_locations, face_names)
             # frame = self.track_handler.yolo_detector(frame)
-            frame = self.track_handler.yolo_detector_faster(frame)
+            # frame = self.track_handler.yolo_detector_faster(frame)
             # frame = self.track_handler.mobile_ssd_detector(frame)
         if self.enable_track_checked and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
             frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
+        self.name_id = None
         return frame
 
     def add_face(self, frame):
@@ -84,6 +84,30 @@ class ImageProcessor(Thread):
         else:
             return frame
 
+    def draw_recognized_face(self, frame, face_locations, face_names):
+        for (top, right, bottom, left), name in zip(face_locations, face_names):
+            # Scale back up face locations since the frame we detected in was scaled to 1/4 size
+            top *= 2
+            right *= 2
+            bottom *= 2
+            left *= 2
+
+            self.track_x = left
+            self.track_y = top
+            self.track_w = right
+            self.track_h = bottom
+
+            # Draw a box around the face
+            cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
+
+            # Draw a label with a name below the face
+            cv2.rectangle(frame, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
+            font = cv2.FONT_HERSHEY_DUPLEX
+            cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
+            if self.tracked_name == name:
+                self.name_id = name
+        return frame
+
     def track_face(self, frame, x, y, w, h):
         rgbFrame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.putText(frame, "Tracking Enabled", (75, 75), self.font, 0.7, (0, 0, 255), 2)
@@ -92,18 +116,17 @@ class ImageProcessor(Thread):
         min_y = int(frame.shape[0] / 8.5)
         max_y = int(frame.shape[0] / 1.3)
         cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (255, 0, 0), 2)
-        # cv2.rectangle(frame, (frame.shape[1] / 11.5, 40), (530, 280), (255, 0, 0), 2)
         if not self.track_started:
             self.tracker = dlib.correlation_tracker()
-            rect = dlib.rectangle(x, y, x + w, y + h)
+            rect = dlib.rectangle(x, y, w, h)
             self.tracker.start_track(rgbFrame, rect)
             self.track_started = True
-            cv2.rectangle(frame, (int(x), int(y)), (int(w + x), int(h + y)), (255, 0, 255), 3, 1)
+            cv2.rectangle(frame, (int(x), int(y)), (int(w), int(h)), (255, 0, 255), 3, 1)
         if self.name_id == self.tracked_name:
-            rect = dlib.rectangle(x, y, x + w, y + h)
+            rect = dlib.rectangle(x, y, w, h)
             self.tracker.start_track(rgbFrame, rect)
-            cv2.rectangle(frame, (int(x), int(y)), (int(w + x), int(h + y)), (255, 0, 255), 3, 1)
-            cv2.putText(frame, "tracking", (x, y + h + 15), self.font, 0.45, (0, 255, 0), 1)
+            cv2.rectangle(frame, (int(x), int(y)), (int(w), int(h)), (255, 0, 255), 3, 1)
+            cv2.putText(frame, "tracking", (x, h + 15), self.font, 0.45, (0, 255, 0), 1)
         else:
             self.tracker.update(rgbFrame)
             pos = self.tracker.get_position()

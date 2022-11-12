@@ -21,14 +21,14 @@ class TrackHandler:
         if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
             self.data = pickle.loads(open("../logic/facial_tracking/trainer/encodings.pickle", "rb").read())
 
-        # YoloV4
-        self.net = cv2.dnn.readNetFromDarknet('../logic/facial_tracking/trainer/yolo.cfg', '../logic/facial_tracking/trainer/yolov4-obj_final.weights')
-        self.classes = []
-        with open("../logic/facial_tracking/trainer/coco.names", "r") as f:
-            self.classes = [line.strip() for line in f.readlines()]
-        layers_names = self.net.getLayerNames()
-        self.output_layers = [layers_names[i - 1] for i in self.net.getUnconnectedOutLayers()]
-        self.colors = np.random.uniform(0, 255, size=(len(self.classes), 3))
+        # # YoloV4
+        # self.net = cv2.dnn.readNetFromDarknet('../logic/facial_tracking/trainer/yolo.cfg', '../logic/facial_tracking/trainer/yolov4-obj_final.weights')
+        # self.classes = []
+        # with open("../logic/facial_tracking/trainer/coco.names", "r") as f:
+        #     self.classes = [line.strip() for line in f.readlines()]
+        # layers_names = self.net.getLayerNames()
+        # self.output_layers = [layers_names[i - 1] for i in self.net.getUnconnectedOutLayers()]
+        # self.colors = np.random.uniform(0, 255, size=(len(self.classes), 3))
 
         # MobileSSD
         # self.classNames = {0: 'background',
@@ -161,7 +161,7 @@ class TrackHandler:
 
         if self.process_this_frame:
             # Resize frame of video to 1/4 size for faster face recognition processing
-            small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
 
             # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
             rgb_small_frame = small_frame[:, :, ::-1]
@@ -184,21 +184,7 @@ class TrackHandler:
 
         self.process_this_frame = not self.process_this_frame
 
-        # Display the results
-        for (top, right, bottom, left), name in zip(self.face_locations, self.face_names):
-            # Scale back up face locations since the frame we detected in was scaled to 1/4 size
-            top *= 4
-            right *= 4
-            bottom *= 4
-            left *= 4
-            # Draw a box around the face
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
-
-            # Draw a label with a name below the face
-            cv2.rectangle(frame, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
-            font = cv2.FONT_HERSHEY_DUPLEX
-            cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
-        return frame
+        return self.face_locations, self.face_names
 
     def show_yolo_bboxes(self, frame):
         blob = cv2.dnn.blobFromImage(frame, 1 / 255.0, (TARGET_WH, TARGET_WH),

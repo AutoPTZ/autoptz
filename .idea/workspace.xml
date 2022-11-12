@@ -5,11 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/logic/facial_tracking/trainer/MobileNetSSD_deploy.caffemodel" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/logic/facial_tracking/trainer/MobileNetSSD_deploy.prototxt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/logic/facial_tracking/trainer/coco.names" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/logic/facial_tracking/trainer/yolo.cfg" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/logic/facial_tracking/trainer/yolov4-obj_final.weights" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/logic/facial_tracking/track_handler.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/track_handler.py" afterDir="false" />
