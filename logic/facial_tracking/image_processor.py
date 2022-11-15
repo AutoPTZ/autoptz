@@ -44,12 +44,12 @@ class ImageProcessor(Thread):
             if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
                 face_locations, face_names = self.track_handler.recognize_face(frame)
                 frame = self.draw_recognized_face(frame, face_locations, face_names)
+                # frame = self.track_handler.yolo_detector(frame)
+                # frame = self.track_handler.yolo_detector_faster(frame)
+                # frame = self.track_handler.mobile_ssd_detector(frame)
         except Exception as e:
             print(e)
             return frame
-            # frame = self.track_handler.yolo_detector(frame)
-            # frame = self.track_handler.yolo_detector_faster(frame)
-            # frame = self.track_handler.mobile_ssd_detector(frame)
         if self.enable_track_checked and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
             frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
         self.name_id = None
@@ -93,20 +93,19 @@ class ImageProcessor(Thread):
             bottom *= 2
             left *= 2
 
-            self.track_x = left
-            self.track_y = top
-            self.track_w = right
-            self.track_h = bottom
-
             # Draw a box around the face
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
+            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
 
             # Draw a label with a name below the face
-            cv2.rectangle(frame, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
-            font = cv2.FONT_HERSHEY_DUPLEX
-            cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
+            cv2.putText(frame, name, (left + 5, bottom - 5), self.font, 0.5, (255, 255, 255), 1)
+
+            #cv2.putText(frame, str(confidence), (x + w - 50, y + h - 5), self.font, 0.45, (255, 255, 0), 1)
             if self.tracked_name == name:
                 self.name_id = name
+                self.track_x = left
+                self.track_y = top
+                self.track_w = right
+                self.track_h = bottom
         return frame
 
     def track_face(self, frame, x, y, w, h):
