@@ -1,11 +1,8 @@
-import datetime
 import pickle
-
 import cv2
 import os
 import face_recognition
 import numpy as np
-from collections import OrderedDict
 
 TARGET_WH = 320
 THRESHOLD = 0.85
@@ -13,11 +10,12 @@ NMS_THRESHOLD = 0.3
 
 
 class TrackHandler:
-    def __init__(self):
-        self.face_locations = []
-        self.face_encodings = []
-        self.face_names = []
-        self.process_this_frame = True
+    def __init__(self, face_loc=None, face_enc=None, face_names=None, process_this_frame=True):
+        self.face_locations = face_loc
+        self.face_encodings = face_enc
+        self.face_names = face_names
+        self.face_rec = face_recognition.FaceRec()
+        self.process_this_frame = process_this_frame
         if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
             self.data = pickle.loads(open("../logic/facial_tracking/trainer/encodings.pickle", "rb").read())
 
@@ -42,6 +40,9 @@ class TrackHandler:
 
         # self.net.setPreferableBackend(cv2.dnn.DNN_TARGET_CUDA)
         # self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+    def resetFacialRecognition(self):
+        if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
+            self.data = pickle.loads(open("../logic/facial_tracking/trainer/encodings.pickle", "rb").read())
 
     def get_box_center(self, box):
         cx, cy = int((box[1] + box[3]) / 2), int((box[0] + box[2]) / 2)
@@ -160,23 +161,23 @@ class TrackHandler:
     def recognize_face(self, frame):
 
         if self.process_this_frame:
-            # Resize frame of video to 1/4 size for faster face recognition processing
+            # Resize frame of video to 1/2 size for faster face recognition processing
             small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
 
             # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
             rgb_small_frame = small_frame[:, :, ::-1]
 
             # Find all the faces and face encodings in the current frame of video
-            self.face_locations = face_recognition.face_locations(rgb_small_frame)
-            self.face_encodings = face_recognition.face_encodings(rgb_small_frame, self.face_locations)
+            self.face_locations = self.face_rec.face_locations(rgb_small_frame)
+            self.face_encodings = self.face_rec.face_encodings(rgb_small_frame, self.face_locations)
 
             self.face_names = []
             for face_encoding in self.face_encodings:
                 # See if the face is a match for the known face(s)
-                matches = face_recognition.compare_faces(self.data['encodings'], face_encoding)
+                matches = self.face_rec.compare_faces(self.data['encodings'], face_encoding)
                 name = "Unknown"
                 # Or instead, use the known face with the smallest distance to the new face
-                face_distances = face_recognition.face_distance(self.data['encodings'], face_encoding)
+                face_distances = self.face_rec.face_distance(self.data['encodings'], face_encoding)
                 best_match_index = np.argmin(face_distances)
                 if matches[best_match_index]:
                     name = self.data['names'][best_match_index]

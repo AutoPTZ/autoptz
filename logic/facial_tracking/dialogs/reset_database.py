@@ -1,13 +1,9 @@
 import os
 import shutil
-
-import cv2
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QDialog
 
 from shared.message_prompts import show_critical_messagebox
-
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
 
 
 class ResetDatabaseUI(object):
@@ -59,11 +55,11 @@ class ResetDatabaseUI(object):
             # check if phrase is correct, if so delete all images + trainer.yml
             if self.confirm_line.text().strip() == 'RESET ALL':
                 image_path = '../logic/facial_tracking/images/'
-                trainer_path = '../logic/facial_tracking/trainer/trainer.json'
+                encodings_path = '../logic/facial_tracking/trainer/encodings.pickle'
                 if os.path.exists(image_path):
                     shutil.rmtree(image_path)
-                if os.path.exists(trainer_path):
-                    os.remove(trainer_path)
+                if os.path.exists(encodings_path):
+                    os.remove(encodings_path)
                 show_critical_messagebox(window_title="Reset Database",
                                          critical_message="All stored faces and models have been removed.")
                 self.window.close()

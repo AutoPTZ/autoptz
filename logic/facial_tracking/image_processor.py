@@ -21,8 +21,6 @@ class ImageProcessor(Thread):
         self.is_adding_face = False
         self.adding_to_name = None
         self.count = 0
-        self.recognizer = None
-        self.names = None
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self.name_id = None
         self.enable_track_checked = False
@@ -42,9 +40,13 @@ class ImageProcessor(Thread):
     def get_frame(self, frame):
         if self.is_adding_face:
             return self.add_face(frame)
-        if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
-            face_locations, face_names = self.track_handler.recognize_face(frame)
-            frame = self.draw_recognized_face(frame, face_locations, face_names)
+        try:
+            if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
+                face_locations, face_names = self.track_handler.recognize_face(frame)
+                frame = self.draw_recognized_face(frame, face_locations, face_names)
+        except Exception as e:
+            print(e)
+            return frame
             # frame = self.track_handler.yolo_detector(frame)
             # frame = self.track_handler.yolo_detector_faster(frame)
             # frame = self.track_handler.mobile_ssd_detector(frame)
@@ -57,7 +59,6 @@ class ImageProcessor(Thread):
         minW = 0.1 * frame.shape[1]
         minH = 0.1 * frame.shape[0]
 
-        frame = cv2.flip(frame, 1)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=10,
@@ -78,7 +79,7 @@ class ImageProcessor(Thread):
             trainer_thread.daemon = True
             trainer_thread.start()
             trainer_thread.join()
-            # self.resetFacialRecognition()
+            self.track_handler.resetFacialRecognition()
             self.count = 0
             return frame
         else:
@@ -170,16 +171,6 @@ class ImageProcessor(Thread):
                     self.camera_control.continuous_move(0, 0.05, 0)
                     # movementY = False
         return frame
-
-    def resetFacialRecognition(self):
-        self.names = []
-        self.recognizer = None
-        if os.path.exists(self.trainer_path):
-            self.recognizer = cv2.face.LBPHFaceRecognizer_create()
-            self.recognizer.read(self.trainer_path)
-            self.names = []
-            for folder in os.listdir(self.image_path):
-                self.names.append(folder)
 
     def config_add_face(self, name):
         self.adding_to_name = name
