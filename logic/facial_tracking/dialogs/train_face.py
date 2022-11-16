@@ -6,13 +6,15 @@ from imutils import paths
 
 from shared.message_prompts import show_info_messagebox
 
+
 class Trainer:
     face_recognition = face_recognition.FaceRec()
+
     @staticmethod
     def train_face(show_message_box):
         if show_message_box:
-            show_info_messagebox("It will take a few seconds to minutes.\n Please Wait ...")
-        print("\n [INFO] Training faces. It will take a few seconds to minutes. Please Wait ...")
+            show_info_messagebox("It will take a few minutes.\n Please Wait ...")
+        print("\n [INFO] Training faces. It will take a few minutes. Please Wait ...")
 
         # Image path for face image database
         image_path = '../logic/facial_tracking/images/'

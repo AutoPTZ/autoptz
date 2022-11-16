@@ -1,10 +1,7 @@
 import os
-import pickle
 import cv2
 from threading import Thread
 import dlib
-import face_recognition
-import imutils
 
 from logic.facial_tracking.dialogs.train_face import Trainer
 from logic.facial_tracking.track_handler import TrackHandler
@@ -42,8 +39,8 @@ class ImageProcessor(Thread):
             return self.add_face(frame)
         try:
             if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
-                face_locations, face_names = self.track_handler.recognize_face(frame)
-                frame = self.draw_recognized_face(frame, face_locations, face_names)
+                face_locations, face_names, confidence_list = self.track_handler.recognize_face(frame)
+                frame = self.draw_recognized_face(frame, face_locations, face_names, confidence_list)
                 # frame = self.track_handler.yolo_detector(frame)
                 # frame = self.track_handler.yolo_detector_faster(frame)
                 # frame = self.track_handler.mobile_ssd_detector(frame)
@@ -85,8 +82,8 @@ class ImageProcessor(Thread):
         else:
             return frame
 
-    def draw_recognized_face(self, frame, face_locations, face_names):
-        for (top, right, bottom, left), name in zip(face_locations, face_names):
+    def draw_recognized_face(self, frame, face_locations, face_names, confidence_list):
+        for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
             # Scale back up face locations since the frame we detected in was scaled to 1/4 size
             top *= 2
             right *= 2
@@ -96,10 +93,10 @@ class ImageProcessor(Thread):
             # Draw a box around the face
             cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
 
-            # Draw a label with a name below the face
-            cv2.putText(frame, name, (left + 5, bottom - 5), self.font, 0.5, (255, 255, 255), 1)
+            # Draw a label with name and confidence for the face
+            cv2.putText(frame, name, (left + 5, top - 5), self.font, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, confidence, (right - 52, bottom - 5), self.font, 0.45, (255, 255, 0), 1)
 
-            #cv2.putText(frame, str(confidence), (x + w - 50, y + h - 5), self.font, 0.45, (255, 255, 0), 1)
             if self.tracked_name == name:
                 self.name_id = name
                 self.track_x = left
