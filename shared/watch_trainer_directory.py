@@ -22,7 +22,7 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         print("Watchdog received an event at - % s." % event.src_path)
         self.spin(1)
         for camera in self.camera_widget_list:
-            camera.image_processor_thread.track_handler.resetFacialRecognition()
+            camera.image_processor.track_handler.resetFacialRecognition()
 
     @staticmethod
     def spin(seconds):
