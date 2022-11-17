@@ -1,7 +1,6 @@
 import os
 import platform
 
-import cv2
 from PyQt5 import QtCore, QtWidgets
 import watchdog.events
 import watchdog.observers
@@ -10,15 +9,15 @@ from PyQt5.QtMultimedia import QCameraInfo
 from logic.facial_tracking.dialogs.add_face import AddFaceDlg
 from logic.facial_tracking.dialogs.remove_face import RemoveFaceDlg
 from logic.facial_tracking.dialogs.reset_database import ResetDatabaseDlg
-from logic.facial_tracking.dialogs.train_face import Trainer
+from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from ui.homepage.assign_network_ptz_ui import AssignNetworkPTZDlg
 from logic.facial_tracking.move_visca_ptz import ViscaPTZ
 from ui.homepage.assign_visca_ptz_ui import AssignViscaPTZDlg
 from ui.homepage.flow_layout import FlowLayout
 from logic.camera_search.get_serial_cameras import COMPorts
 from logic.camera_search.search_ndi import get_ndi_sources
-from ui.shared.message_prompts import show_info_messagebox
-from ui.shared.watch_trainer_directory import WatchTrainer
+from shared.message_prompts import show_info_messagebox
+from shared.watch_trainer_directory import WatchTrainer
 from ui.widgets.camera_widget import CameraWidget
 from ui.widgets.ndi_cam_widget import NDICameraWidget
 
@@ -564,7 +563,7 @@ class Ui_AutoPTZ(object):
         if not os.path.isdir('../logic/facial_tracking/images/') or not os.listdir('../logic/facial_tracking/images/'):
             show_info_messagebox("No Faces to train.")
         else:
-            Trainer().train_face(True)
+            TrainerDlg().show()
 
     def remove_face(self):
         """Launch the Remove Face dialog based on the currently selected camera."""

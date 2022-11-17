@@ -5,7 +5,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/shared/progress_bar.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/remove_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/remove_face.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/homepage/homepage.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/homepage.py" afterDir="false" />
@@ -46,20 +48,21 @@
     &quot;ASKED_ADD_EXTERNAL_FILES&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/Users/prince/development/autoptz/logic/facial_tracking&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/prince/development/autoptz&quot;,
     &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
   }
 }</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$" />
       <recent name="$PROJECT_DIR$/logic/facial_tracking" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
-      <recent name="$PROJECT_DIR$/logic/facial_tracking" />
-      <recent name="$PROJECT_DIR$/test_cam" />
-      <recent name="$PROJECT_DIR$/visca" />
+      <recent name="$PROJECT_DIR$/shared" />
+      <recent name="$PROJECT_DIR$/ui/widgets" />
+      <recent name="$PROJECT_DIR$/logic/facial_tracking/trainer" />
       <recent name="$PROJECT_DIR$" />
-      <recent name="$PROJECT_DIR$/logic/facial_tracking/dialogs" />
+      <recent name="$PROJECT_DIR$/logic/facial_tracking" />
     </key>
   </component>
   <component name="RunManager" selected="Python.startup">
@@ -129,8 +132,8 @@
     <recent_temporary>
       <list>
         <item itemvalue="Python.startup" />
-        <item itemvalue="Python.get_devices_test" />
         <item itemvalue="Python.train_face" />
+        <item itemvalue="Python.get_devices_test" />
       </list>
     </recent_temporary>
   </component>

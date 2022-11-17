@@ -4,10 +4,7 @@ import cv2
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QDialog
 
-from ui.shared.message_prompts import show_critical_messagebox, show_info_messagebox
-
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
-
+from shared.message_prompts import show_critical_messagebox, show_info_messagebox
 
 class AddFaceUI(object):
     def __init__(self):
