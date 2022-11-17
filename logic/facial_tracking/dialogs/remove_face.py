@@ -5,7 +5,7 @@ from threading import Thread
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QDialog
 
-from logic.facial_tracking.dialogs.train_face import Trainer
+from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from shared.message_prompts import show_info_messagebox
 
 
@@ -61,7 +61,7 @@ class RemoveFaceUI(object):
         selected_face = self.path + self.name_list.currentItem().text()
         shutil.rmtree(selected_face)
         show_info_messagebox("Face Removed. \nRetraining model,  please wait...")
-        trainer_thread = Thread(target=Trainer().train_face(True))
+        trainer_thread = Thread(target=TrainerDlg)
         trainer_thread.daemon = True
         trainer_thread.start()
         trainer_thread.join()

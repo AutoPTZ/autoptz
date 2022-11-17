@@ -3,7 +3,7 @@ import cv2
 from threading import Thread
 import dlib
 
-from logic.facial_tracking.dialogs.train_face import Trainer
+from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.track_handler import TrackHandler
 
 
@@ -72,7 +72,7 @@ class ImageProcessor(Thread):
             self.adding_to_name = None
             self.is_adding_face = False
 
-            trainer_thread = Thread(target=Trainer().train_face(False))
+            trainer_thread = Thread(target=TrainerDlg)
             trainer_thread.daemon = True
             trainer_thread.start()
             trainer_thread.join()
