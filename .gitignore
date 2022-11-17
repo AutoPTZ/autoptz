@@ -5,6 +5,7 @@
 /ui/homepage/__pycache__
 /logic/facial_tracking/__pycache__
 /logic/camera_search/__pycache__
+/facial_tracking/__pycache__
 /ui/vapix.log
 /logic/facial_tracking/trainer/trainer.json
 /logic/facial_tracking/dialogs/__pycache__

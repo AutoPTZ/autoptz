@@ -8,10 +8,11 @@ import cv2
 import imutils
 from PyQt5 import QtCore, QtGui, QtWidgets
 
+from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.image_processor import ImageProcessor
 
 
-class NDICameraWidget(QtWidgets.QWidget):
+class NDICameraWidget(QtCore.QObject):
     """Independent camera feed
     Uses threading to grab IP camera frames in the background
 
@@ -56,10 +57,9 @@ class NDICameraWidget(QtWidgets.QWidget):
         self.get_frame_thread.start()
 
         # Start Image Processor for Facial Recognition + Tracking
-        self.image_processor_thread = ImageProcessor()
-        self.image_processor_thread.daemon = True
-        self.image_processor_thread.start()
-        self.image_processor_thread.set_ptz_ready("not ready")
+        self.image_processor = ImageProcessor()
+        self.image_processor.START_TRAINER.connect(self.start_trainer)
+        self.image_processor.set_ptz_ready("not ready")
 
         # Periodically set video frame to display
         self.timer = QtCore.QTimer()
@@ -130,6 +130,10 @@ class NDICameraWidget(QtWidgets.QWidget):
         time_end = time.time() + seconds
         while time.time() < time_end:
             QtWidgets.QApplication.processEvents()
+
+    @staticmethod
+    def start_trainer():
+        TrainerDlg().show()
 
     def set_frame(self):
         if self.break_loop:

@@ -1,16 +1,16 @@
 import os
 import cv2
-from threading import Thread
+from PyQt5 import QtCore
 import dlib
 
-from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.track_handler import TrackHandler
 
 
-class ImageProcessor(Thread):
+class ImageProcessor(QtCore.QObject):
+    START_TRAINER = QtCore.pyqtSignal()
 
     def __init__(self):
-        Thread.__init__(self)
+        super(ImageProcessor, self).__init__()
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
         self.image_path = '../logic/facial_tracking/images/'
 
@@ -71,11 +71,7 @@ class ImageProcessor(Thread):
         if self.count >= 10:  # Take 50 face sample and stop video
             self.adding_to_name = None
             self.is_adding_face = False
-
-            trainer_thread = Thread(target=TrainerDlg)
-            trainer_thread.daemon = True
-            trainer_thread.start()
-            trainer_thread.join()
+            self.START_TRAINER.emit()
             self.track_handler.resetFacialRecognition()
             self.count = 0
             return frame

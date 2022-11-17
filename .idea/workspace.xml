@@ -5,12 +5,15 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/shared/progress_bar.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/add_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/add_face.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/remove_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/remove_face.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/shared/progress_bar.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/ui/homepage/homepage.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/homepage.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/camera_widget.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -48,12 +51,13 @@
     &quot;ASKED_ADD_EXTERNAL_FILES&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/Users/prince/development/autoptz&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/prince/development/autoptz/logic/facial_tracking/images&quot;,
     &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
   }
 }</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/logic/facial_tracking/images" />
       <recent name="$PROJECT_DIR$" />
       <recent name="$PROJECT_DIR$/logic/facial_tracking" />
     </key>

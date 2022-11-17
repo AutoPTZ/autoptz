@@ -1,10 +1,9 @@
 import os
-
-import cv2
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QDialog
 
 from shared.message_prompts import show_critical_messagebox, show_info_messagebox
+
 
 class AddFaceUI(object):
     def __init__(self):
@@ -59,7 +58,8 @@ class AddFaceUI(object):
             path = '../logic/facial_tracking/images/' + self.name_line.text().strip()
             if os.path.exists(path):
                 print("\n [INFO] Name Already Taken")
-                show_critical_messagebox(window_title="Add Face Process", critical_message="User's Face Already Exists.\nPlease add another user.")
+                show_critical_messagebox(window_title="Add Face Process",
+                                         critical_message="User's Face Already Exists.\nPlease add another user.")
                 return
             else:
                 os.makedirs(path)

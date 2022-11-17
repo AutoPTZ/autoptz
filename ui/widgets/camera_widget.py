@@ -6,10 +6,11 @@ import cv2
 import imutils
 from PyQt5 import QtCore, QtGui, QtWidgets
 
+from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.image_processor import ImageProcessor
 
 
-class CameraWidget(QtWidgets.QWidget):
+class CameraWidget(QtCore.QObject):
     """Independent camera feed
     Uses threading to grab IP camera frames in the background
 
@@ -50,8 +51,8 @@ class CameraWidget(QtWidgets.QWidget):
         self.get_frame_thread.start()
 
         # Start Image Processor for Facial Recognition + Tracking
-        self.image_processor_thread = ImageProcessor()
-        self.image_processor_thread.start()
+        self.image_processor = ImageProcessor()
+        self.image_processor.START_TRAINER.connect(self.start_trainer)
 
         # Periodically set video frame to display
         self.timer = QtCore.QTimer()
@@ -95,7 +96,7 @@ class CameraWidget(QtWidgets.QWidget):
                             else:
                                 frame = cv2.resize(frame, (self.screen_width, self.screen_height))
 
-                            frame = self.image_processor_thread.get_frame(frame)
+                            frame = self.image_processor.get_frame(frame)
 
                             fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
                             frame = cv2.putText(frame, str(int(fps)), (75, 50), self.font, 0.7, (0, 0, 255),
@@ -135,6 +136,9 @@ class CameraWidget(QtWidgets.QWidget):
                     self.video_frame.setPixmap(QtGui.QPixmap.fromImage(img))
                 except:
                     self.kill_video()
+    @staticmethod
+    def start_trainer():
+        TrainerDlg().show()
 
     @staticmethod
     def verify_network_stream(link):
@@ -167,7 +171,6 @@ class CameraWidget(QtWidgets.QWidget):
             self.capture.release()
         except:
             pass
-        self.image_processor_thread.join()
         cv2.destroyAllWindows()
         self.load_stream_thread = None
         self.capture = None
