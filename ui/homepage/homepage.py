@@ -1,5 +1,6 @@
 import os
 import platform
+import shutil
 
 from PyQt5 import QtCore, QtWidgets
 import watchdog.events
@@ -548,6 +549,11 @@ class Ui_AutoPTZ(object):
             dlg.closeEvent = self.update_face_selection
             dlg.exec()
 
+    # def run_trainer(self):
+    #     #TrainerDlg.show(self)
+    #     dlg = TrainerDlg(self)
+    #     dlg.exec()
+
     def update_face_selection(self, event):
         current_text_temp = self.select_face_dropdown.currentText()
         self.select_face_dropdown.clear()
@@ -570,10 +576,20 @@ class Ui_AutoPTZ(object):
         if not os.path.isdir('../logic/facial_tracking/images/') or not os.listdir('../logic/facial_tracking/images/'):
             show_info_messagebox("No Faces to remove.")
         else:
+            current_len = len(os.listdir('../logic/facial_tracking/images/'))
             print("Opening Face Dialog")
             dlg = RemoveFaceDlg(self)
             dlg.closeEvent = self.update_face_selection
             dlg.exec()
+            if not os.listdir('../logic/facial_tracking/images/'):
+                image_path = '../logic/facial_tracking/images/'
+                encodings_path = '../logic/facial_tracking/trainer/encodings.pickle'
+                if os.path.exists(image_path):
+                    shutil.rmtree(image_path)
+                if os.path.exists(encodings_path):
+                    os.remove(encodings_path)
+            elif current_len is not len(os.listdir('../logic/facial_tracking/images/')):
+                TrainerDlg().show()
 
     def reset_database(self):
         """Launch the Remove Face dialog based on the currently selected camera."""
