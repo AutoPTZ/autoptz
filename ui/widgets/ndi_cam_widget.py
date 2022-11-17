@@ -104,7 +104,7 @@ class NDICameraWidget(QtCore.QObject):
                                     else:
                                         frame = cv2.resize(frame, (self.screen_width, self.screen_height))
 
-                                    frame = self.image_processor_thread.get_frame(frame)
+                                    frame = self.image_processor.get_frame(frame)
 
                                     fps = cv2.getTickFrequency() / (cv2.getTickCount() - timer)
                                     frame = cv2.putText(frame, str(int(fps)), (75, 50), self.font, 0.7, (0, 0, 255), 2)
@@ -171,7 +171,6 @@ class NDICameraWidget(QtCore.QObject):
             ndi.destroy()
         except:
             pass
-        self.image_processor_thread.join()
         cv2.destroyAllWindows()
         self.load_stream_thread = None
         self.capture = None
