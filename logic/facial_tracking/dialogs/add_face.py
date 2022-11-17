@@ -66,7 +66,7 @@ class AddFaceUI(object):
                 print("\n [INFO] New Path Created")
                 show_info_messagebox("Initializing face capture. \nLook at the select camera and wait...")
                 print("\n [INFO] Initializing face capture. Look at the select camera and wait...")
-                self.camera.image_processor_thread.config_add_face(name=self.name_line.text().strip())
+                self.camera.image_processor.config_add_face(name=self.name_line.text().strip())
                 self.window.close()
 
     def translate_ui(self, add_face):
