@@ -1,5 +1,5 @@
 /logic/facial_tracking/images/
-/visca/__pycache__
+/libraries/visca/__pycache__
 /ui/widgets/__pycache__
 /shared/__pycache__
 /ui/homepage/__pycache__
@@ -11,3 +11,4 @@
 /logic/facial_tracking/dialogs/__pycache__
 /vapix.log
 /logic/facial_tracking/trainer/encodings.pickle
+*/__pycache__

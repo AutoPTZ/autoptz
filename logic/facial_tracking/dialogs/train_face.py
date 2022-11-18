@@ -1,6 +1,6 @@
 import os
 import cv2
-import face_recognition
+from libraries import face_recognition
 import pickle
 from imutils import paths
 from PyQt5 import QtCore, QtWidgets

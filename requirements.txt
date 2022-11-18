@@ -1,7 +1,7 @@
 numpy
 pillow
 opencv-contrib-python
-PyQT5
+PyQT6
 imutils
 scipy
 watchdog

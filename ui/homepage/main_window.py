@@ -1,11 +1,11 @@
 import os
 import platform
 import shutil
-
-from PyQt5 import QtCore, QtWidgets
 import watchdog.events
 import watchdog.observers
-from PyQt5.QtMultimedia import QCameraInfo
+from PyQt6 import QtCore, QtWidgets
+from PyQt6.QtMultimedia import QMediaDevices
+from PyQt6.QtWidgets import QMainWindow
 
 from logic.facial_tracking.dialogs.add_face import AddFaceDlg
 from logic.facial_tracking.dialogs.remove_face import RemoveFaceDlg
@@ -21,89 +21,26 @@ from shared.message_prompts import show_info_messagebox
 from shared.watch_trainer_directory import WatchTrainer
 from ui.widgets.camera_widget import CameraWidget
 from ui.widgets.ndi_cam_widget import NDICameraWidget
+import shared.constants as constants
 
 
-class Ui_AutoPTZ(object):
-    def __init__(self):
-        self.image_path = None
-        self.watch_trainer = None
-        self.current_manual_device = None
-        self.current_selected_source = None
-        self.actionReset_Database = None
-        self.actionRemove_Face = None
-        self.actionTrain_Model = None
-        self.actionAdd_Face = None
-        self.menuFacial_Recognition = None
-        self.actionAbout = None
-        self.actionContact = None
-        self.actionEdit = None
-        self.menuAdd_Hardware = None
-        self.menuAdd_NDI = None
-        self.actionAdd_IP = None
-        self.actionClose = None
-        self.actionSave_as = None
-        self.actionSave = None
-        self.actionOpen = None
-        self.statusbar = None
-        self.menuHelp = None
-        self.menuSource = None
-        self.menuFile = None
-        self.menubar = None
-        self.screen_height = None
-        self.screen_width = None
-        self.flowLayout = None
-        self.shown_cameras = None
-        self.unassign_visca_ptz_btn = None
-        self.assign_visca_ptz_btn = None
-        self.reset_btn = None
-        self.menu_btn = None
-        self.menu_layout = None
-        self.horizontalLayoutWidget_3 = None
-        self.focus_minus_btn = None
-        self.focus_plus_btn = None
-        self.focus_layout = None
-        self.horizontalLayoutWidget_2 = None
-        self.zoom_out_btn = None
-        self.zoom_in_btn = None
-        self.zoom_layout = None
-        self.horizontalLayoutWidget = None
-        self.home_btn = None
-        self.down_btn = None
-        self.right_btn = None
-        self.up_right_btn = None
-        self.down_left_btn = None
-        self.left_btn = None
-        self.up_left_btn = None
-        self.up_btn = None
-        self.down_right_btn = None
-        self.controller_layout = None
-        self.gridLayoutWidget = None
-        self.select_camera_dropdown = None
-        self.select_camera_label = None
-        self.manualControlPage = None
-        self.unassign_network_ptz_btn = None
-        self.assign_network_ptz_btn = None
-        self.select_face_label = None
-        self.select_face_dropdown = None
-        self.enable_track = QtWidgets.QCheckBox()
-        self.formLayout = None
-        self.selectedCamPage = None
-        self.formTabWidget = None
-        self.gridLayout = None
-        self.central_widget = None
-        self.assigned_ptz_camera = None
-        self.serial_widget_list = None
+class AutoPTZ_MainWindow(QMainWindow):
+    def __init__(self, *args, **kwargs):
+        # setting up the UI and QT Threading
+        super(AutoPTZ_MainWindow, self).__init__(*args, **kwargs)
+        self.threadpool = QtCore.QThreadPool()
+        # self.threadpool.setMaxThreadCount(1)
+        self.threadpool.maxThreadCount()
 
-    def setupUi(self, AutoPTZ):
-        # setting up home window
-        AutoPTZ.setObjectName("AutoPTZ")
-        AutoPTZ.resize(200, 450)
-        AutoPTZ.setAutoFillBackground(False)
-        AutoPTZ.setTabShape(QtWidgets.QTabWidget.Rounded)
-        AutoPTZ.setDockNestingEnabled(False)
+        # setting up main window
+        self.setObjectName("AutoPTZ")
+        self.resize(200, 450)
+        self.setAutoFillBackground(False)
+        self.setTabShape(QtWidgets.QTabWidget.Rounded)
+        self.setDockNestingEnabled(False)
 
         # base window widget
-        self.central_widget = QtWidgets.QWidget(AutoPTZ)
+        self.central_widget = QtWidgets.QWidget(self)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
@@ -112,6 +49,7 @@ class Ui_AutoPTZ(object):
         self.central_widget.setObjectName("central_widget")
         self.gridLayout = QtWidgets.QGridLayout(self.central_widget)
         self.gridLayout.setObjectName("gridLayout")
+        self.setCentralWidget(self.central_widget)
 
         # left tab menus
         self.formTabWidget = QtWidgets.QTabWidget(self.central_widget)
@@ -121,7 +59,7 @@ class Ui_AutoPTZ(object):
         self.formTabWidget.setObjectName("formTabWidget")
 
         # auto tab menu
-        self.selectedCamPage = QtWidgets.QWidget()
+        self.selectedCamPage = QtWidgets.QWidget(self)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Preferred)
         size_policy.setHeightForWidth(self.selectedCamPage.sizePolicy().hasHeightForWidth())
         self.selectedCamPage.setSizePolicy(size_policy)
@@ -138,7 +76,6 @@ class Ui_AutoPTZ(object):
         self.select_face_dropdown.setSizePolicy(size_policy)
         self.select_face_dropdown.setObjectName("select_face_dropdown")
         self.select_face_dropdown.setEnabled(False)
-        self.image_path = '../logic/facial_tracking/images/'
         self.select_face_dropdown.currentTextChanged.connect(self.selected_face_change)
         self.select_face_dropdown.addItem('')
         if os.path.isdir(self.image_path):
@@ -370,8 +307,7 @@ class Ui_AutoPTZ(object):
         self.screen_height = QtWidgets.QApplication.desktop().screenGeometry().height()
 
         # Top Menu
-        AutoPTZ.setCentralWidget(self.central_widget)
-        self.menubar = QtWidgets.QMenuBar(AutoPTZ)
+        self.menubar = QtWidgets.QMenuBar(self)
         self.menubar.setGeometry(QtCore.QRect(0, 0, 705, 24))
         self.menubar.setObjectName("menubar")
         self.menuFile = QtWidgets.QMenu(self.menubar)
@@ -382,40 +318,40 @@ class Ui_AutoPTZ(object):
         self.menuFacial_Recognition.setObjectName("menuFacial_Recognition")
         self.menuHelp = QtWidgets.QMenu(self.menubar)
         self.menuHelp.setObjectName("menuHelp")
-        AutoPTZ.setMenuBar(self.menubar)
-        self.statusbar = QtWidgets.QStatusBar(AutoPTZ)
+        self.setMenuBar(self.menubar)
+        self.statusbar = QtWidgets.QStatusBar(self)
         self.statusbar.setObjectName("statusbar")
-        AutoPTZ.setStatusBar(self.statusbar)
-        self.actionOpen = QtWidgets.QAction(AutoPTZ)
+        self.setStatusBar(self.statusbar)
+        self.actionOpen = QtWidgets.QAction(self)
         self.actionOpen.setObjectName("actionOpen")
-        self.actionSave = QtWidgets.QAction(AutoPTZ)
+        self.actionSave = QtWidgets.QAction(self)
         self.actionSave.setObjectName("actionSave")
-        self.actionSave_as = QtWidgets.QAction(AutoPTZ)
+        self.actionSave_as = QtWidgets.QAction(self)
         self.actionSave_as.setObjectName("actionSave_as")
-        self.actionClose = QtWidgets.QAction(AutoPTZ)
+        self.actionClose = QtWidgets.QAction(self)
         self.actionClose.setObjectName("actionClose")
-        self.actionAdd_IP = QtWidgets.QAction(AutoPTZ)
+        self.actionAdd_IP = QtWidgets.QAction(self)
         self.actionAdd_IP.setObjectName("actionAdd_IP")
-        self.menuAdd_NDI = QtWidgets.QMenu(AutoPTZ)
+        self.menuAdd_NDI = QtWidgets.QMenu(self)
         self.menuAdd_NDI.setObjectName("menuAdd_NDI")
-        self.menuAdd_Hardware = QtWidgets.QMenu(AutoPTZ)
+        self.menuAdd_Hardware = QtWidgets.QMenu(self)
         self.menuAdd_Hardware.setObjectName("menuAdd_Hardware")
-        self.actionEdit = QtWidgets.QAction(AutoPTZ)
+        self.actionEdit = QtWidgets.QAction(self)
         self.actionEdit.setObjectName("actionEdit")
-        self.actionContact = QtWidgets.QAction(AutoPTZ)
+        self.actionContact = QtWidgets.QAction(self)
         self.actionContact.setObjectName("actionContact")
-        self.actionAbout = QtWidgets.QAction(AutoPTZ)
+        self.actionAbout = QtWidgets.QAction(self)
         self.actionAbout.setObjectName("actionAbout")
-        self.actionAdd_Face = QtWidgets.QAction(AutoPTZ)
+        self.actionAdd_Face = QtWidgets.QAction(self)
         self.actionAdd_Face.setObjectName("actionAdd_Face")
         self.actionAdd_Face.triggered.connect(self.add_face)
-        self.actionTrain_Model = QtWidgets.QAction(AutoPTZ)
+        self.actionTrain_Model = QtWidgets.QAction(self)
         self.actionTrain_Model.setObjectName("actionTrain_Model")
         self.actionTrain_Model.triggered.connect(self.retrain_face)
-        self.actionRemove_Face = QtWidgets.QAction(AutoPTZ)
+        self.actionRemove_Face = QtWidgets.QAction(self)
         self.actionRemove_Face.setObjectName("actionRemove_Face")
         self.actionRemove_Face.triggered.connect(self.remove_face)
-        self.actionReset_Database = QtWidgets.QAction(AutoPTZ)
+        self.actionReset_Database = QtWidgets.QAction(self)
         self.actionReset_Database.setObjectName("actionReset_Database")
         self.actionReset_Database.triggered.connect(self.reset_database)
         self.menuFile.addAction(self.actionOpen)
@@ -447,14 +383,14 @@ class Ui_AutoPTZ(object):
         self.getPhysicalSourcesList()
         self.assigned_ptz_camera = []
         self.serial_widget_list = []
-        if os.path.exists("../logic/facial_tracking/trainer/") is False:
-            os.mkdir("../logic/facial_tracking/trainer/")
+        if os.path.exists(constants.TRAINER_PATH) is False:
+            os.mkdir(constants.TRAINER_PATH)
         self.watch_trainer = WatchTrainer()
         observer = watchdog.observers.Observer()
-        observer.schedule(self.watch_trainer, path="../logic/facial_tracking/trainer/", recursive=True)
+        observer.schedule(self.watch_trainer, path=constants.TRAINER_PATH, recursive=True)
         observer.start()
-        self.translateUi(AutoPTZ)
-        QtCore.QMetaObject.connectSlotsByName(AutoPTZ)
+        self.translateUi(self)
+        QtCore.QMetaObject.connectSlotsByName(self)
 
     def init_manual_control(self, device):
         """Initializing manual camera control. ONLY VISCA devices for now."""
@@ -549,11 +485,6 @@ class Ui_AutoPTZ(object):
             dlg.closeEvent = self.update_face_selection
             dlg.exec()
 
-    # def run_trainer(self):
-    #     #TrainerDlg.show(self)
-    #     dlg = TrainerDlg(self)
-    #     dlg.exec()
-
     def update_face_selection(self, event):
         current_text_temp = self.select_face_dropdown.currentText()
         self.select_face_dropdown.clear()
@@ -566,29 +497,27 @@ class Ui_AutoPTZ(object):
 
     @staticmethod
     def retrain_face():
-        if not os.path.isdir('../logic/facial_tracking/images/') or not os.listdir('../logic/facial_tracking/images/'):
+        if not os.path.isdir(constants.IMAGE_PATH) or not os.listdir(constants.IMAGE_PATH):
             show_info_messagebox("No Faces to train.")
         else:
             TrainerDlg().show()
 
     def remove_face(self):
         """Launch the Remove Face dialog based on the currently selected camera."""
-        if not os.path.isdir('../logic/facial_tracking/images/') or not os.listdir('../logic/facial_tracking/images/'):
+        if not os.path.isdir(constants.IMAGE_PATH) or not os.listdir(constants.IMAGE_PATH):
             show_info_messagebox("No Faces to remove.")
         else:
-            current_len = len(os.listdir('../logic/facial_tracking/images/'))
+            current_len = len(os.listdir(constants.IMAGE_PATH))
             print("Opening Face Dialog")
             dlg = RemoveFaceDlg(self)
             dlg.closeEvent = self.update_face_selection
             dlg.exec()
-            if not os.listdir('../logic/facial_tracking/images/'):
-                image_path = '../logic/facial_tracking/images/'
-                encodings_path = '../logic/facial_tracking/trainer/encodings.pickle'
-                if os.path.exists(image_path):
-                    shutil.rmtree(image_path)
-                if os.path.exists(encodings_path):
-                    os.remove(encodings_path)
-            elif current_len is not len(os.listdir('../logic/facial_tracking/images/')):
+            if not os.listdir(constants.IMAGE_PATH):
+                if os.path.exists(constants.IMAGE_PATH):
+                    shutil.rmtree(constants.IMAGE_PATH)
+                if os.path.exists(constants.ENCODINGS_PATH):
+                    os.remove(constants.ENCODINGS_PATH)
+            elif current_len is not len(os.listdir(constants.IMAGE_PATH)):
                 TrainerDlg().show()
 
     def reset_database(self):
@@ -641,7 +570,7 @@ class Ui_AutoPTZ(object):
 
     def getPhysicalSourcesList(self):
         """Adds all camera sources to the physical source list"""
-        available_cameras = QCameraInfo.availableCameras()
+        available_cameras = QMediaDevices.videoInputs()
         index = 0
         for cam in available_cameras:
             if cam.description() != "NDI Video":

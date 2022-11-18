@@ -2,7 +2,7 @@ import math
 import pickle
 import cv2
 import os
-import face_recognition
+from libraries import face_recognition
 import numpy as np
 
 TARGET_WH = 320

@@ -1,4 +1,4 @@
-from visca import camera
+from libraries.visca import camera
 import threading
 
 

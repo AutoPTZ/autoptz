@@ -3,7 +3,7 @@ from __future__ import print_function
 import click
 import os
 import re
-import face_recognition.api as face_recognition
+import libraries.face_recognition.api as face_recognition
 import multiprocessing
 import sys
 import itertools

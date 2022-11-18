@@ -5,9 +5,22 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/shared/constants.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/homepage.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/homepage.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/face_recognition/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/libraries/face_recognition/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/face_recognition/api.py" beforeDir="false" afterPath="$PROJECT_DIR$/libraries/face_recognition/api.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/face_recognition/face_detection_cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/libraries/face_recognition/face_detection_cli.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/face_recognition/face_recognition_cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/libraries/face_recognition/face_recognition_cli.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/move_visca_ptz.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/move_visca_ptz.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/track_handler.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/track_handler.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/startup.py" beforeDir="false" afterPath="$PROJECT_DIR$/startup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/homepage/homepage.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/main_window.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/visca/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/libraries/visca/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/visca/camera.py" beforeDir="false" afterPath="$PROJECT_DIR$/libraries/visca/camera.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/visca/visca_code_lines.py" beforeDir="false" afterPath="$PROJECT_DIR$/libraries/visca/visca_code_lines.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -56,11 +69,11 @@
       <recent name="$PROJECT_DIR$/logic/facial_tracking" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/libraries" />
       <recent name="$PROJECT_DIR$/shared" />
       <recent name="$PROJECT_DIR$/ui/widgets" />
       <recent name="$PROJECT_DIR$/logic/facial_tracking/trainer" />
       <recent name="$PROJECT_DIR$" />
-      <recent name="$PROJECT_DIR$/logic/facial_tracking" />
     </key>
   </component>
   <component name="RunManager" selected="Python.startup">
