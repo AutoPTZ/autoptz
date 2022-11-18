@@ -1,8 +1,8 @@
 import os
 import shutil
 
-from PyQt5 import QtCore, QtWidgets
-from PyQt5.QtWidgets import QDialog
+from PyQt6 import QtCore, QtWidgets
+from PyQt6.QtWidgets import QDialog
 from shared.message_prompts import show_info_messagebox
 
 

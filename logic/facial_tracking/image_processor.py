@@ -1,8 +1,8 @@
 import os
 import cv2
-from PyQt5 import QtCore
+from PyQt6 import QtCore
 import dlib
-
+import shared.constants as constants
 from logic.facial_tracking.track_handler import TrackHandler
 
 
@@ -11,8 +11,6 @@ class ImageProcessor(QtCore.QObject):
 
     def __init__(self):
         super(ImageProcessor, self).__init__()
-        self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
-        self.image_path = '../logic/facial_tracking/images/'
 
         # Facial Recognition & Object Tracking
         self.is_adding_face = False
@@ -38,7 +36,7 @@ class ImageProcessor(QtCore.QObject):
         if self.is_adding_face:
             return self.add_face(frame)
         try:
-            if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
+            if os.path.exists(constants.ENCODINGS_PATH):
                 face_locations, face_names, confidence_list = self.track_handler.recognize_face(frame)
                 frame = self.draw_recognized_face(frame, face_locations, face_names, confidence_list)
                 # frame = self.track_handler.yolo_detector(frame)
@@ -58,12 +56,12 @@ class ImageProcessor(QtCore.QObject):
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=10,
+        faces = constants.FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=10,
                                                    minSize=(int(minW), int(minH)))
 
         for x, y, w, h in faces:
             self.count = self.count + 1
-            name = self.image_path + self.adding_to_name + '/' + str(self.count) + '.jpg'
+            name = constants.IMAGE_PATH + self.adding_to_name + '/' + str(self.count) + '.jpg'
             print("\n [INFO] Creating Images........." + name)
             cv2.imwrite(name, frame)
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)

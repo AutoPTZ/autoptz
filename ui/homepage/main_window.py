@@ -36,12 +36,12 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.setObjectName("AutoPTZ")
         self.resize(200, 450)
         self.setAutoFillBackground(False)
-        self.setTabShape(QtWidgets.QTabWidget.Rounded)
+        self.setTabShape(QtWidgets.QTabWidget.TabShape.Rounded)
         self.setDockNestingEnabled(False)
 
         # base window widget
         self.central_widget = QtWidgets.QWidget(self)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
         size_policy.setHeightForWidth(self.central_widget.sizePolicy().hasHeightForWidth())
@@ -53,33 +53,33 @@ class AutoPTZ_MainWindow(QMainWindow):
 
         # left tab menus
         self.formTabWidget = QtWidgets.QTabWidget(self.central_widget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHeightForWidth(self.formTabWidget.sizePolicy().hasHeightForWidth())
         self.formTabWidget.setSizePolicy(size_policy)
         self.formTabWidget.setObjectName("formTabWidget")
 
         # auto tab menu
         self.selectedCamPage = QtWidgets.QWidget(self)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHeightForWidth(self.selectedCamPage.sizePolicy().hasHeightForWidth())
         self.selectedCamPage.setSizePolicy(size_policy)
         self.selectedCamPage.setMinimumSize(QtCore.QSize(163, 0))
         self.selectedCamPage.setMaximumSize(QtCore.QSize(16777215, 428))
         self.selectedCamPage.setObjectName("selectedCamPage")
         self.formLayout = QtWidgets.QFormLayout(self.selectedCamPage)
-        self.formLayout.setLabelAlignment(QtCore.Qt.AlignLeading | QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
-        self.formLayout.setFormAlignment(QtCore.Qt.AlignLeading | QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        self.formLayout.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeading | QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop)
+        self.formLayout.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignLeading | QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop)
         self.formLayout.setObjectName("formLayout")
         self.select_face_dropdown = QtWidgets.QComboBox(self.selectedCamPage)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding, QtWidgets.QSizePolicy.Policy.Fixed)
         size_policy.setHeightForWidth(self.select_face_dropdown.sizePolicy().hasHeightForWidth())
         self.select_face_dropdown.setSizePolicy(size_policy)
         self.select_face_dropdown.setObjectName("select_face_dropdown")
         self.select_face_dropdown.setEnabled(False)
-        self.select_face_dropdown.currentTextChanged.connect(self.selected_face_change)
+        # self.select_face_dropdown.currentTextChanged.connect(self.selected_face_change)
         self.select_face_dropdown.addItem('')
-        if os.path.isdir(self.image_path):
-            for folder in os.listdir(self.image_path):
+        if os.path.isdir(constants.IMAGE_PATH):
+            for folder in os.listdir(constants.IMAGE_PATH):
                 self.select_face_dropdown.addItem(folder)
 
         # assign VISCA PTZ to Serial Camera Source
@@ -94,29 +94,29 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.assign_network_ptz_btn.clicked.connect(self.assign_network_ptz_dlg)
         self.unassign_network_ptz_btn.clicked.connect(self.unassign_network_ptz)
 
-        self.formLayout.setWidget(2, QtWidgets.QFormLayout.SpanningRole, self.select_face_dropdown)
+        self.formLayout.setWidget(2, QtWidgets.QFormLayout.ItemRole.SpanningRole, self.select_face_dropdown)
         self.enable_track = QtWidgets.QCheckBox(self.selectedCamPage)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding, QtWidgets.QSizePolicy.Policy.Fixed)
         size_policy.setHeightForWidth(self.enable_track.sizePolicy().hasHeightForWidth())
         self.enable_track.setSizePolicy(size_policy)
         self.enable_track.setChecked(False)
         self.enable_track.setEnabled(False)
         self.enable_track.setAutoRepeat(False)
         self.enable_track.setAutoExclusive(False)
-        self.enable_track.stateChanged.connect(self.config_enable_track)
+        # self.enable_track.stateChanged.connect(self.config_enable_track)
         self.enable_track.setObjectName("enable_track")
-        self.formLayout.setWidget(3, QtWidgets.QFormLayout.LabelRole, self.enable_track)
+        self.formLayout.setWidget(3, QtWidgets.QFormLayout.ItemRole.LabelRole, self.enable_track)
         self.select_face_label = QtWidgets.QLabel(self.selectedCamPage)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHeightForWidth(self.select_face_label.sizePolicy().hasHeightForWidth())
         self.select_face_label.setSizePolicy(size_policy)
         self.select_face_label.setObjectName("select_face_label")
-        self.formLayout.setWidget(1, QtWidgets.QFormLayout.LabelRole, self.select_face_label)
+        self.formLayout.setWidget(1, QtWidgets.QFormLayout.ItemRole.LabelRole, self.select_face_label)
         self.formTabWidget.addTab(self.selectedCamPage, "")
 
         # manual control tab menu
         self.manualControlPage = QtWidgets.QWidget()
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.MinimumExpanding)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
         size_policy.setHeightForWidth(self.manualControlPage.sizePolicy().hasHeightForWidth())
         self.manualControlPage.setSizePolicy(size_policy)
         self.manualControlPage.setMinimumSize(QtCore.QSize(163, 0))
@@ -124,13 +124,13 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.manualControlPage.setObjectName("manualControlPage")
         self.select_camera_label = QtWidgets.QLabel(self.manualControlPage)
         self.select_camera_label.setGeometry(QtCore.QRect(10, 30, 101, 21))
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHeightForWidth(self.select_camera_label.sizePolicy().hasHeightForWidth())
         self.select_camera_label.setSizePolicy(size_policy)
         self.select_camera_label.setObjectName("select_camera_label")
         self.select_camera_dropdown = QtWidgets.QComboBox(self.manualControlPage)
         self.select_camera_dropdown.setGeometry(QtCore.QRect(9, 51, 151, 26))
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding, QtWidgets.QSizePolicy.Policy.Fixed)
         size_policy.setHeightForWidth(self.select_camera_dropdown.sizePolicy().hasHeightForWidth())
         self.select_camera_dropdown.setSizePolicy(size_policy)
         self.select_camera_dropdown.setObjectName("select_camera_dropdown")
@@ -150,11 +150,11 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.gridLayoutWidget.setGeometry(QtCore.QRect(0, 100, 162, 131))
         self.gridLayoutWidget.setObjectName("gridLayoutWidget")
         self.controller_layout = QtWidgets.QGridLayout(self.gridLayoutWidget)
-        self.controller_layout.setSizeConstraint(QtWidgets.QLayout.SetNoConstraint)
+        # self.controller_layout.setSizeConstraint(QtWidgets.QLayout.SetNoConstraint)
         self.controller_layout.setContentsMargins(0, 0, 0, 0)
         self.controller_layout.setObjectName("controllerLayout")
         self.down_right_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Maximum)
         size_policy.setHeightForWidth(self.down_right_btn.sizePolicy().hasHeightForWidth())
         self.down_right_btn.setSizePolicy(size_policy)
         self.down_right_btn.setIconSize(QtCore.QSize(10, 10))
@@ -162,56 +162,56 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.down_right_btn.setObjectName("down_right_btn")
         self.controller_layout.addWidget(self.down_right_btn, 2, 2, 1, 1)
         self.up_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Maximum)
         size_policy.setHeightForWidth(self.up_btn.sizePolicy().hasHeightForWidth())
         self.up_btn.setSizePolicy(size_policy)
         self.up_btn.setIconSize(QtCore.QSize(10, 10))
         self.up_btn.setObjectName("up_btn")
         self.controller_layout.addWidget(self.up_btn, 0, 1, 1, 1)
         self.up_left_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Maximum)
         size_policy.setHeightForWidth(self.up_left_btn.sizePolicy().hasHeightForWidth())
         self.up_left_btn.setSizePolicy(size_policy)
         self.up_left_btn.setIconSize(QtCore.QSize(10, 10))
         self.up_left_btn.setObjectName("up_left_btn")
         self.controller_layout.addWidget(self.up_left_btn, 0, 0, 1, 1)
         self.left_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Maximum)
         size_policy.setHeightForWidth(self.left_btn.sizePolicy().hasHeightForWidth())
         self.left_btn.setSizePolicy(size_policy)
         self.left_btn.setIconSize(QtCore.QSize(10, 10))
         self.left_btn.setObjectName("left_btn")
         self.controller_layout.addWidget(self.left_btn, 1, 0, 1, 1)
         self.down_left_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Maximum)
         size_policy.setHeightForWidth(self.down_left_btn.sizePolicy().hasHeightForWidth())
         self.down_left_btn.setSizePolicy(size_policy)
         self.down_left_btn.setIconSize(QtCore.QSize(10, 10))
         self.down_left_btn.setObjectName("down_left_btn")
         self.controller_layout.addWidget(self.down_left_btn, 2, 0, 1, 1)
         self.up_right_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Maximum)
         size_policy.setHeightForWidth(self.up_right_btn.sizePolicy().hasHeightForWidth())
         self.up_right_btn.setSizePolicy(size_policy)
         self.up_right_btn.setIconSize(QtCore.QSize(10, 10))
         self.up_right_btn.setObjectName("up_right_btn")
         self.controller_layout.addWidget(self.up_right_btn, 0, 2, 1, 1)
         self.right_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Maximum)
         size_policy.setHeightForWidth(self.right_btn.sizePolicy().hasHeightForWidth())
         self.right_btn.setSizePolicy(size_policy)
         self.right_btn.setIconSize(QtCore.QSize(10, 10))
         self.right_btn.setObjectName("right_btn")
         self.controller_layout.addWidget(self.right_btn, 1, 2, 1, 1)
         self.down_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Maximum)
         size_policy.setHeightForWidth(self.down_btn.sizePolicy().hasHeightForWidth())
         self.down_btn.setSizePolicy(size_policy)
         self.down_btn.setIconSize(QtCore.QSize(10, 10))
         self.down_btn.setObjectName("down_btn")
         self.controller_layout.addWidget(self.down_btn, 2, 1, 1, 1)
         self.home_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Maximum)
         size_policy.setHeightForWidth(self.home_btn.sizePolicy().hasHeightForWidth())
         self.home_btn.setSizePolicy(size_policy)
         self.home_btn.setIconSize(QtCore.QSize(10, 10))
@@ -224,13 +224,13 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.zoom_layout.setContentsMargins(0, 0, 0, 0)
         self.zoom_layout.setObjectName("zoom_layout")
         self.zoom_in_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHeightForWidth(self.zoom_in_btn.sizePolicy().hasHeightForWidth())
         self.zoom_in_btn.setSizePolicy(size_policy)
         self.zoom_in_btn.setObjectName("zoom_in_btn")
         self.zoom_layout.addWidget(self.zoom_in_btn)
         self.zoom_out_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHeightForWidth(self.zoom_out_btn.sizePolicy().hasHeightForWidth())
         self.zoom_out_btn.setSizePolicy(size_policy)
         self.zoom_out_btn.setObjectName("zoom_out_btn")
@@ -242,7 +242,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.focus_layout.setContentsMargins(0, 0, 0, 0)
         self.focus_layout.setObjectName("focus_layout")
         self.focus_plus_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget_2)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
         size_policy.setHeightForWidth(self.focus_plus_btn.sizePolicy().hasHeightForWidth())
@@ -250,7 +250,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.focus_plus_btn.setObjectName("focus_plus_btn")
         self.focus_layout.addWidget(self.focus_plus_btn)
         self.focus_minus_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget_2)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
         size_policy.setHeightForWidth(self.focus_minus_btn.sizePolicy().hasHeightForWidth())
@@ -264,7 +264,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.menu_layout.setContentsMargins(0, 0, 0, 0)
         self.menu_layout.setObjectName("menu_layout")
         self.menu_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget_3)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
         size_policy.setHeightForWidth(self.menu_btn.sizePolicy().hasHeightForWidth())
@@ -272,7 +272,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.menu_btn.setObjectName("menu_btn")
         self.menu_layout.addWidget(self.menu_btn)
         self.reset_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget_3)
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
         size_policy.setHeightForWidth(self.reset_btn.sizePolicy().hasHeightForWidth())
@@ -297,14 +297,14 @@ class AutoPTZ_MainWindow(QMainWindow):
         # enabled cameras view
         self.shown_cameras = QtWidgets.QWidget()
         self.flowLayout = FlowLayout()
-        self.flowLayout.setSizeConstraint(QtWidgets.QLayout.SetNoConstraint)
+        # self.flowLayout.setSizeConstraint(QtWidgets.QLayout.SetNoConstraint)
         self.shown_cameras.setLayout(self.flowLayout)
         self.shown_cameras.setSizePolicy(size_policy)
         self.gridLayout.addWidget(self.shown_cameras, 0, 1, 1, 1)
 
-        # handling camera window sizing
-        self.screen_width = QtWidgets.QApplication.desktop().screenGeometry().width()
-        self.screen_height = QtWidgets.QApplication.desktop().screenGeometry().height()
+        # # handling camera window sizing
+        # self.screen_width = QtWidgets.QApplication.desktop().screenGeometry().width()
+        # self.screen_height = QtWidgets.QApplication.desktop().screenGeometry().height()
 
         # Top Menu
         self.menubar = QtWidgets.QMenuBar(self)
@@ -322,36 +322,36 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.statusbar = QtWidgets.QStatusBar(self)
         self.statusbar.setObjectName("statusbar")
         self.setStatusBar(self.statusbar)
-        self.actionOpen = QtWidgets.QAction(self)
+        self.actionOpen = QtWidgets.QWidgetAction(self)
         self.actionOpen.setObjectName("actionOpen")
-        self.actionSave = QtWidgets.QAction(self)
+        self.actionSave = QtWidgets.QWidgetAction(self)
         self.actionSave.setObjectName("actionSave")
-        self.actionSave_as = QtWidgets.QAction(self)
+        self.actionSave_as = QtWidgets.QWidgetAction(self)
         self.actionSave_as.setObjectName("actionSave_as")
-        self.actionClose = QtWidgets.QAction(self)
+        self.actionClose = QtWidgets.QWidgetAction(self)
         self.actionClose.setObjectName("actionClose")
-        self.actionAdd_IP = QtWidgets.QAction(self)
+        self.actionAdd_IP = QtWidgets.QWidgetAction(self)
         self.actionAdd_IP.setObjectName("actionAdd_IP")
         self.menuAdd_NDI = QtWidgets.QMenu(self)
         self.menuAdd_NDI.setObjectName("menuAdd_NDI")
         self.menuAdd_Hardware = QtWidgets.QMenu(self)
         self.menuAdd_Hardware.setObjectName("menuAdd_Hardware")
-        self.actionEdit = QtWidgets.QAction(self)
+        self.actionEdit = QtWidgets.QWidgetAction(self)
         self.actionEdit.setObjectName("actionEdit")
-        self.actionContact = QtWidgets.QAction(self)
+        self.actionContact = QtWidgets.QWidgetAction(self)
         self.actionContact.setObjectName("actionContact")
-        self.actionAbout = QtWidgets.QAction(self)
+        self.actionAbout = QtWidgets.QWidgetAction(self)
         self.actionAbout.setObjectName("actionAbout")
-        self.actionAdd_Face = QtWidgets.QAction(self)
+        self.actionAdd_Face = QtWidgets.QWidgetAction(self)
         self.actionAdd_Face.setObjectName("actionAdd_Face")
         self.actionAdd_Face.triggered.connect(self.add_face)
-        self.actionTrain_Model = QtWidgets.QAction(self)
+        self.actionTrain_Model = QtWidgets.QWidgetAction(self)
         self.actionTrain_Model.setObjectName("actionTrain_Model")
         self.actionTrain_Model.triggered.connect(self.retrain_face)
-        self.actionRemove_Face = QtWidgets.QAction(self)
+        self.actionRemove_Face = QtWidgets.QWidgetAction(self)
         self.actionRemove_Face.setObjectName("actionRemove_Face")
         self.actionRemove_Face.triggered.connect(self.remove_face)
-        self.actionReset_Database = QtWidgets.QAction(self)
+        self.actionReset_Database = QtWidgets.QWidgetAction(self)
         self.actionReset_Database.setObjectName("actionReset_Database")
         self.actionReset_Database.triggered.connect(self.reset_database)
         self.menuFile.addAction(self.actionOpen)
@@ -378,9 +378,11 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.menubar.addAction(self.menuFacial_Recognition.menuAction())
         self.menubar.addAction(self.menuHelp.menuAction())
 
+        self.current_selected_source = None
+
         # other setup variables and methods
-        self.getNDISourceList()
-        self.getPhysicalSourcesList()
+        # self.getNDISourceList()
+        # self.getPhysicalSourcesList()
         self.assigned_ptz_camera = []
         self.serial_widget_list = []
         if os.path.exists(constants.TRAINER_PATH) is False:
@@ -391,6 +393,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         observer.start()
         self.translateUi(self)
         QtCore.QMetaObject.connectSlotsByName(self)
+
+        self.show()
 
     def init_manual_control(self, device):
         """Initializing manual camera control. ONLY VISCA devices for now."""
@@ -489,8 +493,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         current_text_temp = self.select_face_dropdown.currentText()
         self.select_face_dropdown.clear()
         self.select_face_dropdown.addItem('')
-        if os.path.exists(self.image_path):
-            for folder in os.listdir(self.image_path):
+        if os.path.exists(constants.IMAGE_PATH):
+            for folder in os.listdir(constants.IMAGE_PATH):
                 self.select_face_dropdown.addItem(folder)
             if self.select_face_dropdown.findText(current_text_temp) != -1:
                 self.select_face_dropdown.setCurrentText(current_text_temp)
@@ -545,164 +549,164 @@ class AutoPTZ_MainWindow(QMainWindow):
             self.assign_network_ptz_btn.show()
             self.unassign_network_ptz_btn.hide()
 
-    def selected_face_change(self):
-        if self.current_selected_source is not None:
-            if self.select_face_dropdown.currentText() == '':
-                self.current_selected_source.image_processor.set_face(None)
-                self.enable_track.setEnabled(False)
-                self.enable_track.setChecked(False)
-            else:
-                self.current_selected_source.image_processor.set_face(self.select_face_dropdown.currentText())
-                self.enable_track.setEnabled(True)
-        else:
-            self.enable_track.setEnabled(False)
-            self.enable_track.setChecked(False)
+    # def selected_face_change(self):
+    #     if self.current_selected_source is not None:
+    #         if self.select_face_dropdown.currentText() == '':
+    #             self.current_selected_source.image_processor.set_face(None)
+    #             self.enable_track.setEnabled(False)
+    #             self.enable_track.setChecked(False)
+    #         else:
+    #             self.current_selected_source.image_processor.set_face(self.select_face_dropdown.currentText())
+    #             self.enable_track.setEnabled(True)
+    #     else:
+    #         self.enable_track.setEnabled(False)
+    #         self.enable_track.setChecked(False)
 
-    def config_enable_track(self):
-        if self.current_selected_source is not None and self.current_selected_source.image_processor.is_track_enabled() and self.enable_track.isChecked():
-            pass
-        else:
-            try:
-                self.current_selected_source.image_processor.config_enable_track()
-                self.enable_track.setChecked(self.current_selected_source.image_processor.is_track_enabled())
-            except:
-                self.enable_track.setChecked(False)
-
-    def getPhysicalSourcesList(self):
-        """Adds all camera sources to the physical source list"""
-        available_cameras = QMediaDevices.videoInputs()
-        index = 0
-        for cam in available_cameras:
-            if cam.description() != "NDI Video":
-                if platform.system() == "Darwin":  # MacOS messes up the number scheme so this was the best fix
-                    self.addPhysicalSource(source_number=index, source_name=cam.description())
-                    index = 1 + index
-                else:
-                    self.addPhysicalSource(source_number=index, source_name=cam.description())
-                    index = 1 + index
-
-    def getNDISourceList(self):
-        """Checks all NDI source in the network and adds them to the NDI source list"""
-        source_list = get_ndi_sources()
-        for i, s in enumerate(source_list):
-            self.addNDISource(s)
-
-    def addPhysicalSource(self, source_name, source_number):
-        """Add selected Serial camera source from the menu to the camera grid"""
-        camera_source = QtWidgets.QAction(source_name, self)
-        camera_source.setCheckable(True)
-        camera_source.triggered.connect(lambda: self.addCamera(source_number, menu_item=camera_source, ndi_source=None))
-        self.menuAdd_Hardware.addAction(camera_source)
-
-    def addNDISource(self, ndi_source_id):
-        """Add selected NDI camera source from the menu to the camera grid"""
-        ndi_source = QtWidgets.QAction(ndi_source_id.ndi_name, self)
-        ndi_source.setCheckable(True)
-        ndi_source.triggered.connect(lambda: self.addCamera(-1, ndi_source_id, ndi_source))
-        self.menuAdd_NDI.addAction(ndi_source)
-
-    def addCamera(self, source, ndi_source, menu_item):
-        """Add NDI/Serial camera source from the menu to the camera grid"""
-        camera_widget = QtWidgets.QWidget()
-
-        if source == -1:
-            # Make NDI Camera Widget
-            camera = NDICameraWidget(self.screen_width // 3, self.screen_height // 3, ndi_source=ndi_source,
-                                     aspect_ratio=True)
-            camera.setObjectName('NDI Camera: ' + ndi_source.ndi_name)
-            camera_widget.setObjectName('NDI Camera: ' + ndi_source.ndi_name)
-            menu_item.disconnect()
-            menu_item.triggered.connect(
-                lambda: self.deleteCameraSource(source=-1, ndi_source=ndi_source, menu_item=menu_item, camera=camera,
-                                                camera_widget=camera_widget))
-        else:
-            # Make Serial Camera Widget
-            camera = CameraWidget(self.screen_width // 3, self.screen_height // 3, source, aspect_ratio=True)
-            camera.setObjectName('Camera: ' + str(source + 1))
-            camera_widget.setObjectName('Camera ' + str(source + 1))
-            menu_item.disconnect()
-            menu_item.triggered.connect(
-                lambda: self.deleteCameraSource(source=source, menu_item=menu_item,
-                                                ndi_source=None, camera=camera, camera_widget=camera_widget))
-            self.serial_widget_list.append(camera)
-
-        # create internal grid layout for camera
-        camera_grid_layout = QtWidgets.QGridLayout()
-        camera_grid_layout.setObjectName('Camera Grid: ' + str(camera))
-
-        camera_grid_layout.addWidget(camera.get_video_frame(), 0, 0, 1, 1)
-        camera_widget.setLayout(camera_grid_layout)
-
-        select_cam_btn = QtWidgets.QPushButton("Select Camera")
-        select_cam_btn.clicked.connect(lambda: self.selectCameraSource(camera=camera, select_cam_btn=select_cam_btn,
-                                                                       unselect_cam_btn=unselect_cam_btn))
-        unselect_cam_btn = QtWidgets.QPushButton("Unselect Camera")
-        unselect_cam_btn.clicked.connect(
-            lambda: self.unselectCameraSource(select_cam_btn=select_cam_btn, unselect_cam_btn=unselect_cam_btn))
-        camera_grid_layout.addWidget(select_cam_btn, 1, 0, 1, 1)
-        camera_grid_layout.addWidget(unselect_cam_btn, 2, 0, 1, 1)
-        unselect_cam_btn.hide()
-
-        self.flowLayout.addWidget(camera_widget)
-        self.watch_trainer.add_camera(camera=camera)
-
-    def selectCameraSource(self, camera, select_cam_btn, unselect_cam_btn):
-        self.current_selected_source = camera
-
-        if self.current_selected_source.image_processor.get_ptz_ready() == "ready":
-            self.assign_network_ptz_btn.hide()
-            self.unassign_network_ptz_btn.show()
-        elif self.current_selected_source.image_processor.get_ptz_ready() == "not ready":
-            self.assign_network_ptz_btn.show()
-            self.unassign_network_ptz_btn.hide()
-        else:
-            self.assign_network_ptz_btn.hide()
-            self.unassign_network_ptz_btn.hide()
-
-        select_cam_btn.hide()
-        unselect_cam_btn.show()
-
-        self.select_face_dropdown.setEnabled(True)
-        # Path for face image database
-
-        if self.current_selected_source.image_processor.get_face() is None:
-            self.select_face_dropdown.setCurrentText('')
-            self.enable_track.setEnabled(False)
-        else:
-            self.select_face_dropdown.setCurrentText(self.current_selected_source.image_processor.get_face())
-            self.enable_track.setEnabled(True)
-
-        if self.current_selected_source.image_processor.is_track_enabled():
-            self.enable_track.setChecked(True)
-        else:
-            self.enable_track.setChecked(False)
-
-    def unselectCameraSource(self, select_cam_btn, unselect_cam_btn):
-        self.current_selected_source = None
-        self.select_face_dropdown.setCurrentText('')
-        self.select_face_dropdown.setEnabled(False)
-        self.enable_track.setChecked(False)
-        self.enable_track.setEnabled(False)
-        self.assign_network_ptz_btn.hide()
-        self.unassign_network_ptz_btn.hide()
-        unselect_cam_btn.hide()
-        select_cam_btn.show()
-
-    def deleteCameraSource(self, source, ndi_source, menu_item, camera, camera_widget):
-        """Remove NDI/Serial camera source from camera grid"""
-        menu_item.disconnect()
-        if source == -1:
-            # Remove NDI source widget
-            menu_item.triggered.connect(lambda: self.addCamera(source=-1, ndi_source=ndi_source, menu_item=menu_item))
-        else:
-            # Remove Serial source widget
-            menu_item.triggered.connect(lambda: self.addCamera(source=source, ndi_source=None, menu_item=menu_item))
-            self.serial_widget_list.remove(camera)
-
-        self.watch_trainer.remove_camera(camera=camera)
-        camera.close()
-        camera_widget.close()
-        self.flowLayout.removeWidget(camera_widget)
+    # def config_enable_track(self):
+    #     if self.current_selected_source is not None and self.current_selected_source.image_processor.is_track_enabled() and self.enable_track.isChecked():
+    #         pass
+    #     else:
+    #         try:
+    #             self.current_selected_source.image_processor.config_enable_track()
+    #             self.enable_track.setChecked(self.current_selected_source.image_processor.is_track_enabled())
+    #         except:
+    #             self.enable_track.setChecked(False)
+    #
+    # def getPhysicalSourcesList(self):
+    #     """Adds all camera sources to the physical source list"""
+    #     available_cameras = QMediaDevices.videoInputs()
+    #     index = 0
+    #     for cam in available_cameras:
+    #         if cam.description() != "NDI Video":
+    #             if platform.system() == "Darwin":  # MacOS messes up the number scheme so this was the best fix
+    #                 self.addPhysicalSource(source_number=index, source_name=cam.description())
+    #                 index = 1 + index
+    #             else:
+    #                 self.addPhysicalSource(source_number=index, source_name=cam.description())
+    #                 index = 1 + index
+    #
+    # def getNDISourceList(self):
+    #     """Checks all NDI source in the network and adds them to the NDI source list"""
+    #     source_list = get_ndi_sources()
+    #     for i, s in enumerate(source_list):
+    #         self.addNDISource(s)
+    #
+    # def addPhysicalSource(self, source_name, source_number):
+    #     """Add selected Serial camera source from the menu to the camera grid"""
+    #     camera_source = QtWidgets.QWidgetAction(source_name, self)
+    #     camera_source.setCheckable(True)
+    #     camera_source.triggered.connect(lambda: self.addCamera(source_number, menu_item=camera_source, ndi_source=None))
+    #     self.menuAdd_Hardware.addAction(camera_source)
+    #
+    # def addNDISource(self, ndi_source_id):
+    #     """Add selected NDI camera source from the menu to the camera grid"""
+    #     ndi_source = QtWidgets.QWidgetAction(ndi_source_id.ndi_name, self)
+    #     ndi_source.setCheckable(True)
+    #     ndi_source.triggered.connect(lambda: self.addCamera(-1, ndi_source_id, ndi_source))
+    #     self.menuAdd_NDI.addAction(ndi_source)
+    #
+    # def addCamera(self, source, ndi_source, menu_item):
+    #     """Add NDI/Serial camera source from the menu to the camera grid"""
+    #     camera_widget = QtWidgets.QWidget()
+    #
+    #     if source == -1:
+    #         # Make NDI Camera Widget
+    #         camera = NDICameraWidget(self.screen_width // 3, self.screen_height // 3, ndi_source=ndi_source,
+    #                                  aspect_ratio=True)
+    #         camera.setObjectName('NDI Camera: ' + ndi_source.ndi_name)
+    #         camera_widget.setObjectName('NDI Camera: ' + ndi_source.ndi_name)
+    #         menu_item.disconnect()
+    #         menu_item.triggered.connect(
+    #             lambda: self.deleteCameraSource(source=-1, ndi_source=ndi_source, menu_item=menu_item, camera=camera,
+    #                                             camera_widget=camera_widget))
+    #     else:
+    #         # Make Serial Camera Widget
+    #         camera = CameraWidget(self.screen_width // 3, self.screen_height // 3, source, aspect_ratio=True)
+    #         camera.setObjectName('Camera: ' + str(source + 1))
+    #         camera_widget.setObjectName('Camera ' + str(source + 1))
+    #         menu_item.disconnect()
+    #         menu_item.triggered.connect(
+    #             lambda: self.deleteCameraSource(source=source, menu_item=menu_item,
+    #                                             ndi_source=None, camera=camera, camera_widget=camera_widget))
+    #         self.serial_widget_list.append(camera)
+    #
+    #     # create internal grid layout for camera
+    #     camera_grid_layout = QtWidgets.QGridLayout()
+    #     camera_grid_layout.setObjectName('Camera Grid: ' + str(camera))
+    #
+    #     camera_grid_layout.addWidget(camera.get_video_frame(), 0, 0, 1, 1)
+    #     camera_widget.setLayout(camera_grid_layout)
+    #
+    #     select_cam_btn = QtWidgets.QPushButton("Select Camera")
+    #     select_cam_btn.clicked.connect(lambda: self.selectCameraSource(camera=camera, select_cam_btn=select_cam_btn,
+    #                                                                    unselect_cam_btn=unselect_cam_btn))
+    #     unselect_cam_btn = QtWidgets.QPushButton("Unselect Camera")
+    #     unselect_cam_btn.clicked.connect(
+    #         lambda: self.unselectCameraSource(select_cam_btn=select_cam_btn, unselect_cam_btn=unselect_cam_btn))
+    #     camera_grid_layout.addWidget(select_cam_btn, 1, 0, 1, 1)
+    #     camera_grid_layout.addWidget(unselect_cam_btn, 2, 0, 1, 1)
+    #     unselect_cam_btn.hide()
+    #
+    #     self.flowLayout.addWidget(camera_widget)
+    #     self.watch_trainer.add_camera(camera=camera)
+    #
+    # def selectCameraSource(self, camera, select_cam_btn, unselect_cam_btn):
+    #     self.current_selected_source = camera
+    #
+    #     if self.current_selected_source.image_processor.get_ptz_ready() == "ready":
+    #         self.assign_network_ptz_btn.hide()
+    #         self.unassign_network_ptz_btn.show()
+    #     elif self.current_selected_source.image_processor.get_ptz_ready() == "not ready":
+    #         self.assign_network_ptz_btn.show()
+    #         self.unassign_network_ptz_btn.hide()
+    #     else:
+    #         self.assign_network_ptz_btn.hide()
+    #         self.unassign_network_ptz_btn.hide()
+    #
+    #     select_cam_btn.hide()
+    #     unselect_cam_btn.show()
+    #
+    #     self.select_face_dropdown.setEnabled(True)
+    #     # Path for face image database
+    #
+    #     if self.current_selected_source.image_processor.get_face() is None:
+    #         self.select_face_dropdown.setCurrentText('')
+    #         self.enable_track.setEnabled(False)
+    #     else:
+    #         self.select_face_dropdown.setCurrentText(self.current_selected_source.image_processor.get_face())
+    #         self.enable_track.setEnabled(True)
+    #
+    #     if self.current_selected_source.image_processor.is_track_enabled():
+    #         self.enable_track.setChecked(True)
+    #     else:
+    #         self.enable_track.setChecked(False)
+    #
+    # def unselectCameraSource(self, select_cam_btn, unselect_cam_btn):
+    #     self.current_selected_source = None
+    #     self.select_face_dropdown.setCurrentText('')
+    #     self.select_face_dropdown.setEnabled(False)
+    #     self.enable_track.setChecked(False)
+    #     self.enable_track.setEnabled(False)
+    #     self.assign_network_ptz_btn.hide()
+    #     self.unassign_network_ptz_btn.hide()
+    #     unselect_cam_btn.hide()
+    #     select_cam_btn.show()
+    #
+    # def deleteCameraSource(self, source, ndi_source, menu_item, camera, camera_widget):
+    #     """Remove NDI/Serial camera source from camera grid"""
+    #     menu_item.disconnect()
+    #     if source == -1:
+    #         # Remove NDI source widget
+    #         menu_item.triggered.connect(lambda: self.addCamera(source=-1, ndi_source=ndi_source, menu_item=menu_item))
+    #     else:
+    #         # Remove Serial source widget
+    #         menu_item.triggered.connect(lambda: self.addCamera(source=source, ndi_source=None, menu_item=menu_item))
+    #         self.serial_widget_list.remove(camera)
+    #
+    #     self.watch_trainer.remove_camera(camera=camera)
+    #     camera.close()
+    #     camera_widget.close()
+    #     self.flowLayout.removeWidget(camera_widget)
 
     def translateUi(self, AutoPTZ):
         """Translate Menu, Buttons, and Labels through localization"""

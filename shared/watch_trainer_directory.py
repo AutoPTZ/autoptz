@@ -2,7 +2,7 @@ import time
 
 import watchdog.events
 import watchdog.observers
-from PyQt5 import QtWidgets
+from PyQt6 import QtWidgets
 
 
 class WatchTrainer(watchdog.events.PatternMatchingEventHandler):

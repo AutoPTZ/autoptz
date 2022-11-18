@@ -4,10 +4,14 @@ import time
 
 import cv2
 import imutils
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.image_processor import ImageProcessor
+
+
+def start_trainer():
+    TrainerDlg().show()
 
 
 class CameraWidget(QtCore.QObject):
@@ -52,7 +56,7 @@ class CameraWidget(QtCore.QObject):
 
         # Start Image Processor for Facial Recognition + Tracking
         self.image_processor = ImageProcessor()
-        self.image_processor.START_TRAINER.connect(self.start_trainer)
+        self.image_processor.START_TRAINER.connect(start_trainer)
 
         # Periodically set video frame to display
         self.timer = QtCore.QTimer()
@@ -131,14 +135,12 @@ class CameraWidget(QtCore.QObject):
 
                 # Convert to pixmap and set to video frame
                 img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], frame.strides[0],
-                                   QtGui.QImage.Format_RGB888).rgbSwapped()
+                                   QtGui.QImage.Format.Format_RGB888).rgbSwapped()
                 try:
                     self.video_frame.setPixmap(QtGui.QPixmap.fromImage(img))
-                except:
+                except Exception as e:
+                    print(e)
                     self.kill_video()
-    @staticmethod
-    def start_trainer():
-        TrainerDlg().show()
 
     @staticmethod
     def verify_network_stream(link):
@@ -153,7 +155,7 @@ class CameraWidget(QtCore.QObject):
 
     @staticmethod
     def spin(seconds):
-        """Pause for set amount of seconds, replaces time.sleep so program doesnt stall"""
+        """Pause for set amount of seconds, replaces time.sleep() so program doesnt stall"""
 
         time_end = time.time() + seconds
         while time.time() < time_end:
@@ -169,8 +171,8 @@ class CameraWidget(QtCore.QObject):
             self.break_loop = True
         try:
             self.capture.release()
-        except:
-            pass
+        except Exception as e:
+            print(e)
         cv2.destroyAllWindows()
         self.load_stream_thread = None
         self.capture = None

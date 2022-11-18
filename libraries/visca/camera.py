@@ -1,6 +1,5 @@
 import re
 import binascii
-import numpy as np
 import serial
 from scipy.interpolate import interp1d
 
@@ -152,15 +151,6 @@ class D100(Camera):
                 return None
             return self.interp(x)
         return None
-
-    def test(self, lr=(5.5, 0), ud=(0, 0), angle=0):
-        [5.5, ]
-        dis = 0.391886608016
-        left, right = lr
-        up, down = ud
-        coeff = np.cos(angle)
-
-        movement = (left * dis * 148.466,)
 
     @staticmethod
     def multi_replace(text, rep):

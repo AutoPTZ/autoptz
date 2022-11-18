@@ -6,10 +6,18 @@ import numpy as np
 
 import cv2
 import imutils
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.image_processor import ImageProcessor
+
+
+def spin(seconds):
+    """Pause for set amount of seconds, replaces time.sleep() so program doesnt stall"""
+
+    time_end = time.time() + seconds
+    while time.time() < time_end:
+        QtWidgets.QApplication.processEvents()
 
 
 class NDICameraWidget(QtCore.QObject):
@@ -19,7 +27,7 @@ class NDICameraWidget(QtCore.QObject):
     @param width - Width of the video frame
     @param height - Height of the video frame
     @param stream_link - IP/RTSP/Webcam link
-    @param aspect_ratio - Whether to maintain frame aspect ratio or force into fraame
+    @param aspect_ratio - Whether to maintain frame aspect ratio or force into frame
     """
 
     def __init__(self, width, height, ndi_source=None, aspect_ratio=False, parent=None, deque_size=1):
@@ -113,23 +121,17 @@ class NDICameraWidget(QtCore.QObject):
                                     frame = np.copy(v.data)
 
                                 self.deque.append(frame)
-                            except:
+                            except Exception as e:
+                                print(e)
                                 self.online = False
                         else:
                             # Attempt to reconnect
                             print('attempting to reconnect', self.ndi_source_object.ndi_name)
                             self.load_network_stream()
-                            self.spin(2)
-                        self.spin(.01)
+                            spin(2)
+                        spin(.01)
                     except AttributeError:
                         pass
-
-    def spin(self, seconds):
-        """Pause for set amount of seconds, replaces time.sleep so program doesnt stall"""
-
-        time_end = time.time() + seconds
-        while time.time() < time_end:
-            QtWidgets.QApplication.processEvents()
 
     @staticmethod
     def start_trainer():
@@ -142,7 +144,7 @@ class NDICameraWidget(QtCore.QObject):
         else:
             """Sets pixmap image to video frame"""
             if not self.online:
-                self.spin(3)
+                spin(3)
                 return
 
             if self.deque and self.online:
@@ -151,11 +153,12 @@ class NDICameraWidget(QtCore.QObject):
 
                 # Convert to pixmap and set to video frame
                 img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], frame.strides[0],
-                                   QtGui.QImage.Format_RGBX8888).rgbSwapped()
+                                   QtGui.QImage.Format.Format_RGBX8888).rgbSwapped()
 
                 try:
                     self.video_frame.setPixmap(QtGui.QPixmap.fromImage(img))
-                except:
+                except Exception as e:
+                    print(e)
                     self.kill_video()
 
     def get_video_frame(self):
@@ -169,8 +172,8 @@ class NDICameraWidget(QtCore.QObject):
         try:
             ndi.recv_destroy(self.ndi_recv)
             ndi.destroy()
-        except:
-            pass
+        except Exception as e:
+            print(e)
         cv2.destroyAllWindows()
         self.load_stream_thread = None
         self.capture = None

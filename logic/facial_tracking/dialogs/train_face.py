@@ -3,8 +3,9 @@ import cv2
 from libraries import face_recognition
 import pickle
 from imutils import paths
-from PyQt5 import QtCore, QtWidgets
-from PyQt5.QtWidgets import QDialog
+import shared.constants as constants
+from PyQt6 import QtCore, QtWidgets
+from PyQt6.QtWidgets import QDialog
 
 
 class TrainerUI(object):
@@ -74,17 +75,15 @@ class TrainerThread(QtCore.QThread):
     def run(self):
         print("\n [INFO] Training faces. It will take a few minutes. Please Wait ...")
         # Image path for face image database
-        image_path = '../logic/facial_tracking/images/'
-        encodings_path = '../logic/facial_tracking/trainer/encodings.pickle'
 
-        imagePaths = list(paths.list_images(image_path))
+        imagePaths = list(paths.list_images(constants.IMAGE_PATH))
         knownEncodings = []
         knownNames = []
         self.MAX_VALUE_SIGNAL.emit(len(imagePaths))
         QtCore.QCoreApplication.processEvents()
         self.CURRENT_VALUE_SIGNAL.emit(0)
         QtCore.QCoreApplication.processEvents()
-        if os.listdir(image_path):
+        if os.listdir(constants.IMAGE_PATH):
             # loop over the image paths
             for (i, imagePath) in enumerate(imagePaths):
                 # extract the person name from the image path
@@ -103,7 +102,7 @@ class TrainerThread(QtCore.QThread):
                     knownNames.append(name)
             print("Saving encodings to encodings.pickle ...")
             data = {"encodings": knownEncodings, "names": knownNames}
-            f = open(encodings_path, "wb")
+            f = open(constants.ENCODINGS_PATH, "wb")
             f.write(pickle.dumps(data))
             f.close()
             print("Encodings have been saved successfully.")
@@ -111,8 +110,8 @@ class TrainerThread(QtCore.QThread):
             QtCore.QCoreApplication.processEvents()
         else:
             print("No images to train.")
-            if os.path.exists(encodings_path):
-                os.remove(encodings_path)
+            if os.path.exists(constants.ENCODINGS_PATH):
+                os.remove(constants.ENCODINGS_PATH)
         print("\n [INFO] {0} faces trained.".format(len(knownNames)))
 
 

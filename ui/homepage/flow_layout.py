@@ -1,5 +1,5 @@
-from PyQt5.QtCore import QPoint, QRect, QSize, Qt
-from PyQt5.QtWidgets import (QApplication, QLayout, QPushButton, QSizePolicy,
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt
+from PyQt6.QtWidgets import (QApplication, QLayout, QPushButton, QSizePolicy,
                              QWidget)
 
 
@@ -53,7 +53,7 @@ class FlowLayout(QLayout):
         return None
 
     def expandingDirections(self):
-        return Qt.Orientations(Qt.Orientation(0))
+        return Qt.Orientation(Qt.Orientation(0))
 
     def hasHeightForWidth(self):
         return True
@@ -87,10 +87,10 @@ class FlowLayout(QLayout):
 
         for item in self.itemList:
             wid = item.widget()
-            space_x = self.spacing() + wid.style().layoutSpacing(QSizePolicy.PushButton, QSizePolicy.PushButton,
-                                                                 Qt.Horizontal)
-            space_y = self.spacing() + wid.style().layoutSpacing(QSizePolicy.PushButton, QSizePolicy.PushButton,
-                                                                 Qt.Vertical)
+            space_x = self.spacing() + wid.style().layoutSpacing(QSizePolicy.Policy.PushButton, QSizePolicy.Policy.PushButton,
+                                                                 Qt.AlignmentFlag.Horizontal)
+            space_y = self.spacing() + wid.style().layoutSpacing(QSizePolicy.Policy.PushButton, QSizePolicy.Policy.PushButton,
+                                                                 Qt.AlignmentFlag.Vertical)
             next_x = x + item.sizeHint().width() + space_x
             if next_x - space_x > rect.right() and line_height > 0:
                 x = rect.x()
@@ -113,4 +113,4 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     mainWin = Window()
     mainWin.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
