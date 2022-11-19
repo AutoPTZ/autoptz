@@ -1,31 +1,30 @@
 import os
 import platform
 import shutil
-import watchdog.events
-import watchdog.observers
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtMultimedia import QMediaDevices
 from PyQt6.QtWidgets import QMainWindow
+
+import watchdog.events
+import watchdog.observers
+import shared.constants as constants
 
 from logic.facial_tracking.dialogs.add_face import AddFaceDlg
 from logic.facial_tracking.dialogs.remove_face import RemoveFaceDlg
 from logic.facial_tracking.dialogs.reset_database import ResetDatabaseDlg
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
-from ui.homepage.assign_network_ptz_ui import AssignNetworkPTZDlg
 from logic.facial_tracking.move_visca_ptz import ViscaPTZ
-from ui.homepage.assign_visca_ptz_ui import AssignViscaPTZDlg
-from ui.homepage.flow_layout import FlowLayout
 from logic.camera_search.get_serial_cameras import COMPorts
-from logic.camera_search.search_ndi import get_ndi_sources
+from views.functions.assign_network_ptz_ui import AssignNetworkPTZDlg
+from views.functions.assign_visca_ptz_ui import AssignViscaPTZDlg
+from views.homepage.flow_layout import FlowLayout
 from shared.message_prompts import show_info_messagebox
 from shared.watch_trainer_directory import WatchTrainer
-from ui.widgets.camera_widget import CameraWidget
-from ui.widgets.ndi_cam_widget import NDICameraWidget
-import shared.constants as constants
 
 
 class AutoPTZ_MainWindow(QMainWindow):
     def __init__(self, *args, **kwargs):
+
         # setting up the UI and QT Threading
         super(AutoPTZ_MainWindow, self).__init__(*args, **kwargs)
         self.threadpool = QtCore.QThreadPool()
@@ -103,7 +102,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.enable_track.setEnabled(False)
         self.enable_track.setAutoRepeat(False)
         self.enable_track.setAutoExclusive(False)
-        # self.enable_track.stateChanged.connect(self.config_enable_track)
+        self.enable_track.stateChanged.connect(self.config_enable_track)
         self.enable_track.setObjectName("enable_track")
         self.formLayout.setWidget(3, QtWidgets.QFormLayout.ItemRole.LabelRole, self.enable_track)
         self.select_face_label = QtWidgets.QLabel(self.selectedCamPage)
@@ -382,7 +381,7 @@ class AutoPTZ_MainWindow(QMainWindow):
 
         # other setup variables and methods
         # self.getNDISourceList()
-        # self.getPhysicalSourcesList()
+        self.getPhysicalSourcesList()
         self.assigned_ptz_camera = []
         self.serial_widget_list = []
         if os.path.exists(constants.TRAINER_PATH) is False:
@@ -469,7 +468,7 @@ class AutoPTZ_MainWindow(QMainWindow):
             print("Need to select or add a camera")
         else:
             dlg = AssignNetworkPTZDlg(self, camera=self.current_selected_source)
-            dlg.closeEvent = self.refreshOnvifBtn
+            dlg.closeEvent = self.refreshNetworkBtn
             dlg.exec()
 
     def unassign_network_ptz(self):
@@ -540,7 +539,7 @@ class AutoPTZ_MainWindow(QMainWindow):
             self.assign_visca_ptz_btn.show()
             self.unassign_visca_ptz_btn.hide()
 
-    def refreshOnvifBtn(self, event):
+    def refreshNetworkBtn(self, event):
         """Check is Network PTZ is assigned and change assignment button if so"""
         if self.current_selected_source.image_processor.get_ptz_ready() == "ready":
             self.unassign_network_ptz_btn.show()
@@ -571,19 +570,19 @@ class AutoPTZ_MainWindow(QMainWindow):
     #             self.enable_track.setChecked(self.current_selected_source.image_processor.is_track_enabled())
     #         except:
     #             self.enable_track.setChecked(False)
-    #
-    # def getPhysicalSourcesList(self):
-    #     """Adds all camera sources to the physical source list"""
-    #     available_cameras = QMediaDevices.videoInputs()
-    #     index = 0
-    #     for cam in available_cameras:
-    #         if cam.description() != "NDI Video":
-    #             if platform.system() == "Darwin":  # MacOS messes up the number scheme so this was the best fix
-    #                 self.addPhysicalSource(source_number=index, source_name=cam.description())
-    #                 index = 1 + index
-    #             else:
-    #                 self.addPhysicalSource(source_number=index, source_name=cam.description())
-    #                 index = 1 + index
+
+    def getPhysicalSourcesList(self):
+        """Adds all camera sources to the physical source list"""
+        available_cameras = QMediaDevices.videoInputs()
+        index = 0
+        for cam in available_cameras:
+            if cam.description() != "NDI Video":
+                if platform.system() == "Darwin":  # MacOS messes up the number scheme so this was the best fix
+                    self.addPhysicalSource(source_number=index, source_name=cam.description())
+                    index = 1 + index
+                else:
+                    self.addPhysicalSource(source_number=index, source_name=cam.description())
+                    index = 1 + index
     #
     # def getNDISourceList(self):
     #     """Checks all NDI source in the network and adds them to the NDI source list"""
@@ -591,12 +590,12 @@ class AutoPTZ_MainWindow(QMainWindow):
     #     for i, s in enumerate(source_list):
     #         self.addNDISource(s)
     #
-    # def addPhysicalSource(self, source_name, source_number):
-    #     """Add selected Serial camera source from the menu to the camera grid"""
-    #     camera_source = QtWidgets.QWidgetAction(source_name, self)
-    #     camera_source.setCheckable(True)
-    #     camera_source.triggered.connect(lambda: self.addCamera(source_number, menu_item=camera_source, ndi_source=None))
-    #     self.menuAdd_Hardware.addAction(camera_source)
+    def addPhysicalSource(self, source_name, source_number):
+        """Add selected Serial camera source from the menu to the camera grid"""
+        camera_source = QtWidgets.QWidgetAction(source_name, self)
+        camera_source.setCheckable(True)
+        camera_source.triggered.connect(lambda: self.addCamera(source_number, menu_item=camera_source, ndi_source=None))
+        self.menuAdd_Hardware.addAction(camera_source)
     #
     # def addNDISource(self, ndi_source_id):
     #     """Add selected NDI camera source from the menu to the camera grid"""

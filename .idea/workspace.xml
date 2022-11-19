@@ -5,22 +5,19 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/libraries/visca/camera.py" beforeDir="false" afterPath="$PROJECT_DIR$/libraries/visca/camera.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/add_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/add_face.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/remove_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/remove_face.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/reset_database.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/reset_database.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/shared/constants.py" beforeDir="false" afterPath="$PROJECT_DIR$/shared/constants.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/shared/message_prompts.py" beforeDir="false" afterPath="$PROJECT_DIR$/shared/message_prompts.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/shared/watch_trainer_directory.py" beforeDir="false" afterPath="$PROJECT_DIR$/shared/watch_trainer_directory.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/assign_network_ptz_ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/assign_network_ptz_ui.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/assign_visca_ptz_ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/assign_visca_ptz_ui.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/flow_layout.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/flow_layout.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/homepage/main_window.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/camera_widget.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/startup.py" beforeDir="false" afterPath="$PROJECT_DIR$/startup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_cam/best_cam_example.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_cam/model_webcam_test.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/homepage/assign_network_ptz_ui.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/homepage/assign_visca_ptz_ui.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/homepage/flow_layout.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/homepage/main_window.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/homepage/vapix.log" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/widgets/camera_widget.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -49,6 +46,7 @@
     <option name="selectedTabId" value="CurrentFile" />
   </component>
   <component name="ProjectId" id="2G5UlvkeEckFZ7APx1GRpTIhrk8" />
+  <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
@@ -69,11 +67,11 @@
       <recent name="$PROJECT_DIR$/logic/facial_tracking" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\steve\development\autoptz\views\functions" />
       <recent name="$PROJECT_DIR$/libraries" />
       <recent name="$PROJECT_DIR$/shared" />
       <recent name="$PROJECT_DIR$/ui/widgets" />
       <recent name="$PROJECT_DIR$/logic/facial_tracking/trainer" />
-      <recent name="$PROJECT_DIR$" />
     </key>
   </component>
   <component name="RunManager" selected="Python.startup">
@@ -143,8 +141,8 @@
     <recent_temporary>
       <list>
         <item itemvalue="Python.startup" />
-        <item itemvalue="Python.train_face" />
         <item itemvalue="Python.get_devices_test" />
+        <item itemvalue="Python.train_face" />
       </list>
     </recent_temporary>
   </component>

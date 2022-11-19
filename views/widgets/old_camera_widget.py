@@ -63,8 +63,6 @@ class CameraWidget(QtCore.QObject):
         self.timer.timeout.connect(self.set_frame)
         self.timer.start(1)
 
-        self.font = cv2.FONT_HERSHEY_SIMPLEX
-
         print('Started camera: {}'.format(self.camera_stream_link))
 
     def load_network_stream(self):
@@ -155,7 +153,7 @@ class CameraWidget(QtCore.QObject):
 
     @staticmethod
     def spin(seconds):
-        """Pause for set amount of seconds, replaces time.sleep() so program doesnt stall"""
+        """Pause for set amount of seconds, replaces time.sleep() so program doesn't stall"""
 
         time_end = time.time() + seconds
         while time.time() < time_end:

@@ -1,13 +1,7 @@
-from PyQt6.QtWidgets import QApplication
 import sys
+from PyQt6.QtWidgets import QApplication
 
-from ui.homepage.main_window import AutoPTZ_MainWindow
-
-
-# class AutoPTZ(QtWidgets.QMainWindow, Ui_AutoPTZ):
-#     def __init__(self, parent=None):
-#         super(AutoPTZ, self).__init__(parent)
-#         self.setupUi(self)
+from views.homepage.main_window import AutoPTZ_MainWindow
 
 
 def main():
