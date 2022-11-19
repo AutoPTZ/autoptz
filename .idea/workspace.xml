@@ -5,19 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/shared/constants.py" beforeDir="false" afterPath="$PROJECT_DIR$/shared/constants.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/startup.py" beforeDir="false" afterPath="$PROJECT_DIR$/startup.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_cam/best_cam_example.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_cam/model_webcam_test.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/assign_network_ptz_ui.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/assign_visca_ptz_ui.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/flow_layout.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/main_window.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/homepage/vapix.log" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/widgets/camera_widget.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui/widgets/ndi_cam_widget.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/views/test/test_webcam_thread.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/test/test_webcam_thread.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -74,7 +63,7 @@
       <recent name="$PROJECT_DIR$/logic/facial_tracking/trainer" />
     </key>
   </component>
-  <component name="RunManager" selected="Python.startup">
+  <component name="RunManager" selected="Python.test_webcam_thread">
     <configuration name="get_devices_test" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="autoptz" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -117,6 +106,27 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
+    <configuration name="test_webcam_thread" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="autoptz" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/views/test" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/views/test/test_webcam_thread.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
     <configuration name="train_face" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="autoptz" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -140,6 +150,7 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Python.test_webcam_thread" />
         <item itemvalue="Python.startup" />
         <item itemvalue="Python.get_devices_test" />
         <item itemvalue="Python.train_face" />

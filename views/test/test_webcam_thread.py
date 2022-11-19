@@ -65,7 +65,7 @@ class App(QWidget):
         self.current_select = None
         self.setWindowTitle("Qt live label demo")
         self.disply_width = 1280
-        self.display_height = 720
+        self.display_height = 1280
         # create the label that holds the image
         self.image_label = QLabel(self)
         self.image_label.setProperty('active', False)
@@ -135,7 +135,7 @@ class App(QWidget):
 
 if __name__=="__main__":
     app = QApplication(sys.argv)
-    app.setStyle('Breeze')
+    # app.setStyle('Breeze')
     a = App()
     a.show()
     sys.exit(app.exec())
