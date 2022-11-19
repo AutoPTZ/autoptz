@@ -10,34 +10,37 @@ import numpy as np
 
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray)
-    font = cv2.FONT_HERSHEY_SIMPLEX
     start_time = time.time()
     display_time = 2
     fc = 0
     FPS = 0
 
-    def __init__(self):
+    def __init__(self, src=0):
         super().__init__()
         self._run_flag = True
+        self.cap = cv2.VideoCapture(src)
+        (self.ret, self.cv_img) = self.cap.read()
 
     def run(self):
-        cap = cv2.VideoCapture(0)
         while self._run_flag:
-            ret, cv_img = cap.read()
+            (self.ret, self.cv_img) = self.cap.read()
+
+            # FPS Counter
             self.fc += 1
             TIME = time.time() - self.start_time
-
             if (TIME) >= self.display_time:
                 self.FPS = self.fc / (TIME)
                 self.fc = 0
                 self.start_time = time.time()
-
             fps = "FPS: " + str(self.FPS)[:5]
-            if ret:
-                cv2.putText(cv_img, fps, (50, 50), self.font, 1, (0, 0, 255), 2)
-                self.change_pixmap_signal.emit(cv_img)
+
+            cv2.putText(self.cv_img, fps, (50, 50), self.font, 1, (0, 0, 255), 2)
+
+            # Emit is only for PYQT
+            self.change_pixmap_signal.emit(self.cv_img)
+
         # shut down capture system
-        cap.release()
+        self.cap.release()
 
     def stop(self):
         """Sets run flag to False and waits for thread to finish"""
