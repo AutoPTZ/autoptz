@@ -1,8 +1,9 @@
 import os
 import shutil
-from PyQt6 import QtCore, QtWidgets
-from PyQt6.QtWidgets import QDialog
+from PySide6 import QtCore, QtWidgets
+from PySide6.QtWidgets import QDialog
 
+from shared import constants
 from shared.message_prompts import show_critical_messagebox
 
 
@@ -54,12 +55,10 @@ class ResetDatabaseUI(object):
         else:
             # check if phrase is correct, if so delete all images + trainer.yml
             if self.confirm_line.text().strip() == 'RESET ALL':
-                image_path = '../logic/facial_tracking/images/'
-                encodings_path = '../logic/facial_tracking/trainer/encodings.pickle'
-                if os.path.exists(image_path):
-                    shutil.rmtree(image_path)
-                if os.path.exists(encodings_path):
-                    os.remove(encodings_path)
+                if os.path.exists(constants.IMAGE_PATH):
+                    shutil.rmtree(constants.IMAGE_PATH)
+                if os.path.exists(constants.ENCODINGS_PATH):
+                    os.remove(constants.ENCODINGS_PATH)
                 show_critical_messagebox(window_title="Reset Database",
                                          critical_message="All stored faces and models have been removed.")
                 self.window.close()

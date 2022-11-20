@@ -2,6 +2,8 @@ import cv2
 import shared.constants as constants
 from threading import Thread
 
+from logic.facial_tracking.dialogs.train_face import TrainerDlg
+
 
 class ImageProcessor:
     def __init__(self, stream_thread, width=None, height=None):
@@ -56,6 +58,7 @@ class ImageProcessor:
             self.count = 0
             self.face_locations = None
             self.face_names = None
+            # send signal for TrainingDlg
 
     def stop(self):
         """Sets run flag to False and waits for thread to finish"""

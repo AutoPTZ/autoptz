@@ -10,17 +10,13 @@ import watchdog.observers
 import shared.constants as constants
 from views.functions.show_dialogs_ui import ShowDialog
 from logic.camera_search.search_ndi import get_ndi_sources
-from logic.facial_tracking.dialogs.reset_database import ResetDatabaseDlg
-from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.move_visca_ptz import ViscaPTZ
 from logic.camera_search.get_serial_cameras import COMPorts
 from views.functions.assign_network_ptz_ui import AssignNetworkPTZDlg
 from views.functions.assign_visca_ptz_ui import AssignViscaPTZDlg
 from views.homepage.flow_layout import FlowLayout
-from shared.message_prompts import show_info_messagebox
 from shared.watch_trainer_directory import WatchTrainer
 from views.widgets.camera_widget import CameraWidget
-from views.widgets.video_thread import VideoThread
 
 
 class AutoPTZ_MainWindow(QMainWindow):
@@ -373,13 +369,13 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionAdd_Face.triggered.connect(partial(self.dialogs.add_face, self.update_face_selection))
         self.actionTrain_Model = QtWidgets.QWidgetAction(self)
         self.actionTrain_Model.setObjectName("actionTrain_Model")
-        self.actionTrain_Model.triggered.connect(self.retrain_face)
+        self.actionTrain_Model.triggered.connect(partial(self.dialogs.retrain_face))
         self.actionRemove_Face = QtWidgets.QWidgetAction(self)
         self.actionRemove_Face.setObjectName("actionRemove_Face")
         self.actionRemove_Face.triggered.connect(partial(self.dialogs.remove_face, self.update_face_selection))
         self.actionReset_Database = QtWidgets.QWidgetAction(self)
         self.actionReset_Database.setObjectName("actionReset_Database")
-        self.actionReset_Database.triggered.connect(self.reset_database)
+        self.actionReset_Database.triggered.connect(partial(self.dialogs.reset_database, self.update_face_selection))
         self.menuFile.addAction(self.actionOpen)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionSave)
@@ -573,20 +569,6 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.select_face_dropdown.addItem(folder)
             if self.select_face_dropdown.findText(current_text_temp) != -1:
                 self.select_face_dropdown.setCurrentText(current_text_temp)
-
-    @staticmethod
-    def retrain_face():
-        if not os.path.isdir(constants.IMAGE_PATH) or not os.listdir(constants.IMAGE_PATH):
-            show_info_messagebox("No Faces to train.")
-        else:
-            TrainerDlg().show()
-
-    def reset_database(self):
-        """Launch the Remove Face dialog based on the currently selected camera."""
-        print("Opening Face Dialog")
-        dlg = ResetDatabaseDlg(self)
-        dlg.closeEvent = self.update_face_selection
-        dlg.exec()
 
     def refreshViscaBtn(self, event):
         """Check is VISCA PTZ is assigned and change assignment button if so"""

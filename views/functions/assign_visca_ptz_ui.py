@@ -1,5 +1,5 @@
-from PyQt6 import QtCore, QtWidgets
-from PyQt6.QtWidgets import QDialog
+from PySide6 import QtCore, QtWidgets
+from PySide6.QtWidgets import QDialog
 
 from logic.facial_tracking.move_visca_ptz import ViscaPTZ
 

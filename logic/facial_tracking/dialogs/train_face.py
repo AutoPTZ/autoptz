@@ -4,8 +4,8 @@ from libraries import face_recognition
 import pickle
 from imutils import paths
 import shared.constants as constants
-from PyQt6 import QtCore, QtWidgets
-from PyQt6.QtWidgets import QDialog
+from PySide6 import QtCore, QtWidgets
+from PySide6.QtWidgets import QDialog
 
 
 class TrainerUI(object):
@@ -66,10 +66,10 @@ class TrainerUI(object):
 
 
 class TrainerThread(QtCore.QThread):
-    MAX_VALUE_SIGNAL = QtCore.pyqtSignal(int)
-    CURRENT_VALUE_SIGNAL = QtCore.pyqtSignal(int)
-    CURRENT_TEXT_SIGNAL = QtCore.pyqtSignal(str)
-    DONE_SIGNAL = QtCore.pyqtSignal(bool)
+    MAX_VALUE_SIGNAL = QtCore.Signal(int)
+    CURRENT_VALUE_SIGNAL = QtCore.Signal(int)
+    CURRENT_TEXT_SIGNAL = QtCore.Signal(str)
+    DONE_SIGNAL = QtCore.Signal(bool)
     face_recognition = face_recognition.FaceRec()
 
     def run(self):
