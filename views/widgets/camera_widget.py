@@ -1,7 +1,7 @@
 from PyQt6 import QtGui
-from PyQt6.QtCore import pyqtSlot
-from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QLabel
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import pyqtSlot, Qt
 import cv2
 import numpy as np
 
@@ -13,12 +13,15 @@ from views.widgets.video_thread import VideoThread
 class CameraWidget(QLabel):
 
     def __init__(self, source, width, height):
-        super(CameraWidget).__init__()
-        # Set up new camera widget
+        super().__init__()
+
+        self.width = width
+        self.height = height
         self.setProperty('active', False)
         self.resize(width, height)
         self.setObjectName(f"Camera Source: {source}")
         self.setStyleSheet(constants.CAMERA_STYLESHEET)
+        self.setText(f"Camera Source: {source}")
 
         # create the video capture thread
         self.thread = VideoThread(src=source)
@@ -30,26 +33,6 @@ class CameraWidget(QLabel):
     def stop(self):
         self.thread.stop()
         self.deleteLater()
-
-        """
-         OpenCV VideoThread -> sent for processing (which easily uses OpenCV frame)
-         
-         QT uses QPixmaps, so we need to convert OpenCV frame to QPixmap
-         
-         FrameProcess == Facial Recognition, Tracking, etc
-         VideoThread == Turns on Camera and constantly gets frams
-         CameraWidget == Shows the frames on QT to the user
-         
-         VideoThread -> FrameProcess (sends back, boxes + names)
-         
-         VideoThread -> Pixmap -> CameraWidget
-         VideoThread -> CameraWidget -> Pixmap
-         
-         
-         VideoThread ->  CameraWidget  <- FrameProcess (boxes)
-         CameraWidget -> Pixmap
-         
-        """
 
     @pyqtSlot(np.ndarray)
     def update_image(self, cv_img):
@@ -63,5 +46,27 @@ class CameraWidget(QLabel):
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
         convert_to_Qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
-        # p = convert_to_Qt_format.scaled(self.width, self.height, Qt.AspectRatioMode.KeepAspectRatio)
-        return QPixmap.fromImage(convert_to_Qt_format)
+        p = convert_to_Qt_format.scaled(self.width, self.height, Qt.AspectRatioMode.KeepAspectRatio)
+        return QPixmap.fromImage(p)
+
+    """
+             OpenCV VideoThread -> sent for processing (which easily uses OpenCV frame)
+
+             QT uses QPixmaps, so we need to convert OpenCV frame to QPixmap
+
+             FrameProcess == Facial Recognition, Tracking, etc
+             VideoThread == Turns on Camera and constantly gets frams
+             CameraWidget == Shows the frames on QT to the user
+
+             VideoThread -> FrameProcess (sends back, boxes + names)
+
+             VideoThread -> Pixmap -> CameraWidget
+             VideoThread -> CameraWidget -> Pixmap
+
+
+             VideoThread ->  CameraWidget  <- FrameProcess (boxes)
+             CameraWidget -> Pixmap
+
+            """
+
+

@@ -6,6 +6,7 @@ import sys
 import cv2
 from PyQt6.QtCore import pyqtSignal, pyqtSlot, Qt, QThread
 import numpy as np
+import shared.constants as constants
 
 
 class VideoThread(QThread):
@@ -28,13 +29,13 @@ class VideoThread(QThread):
             # FPS Counter
             self.fc += 1
             TIME = time.time() - self.start_time
-            if (TIME) >= self.display_time:
-                self.FPS = self.fc / (TIME)
+            if TIME >= self.display_time:
+                self.FPS = self.fc / TIME
                 self.fc = 0
                 self.start_time = time.time()
             fps = "FPS: " + str(self.FPS)[:5]
 
-            cv2.putText(self.cv_img, fps, (50, 50), self.font, 1, (0, 0, 255), 2)
+            cv2.putText(self.cv_img, fps, (50, 50), constants.FONT, 1, (0, 0, 255), 2)
 
             # Emit is only for PYQT
             self.change_pixmap_signal.emit(self.cv_img)
@@ -57,7 +58,7 @@ class App(QWidget):
             QLabel::hover {
                 border: 2.5px solid crimson;
                 border-radius: 3px;}
-                
+
             QLabel[active="true"]{
                 border: 2.5px solid dodgerblue;
                 border-radius: 3px;}
@@ -95,7 +96,7 @@ class App(QWidget):
         self.thread.change_pixmap_signal.connect(self.update_image)
         # start the thread
         self.thread.start()
-    
+
     def clicked_widget(self, event, label):
         if self.current_select is not None:
             self.current_select.setProperty(
@@ -125,7 +126,7 @@ class App(QWidget):
         """Updates the image_label with a new opencv image"""
         qt_img = self.convert_cv_qt(cv_img)
         self.image_label.setPixmap(qt_img)
-    
+
     def convert_cv_qt(self, cv_img):
         """Convert from an opencv image to QPixmap"""
         rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
@@ -136,7 +137,7 @@ class App(QWidget):
         return QPixmap.fromImage(p)
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     app = QApplication(sys.argv)
     # app.setStyle('Breeze')
     a = App()

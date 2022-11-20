@@ -7,6 +7,7 @@ from views.homepage.main_window import AutoPTZ_MainWindow
 def main():
     app = QApplication(sys.argv)
     window = AutoPTZ_MainWindow()
+    window.show()
     sys.exit(app.exec())
 
 
