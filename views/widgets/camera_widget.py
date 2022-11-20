@@ -1,9 +1,8 @@
-from PyQt6 import QtGui
-from PyQt6.QtWidgets import QLabel
-from PyQt6.QtGui import QPixmap
-from PyQt6.QtCore import pyqtSlot, Qt
+from PySide6 import QtGui
+from PySide6.QtWidgets import QLabel
+from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt
 import cv2
-import numpy as np
 
 import shared.constants as constants
 from views.widgets.video_thread import VideoThread
@@ -34,7 +33,6 @@ class CameraWidget(QLabel):
         self.thread.stop()
         self.deleteLater()
 
-    @pyqtSlot(np.ndarray)
     def update_image(self, cv_img):
         """Updates the image_label with a new opencv image"""
         qt_img = self.convert_cv_qt(cv_img)
@@ -68,5 +66,3 @@ class CameraWidget(QLabel):
              CameraWidget -> Pixmap
 
             """
-
-

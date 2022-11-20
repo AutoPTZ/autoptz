@@ -1,6 +1,6 @@
 import time
 import cv2
-from PyQt6.QtCore import pyqtSignal, QThread
+from PySide6.QtCore import QThread, Signal
 import shared.constants as constants
 import numpy as np
 
@@ -9,7 +9,7 @@ import numpy as np
 # if not use normal Python Threading
 
 class VideoThread(QThread):
-    change_pixmap_signal = pyqtSignal(np.ndarray)
+    change_pixmap_signal = Signal(np.ndarray)
     start_time = time.time()
     display_time = 2
     fc = 0

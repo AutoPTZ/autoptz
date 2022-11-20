@@ -1,9 +1,9 @@
 import os
 from functools import partial
 import shutil
-from PyQt6 import QtCore, QtWidgets
-from PyQt6.QtMultimedia import QMediaDevices
-from PyQt6.QtWidgets import QMainWindow
+from PySide6 import QtCore, QtWidgets
+from PySide6.QtMultimedia import QMediaDevices
+from PySide6.QtWidgets import QMainWindow
 
 import watchdog.events
 import watchdog.observers
@@ -320,15 +320,16 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.assign_visca_ptz_btn.clicked.connect(self.assign_visca_ptz_dlg)
         self.unassign_visca_ptz_btn.clicked.connect(self.unassign_visca_ptz)
         self.formTabWidget.addTab(self.manualControlPage, "")
+
         self.gridLayout.addWidget(self.formTabWidget, 0, 0, 3, 1)
 
         # enabled cameras view
-        self.shown_cameras = QtWidgets.QWidget()
+        # self.shown_cameras = QtWidgets.QWidget()
         self.flowLayout = FlowLayout()
         # self.flowLayout.setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetNoConstraint)
-        self.shown_cameras.setLayout(self.flowLayout)
-        self.shown_cameras.setSizePolicy(size_policy)
-        self.gridLayout.addWidget(self.shown_cameras, 0, 1, 1, 1)
+        # self.shown_cameras.setLayout(self.flowLayout)
+        # self.shown_cameras.setSizePolicy(size_policy)
+        self.gridLayout.addLayout(self.flowLayout, 0, 1, 1, 1)
 
         # handling camera window sizing
         # self.screen_width = QtWidgets.QApplication.desktop().screenGeometry().width()
@@ -436,7 +437,7 @@ class AutoPTZ_MainWindow(QMainWindow):
             menu_item.setText(cam.description())
             menu_item.setCheckable(True)
             menu_item.triggered.connect(
-                lambda value, source=index, item=menu_item: self.addCamera(source=source, menu_item=item))
+                lambda source=index, item=menu_item: self.addCamera(source=source, menu_item=item))
             self.menuAdd_Hardware.addAction(menu_item)
 
     def findNDISources(self):
@@ -450,55 +451,22 @@ class AutoPTZ_MainWindow(QMainWindow):
             self.menuAdd_NDI.addAction(menu_item)
 
     def addCamera(self, source, menu_item, isNDI=False):
-        print(f"Camera Source: {source} and Menu Item Name: {menu_item.text()}")
-        """Add NDI/Serial camera source from the menu to the camera grid"""
+        """Add NDI/Serial camera source from the menu to the FlowLayout"""
         camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3)
-        # self.flowLayout.addWidget(camera_widget)
-        self.gridLayout.addWidget(camera_widget, 1, 1, 1, 1)
-
+        menu_item.triggered.disconnect()
+        menu_item.triggered.connect(
+            lambda index=source, item=menu_item: self.deleteCameraSource(source=index, menu_item=item, camera_widget=camera_widget))
+        self.flowLayout.addWidget(camera_widget)
         # self.watch_trainer.add_camera(camera=camera_widget)
-        menu_item.disconnect()
 
-        # if isNDI:
-        #     # Make NDI Camera Widget
-        #     camera = NDICameraWidget(self.screen_width // 3, self.screen_height // 3, ndi_source=ndi_source,
-        #                              aspect_ratio=True)
-        #     camera.setObjectName('NDI Camera: ' + ndi_source.ndi_name)
-        #     camera_widget.setObjectName('NDI Camera: ' + ndi_source.ndi_name)
-        #     menu_item.disconnect()
-        #     menu_item.triggered.connect(
-        #         lambda: self.deleteCameraSource(source=-1, ndi_source=ndi_source, menu_item=menu_item, camera=camera,
-        #                                         camera_widget=camera_widget))
-        # else:
-        #     # Make Serial Camera Widget
-        #     camera = CameraWidget(self.screen_width // 3, self.screen_height // 3, source, aspect_ratio=True)
-        #     camera.setObjectName('Camera: ' + str(source + 1))
-        #     camera_widget.setObjectName('Camera ' + str(source + 1))
-        #     menu_item.disconnect()
-        #     menu_item.triggered.connect(
-        #         lambda: self.deleteCameraSource(source=source, menu_item=menu_item,
-        #                                         ndi_source=None, camera=camera, camera_widget=camera_widget))
-        #     self.serial_widget_list.append(camera)
-
-        # # create internal grid layout for camera
-        # camera_grid_layout = QtWidgets.QGridLayout()
-        # camera_grid_layout.setObjectName('Camera Grid: ' + str(camera))
-        #
-        # camera_grid_layout.addWidget(camera.get_video_frame(), 0, 0, 1, 1)
-        # camera_widget.setLayout(camera_grid_layout)
-        #
-        # select_cam_btn = QtWidgets.QPushButton("Select Camera")
-        # select_cam_btn.clicked.connect(lambda: self.selectCameraSource(camera=camera, select_cam_btn=select_cam_btn,
-        #                                                                unselect_cam_btn=unselect_cam_btn))
-        # unselect_cam_btn = QtWidgets.QPushButton("Unselect Camera")
-        # unselect_cam_btn.clicked.connect(
-        #     lambda: self.unselectCameraSource(select_cam_btn=select_cam_btn, unselect_cam_btn=unselect_cam_btn))
-        # camera_grid_layout.addWidget(select_cam_btn, 1, 0, 1, 1)
-        # camera_grid_layout.addWidget(unselect_cam_btn, 2, 0, 1, 1)
-        # unselect_cam_btn.hide()
-        #
-        # self.flowLayout.addWidget(camera_widget)
-        # self.watch_trainer.add_camera(camera=camera)
+    def deleteCameraSource(self, source, menu_item, camera_widget):
+        """Remove NDI/Serial camera source from camera FlowLayout"""
+        menu_item.triggered.disconnect()
+        menu_item.triggered.connect(
+            lambda index=source, item=menu_item: self.addCamera(source=index, menu_item=item))
+        camera_widget.stop()
+        camera_widget.deleteLater()
+        # self.watch_trainer.remove_camera(camera=camera)
 
     def init_manual_control(self, device):
         """Initializing manual camera control. ONLY VISCA devices for now."""
@@ -521,19 +489,19 @@ class AutoPTZ_MainWindow(QMainWindow):
             self.reset_btn.clicked.connect(self.current_manual_device.reset)
         else:
             # Disable Button Commands
-            self.up_left_btn.disconnect()
-            self.up_btn.disconnect()
-            self.up_right_btn.disconnect()
-            self.left_btn.disconnect()
-            self.right_btn.disconnect()
-            self.down_left_btn.disconnect()
-            self.down_btn.disconnect()
-            self.down_right_btn.disconnect()
-            self.home_btn.disconnect()
-            self.zoom_in_btn.disconnect()
-            self.zoom_out_btn.disconnect()
-            self.menu_btn.disconnect()
-            self.reset_btn.disconnect()
+            self.up_left_btn.clicked.disconnect()
+            self.up_btn.clicked.disconnect()
+            self.up_right_btn.clicked.disconnect()
+            self.left_btn.clicked.disconnect()
+            self.right_btn.clicked.disconnect()
+            self.down_left_btn.clicked.disconnect()
+            self.down_btn.clicked.disconnect()
+            self.down_right_btn.clicked.disconnect()
+            self.home_btn.clicked.disconnect()
+            self.zoom_in_btn.clicked.disconnect()
+            self.zoom_out_btn.clicked.disconnect()
+            self.menu_btn.clicked.disconnect()
+            self.reset_btn.clicked.disconnect()
 
         # shows button depending on if device has already been assigned to a camera source
         try:

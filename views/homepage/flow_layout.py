@@ -1,33 +1,36 @@
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt
-from PyQt6.QtWidgets import (QApplication, QLayout, QPushButton, QSizePolicy,
-                             QWidget)
+# Copyright (C) 2013 Riverbank Computing Limited.
+# Copyright (C) 2022 The Qt Company Ltd.
+# SPDX-License-Identifier: LicenseRef-Qt-Commercial OR BSD-3-Clause
+
+"""PySide6 port of the widgets/layouts/flowlayout example from Qt v6.x"""
+
+import sys
+from PySide6.QtCore import Qt, QMargins, QPoint, QRect, QSize
+from PySide6.QtWidgets import QApplication, QLayout, QPushButton, QSizePolicy, QWidget
 
 
 class Window(QWidget):
     def __init__(self):
-        super(Window, self).__init__()
+        super().__init__()
 
-        flow_layout = FlowLayout()
+        flow_layout = FlowLayout(self)
         flow_layout.addWidget(QPushButton("Short"))
         flow_layout.addWidget(QPushButton("Longer"))
         flow_layout.addWidget(QPushButton("Different text"))
         flow_layout.addWidget(QPushButton("More text"))
         flow_layout.addWidget(QPushButton("Even longer button text"))
-        self.setLayout(flow_layout)
 
         self.setWindowTitle("Flow Layout")
 
 
 class FlowLayout(QLayout):
-    def __init__(self, parent=None, margin=0, spacing=-1):
-        super(FlowLayout, self).__init__(parent)
+    def __init__(self, parent=None):
+        super().__init__(parent)
 
         if parent is not None:
-            self.setContentsMargins(margin, margin, margin, margin)
+            self.setContentsMargins(QMargins(0, 0, 0, 0))
 
-        self.setSpacing(spacing)
-
-        self.itemList = []
+        self._item_list = []
 
     def __del__(self):
         item = self.takeAt(0)
@@ -35,36 +38,36 @@ class FlowLayout(QLayout):
             item = self.takeAt(0)
 
     def addItem(self, item):
-        self.itemList.append(item)
+        self._item_list.append(item)
 
     def count(self):
-        return len(self.itemList)
+        return len(self._item_list)
 
     def itemAt(self, index):
-        if 0 <= index < len(self.itemList):
-            return self.itemList[index]
+        if 0 <= index < len(self._item_list):
+            return self._item_list[index]
 
         return None
 
     def takeAt(self, index):
-        if 0 <= index < len(self.itemList):
-            return self.itemList.pop(index)
+        if 0 <= index < len(self._item_list):
+            return self._item_list.pop(index)
 
         return None
 
     def expandingDirections(self):
-        return Qt.Orientation(Qt.Orientation(0))
+        return Qt.Orientation(0)
 
     def hasHeightForWidth(self):
         return True
 
     def heightForWidth(self, width):
-        height = self.doLayout(QRect(0, 0, width, 0), True)
+        height = self._do_layout(QRect(0, 0, width, 0), True)
         return height
 
     def setGeometry(self, rect):
         super(FlowLayout, self).setGeometry(rect)
-        self.doLayout(rect, False)
+        self._do_layout(rect, False)
 
     def sizeHint(self):
         return self.minimumSize()
@@ -72,25 +75,28 @@ class FlowLayout(QLayout):
     def minimumSize(self):
         size = QSize()
 
-        for item in self.itemList:
+        for item in self._item_list:
             size = size.expandedTo(item.minimumSize())
 
-        margin, _, _, _ = self.getContentsMargins()
-
-        size += QSize(2 * margin, 2 * margin)
+        size += QSize(2 * self.contentsMargins().top(), 2 * self.contentsMargins().top())
         return size
 
-    def doLayout(self, rect, test_only):
+    def _do_layout(self, rect, test_only):
         x = rect.x()
         y = rect.y()
         line_height = 0
+        spacing = self.spacing()
 
-        for item in self.itemList:
-            wid = item.widget()
-            space_x = self.spacing() + wid.style().layoutSpacing(QSizePolicy.Policy.PushButton, QSizePolicy.Policy.PushButton,
-                                                                 Qt.AlignmentFlag.Horizontal)
-            space_y = self.spacing() + wid.style().layoutSpacing(QSizePolicy.Policy.PushButton, QSizePolicy.Policy.PushButton,
-                                                                 Qt.AlignmentFlag.Vertical)
+        for item in self._item_list:
+            style = item.widget().style()
+            layout_spacing_x = style.layoutSpacing(
+                QSizePolicy.PushButton, QSizePolicy.PushButton, Qt.Horizontal
+            )
+            layout_spacing_y = style.layoutSpacing(
+                QSizePolicy.PushButton, QSizePolicy.PushButton, Qt.Vertical
+            )
+            space_x = spacing + layout_spacing_x
+            space_y = spacing + layout_spacing_y
             next_x = x + item.sizeHint().width() + space_x
             if next_x - space_x > rect.right() and line_height > 0:
                 x = rect.x()
@@ -107,10 +113,8 @@ class FlowLayout(QLayout):
         return y + line_height - rect.y()
 
 
-if __name__ == '__main__':
-    import sys
-
+if __name__ == "__main__":
     app = QApplication(sys.argv)
-    mainWin = Window()
-    mainWin.show()
+    main_win = Window()
+    main_win.show()
     sys.exit(app.exec())

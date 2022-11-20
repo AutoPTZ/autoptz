@@ -1,5 +1,5 @@
 import sys
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from views.homepage.main_window import AutoPTZ_MainWindow
 

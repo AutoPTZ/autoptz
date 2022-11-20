@@ -12,3 +12,4 @@
 /vapix.log
 /logic/facial_tracking/trainer/encodings.pickle
 /libraries/face_recognition/__pycache__
+/views/functions/__pycache__
