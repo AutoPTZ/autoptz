@@ -1,12 +1,12 @@
 import os
 import shutil
-
-from PyQt6 import QtCore, QtWidgets
-from PyQt6.QtWidgets import QDialog
+from PySide6 import QtCore, QtWidgets
+from PySide6.QtWidgets import QDialog
+from shared import constants
 from shared.message_prompts import show_info_messagebox
 
 
-class RemoveFaceUI:
+class RemoveFaceUI(object):
     def __init__(self):
         self.path = None
         self.name_list = None
@@ -32,8 +32,7 @@ class RemoveFaceUI:
         self.name_list.setObjectName("name_list")
 
         # Path for face image database
-        self.path = '../logic/facial_tracking/images/'
-        for folder in os.listdir(self.path):
+        for folder in os.listdir(constants.IMAGE_PATH):
             self.name_list.addItem(folder)
 
         self.verticalLayout.addWidget(self.name_list)
@@ -55,7 +54,7 @@ class RemoveFaceUI:
         QtCore.QMetaObject.connectSlotsByName(remove_face)
 
     def remove_face_prompt(self):
-        selected_face = self.path + self.name_list.currentItem().text()
+        selected_face = constants.IMAGE_PATH + self.name_list.currentItem().text()
         shutil.rmtree(selected_face)
         show_info_messagebox("Face Removed. \nRetraining model,  please wait...")
         self.window.close()

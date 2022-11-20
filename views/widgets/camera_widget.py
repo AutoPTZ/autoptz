@@ -76,7 +76,8 @@ class CameraWidget(QLabel):
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
         self.change_selection_signal.emit(True)
 
-    def draw_on_face(self, frame, face_locations, face_names, confidence_list=None):
+    @staticmethod
+    def draw_on_face(frame, face_locations, face_names, confidence_list=None):
         if face_locations is not None:
             if confidence_list is None:
                 confidence_list = [0]

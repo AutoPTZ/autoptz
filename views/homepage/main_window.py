@@ -10,7 +10,6 @@ import watchdog.observers
 import shared.constants as constants
 from views.functions.show_dialogs_ui import ShowDialog
 from logic.camera_search.search_ndi import get_ndi_sources
-from logic.facial_tracking.dialogs.remove_face import RemoveFaceDlg
 from logic.facial_tracking.dialogs.reset_database import ResetDatabaseDlg
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.move_visca_ptz import ViscaPTZ
@@ -323,11 +322,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.gridLayout.addWidget(self.formTabWidget, 0, 0, 3, 1)
 
         # enabled cameras view
-        # self.shown_cameras = QtWidgets.QWidget()
         self.flowLayout = FlowLayout()
-        # self.flowLayout.setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetNoConstraint)
-        # self.shown_cameras.setLayout(self.flowLayout)
-        # self.shown_cameras.setSizePolicy(size_policy)
         self.gridLayout.addLayout(self.flowLayout, 0, 1, 1, 1)
 
         # handling camera window sizing
@@ -375,13 +370,13 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionAbout.setObjectName("actionAbout")
         self.actionAdd_Face = QtWidgets.QWidgetAction(self)
         self.actionAdd_Face.setObjectName("actionAdd_Face")
-        self.actionAdd_Face.triggered.connect(self.dialogs.add_face)
+        self.actionAdd_Face.triggered.connect(partial(self.dialogs.add_face, self.update_face_selection))
         self.actionTrain_Model = QtWidgets.QWidgetAction(self)
         self.actionTrain_Model.setObjectName("actionTrain_Model")
         self.actionTrain_Model.triggered.connect(self.retrain_face)
         self.actionRemove_Face = QtWidgets.QWidgetAction(self)
         self.actionRemove_Face.setObjectName("actionRemove_Face")
-        self.actionRemove_Face.triggered.connect(self.remove_face)
+        self.actionRemove_Face.triggered.connect(partial(self.dialogs.remove_face, self.update_face_selection))
         self.actionReset_Database = QtWidgets.QWidgetAction(self)
         self.actionReset_Database.setObjectName("actionReset_Database")
         self.actionReset_Database.triggered.connect(self.reset_database)
@@ -585,24 +580,6 @@ class AutoPTZ_MainWindow(QMainWindow):
             show_info_messagebox("No Faces to train.")
         else:
             TrainerDlg().show()
-
-    def remove_face(self):
-        """Launch the Remove Face dialog based on the currently selected camera."""
-        if not os.path.isdir(constants.IMAGE_PATH) or not os.listdir(constants.IMAGE_PATH):
-            show_info_messagebox("No Faces to remove.")
-        else:
-            current_len = len(os.listdir(constants.IMAGE_PATH))
-            print("Opening Face Dialog")
-            dlg = RemoveFaceDlg(self)
-            dlg.closeEvent = self.update_face_selection
-            dlg.exec()
-            if not os.listdir(constants.IMAGE_PATH):
-                if os.path.exists(constants.IMAGE_PATH):
-                    shutil.rmtree(constants.IMAGE_PATH)
-                if os.path.exists(constants.ENCODINGS_PATH):
-                    os.remove(constants.ENCODINGS_PATH)
-            elif current_len is not len(os.listdir(constants.IMAGE_PATH)):
-                TrainerDlg().show()
 
     def reset_database(self):
         """Launch the Remove Face dialog based on the currently selected camera."""

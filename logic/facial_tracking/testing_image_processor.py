@@ -41,13 +41,15 @@ class ImageProcessor:
                                                         minSize=(int(min_w), int(min_h)))
         self.face_locations = []
         self.face_names = []
+        self.confidence_list = []
         for x, y, w, h in faces:
             self.count = self.count + 1
-            name = constants.IMAGE_PATH + self.add_name + '/' + str(self.count) + '.jpg'
-            print("\n [INFO] Creating Images........." + name)
-            cv2.imwrite(name, frame)
+            location = constants.IMAGE_PATH + self.add_name + '/' + str(self.count) + '.jpg'
+            print("\n [INFO] Creating Images at " + location)
+            cv2.imwrite(location, frame)
             self.face_names.append(self.add_name)
             self.face_locations = [(int(x / 2), int(y / 2), int((x + w) / 2), int((y + h) / 2))]
+            self.confidence_list.append(0)
 
         if self.count >= 10:  # Take 50 face sample and stop video
             self.add_name = None
