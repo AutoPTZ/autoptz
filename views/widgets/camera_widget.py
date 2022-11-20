@@ -93,7 +93,7 @@ class CameraWidget(QLabel):
 
                 # Draw a label with name and confidence for the face
                 cv2.putText(frame, name, (top_left + 5, bottom_left - 5), constants.FONT, 1, (255, 255, 255), 1)
-                # cv2.putText(frame, confidence, (right - 52, bottom - 5), self.font, 0.45, (255, 255, 0), 1)
+                cv2.putText(frame, confidence, (right - 52, bottom - 5), self.font, 0.45, (255, 255, 0), 1)
 
         return frame
 
@@ -105,10 +105,10 @@ class CameraWidget(QLabel):
     """
              OpenCV VideoThread -> sent for processing (which easily uses OpenCV frame)
 
-             QT uses QPixmaps, so we need to convert OpenCV frame to QPixmap
+             QT uses QPixmap, so we need to convert OpenCV frame to QPixmap
 
              FrameProcess == Facial Recognition, Tracking, etc
-             VideoThread == Turns on Camera and constantly gets frams
+             VideoThread == Turns on Camera and constantly gets frames
              CameraWidget == Shows the frames on QT to the user
 
              VideoThread -> FrameProcess (sends back, boxes + names)

@@ -28,9 +28,9 @@ class VideoThread(QThread):
             if self.ret:
                 # FPS Counter
                 self.fc += 1
-                TIME = time.time() - self.start_time
-                if TIME >= self.display_time:
-                    self.FPS = self.fc / TIME
+                time_set = time.time() - self.start_time
+                if time_set >= self.display_time:
+                    self.FPS = self.fc / time_set
                     self.fc = 0
                     self.start_time = time.time()
                 fps = "FPS: " + str(self.FPS)[:5]

@@ -57,7 +57,7 @@ class AssignNetworkPTZIU(object):
 
     def assign_net_ptz_prompt(self):
         try:
-            ip_address = re.findall(r'(?:\d{1,3}\.)+(?:\d{1,3})', self.camera.objectName())
+            ip_address = re.findall(r'(?:\d{1,3}\.)+\d{1,3}', self.camera.objectName())
             camera_control = onvif_control.CameraControl(ip_address[0], self.username_line.text().strip(),
                                                          self.password_line.text().strip())
             camera_control.camera_start()
@@ -65,7 +65,8 @@ class AssignNetworkPTZIU(object):
             self.camera.image_processor_thread.set_ptz_controller(control=camera_control)
             self.camera.image_processor_thread.set_ptz_ready("ready")
             self.window.close()
-        except:
+        except Exception as e:
+            print(e)
             show_critical_messagebox(window_title="ONVIF Camera Control",
                                      critical_message="Username or password is incorrect.\nPlease check if ONVIF "
                                                       "is enabled in your camera settings.")

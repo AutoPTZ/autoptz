@@ -1,6 +1,5 @@
 import os
 from functools import partial
-import shutil
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtMultimedia import QMediaDevices
 from PySide6.QtWidgets import QMainWindow
@@ -8,10 +7,10 @@ from PySide6.QtWidgets import QMainWindow
 import watchdog.events
 import watchdog.observers
 import shared.constants as constants
-from views.functions.show_dialogs_ui import ShowDialog
 from logic.camera_search.search_ndi import get_ndi_sources
 from logic.facial_tracking.move_visca_ptz import ViscaPTZ
 from logic.camera_search.get_serial_cameras import COMPorts
+from views.functions.show_dialogs_ui import ShowDialog
 from views.functions.assign_network_ptz_ui import AssignNetworkPTZDlg
 from views.functions.assign_visca_ptz_ui import AssignViscaPTZDlg
 from views.homepage.flow_layout import FlowLayout
@@ -25,7 +24,6 @@ class AutoPTZ_MainWindow(QMainWindow):
         # setting up the UI and QT Threading
         super(AutoPTZ_MainWindow, self).__init__(*args, **kwargs)
         self.threadpool = QtCore.QThreadPool()
-        # self.threadpool.setMaxThreadCount(1)
         self.threadpool.maxThreadCount()
 
         # setting up main window
@@ -518,7 +516,8 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.unassign_visca_ptz_btn.show()
             else:
                 self.assign_visca_ptz_btn.show()
-        except:
+        except Exception as e:
+            print(e)
             self.assign_visca_ptz_btn.hide()
             self.unassign_visca_ptz_btn.hide()
 
@@ -587,132 +586,6 @@ class AutoPTZ_MainWindow(QMainWindow):
         else:
             self.assign_network_ptz_btn.show()
             self.unassign_network_ptz_btn.hide()
-
-    # def selected_face_change(self):
-    #     if self.current_selected_source is not None:
-    #         if self.select_face_dropdown.currentText() == '':
-    #             self.current_selected_source.image_processor.set_face(None)
-    #             self.enable_track.setEnabled(False)
-    #             self.enable_track.setChecked(False)
-    #         else:
-    #             self.current_selected_source.image_processor.set_face(self.select_face_dropdown.currentText())
-    #             self.enable_track.setEnabled(True)
-    #     else:
-    #         self.enable_track.setEnabled(False)
-    #         self.enable_track.setChecked(False)
-
-    # def config_enable_track(self):
-    #     if self.current_selected_source is not None and self.current_selected_source.image_processor.is_track_enabled() and self.enable_track.isChecked():
-    #         pass
-    #     else:
-    #         try:
-    #             self.current_selected_source.image_processor.config_enable_track()
-    #             self.enable_track.setChecked(self.current_selected_source.image_processor.is_track_enabled())
-    #         except:
-    #             self.enable_track.setChecked(False)
-
-    # def addCamera(self, source, ndi_source, menu_item):
-    #     """Add NDI/Serial camera source from the menu to the camera grid"""
-    #     camera_widget = QtWidgets.QWidget()
-    #
-    #     if source == -1:
-    #         # Make NDI Camera Widget
-    #         camera = NDICameraWidget(self.screen_width // 3, self.screen_height // 3, ndi_source=ndi_source,
-    #                                  aspect_ratio=True)
-    #         camera.setObjectName('NDI Camera: ' + ndi_source.ndi_name)
-    #         camera_widget.setObjectName('NDI Camera: ' + ndi_source.ndi_name)
-    #         menu_item.disconnect()
-    #         menu_item.triggered.connect(
-    #             lambda: self.deleteCameraSource(source=-1, ndi_source=ndi_source, menu_item=menu_item, camera=camera,
-    #                                             camera_widget=camera_widget))
-    #     else:
-    #         # Make Serial Camera Widget
-    #         camera = CameraWidget(self.screen_width // 3, self.screen_height // 3, source, aspect_ratio=True)
-    #         camera.setObjectName('Camera: ' + str(source + 1))
-    #         camera_widget.setObjectName('Camera ' + str(source + 1))
-    #         menu_item.disconnect()
-    #         menu_item.triggered.connect(
-    #             lambda: self.deleteCameraSource(source=source, menu_item=menu_item,
-    #                                             ndi_source=None, camera=camera, camera_widget=camera_widget))
-    #         self.serial_widget_list.append(camera)
-    #
-    #     # create internal grid layout for camera
-    #     camera_grid_layout = QtWidgets.QGridLayout()
-    #     camera_grid_layout.setObjectName('Camera Grid: ' + str(camera))
-    #
-    #     camera_grid_layout.addWidget(camera.get_video_frame(), 0, 0, 1, 1)
-    #     camera_widget.setLayout(camera_grid_layout)
-    #
-    #     select_cam_btn = QtWidgets.QPushButton("Select Camera")
-    #     select_cam_btn.clicked.connect(lambda: self.selectCameraSource(camera=camera, select_cam_btn=select_cam_btn,
-    #                                                                    unselect_cam_btn=unselect_cam_btn))
-    #     unselect_cam_btn = QtWidgets.QPushButton("Unselect Camera")
-    #     unselect_cam_btn.clicked.connect(
-    #         lambda: self.unselectCameraSource(select_cam_btn=select_cam_btn, unselect_cam_btn=unselect_cam_btn))
-    #     camera_grid_layout.addWidget(select_cam_btn, 1, 0, 1, 1)
-    #     camera_grid_layout.addWidget(unselect_cam_btn, 2, 0, 1, 1)
-    #     unselect_cam_btn.hide()
-    #
-    #     self.flowLayout.addWidget(camera_widget)
-    #     self.watch_trainer.add_camera(camera=camera)
-    #
-    # def selectCameraSource(self, camera, select_cam_btn, unselect_cam_btn):
-    #     self.current_selected_source = camera
-    #
-    #     if self.current_selected_source.image_processor.get_ptz_ready() == "ready":
-    #         self.assign_network_ptz_btn.hide()
-    #         self.unassign_network_ptz_btn.show()
-    #     elif self.current_selected_source.image_processor.get_ptz_ready() == "not ready":
-    #         self.assign_network_ptz_btn.show()
-    #         self.unassign_network_ptz_btn.hide()
-    #     else:
-    #         self.assign_network_ptz_btn.hide()
-    #         self.unassign_network_ptz_btn.hide()
-    #
-    #     select_cam_btn.hide()
-    #     unselect_cam_btn.show()
-    #
-    #     self.select_face_dropdown.setEnabled(True)
-    #     # Path for face image database
-    #
-    #     if self.current_selected_source.image_processor.get_face() is None:
-    #         self.select_face_dropdown.setCurrentText('')
-    #         self.enable_track.setEnabled(False)
-    #     else:
-    #         self.select_face_dropdown.setCurrentText(self.current_selected_source.image_processor.get_face())
-    #         self.enable_track.setEnabled(True)
-    #
-    #     if self.current_selected_source.image_processor.is_track_enabled():
-    #         self.enable_track.setChecked(True)
-    #     else:
-    #         self.enable_track.setChecked(False)
-
-    # def unselectCameraSource(self, select_cam_btn, unselect_cam_btn):
-    #     self.current_selected_source = None
-    #     self.select_face_dropdown.setCurrentText('')
-    #     self.select_face_dropdown.setEnabled(False)
-    #     self.enable_track.setChecked(False)
-    #     self.enable_track.setEnabled(False)
-    #     self.assign_network_ptz_btn.hide()
-    #     self.unassign_network_ptz_btn.hide()
-    #     unselect_cam_btn.hide()
-    #     select_cam_btn.show()
-    #
-    # def deleteCameraSource(self, source, ndi_source, menu_item, camera, camera_widget):
-    #     """Remove NDI/Serial camera source from camera grid"""
-    #     menu_item.disconnect()
-    #     if source == -1:
-    #         # Remove NDI source widget
-    #         menu_item.triggered.connect(lambda: self.addCamera(source=-1, ndi_source=ndi_source, menu_item=menu_item))
-    #     else:
-    #         # Remove Serial source widget
-    #         menu_item.triggered.connect(lambda: self.addCamera(source=source, ndi_source=None, menu_item=menu_item))
-    #         self.serial_widget_list.remove(camera)
-    #
-    #     self.watch_trainer.remove_camera(camera=camera)
-    #     camera.close()
-    #     camera_widget.close()
-    #     self.flowLayout.removeWidget(camera_widget)
 
     def translateUi(self, AutoPTZ):
         """Translate Menu, Buttons, and Labels through localization"""

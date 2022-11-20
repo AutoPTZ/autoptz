@@ -10,7 +10,6 @@ from PySide6.QtWidgets import QDialog
 
 class TrainerUI(object):
     def __init__(self):
-        self.percent_for_bar = None
         self.training_progress_bar_title = None
         self.verticalLayout = None
         self.window = None
@@ -24,7 +23,6 @@ class TrainerUI(object):
 
     def setCurrentVal(self, value):
         self.progress_bar_line.setValue(value)
-        self.percent_for_bar.setText(str(int(value/self.progress_bar_line.maximum() * 100)) + "%")
         if value == self.progress_bar_line.maximum():
             self.window.close()
 
@@ -45,22 +43,30 @@ class TrainerUI(object):
         self.trainer_thread.CURRENT_VALUE_SIGNAL.connect(self.setCurrentVal)
         self.trainer_thread.CURRENT_TEXT_SIGNAL.connect(self.setCurrentTitle)
 
-        self.horizontalLayout = QtWidgets.QHBoxLayout()
-        self.horizontalLayout.setObjectName("horizontalLayout")
         self.progress_bar_line = QtWidgets.QProgressBar(training_progress_bar)
         self.progress_bar_line.setObjectName("progress_bar_line")
-        self.horizontalLayout.addWidget(self.progress_bar_line)
+        self.progress_bar_line.setStyleSheet(
+            '''
+            QProgressBar {
+                text-align: center;
+                border: 2px solid grey;
+                border-radius: 5px;
+            }
 
-        self.percent_for_bar = QtWidgets.QLabel(training_progress_bar)
-        self.percent_for_bar.setText('0%  ')
-        self.horizontalLayout.addWidget(self.percent_for_bar)
-        self.verticalLayout.addLayout(self.horizontalLayout)
+            QProgressBar::chunk {
+                background-color: #05B8CC;
+                width: 20px;
+            }
+            '''
+        )
+        self.verticalLayout.addWidget(self.progress_bar_line)
 
         self.translate_ui(training_progress_bar)
         QtCore.QMetaObject.connectSlotsByName(training_progress_bar)
         self.trainer_thread.start()
 
-    def translate_ui(self, training_progress_bar):
+    @staticmethod
+    def translate_ui(training_progress_bar):
         _translate = QtCore.QCoreApplication.translate
         training_progress_bar.setWindowTitle(_translate("training_progress_bar", "Training Model"))
 
@@ -72,47 +78,47 @@ class TrainerThread(QtCore.QThread):
     DONE_SIGNAL = QtCore.Signal(bool)
     face_recognition = face_recognition.FaceRec()
 
+    def __init__(self):
+        super(TrainerThread, self).__init__()
+
+    def __del__(self):
+        self.wait()
+
     def run(self):
         print("\n [INFO] Training faces. It will take a few minutes. Please Wait ...")
         # Image path for face image database
-
-        imagePaths = list(paths.list_images(constants.IMAGE_PATH))
-        knownEncodings = []
-        knownNames = []
-        self.MAX_VALUE_SIGNAL.emit(len(imagePaths))
-        QtCore.QCoreApplication.processEvents()
+        image_paths = list(paths.list_images(constants.IMAGE_PATH))
+        known_encodings = []
+        known_names = []
+        self.MAX_VALUE_SIGNAL.emit(len(image_paths))
         self.CURRENT_VALUE_SIGNAL.emit(0)
-        QtCore.QCoreApplication.processEvents()
         if os.listdir(constants.IMAGE_PATH):
             # loop over the image paths
-            for (i, imagePath) in enumerate(imagePaths):
+            for (i, imagePath) in enumerate(image_paths):
                 # extract the person name from the image path
-                print(f"Processing {i + 1} of {len(imagePaths)}")
-                self.CURRENT_TEXT_SIGNAL.emit(f"Processing {i + 1} of {len(imagePaths)}")
-                QtCore.QCoreApplication.processEvents()
+                print(f"Processing {i + 1} of {len(image_paths)}")
+                self.CURRENT_TEXT_SIGNAL.emit(f"Processing {i + 1} of {len(image_paths)}")
                 self.CURRENT_VALUE_SIGNAL.emit(i + 1)
-                QtCore.QCoreApplication.processEvents()
                 name = imagePath.split(os.path.sep)[-2]
                 image = cv2.imread(imagePath)
                 rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                boxes = self.face_recognition.face_locations(rgb, model='cnn')
+                boxes = self.face_recognition.face_locations(rgb)
                 encodings = self.face_recognition.face_encodings(rgb, boxes)
                 for encoding in encodings:
-                    knownEncodings.append(encoding)
-                    knownNames.append(name)
+                    known_encodings.append(encoding)
+                    known_names.append(name)
             print("Saving encodings to encodings.pickle ...")
-            data = {"encodings": knownEncodings, "names": knownNames}
+            data = {"encodings": known_encodings, "names": known_names}
             f = open(constants.ENCODINGS_PATH, "wb")
             f.write(pickle.dumps(data))
             f.close()
             print("Encodings have been saved successfully.")
             self.DONE_SIGNAL.emit(True)
-            QtCore.QCoreApplication.processEvents()
         else:
             print("No images to train.")
             if os.path.exists(constants.ENCODINGS_PATH):
                 os.remove(constants.ENCODINGS_PATH)
-        print("\n [INFO] {0} faces trained.".format(len(knownNames)))
+        print("\n [INFO] {0} faces trained.".format(len(known_names)))
 
 
 class TrainerDlg(QDialog):
