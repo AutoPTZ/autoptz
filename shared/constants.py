@@ -20,3 +20,4 @@ CAMERA_STYLESHEET = """
                         border: 2.5px solid dodgerblue;
                         border-radius: 3px;}
                     """
+CURRENT_ACTIVE_CAM_WIDGET = None

@@ -3,7 +3,7 @@ import cv2
 from PyQt6 import QtCore
 import dlib
 import shared.constants as constants
-from logic.facial_tracking.track_handler import TrackHandler
+from logic.facial_tracking.old_track_handler import TrackHandler
 
 
 class ImageProcessor(QtCore.QObject):
@@ -76,9 +76,9 @@ class ImageProcessor(QtCore.QObject):
         else:
             return frame
 
-    def draw_recognized_face(self, frame, face_locations, face_names, confidence_list):
+    def draw_on_face(self, frame, face_locations, face_names, confidence_list):
         for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
-            # Scale back up face locations since the frame we detected in was scaled to 1/4 size
+            # Scale back up face locations since the frame we detected in was scaled to 1/2 size
             top *= 2
             right *= 2
             bottom *= 2
@@ -91,12 +91,6 @@ class ImageProcessor(QtCore.QObject):
             cv2.putText(frame, name, (left + 5, top - 5), self.font, 0.5, (255, 255, 255), 1)
             cv2.putText(frame, confidence, (right - 52, bottom - 5), self.font, 0.45, (255, 255, 0), 1)
 
-            if self.tracked_name == name:
-                self.name_id = name
-                self.track_x = left
-                self.track_y = top
-                self.track_w = right
-                self.track_h = bottom
         return frame
 
     def track_face(self, frame, x, y, w, h):

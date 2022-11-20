@@ -7,7 +7,7 @@ import imutils
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
-from logic.facial_tracking.image_processor import ImageProcessor
+from logic.facial_tracking.old_image_processor import ImageProcessor
 
 
 def start_trainer():

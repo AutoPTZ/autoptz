@@ -453,6 +453,7 @@ class AutoPTZ_MainWindow(QMainWindow):
     def addCamera(self, source, menu_item, isNDI=False):
         """Add NDI/Serial camera source from the menu to the FlowLayout"""
         camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3)
+        camera_widget.change_selection_signal.connect(self.updateElements)
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
             lambda index=source, item=menu_item: self.deleteCameraSource(source=index, menu_item=item, camera_widget=camera_widget))
@@ -467,6 +468,26 @@ class AutoPTZ_MainWindow(QMainWindow):
         camera_widget.stop()
         camera_widget.deleteLater()
         # self.watch_trainer.remove_camera(camera=camera)
+
+    def updateElements(self):
+        if constants.CURRENT_ACTIVE_CAM_WIDGET is None:
+            print(f"No Camera Source is active")
+            self.select_face_dropdown.setEnabled(False)
+            self.select_face_dropdown.setCurrentText('')
+        else:
+            print(f"{constants.CURRENT_ACTIVE_CAM_WIDGET.objectName()} is active")
+            self.select_face_dropdown.setEnabled(True)
+        # if self.current_selected_source.image_processor.get_face() is None:
+        #     self.select_face_dropdown.setCurrentText('')
+        #     self.enable_track.setEnabled(False)
+        # else:
+        #     self.select_face_dropdown.setCurrentText(self.current_selected_source.image_processor.get_face())
+        #     self.enable_track.setEnabled(True)
+        #
+        # if self.current_selected_source.image_processor.is_track_enabled():
+        #     self.enable_track.setChecked(True)
+        # else:
+        #     self.enable_track.setChecked(False)
 
     def init_manual_control(self, device):
         """Initializing manual camera control. ONLY VISCA devices for now."""
@@ -719,7 +740,7 @@ class AutoPTZ_MainWindow(QMainWindow):
     #         self.enable_track.setChecked(True)
     #     else:
     #         self.enable_track.setChecked(False)
-    #
+
     # def unselectCameraSource(self, select_cam_btn, unselect_cam_btn):
     #     self.current_selected_source = None
     #     self.select_face_dropdown.setCurrentText('')
