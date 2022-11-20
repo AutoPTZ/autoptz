@@ -5,17 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/logic/facial_tracking/old_image_processor.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/views/functions/show_dialogs_ui.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/track_handler.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/old_track_handler.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/shared/constants.py" beforeDir="false" afterPath="$PROJECT_DIR$/shared/constants.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/shared/current_active_camera.py" beforeDir="false" afterPath="$PROJECT_DIR$/shared/current_active_camera.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.vscode/settings.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/add_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/add_face.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/testing_image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/testing_image_processor.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/views/homepage/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/homepage/main_window.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/views/test/test_webcam_thread.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/test/test_webcam_thread.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/views/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/widgets/camera_widget.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/views/widgets/ndi_cam_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/widgets/ndi_cam_widget.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/views/widgets/old_camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/widgets/old_camera_widget.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

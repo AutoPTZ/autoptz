@@ -8,9 +8,8 @@ from PySide6.QtWidgets import QMainWindow
 import watchdog.events
 import watchdog.observers
 import shared.constants as constants
+from views.functions.show_dialogs_ui import ShowDialog
 from logic.camera_search.search_ndi import get_ndi_sources
-
-from logic.facial_tracking.dialogs.add_face import AddFaceDlg
 from logic.facial_tracking.dialogs.remove_face import RemoveFaceDlg
 from logic.facial_tracking.dialogs.reset_database import ResetDatabaseDlg
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
@@ -332,13 +331,11 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.gridLayout.addLayout(self.flowLayout, 0, 1, 1, 1)
 
         # handling camera window sizing
-        # self.screen_width = QtWidgets.QApplication.desktop().screenGeometry().width()
-        # self.screen_height = QtWidgets.QApplication.desktop().screenGeometry().height()
         self.screen_width = self.screen().availableGeometry().width()
         self.screen_height = self.screen().availableGeometry().height()
-        # self.screen_width = self.screen_width()
 
-        # self.screen_height
+        # Create Dialog Object
+        self.dialogs = ShowDialog()
 
         # Top Menu
         self.menubar = QtWidgets.QMenuBar(self)
@@ -378,7 +375,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionAbout.setObjectName("actionAbout")
         self.actionAdd_Face = QtWidgets.QWidgetAction(self)
         self.actionAdd_Face.setObjectName("actionAdd_Face")
-        self.actionAdd_Face.triggered.connect(self.add_face)
+        self.actionAdd_Face.triggered.connect(self.dialogs.add_face)
         self.actionTrain_Model = QtWidgets.QWidgetAction(self)
         self.actionTrain_Model.setObjectName("actionTrain_Model")
         self.actionTrain_Model.triggered.connect(self.retrain_face)
@@ -571,16 +568,6 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.current_selected_source.image_processor.set_ptz_ready("not ready")
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.show()
-
-    def add_face(self):
-        """Launch the Add Face dialog based on the currently selected camera."""
-        if self.flowLayout.count() == 0 or self.current_selected_source is None:
-            show_info_messagebox("Please add and select a camera.")
-        else:
-            print("Opening Face Dialog")
-            dlg = AddFaceDlg(self, camera=self.current_selected_source)
-            dlg.closeEvent = self.update_face_selection
-            dlg.exec()
 
     def update_face_selection(self, event):
         current_text_temp = self.select_face_dropdown.currentText()

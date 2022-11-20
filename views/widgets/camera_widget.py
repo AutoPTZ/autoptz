@@ -6,6 +6,7 @@ from PySide6.QtCore import Signal
 import cv2
 
 import shared.constants as constants
+from logic.facial_tracking.testing_image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
 
 
@@ -23,20 +24,27 @@ class CameraWidget(QLabel):
         self.setStyleSheet(constants.CAMERA_STYLESHEET)
         self.setText(f"Camera Source: {source}")
         self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(event, widget)
-        # create the video capture thread
-        self.thread = VideoThread(src=source)
-        # connect its signal to the update_image slot
-        self.thread.change_pixmap_signal.connect(self.update_image)
-        # start the thread
-        self.thread.start()
 
+        # Create Video Capture Thread
+        self.stream_thread = VideoThread(src=source)
+        # Connect it's Signal to the update_image Slot Method
+        self.stream_thread.change_pixmap_signal.connect(self.update_image)
+        # Start the Thread
+        self.stream_thread.start()
+
+        # Create and Run Image Processor Thread
+        self.processor_thread = ImageProcessor(stream_thread=self.stream_thread).start()
 
     def stop(self):
-        self.thread.stop()
+        self.stream_thread.stop()
         self.deleteLater()
 
+    def set_add_name(self, name):
+        self.processor_thread.add_name = name
+
     def update_image(self, cv_img):
-        """Updates the image_label with a new opencv image"""
+        """Updates the image_label with a new opencv image and draws on latest frame if processing is completed"""
+        cv_img = self.draw_on_face(frame=cv_img, face_locations=self.processor_thread.face_locations, face_names=self.processor_thread.face_names, confidence_list=self.processor_thread.confidence_list)
         qt_img = self.convert_cv_qt(cv_img)
         self.setPixmap(qt_img)
 
@@ -45,8 +53,8 @@ class CameraWidget(QLabel):
         rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
-        convert_to_Qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
-        p = convert_to_Qt_format.scaled(self.width, self.height, Qt.AspectRatioMode.KeepAspectRatio)
+        convert_to_qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+        p = convert_to_qt_format.scaled(self.width, self.height, Qt.AspectRatioMode.KeepAspectRatio)
         return QPixmap.fromImage(p)
 
     def clicked_widget(self, event, widget):
@@ -68,28 +76,29 @@ class CameraWidget(QLabel):
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
         self.change_selection_signal.emit(True)
 
-    def draw_recognized_face(self, frame, face_locations, face_names, confidence_list=None):
+    def draw_on_face(self, frame, face_locations, face_names, confidence_list=None):
+        if face_locations is not None:
+            if confidence_list is None:
+                confidence_list = [0]
+            for (top_left, bottom_left, top_right, bottom_right), name in zip(face_locations, face_names):
+                # Scale back up face locations since the frame we detected in was scaled to 1/4 size
+                top_left *= 2
+                bottom_left *= 2
+                top_right *= 2
+                bottom_right *= 2
 
-        if confidence_list is None:
-            confidence_list = [0]
-        for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
-            # Scale back up face locations since the frame we detected in was scaled to 1/4 size
-            top *= 2
-            right *= 2
-            bottom *= 2
-            left *= 2
+                # Draw a box around the face
+                cv2.rectangle(frame, (top_left, bottom_left), (top_right, bottom_right), (0, 255, 0), 3)
 
-            # Draw a box around the face
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-
-            # Draw a label with name and confidence for the face
-            cv2.putText(frame, name, (left + 5, top - 5), self.font, 0.5, (255, 255, 255), 1)
-            cv2.putText(frame, confidence, (right - 52, bottom - 5), self.font, 0.45, (255, 255, 0), 1)
+                # Draw a label with name and confidence for the face
+                cv2.putText(frame, name, (top_left + 5, bottom_left - 5), constants.FONT, 1, (255, 255, 255), 1)
+                # cv2.putText(frame, confidence, (right - 52, bottom - 5), self.font, 0.45, (255, 255, 0), 1)
 
         return frame
 
     def closeEvent(self, event):
-        self.thread.stop()
+        self.processor_thread.stop()
+        self.stream_thread.stop()
         event.accept()
 
     """
