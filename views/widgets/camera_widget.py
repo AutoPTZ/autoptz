@@ -29,11 +29,13 @@ class CameraWidget(QLabel):
         self.stream_thread = VideoThread(src=source)
         # Connect it's Signal to the update_image Slot Method
         self.stream_thread.change_pixmap_signal.connect(self.update_image)
-        # Start the Thread
-        self.stream_thread.start()
 
         # Create and Run Image Processor Thread
-        self.processor_thread = ImageProcessor(stream_thread=self.stream_thread).start()
+        self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)
+        self.processor_thread.start()
+
+        # Start the Thread
+        self.stream_thread.start()
 
     def stop(self):
         self.stream_thread.stop()
@@ -77,23 +79,19 @@ class CameraWidget(QLabel):
         self.change_selection_signal.emit(True)
 
     @staticmethod
-    def draw_on_face(frame, face_locations, face_names, confidence_list=None):
+    def draw_on_face(frame, face_locations, face_names, confidence_list):
         if face_locations is not None:
-            if confidence_list is None:
-                confidence_list = [0]
-            for (top_left, bottom_left, top_right, bottom_right), name in zip(face_locations, face_names):
-                # Scale back up face locations since the frame we detected in was scaled to 1/4 size
-                top_left *= 2
-                bottom_left *= 2
-                top_right *= 2
-                bottom_right *= 2
-
+            for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
+                # Scale back up face locations since the frame we detected in was scaled to 1/2 size
+                top *= 2
+                right *= 2
+                bottom *= 2
+                left *= 2
                 # Draw a box around the face
-                cv2.rectangle(frame, (top_left, bottom_left), (top_right, bottom_right), (0, 255, 0), 3)
-
+                cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
                 # Draw a label with name and confidence for the face
-                cv2.putText(frame, name, (top_left + 5, bottom_left - 5), constants.FONT, 1, (255, 255, 255), 1)
-                cv2.putText(frame, confidence, (right - 52, bottom - 5), self.font, 0.45, (255, 255, 0), 1)
+                cv2.putText(frame, name, (left + 5, top - 5), constants.FONT, 0.5, (255, 255, 255), 1)
+                cv2.putText(frame, confidence, (right - 52, bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
 
         return frame
 

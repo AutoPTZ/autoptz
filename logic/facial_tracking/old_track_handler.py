@@ -69,6 +69,9 @@ class TrackHandler:
 
             # Find all the faces and face encodings in the current frame of video
             self.face_locations = self.face_rec.face_locations(rgb_small_frame)
+            top, right, bottom, left = self.face_locations
+            self.face_locations = (left, top, bottom, right)
+
             self.face_encodings = self.face_rec.face_encodings(rgb_small_frame, self.face_locations)
 
             self.face_names = []
