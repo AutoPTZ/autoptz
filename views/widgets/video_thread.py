@@ -3,6 +3,7 @@ import cv2
 from PySide6.QtCore import QThread, Signal
 import shared.constants as constants
 import numpy as np
+import imutils
 
 
 # test using QThread since frames will eventually be sent to QT
@@ -10,22 +11,26 @@ import numpy as np
 
 class VideoThread(QThread):
     change_pixmap_signal = Signal(np.ndarray)
+
+    # FPS for Performance
     start_time = time.time()
     display_time = 2
     fc = 0
     FPS = 0
 
-    def __init__(self, src):
+    def __init__(self, src, width):
         super().__init__()
         self._run_flag = True
         self.cap = cv2.VideoCapture(src)
+        self.width = width
+        # self.cv_img = None
         (self.ret, self.cv_img) = self.cap.read()
 
     def run(self):
         while self._run_flag:
             (self.ret, self.cv_img) = self.cap.read()
-
             if self.ret:
+                # self.cv_img = imutils.resize(cv_img, width=self.width)
                 # FPS Counter
                 self.fc += 1
                 time_set = time.time() - self.start_time

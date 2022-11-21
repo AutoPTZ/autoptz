@@ -443,17 +443,17 @@ class AutoPTZ_MainWindow(QMainWindow):
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
             lambda index=source, item=menu_item: self.deleteCameraSource(source=index, menu_item=item, camera_widget=camera_widget))
+        self.watch_trainer.add_camera(camera_widget=camera_widget)
         self.flowLayout.addWidget(camera_widget)
-        # self.watch_trainer.add_camera(camera=camera_widget)
 
     def deleteCameraSource(self, source, menu_item, camera_widget):
         """Remove NDI/Serial camera source from camera FlowLayout"""
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
             lambda index=source, item=menu_item: self.addCamera(source=index, menu_item=item))
+        self.watch_trainer.remove_camera(camera_widget=camera_widget)
         camera_widget.stop()
         camera_widget.deleteLater()
-        # self.watch_trainer.remove_camera(camera=camera)
 
     def updateElements(self):
         if constants.CURRENT_ACTIVE_CAM_WIDGET is None:

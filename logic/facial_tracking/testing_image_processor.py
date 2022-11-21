@@ -6,16 +6,15 @@ import pickle
 import math
 import numpy as np
 import time
+import imutils
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
 import libraries.face_recognition as face_rec
 
 
 class ImageProcessor:
-    def __init__(self, stream_thread, width=None, height=None):
+    def __init__(self, stream_thread):
         super().__init__()
         self.stream = stream_thread
-        self.width = width
-        self.height = height
         self._run_flag = True
 
         # CameraWidget will access these three variables
@@ -31,8 +30,8 @@ class ImageProcessor:
         self.encoding_data = None
 
     def start(self):
-        Thread(target=self.process, args=()).start()
         self.check_encodings()
+        Thread(target=self.process, args=()).start()
         return self
 
     def process(self):
@@ -83,31 +82,32 @@ class ImageProcessor:
             return str(round(value, 2)) + '%'
 
     def recognize_face(self, frame):
-        # Resize frame of video to 1/2 size for faster face recognition processing
-        small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+        if frame is not None:
+            # Resize frame of video to 1/2 size for faster face recognition processing
+            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
 
-        # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
-        rgb_small_frame = small_frame[:, :, ::-1]
+            # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
+            rgb_small_frame = small_frame[:, :, ::-1]
 
-        # Find all the faces and face encodings in the current frame of video
-        self.face_locations = self.face_rec.face_locations(rgb_small_frame)
-        face_encodings = self.face_rec.face_encodings(rgb_small_frame, self.face_locations)
+            # Find all the faces and face encodings in the current frame of video
+            self.face_locations = self.face_rec.face_locations(rgb_small_frame)
+            face_encodings = self.face_rec.face_encodings(rgb_small_frame, self.face_locations)
 
-        self.face_names = []
-        self.confidence_list = []
-        for face_encoding in face_encodings:
-            # See if the face is a match for the known face(s)
-            matches = self.face_rec.compare_faces(self.encoding_data['encodings'], face_encoding)
-            name = "Unknown"
-            confidence = ''
-            # Or instead, use the known face with the smallest distance to the new face
-            face_distances = self.face_rec.face_distance(self.encoding_data['encodings'], face_encoding)
-            best_match_index = np.argmin(face_distances)
-            if matches[best_match_index]:
-                name = self.encoding_data['names'][best_match_index]
-                confidence = self.face_confidence(face_distances[best_match_index], 0.6)
-            self.face_names.append(name)
-            self.confidence_list.append(confidence)
+            self.face_names = []
+            self.confidence_list = []
+            for face_encoding in face_encodings:
+                # See if the face is a match for the known face(s)
+                matches = self.face_rec.compare_faces(self.encoding_data['encodings'], face_encoding)
+                name = "Unknown"
+                confidence = ''
+                # Or instead, use the known face with the smallest distance to the new face
+                face_distances = self.face_rec.face_distance(self.encoding_data['encodings'], face_encoding)
+                best_match_index = np.argmin(face_distances)
+                if matches[best_match_index]:
+                    name = self.encoding_data['names'][best_match_index]
+                    confidence = self.face_confidence(face_distances[best_match_index], 0.6)
+                self.face_names.append(name)
+                self.confidence_list.append(confidence)
 
     def check_encodings(self):
         self.encoding_data = None

@@ -24,7 +24,6 @@ class ShowDialog:
             dlg = AddFaceDlg(camera=constants.CURRENT_ACTIVE_CAM_WIDGET)
             dlg.closeEvent = update_face_selection
             dlg.show()
-            # dlg.exec()
 
     @staticmethod
     def remove_face(update_face_selection):
@@ -37,7 +36,6 @@ class ShowDialog:
             dlg = RemoveFaceDlg()
             dlg.closeEvent = update_face_selection
             dlg.show()
-            # dlg.exec()
             if not os.listdir(constants.IMAGE_PATH):
                 if os.path.exists(constants.IMAGE_PATH):
                     shutil.rmtree(constants.IMAGE_PATH)
@@ -46,7 +44,6 @@ class ShowDialog:
             elif current_len is not len(os.listdir(constants.IMAGE_PATH)):
                 dlg = TrainerDlg()
                 dlg.show()
-                # dlg.exec()
 
     @staticmethod
     def retrain_face():
@@ -55,7 +52,6 @@ class ShowDialog:
         else:
             dlg = TrainerDlg()
             dlg.show()
-            # dlg.exec()
 
     @staticmethod
     def reset_database(update_face_selection):

@@ -4,7 +4,8 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Qt
 from PySide6.QtCore import Signal
 import cv2
-
+import time
+import imutils
 import shared.constants as constants
 from logic.facial_tracking.testing_image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
@@ -19,14 +20,14 @@ class CameraWidget(QLabel):
         self.width = width
         self.height = height
         self.setProperty('active', False)
-        self.resize(width, height)
+        # self.resize(width, height)
         self.setObjectName(f"Camera Source: {source}")
         self.setStyleSheet(constants.CAMERA_STYLESHEET)
         self.setText(f"Camera Source: {source}")
         self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(event, widget)
 
         # Create Video Capture Thread
-        self.stream_thread = VideoThread(src=source)
+        self.stream_thread = VideoThread(src=source, width=width)
         # Connect it's Signal to the update_image Slot Method
         self.stream_thread.change_pixmap_signal.connect(self.update_image)
 
@@ -38,6 +39,7 @@ class CameraWidget(QLabel):
         self.stream_thread.start()
 
     def stop(self):
+        self.processor_thread.stop()
         self.stream_thread.stop()
         self.deleteLater()
 
