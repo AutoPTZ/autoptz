@@ -50,49 +50,6 @@ class ImageProcessor(QtCore.QObject):
         self.name_id = None
         return frame
 
-    def add_face(self, frame):
-        minW = 0.1 * frame.shape[1]
-        minH = 0.1 * frame.shape[0]
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        faces = constants.FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=10,
-                                                   minSize=(int(minW), int(minH)))
-
-        for x, y, w, h in faces:
-            self.count = self.count + 1
-            name = constants.IMAGE_PATH + self.adding_to_name + '/' + str(self.count) + '.jpg'
-            print("\n [INFO] Creating Images........." + name)
-            cv2.imwrite(name, frame)
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
-
-        if self.count >= 10:  # Take 50 face sample and stop video
-            self.adding_to_name = None
-            self.is_adding_face = False
-            self.START_TRAINER.emit()
-            self.track_handler.resetFacialRecognition()
-            self.count = 0
-            return frame
-        else:
-            return frame
-
-    def draw_on_face(self, frame, face_locations, face_names, confidence_list):
-        for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
-            # Scale back up face locations since the frame we detected in was scaled to 1/2 size
-            top *= 2
-            right *= 2
-            bottom *= 2
-            left *= 2
-
-            # Draw a box around the face
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-
-            # Draw a label with name and confidence for the face
-            cv2.putText(frame, name, (left + 5, top - 5), self.font, 0.5, (255, 255, 255), 1)
-            cv2.putText(frame, confidence, (right - 52, bottom - 5), self.font, 0.45, (255, 255, 0), 1)
-
-        return frame
-
     def track_face(self, frame, x, y, w, h):
         rgbFrame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.putText(frame, "Tracking Enabled", (75, 75), self.font, 0.7, (0, 0, 255), 2)
@@ -155,10 +112,6 @@ class ImageProcessor(QtCore.QObject):
                     self.camera_control.continuous_move(0, 0.05, 0)
                     # movementY = False
         return frame
-
-    def config_add_face(self, name):
-        self.adding_to_name = name
-        self.is_adding_face = True
 
     def set_face(self, name):
         self.tracked_name = name

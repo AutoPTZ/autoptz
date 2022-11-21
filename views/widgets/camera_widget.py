@@ -52,7 +52,7 @@ class CameraWidget(QLabel):
         if self.processor_thread.is_alive():
             self.processor_thread.add_name = name
         else:
-            print("starting ImageProcessor")
+            print(f"starting ImageProcessor Thread for {self.objectName()}")
             # Create and Run Image Processor Thread
             self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)
             self.processor_thread.add_name = name
@@ -62,7 +62,7 @@ class CameraWidget(QLabel):
         if self.processor_thread.is_alive():
             self.processor_thread.check_encodings()
         else:
-            print("starting ImageProcessor")
+            print(f"starting ImageProcessor Thread for {self.objectName()}")
             self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)
             self.processor_thread.start()
 

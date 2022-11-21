@@ -23,14 +23,12 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         print("Watchdog received an event at - % s." % event.src_path)
         self.spin(5)
         for camera in self.camera_widget_list:
-            print(camera)
             camera.check_encodings()
 
     def on_deleted(self, event):
         print("Watchdog received an event at - % s." % event.src_path)
         self.spin(5)
         for camera in self.camera_widget_list:
-            print(camera)
             camera.check_encodings()
 
 
