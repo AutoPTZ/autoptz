@@ -14,6 +14,11 @@ from views.widgets.video_thread import VideoThread
 # For now this only creates USB Camera Widget
 class CameraWidget(QLabel):
     change_selection_signal = Signal(bool)
+    # FPS for Performance
+    start_time = time.time()
+    display_time = 2
+    fc = 0
+    FPS = 0
 
     def __init__(self, source, width, height):
         super().__init__()
@@ -30,13 +35,12 @@ class CameraWidget(QLabel):
         self.stream_thread = VideoThread(src=source, width=width)
         # Connect it's Signal to the update_image Slot Method
         self.stream_thread.change_pixmap_signal.connect(self.update_image)
+        # Start the Thread
+        self.stream_thread.start()
 
         # Create and Run Image Processor Thread
         self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)
         self.processor_thread.start()
-
-        # Start the Thread
-        self.stream_thread.start()
 
     def stop(self):
         self.processor_thread.stop()
@@ -44,11 +48,29 @@ class CameraWidget(QLabel):
         self.deleteLater()
 
     def set_add_name(self, name):
-        self.processor_thread.add_name = name
+        print(self.processor_thread.is_alive())
+        if self.processor_thread.is_alive():
+            self.processor_thread.add_name = name
+        else:
+            print("starting ImageProcessor")
+            # Create and Run Image Processor Thread
+            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)
+            self.processor_thread.add_name = name
+            self.processor_thread.start()
+
+    def check_encodings(self):
+        if self.processor_thread.is_alive():
+            self.processor_thread.check_encodings()
+        else:
+            print("starting ImageProcessor")
+            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)
+            self.processor_thread.start()
 
     def update_image(self, cv_img):
         """Updates the image_label with a new opencv image and draws on latest frame if processing is completed"""
-        cv_img = self.draw_on_face(frame=cv_img, face_locations=self.processor_thread.face_locations, face_names=self.processor_thread.face_names, confidence_list=self.processor_thread.confidence_list)
+        cv_img = self.draw_on_face(frame=cv_img, face_locations=self.processor_thread.face_locations,
+                                   face_names=self.processor_thread.face_names,
+                                   confidence_list=self.processor_thread.confidence_list)
         qt_img = self.convert_cv_qt(cv_img)
         self.setPixmap(qt_img)
 
@@ -80,9 +102,16 @@ class CameraWidget(QLabel):
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
         self.change_selection_signal.emit(True)
 
-    @staticmethod
-    def draw_on_face(frame, face_locations, face_names, confidence_list):
-        if face_locations is not None:
+    def draw_on_face(self, frame, face_locations, face_names, confidence_list):
+        # top = 202
+        # right = 408
+        # bottom = 306
+        # left = 294
+        # cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+        # Draw a label with name and confidence for the face
+        # cv2.putText(frame, "steve", (left + 5, top - 5), constants.FONT, 0.5, (255, 255, 255), 1)
+        # cv2.putText(frame, "324", (right - 52, bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
+        if face_locations is not None and face_names is not None and confidence_list is not None:
             for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
                 # Scale back up face locations since the frame we detected in was scaled to 1/2 size
                 top *= 2
@@ -94,7 +123,16 @@ class CameraWidget(QLabel):
                 # Draw a label with name and confidence for the face
                 cv2.putText(frame, name, (left + 5, top - 5), constants.FONT, 0.5, (255, 255, 255), 1)
                 cv2.putText(frame, confidence, (right - 52, bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
+        # FPS Counter
+        self.fc += 1
+        time_set = time.time() - self.start_time
+        if time_set >= self.display_time:
+            self.FPS = self.fc / time_set
+            self.fc = 0
+            self.start_time = time.time()
+        fps = "FPS: " + str(self.FPS)[:5]
 
+        cv2.putText(frame, fps, (50, 50), constants.FONT, 1, (0, 0, 255), 2)
         return frame
 
     def closeEvent(self, event):

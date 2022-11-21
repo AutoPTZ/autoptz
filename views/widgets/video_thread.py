@@ -12,12 +12,6 @@ import imutils
 class VideoThread(QThread):
     change_pixmap_signal = Signal(np.ndarray)
 
-    # FPS for Performance
-    start_time = time.time()
-    display_time = 2
-    fc = 0
-    FPS = 0
-
     def __init__(self, src, width):
         super().__init__()
         self._run_flag = True
@@ -31,17 +25,6 @@ class VideoThread(QThread):
             (self.ret, self.cv_img) = self.cap.read()
             if self.ret:
                 # self.cv_img = imutils.resize(cv_img, width=self.width)
-                # FPS Counter
-                self.fc += 1
-                time_set = time.time() - self.start_time
-                if time_set >= self.display_time:
-                    self.FPS = self.fc / time_set
-                    self.fc = 0
-                    self.start_time = time.time()
-                fps = "FPS: " + str(self.FPS)[:5]
-
-                cv2.putText(self.cv_img, fps, (50, 50), constants.FONT, 1, (0, 0, 255), 2)
-
                 self.change_pixmap_signal.emit(self.cv_img)
 
         # shut down capture system

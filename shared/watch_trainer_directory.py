@@ -1,5 +1,5 @@
 import time
-
+from views.widgets.camera_widget import CameraWidget
 import watchdog.events
 import watchdog.observers
 from PySide6 import QtWidgets
@@ -19,11 +19,20 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
     def remove_camera(self, camera_widget):
         self.camera_widget_list.remove(camera_widget)
 
-    def on_any_event(self, event):
+    def on_created(self, event):
         print("Watchdog received an event at - % s." % event.src_path)
-        self.spin(1)
+        self.spin(5)
         for camera in self.camera_widget_list:
-            camera.processor_thread.check_encodings()
+            print(camera)
+            camera.check_encodings()
+
+    def on_deleted(self, event):
+        print("Watchdog received an event at - % s." % event.src_path)
+        self.spin(5)
+        for camera in self.camera_widget_list:
+            print(camera)
+            camera.check_encodings()
+
 
     @staticmethod
     def spin(seconds):

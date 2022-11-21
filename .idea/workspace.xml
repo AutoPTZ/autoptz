@@ -5,12 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/views/test/obama.jpg" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/views/test/test_multiprocessing_face_rec.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/logic/facial_tracking/testing_image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/testing_image_processor.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/shared/current_active_camera.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/shared/watch_trainer_directory.py" beforeDir="false" afterPath="$PROJECT_DIR$/shared/watch_trainer_directory.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/views/functions/show_dialogs_ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/functions/show_dialogs_ui.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/views/homepage/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/homepage/main_window.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/views/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/widgets/camera_widget.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/views/widgets/video_thread.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/widgets/video_thread.py" afterDir="false" />
     </list>
@@ -46,15 +45,15 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ASKED_ADD_EXTERNAL_FILES&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/Users/prince/development/autoptz/logic/facial_tracking/images&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_ADD_EXTERNAL_FILES": "true",
+    "RunOnceActivity.OpenProjectViewOnStart": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "last_opened_file_path": "/Users/prince/development/autoptz/logic/facial_tracking/images",
+    "settings.editor.selected.configurable": "Errors"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/logic/facial_tracking/images" />
