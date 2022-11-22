@@ -61,7 +61,6 @@ class CameraWidget(QLabel):
         If the Processor thread is not alive then start up the thread, then add the face.
         :param name:
         """
-        print(self.processor_thread.is_alive())
         if self.processor_thread.is_alive():
             self.processor_thread.add_name = name
         else:
@@ -84,11 +83,30 @@ class CameraWidget(QLabel):
             self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)
             self.processor_thread.start()
 
+    def set_tracking(self):
+        if self.processor_thread.is_alive():
+            self.processor_thread.is_tracking = not self.processor_thread.is_tracking
+
+    def set_tracked_name(self, name):
+        print(f"Setting {name} as tracked name")
+        if self.processor_thread.is_alive():
+            self.processor_thread.tracked_name = name
+
+    def get_tracked_name(self):
+        if self.processor_thread.is_alive():
+            return self.processor_thread.tracked_name
+
+    def get_tracking(self):
+        if self.processor_thread.is_alive():
+            return self.processor_thread.is_tracking
+
     def update_image(self, cv_img):
         """Updates the QLabel with the latest OpenCV/NDI frame and draws it"""
-        cv_img = self.draw_on_face(frame=cv_img, face_locations=self.processor_thread.face_locations,
-                                   face_names=self.processor_thread.face_names,
-                                   confidence_list=self.processor_thread.confidence_list)
+        cv_img = self.draw_on_frame(frame=cv_img, face_locations=self.processor_thread.face_locations,
+                                    face_names=self.processor_thread.face_names,
+                                    confidence_list=self.processor_thread.confidence_list,
+                                    track_x=self.processor_thread.track_x, track_y=self.processor_thread.track_y,
+                                    track_w=self.processor_thread.track_w, track_h=self.processor_thread.track_h)
         qt_img = self.convert_cv_qt(cv_img)
         self.setPixmap(qt_img)
 
@@ -127,7 +145,7 @@ class CameraWidget(QLabel):
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
         self.change_selection_signal.emit()
 
-    def draw_on_face(self, frame, face_locations, face_names, confidence_list):
+    def draw_on_frame(self, frame, face_locations, face_names, confidence_list, track_x, track_y, track_w, track_h):
         """
         Is called by update_image and returns the latest frame with FPS + face box drawings if there are any.
         :param frame:
@@ -143,11 +161,23 @@ class CameraWidget(QLabel):
                 right *= 2
                 bottom *= 2
                 left *= 2
+                # print(top, right, bottom, left)
                 # Draw a box around the face
                 cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
                 # Draw a label with name and confidence for the face
                 cv2.putText(frame, name, (left + 5, top - 5), constants.FONT, 0.5, (255, 255, 255), 1)
                 cv2.putText(frame, confidence, (right - 52, bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
+
+        if self.get_tracking():
+            # min_x = int(frame.shape[1] / 11.5)
+            # max_x = int(frame.shape[1] / 1.1)
+            # min_y = int(frame.shape[0] / 8.5)
+            # max_y = int(frame.shape[0] / 1.3)
+            # cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (255, 0, 0), 2)
+            if track_x is not None:
+                cv2.putText(frame, "tracking", (track_x, track_h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
+                cv2.rectangle(frame, (track_x, track_y), (track_w, track_h), (255, 0, 255), 3, 1)
+
         # FPS Counter
         self.fc += 1
         time_set = time.time() - self.start_time

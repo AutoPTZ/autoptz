@@ -79,7 +79,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.select_face_dropdown.setSizePolicy(size_policy)
         self.select_face_dropdown.setObjectName("select_face_dropdown")
         self.select_face_dropdown.setEnabled(False)
-        # self.select_face_dropdown.currentTextChanged.connect(self.selected_face_change)
+        self.select_face_dropdown.currentTextChanged.connect(self.selected_face_change)
         self.select_face_dropdown.addItem('')
         if os.path.isdir(constants.IMAGE_PATH):
             for folder in os.listdir(constants.IMAGE_PATH):
@@ -107,7 +107,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.enable_track.setEnabled(False)
         self.enable_track.setAutoRepeat(False)
         self.enable_track.setAutoExclusive(False)
-        # self.enable_track.stateChanged.connect(self.config_enable_track)
+        self.enable_track.stateChanged.connect(self.enable_track_change)
         self.enable_track.setObjectName("enable_track")
         self.formLayout.setWidget(3, QtWidgets.QFormLayout.ItemRole.LabelRole, self.enable_track)
         self.select_face_label = QtWidgets.QLabel(self.selectedCamPage)
@@ -367,16 +367,16 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionAbout.setObjectName("actionAbout")
         self.actionAdd_Face = QtWidgets.QWidgetAction(self)
         self.actionAdd_Face.setObjectName("actionAdd_Face")
-        self.actionAdd_Face.triggered.connect(partial(self.dialogs.add_face, self.update_face_selection))
+        self.actionAdd_Face.triggered.connect(partial(self.dialogs.add_face, self.update_face_dropdown))
         self.actionTrain_Model = QtWidgets.QWidgetAction(self)
         self.actionTrain_Model.setObjectName("actionTrain_Model")
         self.actionTrain_Model.triggered.connect(partial(self.dialogs.retrain_face))
         self.actionRemove_Face = QtWidgets.QWidgetAction(self)
         self.actionRemove_Face.setObjectName("actionRemove_Face")
-        self.actionRemove_Face.triggered.connect(partial(self.dialogs.remove_face, self.update_face_selection))
+        self.actionRemove_Face.triggered.connect(partial(self.dialogs.remove_face, self.update_face_dropdown))
         self.actionReset_Database = QtWidgets.QWidgetAction(self)
         self.actionReset_Database.setObjectName("actionReset_Database")
-        self.actionReset_Database.triggered.connect(partial(self.dialogs.reset_database, self.update_face_selection))
+        self.actionReset_Database.triggered.connect(partial(self.dialogs.reset_database, self.update_face_dropdown))
         self.menuFile.addAction(self.actionOpen)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionSave)
@@ -467,20 +467,56 @@ class AutoPTZ_MainWindow(QMainWindow):
             print(f"No Camera Source is active")
             self.select_face_dropdown.setEnabled(False)
             self.select_face_dropdown.setCurrentText('')
+            self.enable_track.setEnabled(False)
+            self.enable_track.setChecked(False)
         else:
             print(f"{constants.CURRENT_ACTIVE_CAM_WIDGET.objectName()} is active")
             self.select_face_dropdown.setEnabled(True)
-        # if self.current_selected_source.image_processor.get_face() is None:
-        #     self.select_face_dropdown.setCurrentText('')
-        #     self.enable_track.setEnabled(False)
-        # else:
-        #     self.select_face_dropdown.setCurrentText(self.current_selected_source.image_processor.get_face())
-        #     self.enable_track.setEnabled(True)
-        #
-        # if self.current_selected_source.image_processor.is_track_enabled():
-        #     self.enable_track.setChecked(True)
-        # else:
-        #     self.enable_track.setChecked(False)
+            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread.is_alive():
+                print("Processor Thread is running")
+                if constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name() is None:
+                    print("no tracked name")
+                    self.select_face_dropdown.setCurrentText('')
+                    self.enable_track.setEnabled(False)
+                    self.enable_track.setChecked(False)
+                else:
+                    self.select_face_dropdown.setCurrentText(constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name())
+                    self.enable_track.setEnabled(True)
+                    if constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking() is False:
+                        self.enable_track.setChecked(False)
+                        print("a tracked name but not tracking")
+                    else:
+                        self.enable_track.setChecked(True)
+                        print("a tracked name and tracking")
+            else:
+                print("Processor Thread is not running")
+                self.select_face_dropdown.setEnabled(True)
+                self.select_face_dropdown.setCurrentText('')
+                self.enable_track.setEnabled(False)
+                self.enable_track.setChecked(False)
+
+    def selected_face_change(self):
+        if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
+            if self.select_face_dropdown.currentText() == '':
+                constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracked_name(None)
+                self.enable_track.setEnabled(False)
+                self.enable_track.setChecked(False)
+            else:
+                constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracked_name(self.select_face_dropdown.currentText())
+                self.enable_track.setEnabled(True)
+        else:
+            self.enable_track.setEnabled(False)
+            self.enable_track.setChecked(False)
+
+    def enable_track_change(self):
+        if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
+            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread.is_alive() and constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking() and self.enable_track.isChecked():
+                pass
+            else:
+                constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracking()
+                self.enable_track.setChecked(constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking())
+        else:
+            self.enable_track.setChecked(False)
 
     def init_manual_control(self, device):
         """Initializing manual camera control. ONLY VISCA devices for now."""
@@ -566,7 +602,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.show()
 
-    def update_face_selection(self, event):
+    def update_face_dropdown(self, event):
         current_text_temp = self.select_face_dropdown.currentText()
         self.select_face_dropdown.clear()
         self.select_face_dropdown.addItem('')
