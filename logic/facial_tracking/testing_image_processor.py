@@ -96,14 +96,6 @@ class ImageProcessor(Thread):
         self.face_rec = FaceRec()
         self.encoding_data = None
         self.check_encodings()
-        self.tracker = None  # Dlib Tracker Object
-        self.is_tracking = False  # If Track Checkbox is checked
-        self.tracked_name = None  # Face that needs to be tracked
-        self.temp_tracked_name = None  # Temporarily sets name by face recognition, used for fixing tracking when person is detected
-        self.track_x = None  # Temporary X value from face recognition for person
-        self.track_y = None  # Temporary Y value from face recognition for person
-        self.track_w = None  # Temporary W value from face recognition for person
-        self.track_h = None  # Temporary H value from face recognition for person
 
     def run(self):
         """
@@ -117,8 +109,6 @@ class ImageProcessor(Thread):
             elif self.encoding_data is not None:
                 try:
                     self.recognize_face(frame)
-                    if self.is_tracking:
-                        self.track_face(frame)
                 except Exception as e:
                     print(e)
                 # p = Pool(processes=6)
@@ -132,8 +122,8 @@ class ImageProcessor(Thread):
                 # recognition = Process(target=recognize_face, args=(frame,))
                 # recognition.start()
                 # recognition.join()
-            # else:  # Free up threads and fixes Window's performance issue with useless thread
-            #     self.stop()
+            else:  # Free up threads and fixes Window's performance issue with useless thread
+                self.stop()
 
     def add_face(self, frame, gray_frame):
         """
@@ -196,43 +186,9 @@ class ImageProcessor(Thread):
                 if matches[best_match_index]:
                     name = self.encoding_data['names'][best_match_index]
                     confidence = face_confidence(face_distances[best_match_index], 0.6)
-                if name == self.tracked_name:
-                    index = face_encodings.index(face_encoding)
-                    self.temp_tracked_name = name
-                    self.track_x = self.face_locations[index][3] * 2
-                    self.track_y = self.face_locations[index][0] * 2
-                    self.track_w = self.face_locations[index][1] * 2
-                    self.track_h = self.face_locations[index][2] * 2
                 self.face_names.append(name)
                 self.confidence_list.append(confidence)
 
-    def track_face(self, frame):  # Probably needs to be on its own thread
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        if self.tracker is None and self.track_x is not None:
-            self.tracker = dlib.correlation_tracker()
-            rect = dlib.rectangle(self.track_x, self.track_y, self.track_w, self.track_h)
-            self.tracker.start_track(rgb_frame, rect)
-            self.track_x = None
-            self.track_y = None
-            self.track_w = None
-            self.track_h = None
-            self.temp_tracked_name = None
-        if self.tracker is not None and self.temp_tracked_name == self.tracked_name and self.track_x is not None:
-            rect = dlib.rectangle(self.track_x, self.track_y, self.track_w, self.track_h)
-            self.tracker.start_track(rgb_frame, rect)
-            self.track_x = None
-            self.track_y = None
-            self.track_w = None
-            self.track_h = None
-            self.temp_tracked_name = None
-        elif self.tracker is not None:
-            self.tracker.update(rgb_frame)
-            pos = self.tracker.get_position()
-            # unpack the position object
-            self.track_x = int(pos.left())
-            self.track_y = int(pos.top())
-            self.track_w = int(pos.right())
-            self.track_h = int(pos.bottom())
 
     def check_encodings(self):
         """

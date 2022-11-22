@@ -456,6 +456,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         menu_item.triggered.connect(
             lambda index=source, item=menu_item: self.addCameraWidget(source=index, menu_item=item))
         self.watch_trainer.remove_camera(camera_widget=camera_widget)
+        if constants.CURRENT_ACTIVE_CAM_WIDGET == camera_widget:
+            constants.CURRENT_ACTIVE_CAM_WIDGET = None
         camera_widget.stop()
         camera_widget.deleteLater()
 
@@ -504,9 +506,6 @@ class AutoPTZ_MainWindow(QMainWindow):
             else:
                 constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracked_name(self.select_face_dropdown.currentText())
                 self.enable_track.setEnabled(True)
-        else:
-            self.enable_track.setEnabled(False)
-            self.enable_track.setChecked(False)
 
     def enable_track_change(self):
         if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
