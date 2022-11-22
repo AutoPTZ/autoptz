@@ -5,6 +5,9 @@ from views.homepage.main_window import AutoPTZ_MainWindow
 
 
 def main():
+    """
+    Starts the AutoPTZ Application
+    """
     app = QApplication(sys.argv)
     window = AutoPTZ_MainWindow()
     window.show()

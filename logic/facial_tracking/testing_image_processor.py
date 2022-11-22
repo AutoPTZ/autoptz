@@ -20,6 +20,12 @@ from multiprocessing import Process
 
 
 def face_confidence(face_distance, face_match_threshold=0.6):
+    """
+    Confidence calculation for Facial Recognition
+    :param face_distance:
+    :param face_match_threshold:
+    :return:
+    """
     threshold = (1.0 - face_match_threshold)
     linear_val = (1.0 - face_distance) / (threshold * 2.0)
 
@@ -67,6 +73,11 @@ def face_confidence(face_distance, face_match_threshold=0.6):
 
 
 class ImageProcessor(Thread):
+    """
+    Threaded ImageProcessor for CameraWidget.
+    Used for added faces to database and facial recognition for now.
+    *** NEED TO ADD FACIAL TRACKING ***
+    """
     def __init__(self, stream_thread):
         super().__init__()
         self.stream = stream_thread
@@ -86,6 +97,9 @@ class ImageProcessor(Thread):
         self.check_encodings()
 
     def run(self):
+        """
+        Runs continuously on CameraWidget.start() to provide the latest face boxes for CameraWidget to drawn until _run_flag is False.
+        """
         while self._run_flag:
             frame = self.stream.cv_img
             gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -111,6 +125,11 @@ class ImageProcessor(Thread):
                 self.stop()
 
     def add_face(self, frame, gray_frame):
+        """
+        If there is a face to add, then use OpenCV Cascades to save images to database and send for training.
+        :param frame: Is used for saving the complete original image.
+        :param gray_frame: Is used for OpenCV face detection.
+        """
         min_w = 0.1 * gray_frame.shape[1]
         min_h = 0.1 * gray_frame.shape[0]
 
@@ -137,6 +156,10 @@ class ImageProcessor(Thread):
             # send signal for TrainingDlg
 
     def recognize_face(self, frame):
+        """
+        Runs grabbed frame through Facial Recognition Library and sets Face Locations, Names, and Confidences in a list.
+        :param frame:
+        """
         if frame is not None:
 
             # Resize frame of video to 1/2 size for faster face recognition processing
@@ -166,6 +189,9 @@ class ImageProcessor(Thread):
                 self.confidence_list.append(confidence)
 
     def check_encodings(self):
+        """
+        Refresh encodings_data to use the latest trainer data. If there is any.
+        """
         self.encoding_data = None
         if os.path.exists(constants.ENCODINGS_PATH):
             self.encoding_data = pickle.loads(open(constants.ENCODINGS_PATH, "rb").read())

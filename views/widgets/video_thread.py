@@ -7,10 +7,11 @@ import NDIlib as ndi
 import imutils
 
 
-# test using QThread since frames will eventually be sent to QT
-# if not use normal Python Threading
-
 class VideoThread(QThread):
+    """
+    Threaded Video Capture for both OpenCV and NDI camera feeds.
+    Emits/Returns the latest frame to the relative CameraWidget.
+    """
     change_pixmap_signal = Signal(np.ndarray)
 
     def __init__(self, src, width, isNDI=False):
@@ -30,6 +31,9 @@ class VideoThread(QThread):
             (self.ret, self.cv_img) = self.cap.read()
 
     def run(self):
+        """
+        Runs continuously on CameraWidget.start() to provide the latest video frame until _run_flag is False.
+        """
         while self._run_flag:
             if self.isNDI:
                 self.ret, v, _, _ = ndi.recv_capture_v3(self.ndi_recv, 5000)

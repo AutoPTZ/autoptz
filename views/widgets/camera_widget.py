@@ -11,8 +11,12 @@ from logic.facial_tracking.testing_image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
 
 
-# For now this only creates USB Camera Widget
 class CameraWidget(QLabel):
+    """
+    Create and handle all Cameras that are added to the UI.
+    It creates a QLabel as OpenCV and NDI video can be converted to QPixmap for display.
+    Combines both VideoThread and ImageProcessor threads for asynchronous computation for smoother looking video.
+    """
     change_selection_signal = Signal()
     # FPS for Performance
     start_time = time.time()
@@ -43,11 +47,20 @@ class CameraWidget(QLabel):
         self.processor_thread.start()
 
     def stop(self):
+        """
+        When CameraWidget is being removed from the UI, we should stop all relevant threads before deletion.
+        """
         self.processor_thread.stop()
         self.stream_thread.stop()
         self.deleteLater()
 
     def set_add_name(self, name):
+        """
+        Run when the user wants to register a new face for recognition.
+        If the Processor thread is already alive then just set the name to start taking images,
+        If the Processor thread is not alive then start up the thread, then add the face.
+        :param name:
+        """
         print(self.processor_thread.is_alive())
         if self.processor_thread.is_alive():
             self.processor_thread.add_name = name
@@ -59,6 +72,11 @@ class CameraWidget(QLabel):
             self.processor_thread.start()
 
     def check_encodings(self):
+        """
+        Run when the user resets database or train a model.
+        If the Processor thread is already alive then tell the thread to check encodings again.
+        If the Processor thread is not alive then start up the thread, the thread will automatically check encodings.
+        """
         if self.processor_thread.is_alive():
             self.processor_thread.check_encodings()
         else:
@@ -67,7 +85,7 @@ class CameraWidget(QLabel):
             self.processor_thread.start()
 
     def update_image(self, cv_img):
-        """Updates the image_label with a new opencv image and draws on latest frame if processing is completed"""
+        """Updates the QLabel with the latest OpenCV/NDI frame and draws it"""
         cv_img = self.draw_on_face(frame=cv_img, face_locations=self.processor_thread.face_locations,
                                    face_names=self.processor_thread.face_names,
                                    confidence_list=self.processor_thread.confidence_list)
@@ -84,6 +102,13 @@ class CameraWidget(QLabel):
         return QPixmap.fromImage(p)
 
     def clicked_widget(self, event, widget):
+        """
+        First checks if there is another CameraWidget currently active. If it is then deactivate it and update their stylesheet.
+        Then if that deactivated CameraWidget is the same CameraWidget currently clicked on, then remove it from constants. So nothing is active.
+        If it is not the same CameraWidget, then update this clicked on CameraWidget to be active and update its stylesheet.
+        :param event:
+        :param widget:
+        """
         if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
             constants.CURRENT_ACTIVE_CAM_WIDGET.setProperty(
                 'active', not constants.CURRENT_ACTIVE_CAM_WIDGET.property('active'))
@@ -103,6 +128,14 @@ class CameraWidget(QLabel):
         self.change_selection_signal.emit()
 
     def draw_on_face(self, frame, face_locations, face_names, confidence_list):
+        """
+        Is called by update_image and returns the latest frame with FPS + face box drawings if there are any.
+        :param frame:
+        :param face_locations:
+        :param face_names:
+        :param confidence_list:
+        :return:
+        """
         if face_locations is not None and face_names is not None and confidence_list is not None:
             for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
                 # Scale back up face locations since the frame we detected in was scaled to 1/2 size
@@ -128,26 +161,10 @@ class CameraWidget(QLabel):
         return frame
 
     def closeEvent(self, event):
+        """
+        On event call, stop all the related threads.
+        :param event:
+        """
         self.processor_thread.stop()
         self.stream_thread.stop()
         event.accept()
-
-    """
-             OpenCV VideoThread -> sent for processing (which easily uses OpenCV frame)
-
-             QT uses QPixmap, so we need to convert OpenCV frame to QPixmap
-
-             FrameProcess == Facial Recognition, Tracking, etc
-             VideoThread == Turns on Camera and constantly gets frames
-             CameraWidget == Shows the frames on QT to the user
-
-             VideoThread -> FrameProcess (sends back, boxes + names)
-
-             VideoThread -> Pixmap -> CameraWidget
-             VideoThread -> CameraWidget -> Pixmap
-
-
-             VideoThread ->  CameraWidget  <- FrameProcess (boxes)
-             CameraWidget -> Pixmap
-
-            """

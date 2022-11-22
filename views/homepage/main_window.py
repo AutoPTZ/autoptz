@@ -19,6 +19,9 @@ from views.widgets.camera_widget import CameraWidget
 
 
 class AutoPTZ_MainWindow(QMainWindow):
+    """
+    Configures and Handles the AutoPTZ MainWindow UI
+    """
     def __init__(self, *args, **kwargs):
 
         # setting up the UI and QT Threading
@@ -415,7 +418,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         QtCore.QMetaObject.connectSlotsByName(self)
 
     def findHardwareSources(self):
-        """Adds camera sources to the physical source list"""
+        """Adds camera sources to the Hardware source list"""
         available_cameras = QMediaDevices.videoInputs()
 
         for index, cam in enumerate(available_cameras, start=0):
@@ -457,6 +460,9 @@ class AutoPTZ_MainWindow(QMainWindow):
         camera_widget.deleteLater()
 
     def updateElements(self):
+        """
+        Update UI elements like FaceDropDownMenu and Enable Track Checkbox when a CameraWidget is activated/deactivated
+        """
         if constants.CURRENT_ACTIVE_CAM_WIDGET is None:
             print(f"No Camera Source is active")
             self.select_face_dropdown.setEnabled(False)
