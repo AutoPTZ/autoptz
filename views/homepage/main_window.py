@@ -474,7 +474,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         else:
             print(f"{constants.CURRENT_ACTIVE_CAM_WIDGET.objectName()} is active")
             self.select_face_dropdown.setEnabled(True)
-            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread.is_alive():
+            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread.isRunning():
                 print("Processor Thread is running")
                 if constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name() is None:
                     print("no tracked name")
@@ -486,10 +486,11 @@ class AutoPTZ_MainWindow(QMainWindow):
                     self.enable_track.setEnabled(True)
                     if constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking() is False:
                         self.enable_track.setChecked(False)
-                        print("a tracked name but not tracking")
+                        print(f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name()} but tracking is disabled")
                     else:
-                        self.enable_track.setChecked(True)
-                        print("a tracked name and tracking")
+                        self.enable_track.setChecked(False)
+                        # self.enable_track.setChecked(True)
+                        print(f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name()} and tracking is enabled")
             else:
                 print("Processor Thread is not running")
                 self.select_face_dropdown.setEnabled(True)
@@ -508,14 +509,30 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.enable_track.setEnabled(True)
 
     def enable_track_change(self):
+        print("called to change")
         if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
-            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread.is_alive() and constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking() and self.enable_track.isChecked():
-                pass
+            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread.isRunning() and constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking() and self.enable_track.isChecked():
+                print("already set, will not touch")
             else:
+                print(f"setting track button for {self.enable_track.isChecked()}")
                 constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracking()
-                self.enable_track.setChecked(constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking())
-        else:
-            self.enable_track.setChecked(False)
+        # else:
+        #     try:
+        #         constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracking()
+        #         self.enable_track.setChecked(constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking())
+        #     except Exception as e:
+        #         print(e)
+        #         self.enable_track.setChecked(False)
+
+    # def config_enable_track(self):
+    #     if self.current_selected_source is not None and self.current_selected_source.image_processor.is_track_enabled() and self.enable_track.isChecked():
+    #         pass
+    #     else:
+    #         try:
+    #             self.current_selected_source.image_processor.config_enable_track()
+    #             self.enable_track.setChecked(self.current_selected_source.image_processor.is_track_enabled())
+    #         except:
+    #             self.enable_track.setChecked(False)
 
     def init_manual_control(self, device):
         """Initializing manual camera control. ONLY VISCA devices for now."""

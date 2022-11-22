@@ -11,10 +11,6 @@ import pickle
 import math
 import numpy as np
 import time
-import imutils
-import timeit
-import dlib
-
 from libraries.face_recognition import FaceRec
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from multiprocessing import Process
@@ -73,12 +69,13 @@ def face_confidence(face_distance, face_match_threshold=0.6):
 #     return face_locations, face_names, confidence_list
 
 
-class ImageProcessor(Thread):
+class ImageProcessor(QThread):
     """
     Threaded ImageProcessor for CameraWidget.
     Used for added faces to database and facial recognition for now.
     *** NEED TO ADD FACIAL TRACKING ***
     """
+
     def __init__(self, stream_thread):
         super().__init__()
         self.stream = stream_thread
@@ -188,7 +185,6 @@ class ImageProcessor(Thread):
                     confidence = face_confidence(face_distances[best_match_index], 0.6)
                 self.face_names.append(name)
                 self.confidence_list.append(confidence)
-
 
     def check_encodings(self):
         """

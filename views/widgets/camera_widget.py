@@ -48,6 +48,7 @@ class CameraWidget(QLabel):
         self.processor_thread.start()
 
         self.tracker = None
+        self.track_started = False
         self.temp_tracked_name = None
         self.track_x = None
         self.track_y = None
@@ -71,7 +72,7 @@ class CameraWidget(QLabel):
         If the Processor thread is not alive then start up the thread, then add the face.
         :param name:
         """
-        if self.processor_thread.is_alive():
+        if self.processor_thread.isRunning():
             self.processor_thread.add_name = name
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
@@ -86,7 +87,7 @@ class CameraWidget(QLabel):
         If the Processor thread is already alive then tell the thread to check encodings again.
         If the Processor thread is not alive then start up the thread, the thread will automatically check encodings.
         """
-        if self.processor_thread.is_alive():
+        if self.processor_thread.isRunning():
             self.processor_thread.check_encodings()
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
@@ -94,6 +95,10 @@ class CameraWidget(QLabel):
             self.processor_thread.start()
 
     def set_tracking(self):
+        self.track_x = None
+        self.track_y = None
+        self.track_w = None
+        self.track_h = None
         self.is_tracking = not self.is_tracking
 
     def set_tracked_name(self, name):
@@ -177,8 +182,9 @@ class CameraWidget(QLabel):
                 cv2.putText(frame, name, (left + 5, top - 5), constants.FONT, 0.5, (255, 255, 255), 1)
                 cv2.putText(frame, confidence, (right - 52, bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
 
-        if self.is_tracking and self.processor_thread.is_alive():
-            frame = self.track_face(frame)
+        if self.is_tracking and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
+            frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
+        self.temp_tracked_name = None
 
         # FPS Counter
         self.fc += 1
@@ -192,35 +198,32 @@ class CameraWidget(QLabel):
         cv2.putText(frame, fps, (50, 50), constants.FONT, 1, (0, 0, 255), 2)
         return frame
 
-    def track_face(self, frame):  # Probably needs to be on its own thread
+    def track_face(self, frame, x, y, w, h):  # Probably needs to be on its own thread
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        if self.tracker is None and self.track_x is not None:
+        cv2.putText(frame, "Tracking Enabled", (75, 75), constants.FONT, 0.7, (0, 0, 255), 2)
+        print(self.objectName() + " " + str(self.track_started))
+        if self.track_started is False:
             self.tracker = dlib.correlation_tracker()
-            rect = dlib.rectangle(self.track_x, self.track_y, self.track_w, self.track_h)
+            rect = dlib.rectangle(x, y, w, h)
             self.tracker.start_track(rgb_frame, rect)
-            cv2.putText(frame, "tracking", (self.track_x, self.track_h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
-            cv2.rectangle(frame, (self.track_x, self.track_y), (self.track_w, self.track_h), (255, 0, 255), 3, 1)
-        if self.tracker is not None and self.temp_tracked_name == self.tracked_name and self.track_x is not None:
-            rect = dlib.rectangle(self.track_x, self.track_y, self.track_w, self.track_h)
-            self.tracker.start_track(rgb_frame, rect)
-            cv2.putText(frame, "tracking", (self.track_x, self.track_h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
-            cv2.rectangle(frame, (self.track_x, self.track_y), (self.track_w, self.track_h), (255, 0, 255), 3, 1)
-        elif self.tracker is not None:
+            cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
+            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
+            self.track_started = True
+        # if self.temp_tracked_name == self.tracked_name:
+        #     rect = dlib.rectangle(x, y, w, h)
+        #     self.tracker.start_track(rgb_frame, rect)
+        #     cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
+        #     cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
+        else:
             self.tracker.update(rgb_frame)
             pos = self.tracker.get_position()
             # unpack the position object
-            self.track_x = int(pos.left())
-            self.track_y = int(pos.top())
-            self.track_w = int(pos.right())
-            self.track_h = int(pos.bottom())
-            cv2.putText(frame, "tracking", (self.track_x, self.track_h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
-            cv2.rectangle(frame, (self.track_x, self.track_y), (self.track_w, self.track_h), (255, 0, 255), 3, 1)
-
-        self.track_x = None
-        self.track_y = None
-        self.track_w = None
-        self.track_h = None
-        self.temp_tracked_name = None
+            x = int(pos.left())
+            y = int(pos.top())
+            w = int(pos.right())
+            h = int(pos.bottom())
+            cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
+            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
         return frame
 
     def closeEvent(self, event):

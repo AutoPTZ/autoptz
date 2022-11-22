@@ -124,6 +124,14 @@
       <option name="presentableId" value="Default" />
       <updated>1665678093482</updated>
     </task>
+    <task id="LOCAL-00001" summary="maybe moving dlib">
+      <created>1669149062778</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1669149062778</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -136,6 +144,10 @@
         </entry>
       </map>
     </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="maybe moving dlib" />
+    <option name="LAST_COMMIT_MESSAGE" value="maybe moving dlib" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
