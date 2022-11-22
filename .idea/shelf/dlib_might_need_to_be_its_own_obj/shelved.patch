@@ -1,0 +1,152 @@
+Index: .idea/workspace.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<project version=\"4\">\n  <component name=\"AutoImportSettings\">\n    <option name=\"autoReloadType\" value=\"SELECTIVE\" />\n  </component>\n  <component name=\"ChangeListManager\">\n    <list default=\"true\" id=\"38ebf632-8fcc-432a-b960-3dfb24f85e9e\" name=\"Changes\" comment=\"\">\n      <change beforePath=\"$PROJECT_DIR$/.idea/workspace.xml\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/.idea/workspace.xml\" afterDir=\"false\" />\n      <change beforePath=\"$PROJECT_DIR$/logic/facial_tracking/testing_image_processor.py\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/logic/facial_tracking/testing_image_processor.py\" afterDir=\"false\" />\n      <change beforePath=\"$PROJECT_DIR$/views/homepage/main_window.py\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/views/homepage/main_window.py\" afterDir=\"false\" />\n      <change beforePath=\"$PROJECT_DIR$/views/widgets/camera_widget.py\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/views/widgets/camera_widget.py\" afterDir=\"false\" />\n    </list>\n    <option name=\"SHOW_DIALOG\" value=\"false\" />\n    <option name=\"HIGHLIGHT_CONFLICTS\" value=\"true\" />\n    <option name=\"HIGHLIGHT_NON_ACTIVE_CHANGELIST\" value=\"false\" />\n    <option name=\"LAST_RESOLUTION\" value=\"IGNORE\" />\n  </component>\n  <component name=\"FileTemplateManagerImpl\">\n    <option name=\"RECENT_TEMPLATES\">\n      <list>\n        <option value=\"Python Script\" />\n      </list>\n    </option>\n  </component>\n  <component name=\"Git.Settings\">\n    <option name=\"RECENT_BRANCH_BY_REPOSITORY\">\n      <map>\n        <entry key=\"$PROJECT_DIR$\" value=\"main\" />\n      </map>\n    </option>\n    <option name=\"RECENT_GIT_ROOT_PATH\" value=\"$PROJECT_DIR$\" />\n  </component>\n  <component name=\"MarkdownSettingsMigration\">\n    <option name=\"stateVersion\" value=\"1\" />\n  </component>\n  <component name=\"ProblemsViewState\">\n    <option name=\"selectedTabId\" value=\"CurrentFile\" />\n  </component>\n  <component name=\"ProjectId\" id=\"2G5UlvkeEckFZ7APx1GRpTIhrk8\" />\n  <component name=\"ProjectLevelVcsManager\" settingsEditedManually=\"true\" />\n  <component name=\"ProjectViewState\">\n    <option name=\"hideEmptyMiddlePackages\" value=\"true\" />\n    <option name=\"showLibraryContents\" value=\"true\" />\n  </component>\n  <component name=\"PropertiesComponent\">{\n  &quot;keyToString&quot;: {\n    &quot;ASKED_ADD_EXTERNAL_FILES&quot;: &quot;true&quot;,\n    &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,\n    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,\n    &quot;last_opened_file_path&quot;: &quot;/Users/prince/development/autoptz/logic/facial_tracking/images&quot;,\n    &quot;settings.editor.selected.configurable&quot;: &quot;Errors&quot;\n  }\n}</component>\n  <component name=\"RecentsManager\">\n    <key name=\"CopyFile.RECENT_KEYS\">\n      <recent name=\"$PROJECT_DIR$/logic/facial_tracking/images\" />\n      <recent name=\"$PROJECT_DIR$\" />\n      <recent name=\"$PROJECT_DIR$/logic/facial_tracking\" />\n    </key>\n    <key name=\"MoveFile.RECENT_KEYS\">\n      <recent name=\"$PROJECT_DIR$/views/test\" />\n      <recent name=\"C:\\Users\\steve\\development\\autoptz\\views\\functions\" />\n      <recent name=\"$PROJECT_DIR$/libraries\" />\n      <recent name=\"$PROJECT_DIR$/shared\" />\n      <recent name=\"$PROJECT_DIR$/ui/widgets\" />\n    </key>\n  </component>\n  <component name=\"RunManager\" selected=\"Python.startup\">\n    <configuration name=\"flow_layout\" type=\"PythonConfigurationType\" factoryName=\"Python\" temporary=\"true\" nameIsGenerated=\"true\">\n      <module name=\"autoptz\" />\n      <option name=\"INTERPRETER_OPTIONS\" value=\"\" />\n      <option name=\"PARENT_ENVS\" value=\"true\" />\n      <envs>\n        <env name=\"PYTHONUNBUFFERED\" value=\"1\" />\n      </envs>\n      <option name=\"SDK_HOME\" value=\"\" />\n      <option name=\"WORKING_DIRECTORY\" value=\"$PROJECT_DIR$/views/homepage\" />\n      <option name=\"IS_MODULE_SDK\" value=\"true\" />\n      <option name=\"ADD_CONTENT_ROOTS\" value=\"true\" />\n      <option name=\"ADD_SOURCE_ROOTS\" value=\"true\" />\n      <option name=\"SCRIPT_NAME\" value=\"$PROJECT_DIR$/views/homepage/flow_layout.py\" />\n      <option name=\"PARAMETERS\" value=\"\" />\n      <option name=\"SHOW_COMMAND_LINE\" value=\"false\" />\n      <option name=\"EMULATE_TERMINAL\" value=\"false\" />\n      <option name=\"MODULE_MODE\" value=\"false\" />\n      <option name=\"REDIRECT_INPUT\" value=\"false\" />\n      <option name=\"INPUT_FILE\" value=\"\" />\n      <method v=\"2\" />\n    </configuration>\n    <configuration name=\"startup\" type=\"PythonConfigurationType\" factoryName=\"Python\" temporary=\"true\" nameIsGenerated=\"true\">\n      <module name=\"autoptz\" />\n      <option name=\"INTERPRETER_OPTIONS\" value=\"\" />\n      <option name=\"PARENT_ENVS\" value=\"true\" />\n      <envs>\n        <env name=\"PYTHONUNBUFFERED\" value=\"1\" />\n      </envs>\n      <option name=\"SDK_HOME\" value=\"\" />\n      <option name=\"WORKING_DIRECTORY\" value=\"$PROJECT_DIR$\" />\n      <option name=\"IS_MODULE_SDK\" value=\"true\" />\n      <option name=\"ADD_CONTENT_ROOTS\" value=\"true\" />\n      <option name=\"ADD_SOURCE_ROOTS\" value=\"true\" />\n      <option name=\"SCRIPT_NAME\" value=\"$PROJECT_DIR$/startup.py\" />\n      <option name=\"PARAMETERS\" value=\"\" />\n      <option name=\"SHOW_COMMAND_LINE\" value=\"false\" />\n      <option name=\"EMULATE_TERMINAL\" value=\"false\" />\n      <option name=\"MODULE_MODE\" value=\"false\" />\n      <option name=\"REDIRECT_INPUT\" value=\"false\" />\n      <option name=\"INPUT_FILE\" value=\"\" />\n      <method v=\"2\" />\n    </configuration>\n    <recent_temporary>\n      <list>\n        <item itemvalue=\"Python.startup\" />\n        <item itemvalue=\"Python.flow_layout\" />\n      </list>\n    </recent_temporary>\n  </component>\n  <component name=\"SpellCheckerSettings\" RuntimeDictionaries=\"0\" Folders=\"0\" CustomDictionaries=\"0\" DefaultDictionary=\"application-level\" UseSingleDictionary=\"true\" transferred=\"true\" />\n  <component name=\"TaskManager\">\n    <task active=\"true\" id=\"Default\" summary=\"Default task\">\n      <changelist id=\"38ebf632-8fcc-432a-b960-3dfb24f85e9e\" name=\"Changes\" comment=\"\" />\n      <created>1665678093482</created>\n      <option name=\"number\" value=\"Default\" />\n      <option name=\"presentableId\" value=\"Default\" />\n      <updated>1665678093482</updated>\n    </task>\n    <task id=\"LOCAL-00001\" summary=\"maybe moving dlib\">\n      <created>1669149062778</created>\n      <option name=\"number\" value=\"00001\" />\n      <option name=\"presentableId\" value=\"LOCAL-00001\" />\n      <option name=\"project\" value=\"LOCAL\" />\n      <updated>1669149062778</updated>\n    </task>\n    <option name=\"localTasksCounter\" value=\"2\" />\n    <servers />\n  </component>\n  <component name=\"Vcs.Log.Tabs.Properties\">\n    <option name=\"TAB_STATES\">\n      <map>\n        <entry key=\"MAIN\">\n          <value>\n            <State />\n          </value>\n        </entry>\n      </map>\n    </option>\n  </component>\n  <component name=\"VcsManagerConfiguration\">\n    <MESSAGE value=\"maybe moving dlib\" />\n    <option name=\"LAST_COMMIT_MESSAGE\" value=\"maybe moving dlib\" />\n  </component>\n  <component name=\"XDebuggerManager\">\n    <breakpoint-manager>\n      <default-breakpoints>\n        <breakpoint type=\"python-exception\">\n          <properties notifyOnTerminate=\"true\" exception=\"BaseException\">\n            <option name=\"notifyOnTerminate\" value=\"true\" />\n          </properties>\n        </breakpoint>\n      </default-breakpoints>\n    </breakpoint-manager>\n  </component>\n</project>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/workspace.xml b/.idea/workspace.xml
+--- a/.idea/workspace.xml	(revision f83430776fd320c08ca56683104f3fc2f9cde7cf)
++++ b/.idea/workspace.xml	(date 1669154699589)
+@@ -6,8 +6,7 @@
+   <component name="ChangeListManager">
+     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="">
+       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/testing_image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/testing_image_processor.py" afterDir="false" />
+-      <change beforePath="$PROJECT_DIR$/views/homepage/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/homepage/main_window.py" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/startup.py" beforeDir="false" afterPath="$PROJECT_DIR$/startup.py" afterDir="false" />
+       <change beforePath="$PROJECT_DIR$/views/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/widgets/camera_widget.py" afterDir="false" />
+     </list>
+     <option name="SHOW_DIALOG" value="false" />
+Index: views/widgets/camera_widget.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>from PySide6 import QtGui\nfrom PySide6.QtWidgets import QLabel\nfrom PySide6.QtGui import QPixmap\nfrom PySide6.QtCore import Qt\nfrom PySide6.QtCore import Signal\nimport cv2\nimport time\nimport imutils\nimport dlib\nimport shared.constants as constants\nfrom logic.facial_tracking.testing_image_processor import ImageProcessor\nfrom views.widgets.video_thread import VideoThread\n\n\nclass CameraWidget(QLabel):\n    \"\"\"\n    Create and handle all Cameras that are added to the UI.\n    It creates a QLabel as OpenCV and NDI video can be converted to QPixmap for display.\n    Combines both VideoThread and ImageProcessor threads for asynchronous computation for smoother looking video.\n    \"\"\"\n    change_selection_signal = Signal()\n    # FPS for Performance\n    start_time = time.time()\n    display_time = 2\n    fc = 0\n    FPS = 0\n\n    def __init__(self, source, width, height, isNDI=False):\n        super().__init__()\n        self.width = width\n        self.height = height\n        self.setProperty('active', False)\n        # self.resize(width, height)\n        self.setObjectName(f\"Camera Source: {source}\")\n        self.setStyleSheet(constants.CAMERA_STYLESHEET)\n        self.setText(f\"Camera Source: {source}\")\n        self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(event, widget)\n\n        # Create Video Capture Thread\n        self.stream_thread = VideoThread(src=source, width=width, isNDI=isNDI)\n        # Connect it's Signal to the update_image Slot Method\n        self.stream_thread.change_pixmap_signal.connect(self.update_image)\n        # Start the Thread\n        self.stream_thread.start()\n\n        # Create and Run Image Processor Thread\n        self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)\n        self.processor_thread.start()\n\n        self.tracker = None\n        self.track_started = False\n        self.temp_tracked_name = None\n        self.track_x = None\n        self.track_y = None\n        self.track_w = None\n        self.track_h = None\n        self.is_tracking = False  # If Track Checkbox is checked\n        self.tracked_name = None  # Face that needs to be tracked\n\n    def stop(self):\n        \"\"\"\n        When CameraWidget is being removed from the UI, we should stop all relevant threads before deletion.\n        \"\"\"\n        self.processor_thread.stop()\n        self.stream_thread.stop()\n        self.deleteLater()\n\n    def set_add_name(self, name):\n        \"\"\"\n        Run when the user wants to register a new face for recognition.\n        If the Processor thread is already alive then just set the name to start taking images,\n        If the Processor thread is not alive then start up the thread, then add the face.\n        :param name:\n        \"\"\"\n        if self.processor_thread.isRunning():\n            self.processor_thread.add_name = name\n        else:\n            print(f\"starting ImageProcessor Thread for {self.objectName()}\")\n            # Create and Run Image Processor Thread\n            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)\n            self.processor_thread.add_name = name\n            self.processor_thread.start()\n\n    def check_encodings(self):\n        \"\"\"\n        Run when the user resets database or train a model.\n        If the Processor thread is already alive then tell the thread to check encodings again.\n        If the Processor thread is not alive then start up the thread, the thread will automatically check encodings.\n        \"\"\"\n        if self.processor_thread.isRunning():\n            self.processor_thread.check_encodings()\n        else:\n            print(f\"starting ImageProcessor Thread for {self.objectName()}\")\n            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)\n            self.processor_thread.start()\n\n    def set_tracking(self):\n        self.track_x = None\n        self.track_y = None\n        self.track_w = None\n        self.track_h = None\n        self.is_tracking = not self.is_tracking\n\n    def set_tracked_name(self, name):\n        self.tracked_name = name\n\n    def get_tracked_name(self):\n        return self.tracked_name\n\n    def get_tracking(self):\n        return self.is_tracking\n\n    def update_image(self, cv_img):\n        \"\"\"Updates the QLabel with the latest OpenCV/NDI frame and draws it\"\"\"\n        cv_img = self.draw_on_frame(frame=cv_img, face_locations=self.processor_thread.face_locations,\n                                    face_names=self.processor_thread.face_names,\n                                    confidence_list=self.processor_thread.confidence_list)\n        qt_img = self.convert_cv_qt(cv_img)\n        self.setPixmap(qt_img)\n\n    def convert_cv_qt(self, cv_img):\n        \"\"\"Convert from an opencv image to QPixmap\"\"\"\n        rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)\n        h, w, ch = rgb_image.shape\n        bytes_per_line = ch * w\n        convert_to_qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)\n        p = convert_to_qt_format.scaled(self.width, self.height, Qt.AspectRatioMode.KeepAspectRatio)\n        return QPixmap.fromImage(p)\n\n    def clicked_widget(self, event, widget):\n        \"\"\"\n        First checks if there is another CameraWidget currently active. If it is then deactivate it and update their stylesheet.\n        Then if that deactivated CameraWidget is the same CameraWidget currently clicked on, then remove it from constants. So nothing is active.\n        If it is not the same CameraWidget, then update this clicked on CameraWidget to be active and update its stylesheet.\n        :param event:\n        :param widget:\n        \"\"\"\n        if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:\n            constants.CURRENT_ACTIVE_CAM_WIDGET.setProperty(\n                'active', not constants.CURRENT_ACTIVE_CAM_WIDGET.property('active'))\n            constants.CURRENT_ACTIVE_CAM_WIDGET.style().unpolish(constants.CURRENT_ACTIVE_CAM_WIDGET)\n            constants.CURRENT_ACTIVE_CAM_WIDGET.style().polish(constants.CURRENT_ACTIVE_CAM_WIDGET)\n            constants.CURRENT_ACTIVE_CAM_WIDGET.update()\n\n        if constants.CURRENT_ACTIVE_CAM_WIDGET == widget:\n            constants.CURRENT_ACTIVE_CAM_WIDGET = None\n        else:\n            constants.CURRENT_ACTIVE_CAM_WIDGET = widget\n            constants.CURRENT_ACTIVE_CAM_WIDGET.setProperty(\n                'active', not constants.CURRENT_ACTIVE_CAM_WIDGET.property('active'))\n            constants.CURRENT_ACTIVE_CAM_WIDGET.style().unpolish(constants.CURRENT_ACTIVE_CAM_WIDGET)\n            constants.CURRENT_ACTIVE_CAM_WIDGET.style().polish(constants.CURRENT_ACTIVE_CAM_WIDGET)\n            constants.CURRENT_ACTIVE_CAM_WIDGET.update()\n        self.change_selection_signal.emit()\n\n    def draw_on_frame(self, frame, face_locations, face_names, confidence_list):\n        \"\"\"\n        Is called by update_image and returns the latest frame with FPS + face box drawings if there are any.\n        :param frame:\n        :param face_locations:\n        :param face_names:\n        :param confidence_list:\n        :return:\n        \"\"\"\n        if face_locations is not None and face_names is not None and confidence_list is not None:\n            for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):\n                # Scale back up face locations since the frame we detected in was scaled to 1/2 size\n                top *= 2\n                right *= 2\n                bottom *= 2\n                left *= 2\n\n                if name == self.tracked_name:\n                    self.temp_tracked_name = name\n                    self.track_x = left\n                    self.track_y = top\n                    self.track_w = right\n                    self.track_h = bottom\n                # Draw a box around the face\n                cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)\n                # Draw a label with name and confidence for the face\n                cv2.putText(frame, name, (left + 5, top - 5), constants.FONT, 0.5, (255, 255, 255), 1)\n                cv2.putText(frame, confidence, (right - 52, bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)\n\n        if self.is_tracking and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:\n            frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)\n        self.temp_tracked_name = None\n\n        # FPS Counter\n        self.fc += 1\n        time_set = time.time() - self.start_time\n        if time_set >= self.display_time:\n            self.FPS = self.fc / time_set\n            self.fc = 0\n            self.start_time = time.time()\n        fps = \"FPS: \" + str(self.FPS)[:5]\n\n        cv2.putText(frame, fps, (50, 50), constants.FONT, 1, (0, 0, 255), 2)\n        return frame\n\n    def track_face(self, frame, x, y, w, h):  # Probably needs to be on its own thread\n        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)\n        cv2.putText(frame, \"Tracking Enabled\", (75, 75), constants.FONT, 0.7, (0, 0, 255), 2)\n        print(self.objectName() + \" \" + str(self.track_started))\n        if self.track_started is False:\n            self.tracker = dlib.correlation_tracker()\n            rect = dlib.rectangle(x, y, w, h)\n            self.tracker.start_track(rgb_frame, rect)\n            cv2.putText(frame, \"tracking\", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)\n            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)\n            self.track_started = True\n        # if self.temp_tracked_name == self.tracked_name:\n        #     rect = dlib.rectangle(x, y, w, h)\n        #     self.tracker.start_track(rgb_frame, rect)\n        #     cv2.putText(frame, \"tracking\", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)\n        #     cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)\n        else:\n            self.tracker.update(rgb_frame)\n            pos = self.tracker.get_position()\n            # unpack the position object\n            x = int(pos.left())\n            y = int(pos.top())\n            w = int(pos.right())\n            h = int(pos.bottom())\n            cv2.putText(frame, \"tracking\", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)\n            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)\n        return frame\n\n    def closeEvent(self, event):\n        \"\"\"\n        On event call, stop all the related threads.\n        :param event:\n        \"\"\"\n        self.processor_thread.stop()\n        self.stream_thread.stop()\n        event.accept()\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/views/widgets/camera_widget.py b/views/widgets/camera_widget.py
+--- a/views/widgets/camera_widget.py	(revision f83430776fd320c08ca56683104f3fc2f9cde7cf)
++++ b/views/widgets/camera_widget.py	(date 1669155090359)
+@@ -11,7 +11,6 @@
+ from logic.facial_tracking.testing_image_processor import ImageProcessor
+ from views.widgets.video_thread import VideoThread
+ 
+-
+ class CameraWidget(QLabel):
+     """
+     Create and handle all Cameras that are added to the UI.
+@@ -100,6 +99,7 @@
+         self.track_w = None
+         self.track_h = None
+         self.is_tracking = not self.is_tracking
++        # self.tracker = None
+ 
+     def set_tracked_name(self, name):
+         self.tracked_name = name
+@@ -112,9 +112,7 @@
+ 
+     def update_image(self, cv_img):
+         """Updates the QLabel with the latest OpenCV/NDI frame and draws it"""
+-        cv_img = self.draw_on_frame(frame=cv_img, face_locations=self.processor_thread.face_locations,
+-                                    face_names=self.processor_thread.face_names,
+-                                    confidence_list=self.processor_thread.confidence_list)
++        cv_img = self.draw_on_frame(frame=cv_img)
+         qt_img = self.convert_cv_qt(cv_img)
+         self.setPixmap(qt_img)
+ 
+@@ -153,7 +151,7 @@
+             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
+         self.change_selection_signal.emit()
+ 
+-    def draw_on_frame(self, frame, face_locations, face_names, confidence_list):
++    def draw_on_frame(self, frame):
+         """
+         Is called by update_image and returns the latest frame with FPS + face box drawings if there are any.
+         :param frame:
+@@ -162,15 +160,16 @@
+         :param confidence_list:
+         :return:
+         """
+-        if face_locations is not None and face_names is not None and confidence_list is not None:
+-            for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
++        # print(self.objectName() + " | " + str(self.processor_thread))
++        if self.processor_thread.face_locations is not None and self.processor_thread.face_names is not None and self.processor_thread.confidence_list is not None:
++            for (top, right, bottom, left), name, confidence in zip(self.processor_thread.face_locations, self.processor_thread.face_names, self.processor_thread.confidence_list):
+                 # Scale back up face locations since the frame we detected in was scaled to 1/2 size
+                 top *= 2
+                 right *= 2
+                 bottom *= 2
+                 left *= 2
+ 
+-                if name == self.tracked_name:
++                if name == self.tracked_name and self.is_tracking:
+                     self.temp_tracked_name = name
+                     self.track_x = left
+                     self.track_y = top
+@@ -198,22 +197,18 @@
+         cv2.putText(frame, fps, (50, 50), constants.FONT, 1, (0, 0, 255), 2)
+         return frame
+ 
+-    def track_face(self, frame, x, y, w, h):  # Probably needs to be on its own thread
++    def track_face(self, frame, x, y, w, h):
+         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+         cv2.putText(frame, "Tracking Enabled", (75, 75), constants.FONT, 0.7, (0, 0, 255), 2)
+-        print(self.objectName() + " " + str(self.track_started))
++        print(self.objectName() + " " + str(self.tracker))
+         if self.track_started is False:
+             self.tracker = dlib.correlation_tracker()
+             rect = dlib.rectangle(x, y, w, h)
+             self.tracker.start_track(rgb_frame, rect)
+-            cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
+-            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
+             self.track_started = True
+-        # if self.temp_tracked_name == self.tracked_name:
+-        #     rect = dlib.rectangle(x, y, w, h)
+-        #     self.tracker.start_track(rgb_frame, rect)
+-        #     cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
+-        #     cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
++        if self.temp_tracked_name == self.tracked_name:
++            rect = dlib.rectangle(x, y, w, h)
++            self.tracker.start_track(rgb_frame, rect)
+         else:
+             self.tracker.update(rgb_frame)
+             pos = self.tracker.get_position()
+@@ -222,8 +217,8 @@
+             y = int(pos.top())
+             w = int(pos.right())
+             h = int(pos.bottom())
+-            cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
+-            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
++        cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
++        cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
+         return frame
+ 
+     def closeEvent(self, event):
+Index: startup.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import sys\nfrom PySide6.QtWidgets import QApplication\n\nfrom views.homepage.main_window import AutoPTZ_MainWindow\n\n\ndef main():\n    \"\"\"\n    Starts the AutoPTZ Application\n    \"\"\"\n    app = QApplication(sys.argv)\n    window = AutoPTZ_MainWindow()\n    window.show()\n    sys.exit(app.exec())\n\n\nif __name__ == '__main__':\n    main()\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/startup.py b/startup.py
+--- a/startup.py	(revision f83430776fd320c08ca56683104f3fc2f9cde7cf)
++++ b/startup.py	(date 1669154699523)
+@@ -1,13 +1,15 @@
+ import sys
+ from PySide6.QtWidgets import QApplication
+-
+ from views.homepage.main_window import AutoPTZ_MainWindow
+ 
++import faulthandler
++
+ 
+ def main():
+     """
+     Starts the AutoPTZ Application
+     """
++    faulthandler.enable()
+     app = QApplication(sys.argv)
+     window = AutoPTZ_MainWindow()
+     window.show()
