@@ -24,6 +24,7 @@ class CameraWidget(QLabel):
     display_time = 2
     fc = 0
     FPS = 0
+    tracker = None
 
     def __init__(self, source, width, height, isNDI=False):
         super().__init__()
@@ -47,7 +48,6 @@ class CameraWidget(QLabel):
         self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)
         self.processor_thread.start()
 
-        self.tracker = None
         self.track_started = False
         self.temp_tracked_name = None
         self.track_x = None
@@ -201,7 +201,7 @@ class CameraWidget(QLabel):
     def track_face(self, frame, x, y, w, h):  # Probably needs to be on its own thread
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.putText(frame, "Tracking Enabled", (75, 75), constants.FONT, 0.7, (0, 0, 255), 2)
-        print(self.objectName() + " " + str(self.track_started))
+        print(self.objectName() + " " + str(self.tracker))
         if self.track_started is False:
             self.tracker = dlib.correlation_tracker()
             rect = dlib.rectangle(x, y, w, h)
@@ -209,11 +209,11 @@ class CameraWidget(QLabel):
             cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
             cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
             self.track_started = True
-        # if self.temp_tracked_name == self.tracked_name:
-        #     rect = dlib.rectangle(x, y, w, h)
-        #     self.tracker.start_track(rgb_frame, rect)
-        #     cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
-        #     cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
+        if self.temp_tracked_name == self.tracked_name:
+            rect = dlib.rectangle(x, y, w, h)
+            self.tracker.start_track(rgb_frame, rect)
+            cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
+            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
         else:
             self.tracker.update(rgb_frame)
             pos = self.tracker.get_position()

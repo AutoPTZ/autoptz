@@ -449,6 +449,7 @@ class AutoPTZ_MainWindow(QMainWindow):
             lambda index=source, item=menu_item: self.deleteCameraWidget(source=index, menu_item=item, camera_widget=camera_widget))
         self.watch_trainer.add_camera(camera_widget=camera_widget)
         self.flowLayout.addWidget(camera_widget)
+        camera_widget.show()
 
     def deleteCameraWidget(self, source, menu_item, camera_widget):
         """Remove NDI/Serial camera source from camera FlowLayout"""
