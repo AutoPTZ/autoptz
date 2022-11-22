@@ -88,8 +88,8 @@ class ImageProcessor(Thread):
     def run(self):
         while self._run_flag:
             frame = self.stream.cv_img
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if self.add_name:
-                gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 self.add_face(frame=frame, gray_frame=gray_frame)
             elif self.encoding_data is not None:
                 try:
@@ -138,6 +138,7 @@ class ImageProcessor(Thread):
 
     def recognize_face(self, frame):
         if frame is not None:
+
             # Resize frame of video to 1/2 size for faster face recognition processing
             small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
 

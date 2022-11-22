@@ -423,7 +423,7 @@ class AutoPTZ_MainWindow(QMainWindow):
             menu_item.setText(cam.description())
             menu_item.setCheckable(True)
             menu_item.triggered.connect(
-                lambda source=index, item=menu_item: self.addCamera(source=source, menu_item=item))
+                lambda source=index, item=menu_item: self.addCameraWidget(source=source, menu_item=item))
             self.menuAdd_Hardware.addAction(menu_item)
 
     def findNDISources(self):
@@ -433,24 +433,25 @@ class AutoPTZ_MainWindow(QMainWindow):
             menu_item = QtWidgets.QWidgetAction(self)
             menu_item.setText(s.ndi_name)
             menu_item.setCheckable(True)
-            # ndi_source.triggered.connect(lambda: self.addCamera(-1, ndi_source_id, ndi_source))
+            menu_item.triggered.connect(
+                lambda source=s, item=menu_item: self.addCameraWidget(source=s, menu_item=item, isNDI=True))
             self.menuAdd_NDI.addAction(menu_item)
 
-    def addCamera(self, source, menu_item, isNDI=False):
+    def addCameraWidget(self, source, menu_item, isNDI=False):
         """Add NDI/Serial camera source from the menu to the FlowLayout"""
-        camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3)
+        camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3, isNDI=isNDI)
         camera_widget.change_selection_signal.connect(self.updateElements)
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
-            lambda index=source, item=menu_item: self.deleteCameraSource(source=index, menu_item=item, camera_widget=camera_widget))
+            lambda index=source, item=menu_item: self.deleteCameraWidget(source=index, menu_item=item, camera_widget=camera_widget))
         self.watch_trainer.add_camera(camera_widget=camera_widget)
         self.flowLayout.addWidget(camera_widget)
 
-    def deleteCameraSource(self, source, menu_item, camera_widget):
+    def deleteCameraWidget(self, source, menu_item, camera_widget):
         """Remove NDI/Serial camera source from camera FlowLayout"""
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
-            lambda index=source, item=menu_item: self.addCamera(source=index, menu_item=item))
+            lambda index=source, item=menu_item: self.addCameraWidget(source=index, menu_item=item))
         self.watch_trainer.remove_camera(camera_widget=camera_widget)
         camera_widget.stop()
         camera_widget.deleteLater()

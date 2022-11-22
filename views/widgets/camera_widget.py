@@ -13,14 +13,14 @@ from views.widgets.video_thread import VideoThread
 
 # For now this only creates USB Camera Widget
 class CameraWidget(QLabel):
-    change_selection_signal = Signal(bool)
+    change_selection_signal = Signal()
     # FPS for Performance
     start_time = time.time()
     display_time = 2
     fc = 0
     FPS = 0
 
-    def __init__(self, source, width, height):
+    def __init__(self, source, width, height, isNDI=False):
         super().__init__()
         self.width = width
         self.height = height
@@ -32,7 +32,7 @@ class CameraWidget(QLabel):
         self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(event, widget)
 
         # Create Video Capture Thread
-        self.stream_thread = VideoThread(src=source, width=width)
+        self.stream_thread = VideoThread(src=source, width=width, isNDI=isNDI)
         # Connect it's Signal to the update_image Slot Method
         self.stream_thread.change_pixmap_signal.connect(self.update_image)
         # Start the Thread
@@ -100,17 +100,9 @@ class CameraWidget(QLabel):
             constants.CURRENT_ACTIVE_CAM_WIDGET.style().unpolish(constants.CURRENT_ACTIVE_CAM_WIDGET)
             constants.CURRENT_ACTIVE_CAM_WIDGET.style().polish(constants.CURRENT_ACTIVE_CAM_WIDGET)
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
-        self.change_selection_signal.emit(True)
+        self.change_selection_signal.emit()
 
     def draw_on_face(self, frame, face_locations, face_names, confidence_list):
-        # top = 202
-        # right = 408
-        # bottom = 306
-        # left = 294
-        # cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-        # Draw a label with name and confidence for the face
-        # cv2.putText(frame, "steve", (left + 5, top - 5), constants.FONT, 0.5, (255, 255, 255), 1)
-        # cv2.putText(frame, "324", (right - 52, bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
         if face_locations is not None and face_names is not None and confidence_list is not None:
             for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
                 # Scale back up face locations since the frame we detected in was scaled to 1/2 size
