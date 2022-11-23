@@ -10,89 +10,29 @@ THRESHOLD = 0.85
 NMS_THRESHOLD = 0.3
 
 
-def face_confidence(face_distance, face_match_threshold=0.6):
-    range = (1.0 - face_match_threshold)
-    linear_val = (1.0 - face_distance) / (range * 2.0)
+class YoloHandler:
 
-    if face_distance > face_match_threshold:
-        return str(round(linear_val * 100, 2)) + '%'
-    else:
-        value = (linear_val + ((1.0 - linear_val) * math.pow((linear_val - 0.5) * 2, 0.2))) * 100
-        return str(round(value, 2)) + '%'
+    # YoloV4
+    # self.net = cv2.dnn.readNetFromDarknet('../logic/facial_tracking/trainer/yolo.cfg', '../logic/facial_tracking/trainer/yolov4-obj_final.weights')
+    # self.classes = []
+    # with open("../logic/facial_tracking/trainer/coco.names", "r") as f:
+    #     self.classes = [line.strip() for line in f.readlines()]
+    # layers_names = self.net.getLayerNames()
+    # self.output_layers = [layers_names[i - 1] for i in self.net.getUnconnectedOutLayers()]
+    # self.colors = np.random.uniform(0, 255, size=(len(self.classes), 3))
 
+    # MobileSSD
+    # self.classNames = {0: 'background',
+    #                    1: 'aeroplane', 2: 'bicycle', 3: 'bird', 4: 'boat',
+    #                    5: 'bottle', 6: 'bus', 7: 'car', 8: 'cat', 9: 'chair',
+    #                    10: 'cow', 11: 'diningtable', 12: 'dog', 13: 'horse',
+    #                    14: 'motorbike', 15: 'person', 16: 'pottedplant',
+    #                    17: 'sheep', 18: 'sofa', 19: 'train', 20: 'tvmonitor'}
+    # self.net = cv2.dnn.readNetFromCaffe('../logic/facial_tracking/trainer/MobileNetSSD_deploy.prototxt',
+    #                                     '../logic/facial_tracking/trainer/MobileNetSSD_deploy.caffemodel')
 
-class TrackHandler:
-    def __init__(self, face_loc=None, face_enc=None, face_names=None, confidence_list=None, process_this_frame=True):
-        self.face_locations = face_loc
-        self.face_encodings = face_enc
-        self.face_names = face_names
-        self.confidence_list = confidence_list
-        self.face_rec = face_recognition.FaceRec()
-        self.process_this_frame = process_this_frame
-        if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
-            self.data = pickle.loads(open("../logic/facial_tracking/trainer/encodings.pickle", "rb").read())
-
-        # YoloV4
-        # self.net = cv2.dnn.readNetFromDarknet('../logic/facial_tracking/trainer/yolo.cfg', '../logic/facial_tracking/trainer/yolov4-obj_final.weights')
-        # self.classes = []
-        # with open("../logic/facial_tracking/trainer/coco.names", "r") as f:
-        #     self.classes = [line.strip() for line in f.readlines()]
-        # layers_names = self.net.getLayerNames()
-        # self.output_layers = [layers_names[i - 1] for i in self.net.getUnconnectedOutLayers()]
-        # self.colors = np.random.uniform(0, 255, size=(len(self.classes), 3))
-
-        # MobileSSD
-        # self.classNames = {0: 'background',
-        #                    1: 'aeroplane', 2: 'bicycle', 3: 'bird', 4: 'boat',
-        #                    5: 'bottle', 6: 'bus', 7: 'car', 8: 'cat', 9: 'chair',
-        #                    10: 'cow', 11: 'diningtable', 12: 'dog', 13: 'horse',
-        #                    14: 'motorbike', 15: 'person', 16: 'pottedplant',
-        #                    17: 'sheep', 18: 'sofa', 19: 'train', 20: 'tvmonitor'}
-        # self.net = cv2.dnn.readNetFromCaffe('../logic/facial_tracking/trainer/MobileNetSSD_deploy.prototxt',
-        #                                     '../logic/facial_tracking/trainer/MobileNetSSD_deploy.caffemodel')
-
-        # self.net.setPreferableBackend(cv2.dnn.DNN_TARGET_CUDA)
-        # self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
-    def resetFacialRecognition(self):
-        if os.path.exists("../logic/facial_tracking/trainer/encodings.pickle"):
-            self.data = pickle.loads(open("../logic/facial_tracking/trainer/encodings.pickle", "rb").read())
-
-    # facial recognition code
-    def recognize_face(self, frame):
-
-        if self.process_this_frame:
-            # Resize frame of video to 1/2 size for faster face recognition processing
-            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-
-            # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
-            rgb_small_frame = small_frame[:, :, ::-1]
-
-            # Find all the faces and face encodings in the current frame of video
-            self.face_locations = self.face_rec.face_locations(rgb_small_frame)
-            top, right, bottom, left = self.face_locations
-            self.face_locations = (left, top, bottom, right)
-
-            self.face_encodings = self.face_rec.face_encodings(rgb_small_frame, self.face_locations)
-
-            self.face_names = []
-            self.confidence_list = []
-            for face_encoding in self.face_encodings:
-                # See if the face is a match for the known face(s)
-                matches = self.face_rec.compare_faces(self.data['encodings'], face_encoding)
-                name = "Unknown"
-                confidence = ''
-                # Or instead, use the known face with the smallest distance to the new face
-                face_distances = self.face_rec.face_distance(self.data['encodings'], face_encoding)
-                best_match_index = np.argmin(face_distances)
-                if matches[best_match_index]:
-                    name = self.data['names'][best_match_index]
-                    confidence = face_confidence(face_distances[best_match_index], 0.6)
-                self.face_names.append(name)
-                self.confidence_list.append(confidence)
-
-        self.process_this_frame = not self.process_this_frame
-
-        return self.face_locations, self.face_names, self.confidence_list
+    # self.net.setPreferableBackend(cv2.dnn.DNN_TARGET_CUDA)
+    # self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
 
     # object detection code
     def get_box_center(self, box):
@@ -205,8 +145,8 @@ class TrackHandler:
                 x, y, w, h = bbox[i]
                 label = str(self.classes[class_ids[i]])
                 color = self.colors[i]
-                cv2.rectangle(frame, (x * 4, y * 4), (x*4 + w*4, y*4 + h*4), color, 2)
-                cv2.putText(frame, label, (x*4, y*4 - 5), font, 1, color, 1)
+                cv2.rectangle(frame, (x * 4, y * 4), (x * 4 + w * 4, y * 4 + h * 4), color, 2)
+                cv2.putText(frame, label, (x * 4, y * 4 - 5), font, 1, color, 1)
         return frame
 
     def show_yolo_bboxes(self, frame):

@@ -37,7 +37,6 @@ class ImageProcessor(Thread):
     face_locations = None
     face_names = None
     confidence_list = None
-    tracked_location = None
     count = 0
     add_name = None
     face_rec = None
@@ -49,11 +48,11 @@ class ImageProcessor(Thread):
         self._run_flag = True
         self.lock = lock
         self.daemon = True
-        # CameraWidget will access these four variables for Facial Recognition (3) and Tracking (1)
-        self.face_locations = None
-        self.face_names = None
-        self.confidence_list = None
-        self.tracked_location = None
+
+        # CameraWidget will access these three variables for Facial Recognition
+        self.face_locations = []
+        self.face_names = []
+        self.confidence_list = []
 
         # Variables for Adding Faces, Recognition, and Tracking
         self.count = 0
@@ -93,6 +92,9 @@ class ImageProcessor(Thread):
 
         faces = constants.FACE_CASCADE.detectMultiScale(gray_frame, scaleFactor=1.1, minNeighbors=10,
                                                         minSize=(int(min_w), int(min_h)))
+        self.face_locations = []
+        self.face_names = []
+        self.confidence_list = []
         time.sleep(0.07)  # add artificial timer sleep so users can see the boxes draw
         for x, y, w, h in faces:
             self.count += 1
