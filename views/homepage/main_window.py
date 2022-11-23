@@ -463,7 +463,6 @@ class AutoPTZ_MainWindow(QMainWindow):
 
     def create_lambda(self, src, menu_item):
         return lambda: self.addCameraWidget(source=src, menu_item=menu_item, isNDI=True)
-        # return lambda: print(src.ndi_name)
 
     def deleteCameraWidget(self, source, menu_item, camera_widget):
         """Remove NDI/Serial camera source from camera FlowLayout"""

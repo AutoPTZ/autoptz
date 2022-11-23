@@ -1,6 +1,8 @@
-import cv2
-import shared.constants as constants
 from threading import Thread
+
+import cv2
+from PySide6.QtCore import QThread
+import shared.constants as constants
 import os
 import pickle
 import math
@@ -71,16 +73,17 @@ class ImageProcessor(Thread):
             frame = self.stream.cv_img
             if frame is not None:
                 gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                print(self.add_name)
                 if self.add_name:
                     self.add_face(frame=frame, gray_frame=gray_frame)
                 elif self.encoding_data is not None:
                     try:
                         self.recognize_face(frame)
+                        self.lock.release()
                     except Exception as e:
                         print(e)
                 else:  # Free up threads and fixes Window's performance issue with useless thread
                     self.stop()
-                self.lock.release()
 
     def add_face(self, frame, gray_frame):
         """
@@ -158,3 +161,6 @@ class ImageProcessor(Thread):
     def stop(self):
         """Sets run flag to False and waits for thread to finish"""
         self._run_flag = False
+        self.lock.release()
+        # self.wait()
+        # self.deleteLater()

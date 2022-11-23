@@ -75,6 +75,7 @@ class CameraWidget(QLabel):
         self.processor_thread.stop()
         self.stream_thread.stop()
         self.deleteLater()
+        self.destroy()
 
     def set_add_name(self, name):
         """
@@ -267,4 +268,6 @@ class CameraWidget(QLabel):
         """
         self.processor_thread.stop()
         self.stream_thread.stop()
+        self.deleteLater()
+        # self.destroy()
         event.accept()
