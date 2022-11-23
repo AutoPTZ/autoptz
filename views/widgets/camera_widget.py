@@ -24,12 +24,22 @@ class CameraWidget(QLabel):
     display_time = 2
     fc = 0
     FPS = 0
-    tracker = None
+    stream_thread = None
+    processor_thread = None
+    track_started = None
+    temp_tracked_name = None
+    track_x = None
+    track_y = None
+    track_w = None
+    track_h = None
+    is_tracking = None
+    tracked_name = None
 
-    def __init__(self, source, width, height, isNDI=False):
+    def __init__(self, source, width, height, lock, isNDI=False):
         super().__init__()
         self.width = width
         self.height = height
+        self.lock = lock
         self.setProperty('active', False)
         # self.resize(width, height)
         self.setObjectName(f"Camera Source: {source}")
@@ -44,9 +54,12 @@ class CameraWidget(QLabel):
         # Start the Thread
         self.stream_thread.start()
 
+        time.sleep(1)
+
         # Create and Run Image Processor Thread
-        self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)
+        self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
         self.processor_thread.start()
+        time.sleep(1)
 
         self.track_started = False
         self.temp_tracked_name = None
@@ -56,6 +69,7 @@ class CameraWidget(QLabel):
         self.track_h = None
         self.is_tracking = False  # If Track Checkbox is checked
         self.tracked_name = None  # Face that needs to be tracked
+        self.tracker = dlib.correlation_tracker()
 
     def stop(self):
         """
@@ -77,9 +91,10 @@ class CameraWidget(QLabel):
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
             # Create and Run Image Processor Thread
-            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)
+            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
             self.processor_thread.add_name = name
             self.processor_thread.start()
+            time.sleep(1)
 
     def check_encodings(self):
         """
@@ -91,8 +106,9 @@ class CameraWidget(QLabel):
             self.processor_thread.check_encodings()
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
-            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread)
+            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
             self.processor_thread.start()
+            time.sleep(1)
 
     def set_tracking(self):
         self.track_x = None
@@ -165,10 +181,10 @@ class CameraWidget(QLabel):
         if face_locations is not None and face_names is not None and confidence_list is not None:
             for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
                 # Scale back up face locations since the frame we detected in was scaled to 1/2 size
-                top *= 2
-                right *= 2
-                bottom *= 2
-                left *= 2
+                # top *= 2
+                # right *= 2
+                # bottom *= 2
+                # left *= 2
 
                 if name == self.tracked_name:
                     self.temp_tracked_name = name
@@ -201,9 +217,7 @@ class CameraWidget(QLabel):
     def track_face(self, frame, x, y, w, h):  # Probably needs to be on its own thread
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.putText(frame, "Tracking Enabled", (75, 75), constants.FONT, 0.7, (0, 0, 255), 2)
-        print(self.objectName() + " " + str(self.tracker))
         if self.track_started is False:
-            self.tracker = dlib.correlation_tracker()
             rect = dlib.rectangle(x, y, w, h)
             self.tracker.start_track(rgb_frame, rect)
             cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)

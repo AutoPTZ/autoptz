@@ -1,4 +1,6 @@
 import time
+from threading import Thread
+
 import cv2
 from PySide6.QtCore import QThread, Signal
 import shared.constants as constants
@@ -13,12 +15,20 @@ class VideoThread(QThread):
     Emits/Returns the latest frame to the relative CameraWidget.
     """
     change_pixmap_signal = Signal(np.ndarray)
+    _run_flag = None
+    width = None
+    isNDI = None
+    ndi_recv = None
+    ret = None
+    cv_img = None
+    imutils = None
 
     def __init__(self, src, width, isNDI=False):
         super().__init__()
         self._run_flag = True
         self.width = width
         self.isNDI = isNDI
+        self.imutils = imutils
         if isNDI:
             ndi_source_object = src
             ndi_recv_create = ndi.RecvCreateV3(ndi_source_object)
@@ -28,7 +38,8 @@ class VideoThread(QThread):
             self.ret, v, _, _ = ndi.recv_capture_v3(self.ndi_recv, 5000)
         else:
             self.cap = cv2.VideoCapture(src)
-            (self.ret, self.cv_img) = self.cap.read()
+            (self.ret, img) = self.cap.read()
+            self.cv_img = self.imutils.resize(img, width=self.width)
 
     def run(self):
         """
@@ -42,9 +53,9 @@ class VideoThread(QThread):
                     # self.cv_img = imutils.resize(cv_img, width=self.width)
                     self.change_pixmap_signal.emit(self.cv_img)
             else:
-                (self.ret, self.cv_img) = self.cap.read()
+                (self.ret, img) = self.cap.read()
                 if self.ret:
-                    # self.cv_img = imutils.resize(cv_img, width=self.width)
+                    self.cv_img = self.imutils.resize(img, width=self.width)
                     self.change_pixmap_signal.emit(self.cv_img)
 
         # shut down capture system

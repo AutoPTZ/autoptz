@@ -1,5 +1,7 @@
 import os
 from functools import partial
+from threading import Lock
+
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtMultimedia import QMediaDevices
 from PySide6.QtWidgets import QMainWindow
@@ -28,6 +30,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         super(AutoPTZ_MainWindow, self).__init__(*args, **kwargs)
         self.threadpool = QtCore.QThreadPool()
         self.threadpool.maxThreadCount()
+        self.lock = Lock()
 
         # setting up main window
         self.setObjectName("AutoPTZ")
@@ -442,7 +445,7 @@ class AutoPTZ_MainWindow(QMainWindow):
 
     def addCameraWidget(self, source, menu_item, isNDI=False):
         """Add NDI/Serial camera source from the menu to the FlowLayout"""
-        camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3, isNDI=isNDI)
+        camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3, isNDI=isNDI, lock=self.lock)
         camera_widget.change_selection_signal.connect(self.updateElements)
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(

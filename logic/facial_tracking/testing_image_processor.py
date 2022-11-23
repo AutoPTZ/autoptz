@@ -5,7 +5,7 @@ import cv2
 from PySide6.QtCore import QThread
 
 import shared.constants as constants
-from threading import Thread
+from threading import Thread, Lock
 import os
 import pickle
 import math
@@ -69,18 +69,32 @@ def face_confidence(face_distance, face_match_threshold=0.6):
 #     return face_locations, face_names, confidence_list
 
 
-class ImageProcessor(QThread):
+class ImageProcessor:
     """
     Threaded ImageProcessor for CameraWidget.
     Used for added faces to database and facial recognition for now.
     *** NEED TO ADD FACIAL TRACKING ***
     """
+    stream = None
+    _run_flag = None
 
-    def __init__(self, stream_thread):
+    # CameraWidget will access these four variables for Facial Recognition (3) and Tracking (1)
+    face_locations = None
+    face_names = None
+    confidence_list = None
+    tracked_location = None
+
+    # Variables for Adding Faces, Recognition, and Tracking
+    count = 0
+    add_name = None
+    face_rec = None
+    encoding_data = None
+
+    def __init__(self, stream_thread, lock):
         super().__init__()
         self.stream = stream_thread
         self._run_flag = True
-
+        self.lock = lock
         # CameraWidget will access these four variables for Facial Recognition (3) and Tracking (1)
         self.face_locations = None
         self.face_names = None
@@ -99,6 +113,8 @@ class ImageProcessor(QThread):
         Runs continuously on CameraWidget.start() to provide the latest face boxes for CameraWidget to drawn until _run_flag is False.
         """
         while self._run_flag:
+            self.lock.acquire(blocking=True)
+            print(str(self.stream) + " | " + str(self.face_rec))
             frame = self.stream.cv_img
             gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if self.add_name:
@@ -108,19 +124,9 @@ class ImageProcessor(QThread):
                     self.recognize_face(frame)
                 except Exception as e:
                     print(e)
-                # p = Pool(processes=6)
-                # data = p.map(recognize_face, [frame])
-                #
-                # for loc, name, conf in data:
-                #     self.face_locations = loc
-                #     self.face_names = name
-                #     self.confidence_list = conf
-
-                # recognition = Process(target=recognize_face, args=(frame,))
-                # recognition.start()
-                # recognition.join()
             else:  # Free up threads and fixes Window's performance issue with useless thread
                 self.stop()
+            self.lock.release()
 
     def add_face(self, frame, gray_frame):
         """
@@ -134,9 +140,6 @@ class ImageProcessor(QThread):
         faces = constants.FACE_CASCADE.detectMultiScale(gray_frame, scaleFactor=1.1, minNeighbors=10,
                                                         minSize=(int(min_w), int(min_h)))
         time.sleep(0.07)  # add artificial timer sleep so users can see the boxes draw
-        self.face_locations = []
-        self.face_names = []
-        self.confidence_list = []
         for x, y, w, h in faces:
             self.count += 1
             location = constants.IMAGE_PATH + self.add_name + '/' + str(self.count) + '.jpg'
@@ -160,10 +163,10 @@ class ImageProcessor(QThread):
         """
         if frame is not None:
             # Resize frame of video to 1/2 size for faster face recognition processing
-            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+            # small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
 
             # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
-            rgb_small_frame = small_frame[:, :, ::-1]
+            rgb_small_frame = frame[:, :, ::-1]
 
             # Find all the faces and face encodings in the current frame of video
             self.face_locations = self.face_rec.face_locations(rgb_small_frame, number_of_times_to_upsample=0)
