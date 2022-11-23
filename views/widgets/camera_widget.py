@@ -181,10 +181,10 @@ class CameraWidget(QLabel):
         if face_locations is not None and face_names is not None and confidence_list is not None:
             for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
                 # Scale back up face locations since the frame we detected in was scaled to 1/2 size
-                # top *= 2
-                # right *= 2
-                # bottom *= 2
-                # left *= 2
+                top *= 2
+                right *= 2
+                bottom *= 2
+                left *= 2
 
                 if name == self.tracked_name:
                     self.temp_tracked_name = name

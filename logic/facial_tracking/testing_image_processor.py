@@ -69,7 +69,7 @@ def face_confidence(face_distance, face_match_threshold=0.6):
 #     return face_locations, face_names, confidence_list
 
 
-class ImageProcessor:
+class ImageProcessor(Thread):
     """
     Threaded ImageProcessor for CameraWidget.
     Used for added faces to database and facial recognition for now.
@@ -95,6 +95,7 @@ class ImageProcessor:
         self.stream = stream_thread
         self._run_flag = True
         self.lock = lock
+        self.daemon = True
         # CameraWidget will access these four variables for Facial Recognition (3) and Tracking (1)
         self.face_locations = None
         self.face_names = None
@@ -107,6 +108,7 @@ class ImageProcessor:
         self.face_rec = FaceRec()
         self.encoding_data = None
         self.check_encodings()
+        self.skip_frame = True
 
     def run(self):
         """
@@ -114,7 +116,6 @@ class ImageProcessor:
         """
         while self._run_flag:
             self.lock.acquire(blocking=True)
-            print(str(self.stream) + " | " + str(self.face_rec))
             frame = self.stream.cv_img
             gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if self.add_name:
@@ -161,12 +162,12 @@ class ImageProcessor:
         Runs grabbed frame through Facial Recognition Library and sets Face Locations, Names, and Confidences in a list.
         :param frame:
         """
-        if frame is not None:
+        if frame is not None and self.skip_frame:
             # Resize frame of video to 1/2 size for faster face recognition processing
-            # small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
 
             # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
-            rgb_small_frame = frame[:, :, ::-1]
+            rgb_small_frame = small_frame[:, :, ::-1]
 
             # Find all the faces and face encodings in the current frame of video
             self.face_locations = self.face_rec.face_locations(rgb_small_frame, number_of_times_to_upsample=0)
@@ -188,6 +189,7 @@ class ImageProcessor:
                     confidence = face_confidence(face_distances[best_match_index], 0.6)
                 self.face_names.append(name)
                 self.confidence_list.append(confidence)
+        self.skip_frame = not self.skip_frame
 
     def check_encodings(self):
         """

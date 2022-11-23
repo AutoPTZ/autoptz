@@ -27,6 +27,7 @@ class VideoThread(QThread):
         super().__init__()
         self._run_flag = True
         self.width = width
+        self.daemon = True
         self.isNDI = isNDI
         self.imutils = imutils
         if isNDI:
