@@ -1,19 +1,12 @@
-import multiprocessing
-from multiprocessing import Process, Pool
-
 import cv2
-from PySide6.QtCore import QThread
-
 import shared.constants as constants
-from threading import Thread, Lock
+from threading import Thread
 import os
 import pickle
 import math
 import numpy as np
 import time
 from libraries.face_recognition import FaceRec
-from logic.facial_tracking.dialogs.train_face import TrainerDlg
-from multiprocessing import Process
 
 
 def face_confidence(face_distance, face_match_threshold=0.6):
@@ -33,58 +26,18 @@ def face_confidence(face_distance, face_match_threshold=0.6):
         return str(round(value, 2)) + '%'
 
 
-# def recognize_face(frame):
-#     tic = timeit.default_timer()
-#     encoding_data = pickle.loads(open(constants.ENCODINGS_PATH, "rb").read())
-#     face_rec = FaceRec()
-#     face_locations = []
-#     face_names = []
-#     confidence_list = []
-#     if frame is not None:
-#         # Resize frame of video to 1/2 size for faster face recognition processing
-#         small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-#
-#         # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
-#         rgb_small_frame = small_frame[:, :, ::-1]
-#
-#         # Find all the faces and face encodings in the current frame of video
-#         face_locations = face_rec.face_locations(rgb_small_frame, number_of_times_to_upsample=0, model="cnn")
-#         face_encodings = face_rec.face_encodings(rgb_small_frame, face_locations)
-#         for face_encoding in face_encodings:
-#             # See if the face is a match for the known face(s)
-#             matches = face_rec.compare_faces(encoding_data['encodings'], face_encoding)
-#             name = "Unknown"
-#             confidence = ''
-#             # Or instead, use the known face with the smallest distance to the new face
-#             face_distances = face_rec.face_distance(encoding_data['encodings'], face_encoding)
-#             best_match_index = np.argmin(face_distances)
-#             if matches[best_match_index]:
-#                 name = encoding_data['names'][best_match_index]
-#                 confidence = face_confidence(face_distances[best_match_index])
-#             face_names.append(name)
-#             confidence_list.append(confidence)
-#     toc = timeit.default_timer()
-#     print(f'Done in {toc - tic}')
-#     print(face_locations, face_names, confidence_list)
-#     return face_locations, face_names, confidence_list
-
-
 class ImageProcessor(Thread):
     """
     Threaded ImageProcessor for CameraWidget.
-    Used for added faces to database and facial recognition for now.
-    *** NEED TO ADD FACIAL TRACKING ***
+    Used for added faces to database and facial recognition.
     """
     stream = None
     _run_flag = None
-
-    # CameraWidget will access these four variables for Facial Recognition (3) and Tracking (1)
+    lock = None
     face_locations = None
     face_names = None
     confidence_list = None
     tracked_location = None
-
-    # Variables for Adding Faces, Recognition, and Tracking
     count = 0
     add_name = None
     face_rec = None
@@ -186,7 +139,7 @@ class ImageProcessor(Thread):
                 best_match_index = np.argmin(face_distances)
                 if matches[best_match_index]:
                     name = self.encoding_data['names'][best_match_index]
-                    confidence = face_confidence(face_distances[best_match_index], 0.6)
+                    confidence = face_confidence(face_distances[best_match_index])
                 self.face_names.append(name)
                 self.confidence_list.append(confidence)
         self.skip_frame = not self.skip_frame

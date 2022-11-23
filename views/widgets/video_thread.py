@@ -1,9 +1,5 @@
-import time
-from threading import Thread
-
 import cv2
 from PySide6.QtCore import QThread, Signal
-import shared.constants as constants
 import numpy as np
 import NDIlib as ndi
 import imutils

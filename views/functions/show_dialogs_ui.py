@@ -10,7 +10,9 @@ import shared.constants as constants
 
 
 class ShowDialog:
-
+    """
+    Simplified Add/Train/Remove/Reset Dialog methods into one place
+    """
     def __init__(self):
         super(ShowDialog, self).__init__()
 
@@ -47,6 +49,7 @@ class ShowDialog:
 
     @staticmethod
     def retrain_face():
+        """ Launch the Retrain Model dialog. """
         if not os.path.isdir(constants.IMAGE_PATH) or not os.listdir(constants.IMAGE_PATH):
             show_info_messagebox("No Faces to train.")
         else:

@@ -2,6 +2,11 @@ from PySide6.QtWidgets import QMessageBox
 
 
 def show_critical_messagebox(window_title, critical_message):
+    """
+    Used for Critical Popup Windows if something went wrong to notify the user
+    :param window_title:
+    :param critical_message:
+    """
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Icon.Critical)
     # setting message for Message Box
@@ -15,6 +20,10 @@ def show_critical_messagebox(window_title, critical_message):
 
 
 def show_info_messagebox(info_message):
+    """
+    Used for General Popup Windows if something has or will happen to notify the user
+    :param info_message:
+    """
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Icon.Information)
     # setting message for Message Box

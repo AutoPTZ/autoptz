@@ -5,7 +5,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtCore import Signal
 import cv2
 import time
-import imutils
 import dlib
 import shared.constants as constants
 from logic.facial_tracking.testing_image_processor import ImageProcessor
@@ -17,6 +16,7 @@ class CameraWidget(QLabel):
     Create and handle all Cameras that are added to the UI.
     It creates a QLabel as OpenCV and NDI video can be converted to QPixmap for display.
     Combines both VideoThread and ImageProcessor threads for asynchronous computation for smoother looking video.
+    With the latest frame, Dlib Object Tracking is in use and works alongside with FaceRecognition to fix any inconsistencies when tracking.
     """
     change_selection_signal = Signal()
     # FPS for Performance
@@ -54,12 +54,9 @@ class CameraWidget(QLabel):
         # Start the Thread
         self.stream_thread.start()
 
-        time.sleep(1)
-
         # Create and Run Image Processor Thread
         self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
         self.processor_thread.start()
-        time.sleep(1)
 
         self.track_started = False
         self.temp_tracked_name = None
@@ -86,7 +83,7 @@ class CameraWidget(QLabel):
         If the Processor thread is not alive then start up the thread, then add the face.
         :param name:
         """
-        if self.processor_thread.isRunning():
+        if self.processor_thread.is_alive():
             self.processor_thread.add_name = name
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
@@ -102,7 +99,7 @@ class CameraWidget(QLabel):
         If the Processor thread is already alive then tell the thread to check encodings again.
         If the Processor thread is not alive then start up the thread, the thread will automatically check encodings.
         """
-        if self.processor_thread.isRunning():
+        if self.processor_thread.is_alive():
             self.processor_thread.check_encodings()
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
@@ -111,6 +108,9 @@ class CameraWidget(QLabel):
             time.sleep(1)
 
     def set_tracking(self):
+        """
+        Resets tracking variables when user toggles the checkbox
+        """
         self.track_x = None
         self.track_y = None
         self.track_w = None
@@ -118,13 +118,25 @@ class CameraWidget(QLabel):
         self.is_tracking = not self.is_tracking
 
     def set_tracked_name(self, name):
+        """
+        Sets the name to track, used to start tracking based on face recognition data
+        :param name:
+        """
         self.tracked_name = name
 
-    def get_tracked_name(self):
-        return self.tracked_name
-
     def get_tracking(self):
+        """
+        Returns if tracking is enabled
+        :return:
+        """
         return self.is_tracking
+
+    def get_tracked_name(self):
+        """
+        Returns current tracked name
+        :return:
+        """
+        return self.tracked_name
 
     def update_image(self, cv_img):
         """Updates the QLabel with the latest OpenCV/NDI frame and draws it"""
@@ -214,7 +226,16 @@ class CameraWidget(QLabel):
         cv2.putText(frame, fps, (50, 50), constants.FONT, 1, (0, 0, 255), 2)
         return frame
 
-    def track_face(self, frame, x, y, w, h):  # Probably needs to be on its own thread
+    def track_face(self, frame, x, y, w, h):
+        """
+        Uses Dlib Object Tracking to set and update the currently tracked person
+        :param frame:
+        :param x:
+        :param y:
+        :param w:
+        :param h:
+        :return:
+        """
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.putText(frame, "Tracking Enabled", (75, 75), constants.FONT, 0.7, (0, 0, 255), 2)
         if self.track_started is False:
