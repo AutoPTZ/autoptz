@@ -99,7 +99,7 @@ class TrainerThread(QtCore.QThread):
                 print(f"Processing {i + 1} of {len(image_paths)}")
                 self.CURRENT_TEXT_SIGNAL.emit(f"Processing {i + 1} of {len(image_paths)}")
                 self.CURRENT_VALUE_SIGNAL.emit(i + 1)
-                name = imagePath.split(os.path.sep)[-2]
+                name = os.path.basename(os.path.dirname(imagePath))
                 image = cv2.imread(imagePath)
                 rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 boxes = self.face_recognition.face_locations(rgb)

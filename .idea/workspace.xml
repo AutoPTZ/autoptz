@@ -5,10 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="maybe moving dlib">
+      <change beforePath="$PROJECT_DIR$/.idea/autoptz.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/autoptz.iml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/shelf/maybe_moving_dlib.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/shelf/maybe_moving_dlib.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/old_image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/old_image_processor.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/old_track_handler.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/old_yolo_handler.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/testing_image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/testing_image_processor.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -65,28 +66,7 @@
       <recent name="$PROJECT_DIR$/ui/widgets" />
     </key>
   </component>
-  <component name="RunManager" selected="Python.startup">
-    <configuration name="flow_layout" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
-      <module name="autoptz" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/views/homepage" />
-      <option name="IS_MODULE_SDK" value="true" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/views/homepage/flow_layout.py" />
-      <option name="PARAMETERS" value="" />
-      <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
-      <option name="MODULE_MODE" value="false" />
-      <option name="REDIRECT_INPUT" value="false" />
-      <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
+  <component name="RunManager">
     <configuration name="startup" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="autoptz" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -111,7 +91,6 @@
     <recent_temporary>
       <list>
         <item itemvalue="Python.startup" />
-        <item itemvalue="Python.flow_layout" />
       </list>
     </recent_temporary>
   </component>
