@@ -2,6 +2,7 @@ import os
 import cv2
 from threading import Thread
 import dlib
+import asyncio
 
 from logic.facial_tracking.dialogs.train_face import Trainer
 
@@ -35,6 +36,7 @@ class ImageProcessor(Thread):
 
         # VISCA/ONVIF PTZ Control
         self.ptz_ready = None
+        self.isONVIF = False
         self.camera_control = None
         self.camera_control_thread = None
         self.start_thread = False
@@ -64,14 +66,14 @@ class ImageProcessor(Thread):
     def add_face(self, frame):
         minW = 0.1 * frame.shape[1]
         minH = 0.1 * frame.shape[0]
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=10,
+        # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = self.face_cascade.detectMultiScale(frame, scaleFactor=1.1, minNeighbors=6,
                                                    minSize=(int(minW), int(minH)))
         for x, y, w, h in faces:
             self.count = self.count + 1
             name = self.image_path + self.adding_to_name + '/' + str(self.count) + '.jpg'
             print("\n [INFO] Creating Images........." + name)
-            cv2.imwrite(name, gray[y:y + h, x:x + w])
+            cv2.imwrite(name, frame[y:y + h, x:x + w])
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
 
         if self.count >= 50:  # Take 50 face sample and stop video
@@ -159,35 +161,54 @@ class ImageProcessor(Thread):
         self.current_y = y
         self.current_w = w
         self.current_h = h
-        if self.camera_control_thread is not None and self.start_thread is False:
-            # run move_camera in background for network camera
-            self.camera_control_thread.start()
-            self.start_thread = True
-        else:
-            self.move_camera(False)
+        self.move_camera()
+        # if self.camera_control_thread is not None and self.start_thread is False:
+        #     # run move_camera in background for network camera
+        #     self.start_thread = True
+        #     print('start')
+        #     self.camera_control_thread.start()
+        #     print('done')
+        # else:
+        #     self.move_camera()
         return frame
 
-    def move_camera(self, isONVIF):
-        if isONVIF:
-            while self.enable_track_checked:
-                if self.is_moving_left or self.is_moving_up or self.is_moving_right or self.is_moving_down and self.current_x > self.min_x and self.current_w < self.max_x and self.current_y > self.min_y and self.current_h < self.max_y:
-                    self.camera_control.stop_move()
-                    self.is_moving_left = False
-                    self.is_moving_right = False
-                    self.is_moving_up = False
-                    self.is_moving_down = False
-                if self.current_w > self.max_x and self.is_moving_right is False:
-                    self.camera_control.continuous_move(0.05, 0, 0)
-                    self.is_moving_right = True
-                elif self.current_x < self.min_x and self.is_moving_left is False:
-                    self.camera_control.continuous_move(-0.05, 0, 0)
-                    self.is_moving_left = True
-                if self.current_h > self.max_y and self.is_moving_down is False:
-                    self.camera_control.continuous_move(0, -0.05, 0)
-                    self.is_moving_down = True
-                elif self.current_y < self.min_y and self.is_moving_up is False:
-                    self.camera_control.continuous_move(0, 0.05, 0)
-                    self.is_moving_up = True
+    def move_camera(self):
+        if self.isONVIF:
+            # while self.is_track_enabled:
+            if self.is_moving_left and self.current_x > self.min_x and self.current_w < self.max_x and self.current_y > self.min_y and self.current_h < self.max_y:
+                self.camera_control.stop_move()
+                self.is_moving_left = False
+            if self.current_w > self.max_x:
+                self.camera_control.relative_move(0.003, 0, 0)
+                self.is_moving_left = True
+            elif self.current_x < self.min_x and self.is_moving_left:
+                self.camera_control.relative_move(-0.003, 0, 0)
+                self.is_moving_left = True
+            if self.current_h > self.max_y and self.is_moving_down:
+                self.camera_control.relative_move(0, -0.003, 0)
+                self.is_moving_left = True
+            elif self.current_y < self.min_y and self.is_moving_up:
+                self.camera_control.relative_move(0, 0.003, 0)
+                self.is_moving_left = True
+            # if self.current_x is not None and self.current_y is not None and self.current_w is not None and self.current_h is not None and self.min_x is not None and self.min_y is not None and self.max_x is not None and self.max_y is not None:
+                # if self.is_moving_left or self.is_moving_up or self.is_moving_right or self.is_moving_down and self.current_x > self.min_x and self.current_w < self.max_x and self.current_y > self.min_y and self.current_h < self.max_y:
+                #     self.camera_control.stop_move()
+                #     self.is_moving_left = False
+                #     self.is_moving_right = False
+                #     self.is_moving_up = False
+                #     self.is_moving_down = False
+                # if self.current_w > self.max_x and self.is_moving_right is False:
+                #     self.camera_control.continuous_move(0.05, 0, 0)
+                #     self.is_moving_right = True
+                # elif self.current_x < self.min_x and self.is_moving_left is False:
+                #     self.camera_control.continuous_move(-0.05, 0, 0)
+                #     self.is_moving_left = True
+                # if self.current_h > self.max_y and self.is_moving_down is False:
+                #     self.camera_control.continuous_move(0, -0.05, 0)
+                #     self.is_moving_down = True
+                # elif self.current_y < self.min_y and self.is_moving_up is False:
+                #     self.camera_control.continuous_move(0, 0.05, 0)
+                #     self.is_moving_up = True
         else:
             if self.is_moving_left or self.is_moving_up or self.is_moving_right or self.is_moving_down and self.current_x > self.min_x and self.current_w < self.max_x and self.current_y > self.min_y and self.current_h < self.max_y:
                 self.camera_control.move_stop()
@@ -271,6 +292,14 @@ class ImageProcessor(Thread):
         return self.ptz_ready
 
     def config_enable_track(self):
+        if self.camera_control is not None:
+            if self.ptz_ready is None:
+                self.camera_control.move_stop()
+            else:
+                self.camera_control.stop_move()
+        self.enable_track_checked = not self.enable_track_checked
+        if self.enable_track_checked is False and self.camera_control_thread is not None:
+            self.camera_control_thread.join()
         self.track_started = None
         self.tracker = None
         self.track_x = None
@@ -289,22 +318,20 @@ class ImageProcessor(Thread):
         self.is_moving_right = False
         self.is_moving_up = False
         self.is_moving_down = False
-        if self.camera_control is not None:
-            if self.ptz_ready is None:
-                self.camera_control.move_stop()
-            else:
-                self.camera_control.stop_move()
-        self.enable_track_checked = not self.enable_track_checked
-        if not self.enable_track_checked and self.camera_control_thread is not None:
-            self.camera_control_thread.join()
+        self.camera_control_thread = None
 
     def is_track_enabled(self):
         return self.enable_track_checked
 
     def set_ptz_controller(self, control, isONVIF):
         self.camera_control = control
+
         if isONVIF:
-            self.camera_control_thread.setDaemon(True)
-            self.camera_control_thread = Thread(target=self.move_camera, args=(isONVIF,))
+            self.isONVIF = True
+            # print(self.isONVIF)
+            # self.camera_control_thread = Thread(target=self.move_camera)
+            # print('threaded')
+            # self.camera_control_thread.setDaemon(True)
+            # print('done')
         else:
             self.camera_control_thread = None

@@ -40,7 +40,8 @@ class NDICameraWidget(QtWidgets.QWidget):
         self.ndi_source_object = ndi_source
         self.ndi_recv_create = ndi.RecvCreateV3()
         self.ndi_recv_create.color_format = ndi.RECV_COLOR_FORMAT_BGRX_BGRA
-        self.ndi_recv_create.bandwidth = ndi.RECV_BANDWIDTH_LOWEST
+        # self.ndi_recv_create.bandwidth = ndi.RECV_BANDWIDTH_LOWEST
+        self.ndi_recv_create.bandwidth = ndi.RECV_BANDWIDTH_HIGHEST
         self.ndi_recv = ndi.recv_create_v3(self.ndi_recv_create)
 
         # Flag to check if camera is valid/working
