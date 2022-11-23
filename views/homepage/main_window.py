@@ -1,7 +1,7 @@
 import os
 from functools import partial
 from threading import Lock
-
+from functools import partial
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtMultimedia import QMediaDevices
 from PySide6.QtWidgets import QMainWindow
@@ -20,10 +20,16 @@ from shared.watch_trainer_directory import WatchTrainer
 from views.widgets.camera_widget import CameraWidget
 
 
+# def create_lambda(src, menu_item):
+#     return lambda: addCameraWidget(source=src, menu_item=menu_item, ))
+#     # returnlambda: print(x.ndi_name)
+
+
 class AutoPTZ_MainWindow(QMainWindow):
     """
     Configures and Handles the AutoPTZ MainWindow UI
     """
+
     def __init__(self, *args, **kwargs):
 
         # setting up the UI and QT Threading
@@ -435,24 +441,29 @@ class AutoPTZ_MainWindow(QMainWindow):
     def findNDISources(self):
         """Adds NDI sources to the NDI source list"""
         source_list = get_ndi_sources()
-        for i, s in enumerate(source_list):
+        for index, cam in enumerate(source_list, start=0):
             menu_item = QtWidgets.QWidgetAction(self)
-            menu_item.setText(s.ndi_name)
+            menu_item.setText(cam.ndi_name)
             menu_item.setCheckable(True)
-            menu_item.triggered.connect(
-                lambda source=s, item=menu_item: self.addCameraWidget(source=s, menu_item=item, isNDI=True))
+            menu_item.triggered.connect(self.create_lambda(cam, menu_item))
             self.menuAdd_NDI.addAction(menu_item)
 
     def addCameraWidget(self, source, menu_item, isNDI=False):
         """Add NDI/Serial camera source from the menu to the FlowLayout"""
-        camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3, isNDI=isNDI, lock=self.lock)
+        camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3,
+                                     isNDI=isNDI, lock=self.lock)
         camera_widget.change_selection_signal.connect(self.updateElements)
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
-            lambda index=source, item=menu_item: self.deleteCameraWidget(source=index, menu_item=item, camera_widget=camera_widget))
+            lambda index=source, item=menu_item: self.deleteCameraWidget(source=index, menu_item=item,
+                                                                         camera_widget=camera_widget))
         self.watch_trainer.add_camera(camera_widget=camera_widget)
         self.flowLayout.addWidget(camera_widget)
         camera_widget.show()
+
+    def create_lambda(self, src, menu_item):
+        return lambda: self.addCameraWidget(source=src, menu_item=menu_item, isNDI=True)
+        # return lambda: print(src.ndi_name)
 
     def deleteCameraWidget(self, source, menu_item, camera_widget):
         """Remove NDI/Serial camera source from camera FlowLayout"""
@@ -490,11 +501,13 @@ class AutoPTZ_MainWindow(QMainWindow):
                     self.enable_track.setEnabled(True)
                     if constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking() is False:
                         self.enable_track.setChecked(False)
-                        print(f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name()} but tracking is disabled")
+                        print(
+                            f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name()} but tracking is disabled")
                     else:
                         self.enable_track.setChecked(False)
                         # self.enable_track.setChecked(True)
-                        print(f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name()} and tracking is enabled")
+                        print(
+                            f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name()} and tracking is enabled")
             else:
                 print("Processor Thread is not running")
                 self.select_face_dropdown.setEnabled(True)

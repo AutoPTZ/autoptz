@@ -140,9 +140,7 @@ class CameraWidget(QLabel):
 
     def update_image(self, cv_img):
         """Updates the QLabel with the latest OpenCV/NDI frame and draws it"""
-        cv_img = self.draw_on_frame(frame=cv_img, face_locations=self.processor_thread.face_locations,
-                                    face_names=self.processor_thread.face_names,
-                                    confidence_list=self.processor_thread.confidence_list)
+        cv_img = self.draw_on_frame(frame=cv_img)
         qt_img = self.convert_cv_qt(cv_img)
         self.setPixmap(qt_img)
 
@@ -181,7 +179,7 @@ class CameraWidget(QLabel):
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
         self.change_selection_signal.emit()
 
-    def draw_on_frame(self, frame, face_locations, face_names, confidence_list):
+    def draw_on_frame(self, frame):
         """
         Is called by update_image and returns the latest frame with FPS + face box drawings if there are any.
         :param frame:
@@ -190,25 +188,26 @@ class CameraWidget(QLabel):
         :param confidence_list:
         :return:
         """
-        if face_locations is not None and face_names is not None and confidence_list is not None:
-            for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
-                # Scale back up face locations since the frame we detected in was scaled to 1/2 size
-                top *= 2
-                right *= 2
-                bottom *= 2
-                left *= 2
+        if self.processor_thread.is_alive():
+            if self.processor_thread.face_locations is not None and self.processor_thread.face_names is not None and self.processor_thread.confidence_list is not None:
+                for (top, right, bottom, left), name, confidence in zip(self.processor_thread.face_locations, self.processor_thread.face_names, self.processor_thread.confidence_list):
+                    # Scale back up face locations since the frame we detected in was scaled to 1/2 size
+                    top *= 2
+                    right *= 2
+                    bottom *= 2
+                    left *= 2
 
-                if name == self.tracked_name:
-                    self.temp_tracked_name = name
-                    self.track_x = left
-                    self.track_y = top
-                    self.track_w = right
-                    self.track_h = bottom
-                # Draw a box around the face
-                cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-                # Draw a label with name and confidence for the face
-                cv2.putText(frame, name, (left + 5, top - 5), constants.FONT, 0.5, (255, 255, 255), 1)
-                cv2.putText(frame, confidence, (right - 52, bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
+                    if name == self.tracked_name:
+                        self.temp_tracked_name = name
+                        self.track_x = left
+                        self.track_y = top
+                        self.track_w = right
+                        self.track_h = bottom
+                    # Draw a box around the face
+                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                    # Draw a label with name and confidence for the face
+                    cv2.putText(frame, name, (left + 5, top - 5), constants.FONT, 0.5, (255, 255, 255), 1)
+                    cv2.putText(frame, confidence, (right - 52, bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
 
         if self.is_tracking and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
             frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)

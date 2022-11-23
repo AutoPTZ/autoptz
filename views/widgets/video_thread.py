@@ -27,12 +27,18 @@ class VideoThread(QThread):
         self.isNDI = isNDI
         self.imutils = imutils
         if isNDI:
-            ndi_source_object = src
-            ndi_recv_create = ndi.RecvCreateV3(ndi_source_object)
+            ndi_recv_create = ndi.RecvCreateV3()
             ndi_recv_create.color_format = ndi.RECV_COLOR_FORMAT_BGRX_BGRA
-            ndi_recv_create.bandwidth = ndi.RECV_BANDWIDTH_MAX
+            # ndi_recv_create.bandwidth = ndi.RECV_BANDWIDTH_MAX
             self.ndi_recv = ndi.recv_create_v3(ndi_recv_create)
-            self.ret, v, _, _ = ndi.recv_capture_v3(self.ndi_recv, 5000)
+            ndi.recv_connect(self.ndi_recv, src)
+            self.ret, v, _, _ = ndi.recv_capture_v2(self.ndi_recv, 5000)
+            if self.ret == ndi.FRAME_TYPE_VIDEO:
+                self.cv_img = np.copy(v.data)
+                ndi.recv_free_video_v2(self.ndi_recv, v)
+                # v = np.copy(v.data)
+                # self.cv_img = imutils.resize(v, width=self.width)
+
         else:
             self.cap = cv2.VideoCapture(src)
             (self.ret, img) = self.cap.read()
@@ -44,11 +50,13 @@ class VideoThread(QThread):
         """
         while self._run_flag:
             if self.isNDI:
-                self.ret, v, _, _ = ndi.recv_capture_v3(self.ndi_recv, 5000)
+                self.ret, v, _, _ = ndi.recv_capture_v2(self.ndi_recv, 5000)
                 if self.ret == ndi.FRAME_TYPE_VIDEO:
                     self.cv_img = np.copy(v.data)
-                    # self.cv_img = imutils.resize(cv_img, width=self.width)
+                    # v = np.copy(v.data)
+                    # self.cv_img = imutils.resize(v, width=self.width)
                     self.change_pixmap_signal.emit(self.cv_img)
+                    ndi.recv_free_video_v2(self.ndi_recv, v)
             else:
                 (self.ret, img) = self.cap.read()
                 if self.ret:
