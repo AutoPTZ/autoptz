@@ -73,17 +73,17 @@ class ImageProcessor(Thread):
             frame = self.stream.cv_img
             if frame is not None:
                 gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                print(self.add_name)
-                if self.add_name:
+
+                if self.add_name is not None:
                     self.add_face(frame=frame, gray_frame=gray_frame)
                 elif self.encoding_data is not None:
                     try:
-                        self.recognize_face(frame)
-                        self.lock.release()
+                        self.recognize_face(frame=frame)
                     except Exception as e:
                         print(e)
-                else:  # Free up threads and fixes Window's performance issue with useless thread
-                    self.stop()
+            self.lock.release()
+                # else:  # Free up threads and fixes Window's performance issue with useless thread
+                #     self.stop()
 
     def add_face(self, frame, gray_frame):
         """
@@ -114,6 +114,8 @@ class ImageProcessor(Thread):
             self.count = 0
             self.face_locations = None
             self.face_names = None
+        else:
+            pass
             # send signal for TrainingDlg
 
     def recognize_face(self, frame):
@@ -126,7 +128,7 @@ class ImageProcessor(Thread):
             small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
 
             # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
-            rgb_small_frame = small_frame[:, :, ::-1]
+            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
             # Find all the faces and face encodings in the current frame of video
             self.face_locations = self.face_rec.face_locations(rgb_small_frame, number_of_times_to_upsample=0)

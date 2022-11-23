@@ -90,9 +90,10 @@ class CameraWidget(QLabel):
             print(f"starting ImageProcessor Thread for {self.objectName()}")
             # Create and Run Image Processor Thread
             self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
+            time.sleep(0.9)
             self.processor_thread.add_name = name
             self.processor_thread.start()
-            time.sleep(1)
+
 
     def check_encodings(self):
         """
@@ -106,7 +107,6 @@ class CameraWidget(QLabel):
             print(f"starting ImageProcessor Thread for {self.objectName()}")
             self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
             self.processor_thread.start()
-            time.sleep(1)
 
     def set_tracking(self):
         """
