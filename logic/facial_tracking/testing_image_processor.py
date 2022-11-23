@@ -125,10 +125,10 @@ class ImageProcessor(Thread):
         """
         if frame is not None and self.skip_frame:
             # Resize frame of video to 1/2 size for faster face recognition processing
-            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+            # small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
 
             # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
-            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+            rgb_small_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             # Find all the faces and face encodings in the current frame of video
             self.face_locations = self.face_rec.face_locations(rgb_small_frame, number_of_times_to_upsample=0)

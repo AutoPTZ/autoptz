@@ -7,6 +7,7 @@ import cv2
 import time
 import dlib
 import shared.constants as constants
+from logic.facial_tracking.move_ptz import MovePTZ
 from logic.facial_tracking.testing_image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
 
@@ -35,14 +36,20 @@ class CameraWidget(QLabel):
     is_tracking = None
     tracked_name = None
 
+    is_moving = False
+
     def __init__(self, source, width, height, lock, isNDI=False):
         super().__init__()
         self.width = width
         self.height = height
         self.lock = lock
+        self.isNDI = isNDI
         self.setProperty('active', False)
         # self.resize(width, height)
-        self.setObjectName(f"Camera Source: {source}")
+        if self.isNDI:
+            self.setObjectName(f"Camera Source: {source.ndi_name}")
+        else:
+            self.setObjectName(f"Camera Source: {source}")
         self.setStyleSheet(constants.CAMERA_STYLESHEET)
         self.setText(f"Camera Source: {source}")
         self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(event, widget)
@@ -68,14 +75,28 @@ class CameraWidget(QLabel):
         self.tracked_name = None  # Face that needs to be tracked
         self.tracker = dlib.correlation_tracker()
 
+        self.ptz_control_thread = None
+
     def stop(self):
         """
         When CameraWidget is being removed from the UI, we should stop all relevant threads before deletion.
         """
+        if self.ptz_control_thread is not None:
+            self.ptz_control_thread.stop_move()
+        self.ptz_control_thread = None
         self.processor_thread.stop()
         self.stream_thread.stop()
         self.deleteLater()
         self.destroy()
+
+    def set_ptz(self, control):
+        if control is None:
+            # self.ptz_control_thread.stop()
+            self.ptz_control_thread = None
+        else:
+            self.ptz_control_thread = control
+            # self.ptz_control_thread.daemon = True
+            # self.ptz_control_thread.start()
 
     def set_add_name(self, name):
         """
@@ -93,7 +114,6 @@ class CameraWidget(QLabel):
             time.sleep(0.9)
             self.processor_thread.add_name = name
             self.processor_thread.start()
-
 
     def check_encodings(self):
         """
@@ -191,12 +211,14 @@ class CameraWidget(QLabel):
         """
         if self.processor_thread.is_alive():
             if self.processor_thread.face_locations is not None and self.processor_thread.face_names is not None and self.processor_thread.confidence_list is not None:
-                for (top, right, bottom, left), name, confidence in zip(self.processor_thread.face_locations, self.processor_thread.face_names, self.processor_thread.confidence_list):
+                for (top, right, bottom, left), name, confidence in zip(self.processor_thread.face_locations,
+                                                                        self.processor_thread.face_names,
+                                                                        self.processor_thread.confidence_list):
                     # Scale back up face locations since the frame we detected in was scaled to 1/2 size
-                    top *= 2
-                    right *= 2
-                    bottom *= 2
-                    left *= 2
+                    # top *= 2
+                    # right *= 2
+                    # bottom *= 2
+                    # left *= 2
 
                     if name == self.tracked_name:
                         self.temp_tracked_name = name
@@ -236,6 +258,11 @@ class CameraWidget(QLabel):
         :param h:
         :return:
         """
+        min_x = int(frame.shape[1] / 11.5)
+        max_x = int(frame.shape[1] / 1.1)
+        min_y = int(frame.shape[0] / 8.5)
+        max_y = int(frame.shape[0] / 1.3)
+        cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (255, 0, 0), 2)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.putText(frame, "Tracking Enabled", (75, 75), constants.FONT, 0.7, (0, 0, 255), 2)
         if self.track_started is False:
@@ -259,6 +286,23 @@ class CameraWidget(QLabel):
             h = int(pos.bottom())
             cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
             cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
+
+        if self.ptz_control_thread is not None:
+            # For ONVIF PTZ
+            if x > min_x and w < max_x and y > min_y and h < max_y and self.is_moving:
+                self.ptz_control_thread.stop_move()
+                self.is_moving = False
+            if w > max_x and self.is_moving is False:
+                self.ptz_control_thread.continuous_move(0.2, 0, 0)
+                self.is_moving = True
+            elif x < min_x and self.is_moving is False:
+                self.ptz_control_thread.continuous_move(-0.2, 0, 0)
+                self.is_moving = True
+            # if h > min_y:
+            #     self.camera_control.continuous_move(0, -0.05, 0)
+            # elif y < max_y:
+            #     self.camera_control.continuous_move(0, 0.05, 0)
+
         return frame
 
     def closeEvent(self, event):

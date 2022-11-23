@@ -20,11 +20,6 @@ from shared.watch_trainer_directory import WatchTrainer
 from views.widgets.camera_widget import CameraWidget
 
 
-# def create_lambda(src, menu_item):
-#     return lambda: addCameraWidget(source=src, menu_item=menu_item, ))
-#     # returnlambda: print(x.ndi_name)
-
-
 class AutoPTZ_MainWindow(QMainWindow):
     """
     Configures and Handles the AutoPTZ MainWindow UI
@@ -485,6 +480,8 @@ class AutoPTZ_MainWindow(QMainWindow):
             self.select_face_dropdown.setCurrentText('')
             self.enable_track.setEnabled(False)
             self.enable_track.setChecked(False)
+            self.assign_network_ptz_btn.hide()
+            self.assign_network_ptz_btn.hide()
         else:
             print(f"{constants.CURRENT_ACTIVE_CAM_WIDGET.objectName()} is active")
             self.select_face_dropdown.setEnabled(True)
@@ -513,6 +510,15 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.select_face_dropdown.setCurrentText('')
                 self.enable_track.setEnabled(False)
                 self.enable_track.setChecked(False)
+            if constants.CURRENT_ACTIVE_CAM_WIDGET.isNDI and constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_control_thread is None:
+                self.unassign_network_ptz_btn.hide()
+                self.assign_network_ptz_btn.show()
+            elif constants.CURRENT_ACTIVE_CAM_WIDGET.isNDI and constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_control_thread is not None:
+                self.unassign_network_ptz_btn.show()
+                self.assign_network_ptz_btn.hide()
+            else:
+                self.assign_network_ptz_btn.hide()
+                self.assign_network_ptz_btn.hide()
 
     def selected_face_change(self):
         if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
@@ -620,17 +626,16 @@ class AutoPTZ_MainWindow(QMainWindow):
 
     def assign_network_ptz_dlg(self):
         """Launch the Assign Network PTZ to Camera Source dialog."""
-        if not self.current_selected_source:
+        if constants.CURRENT_ACTIVE_CAM_WIDGET is None:
             print("Need to select or add a camera")
         else:
-            dlg = AssignNetworkPTZDlg(self, camera=self.current_selected_source)
+            dlg = AssignNetworkPTZDlg(self, camera=constants.CURRENT_ACTIVE_CAM_WIDGET)
             dlg.closeEvent = self.refreshNetworkBtn
             dlg.exec()
 
     def unassign_network_ptz(self):
         """Allow User to Unassign current Network PTZ device from Camera Source"""
-        self.current_selected_source.image_processor.set_ptz_controller(control=None)
-        self.current_selected_source.image_processor.set_ptz_ready("not ready")
+        constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=None)
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.show()
 
@@ -655,7 +660,7 @@ class AutoPTZ_MainWindow(QMainWindow):
 
     def refreshNetworkBtn(self, event):
         """Check is Network PTZ is assigned and change assignment button if so"""
-        if self.current_selected_source.image_processor.get_ptz_ready() == "ready":
+        if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
             self.unassign_network_ptz_btn.show()
             self.assign_network_ptz_btn.hide()
         else:

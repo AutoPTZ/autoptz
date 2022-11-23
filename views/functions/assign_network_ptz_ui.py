@@ -13,15 +13,15 @@ class AssignNetworkPTZIU(object):
         self.horizontalLayout = None
         self.cancel_btn = None
         self.submit = None
-        self.camera = None
+        self.camera_widget = None
         self.allow_network_control = None
         self.verticalLayout = None
         self.window = None
         self.count = 0
 
-    def setupUi(self, assign_net_ptz, camera):
+    def setupUi(self, assign_net_ptz, camera_widget):
         self.window = assign_net_ptz
-        self.camera = camera
+        self.camera_widget = camera_widget
         assign_net_ptz.setObjectName("assign_net_ptz")
         assign_net_ptz.resize(300, 80)
         self.verticalLayout = QtWidgets.QVBoxLayout(assign_net_ptz)
@@ -57,13 +57,13 @@ class AssignNetworkPTZIU(object):
 
     def assign_net_ptz_prompt(self):
         try:
-            ip_address = re.findall(r'(?:\d{1,3}\.)+\d{1,3}', self.camera.objectName())
+            ip_address = re.findall(r'(?:\d{1,3}\.)+\d{1,3}', self.camera_widget.objectName())
+            print(ip_address, self.camera_widget.objectName())
             camera_control = onvif_control.CameraControl(ip_address[0], self.username_line.text().strip(),
                                                          self.password_line.text().strip())
             camera_control.camera_start()
             print("camera control started for " + ip_address[0])
-            self.camera.image_processor_thread.set_ptz_controller(control=camera_control)
-            self.camera.image_processor_thread.set_ptz_ready("ready")
+            self.camera_widget.set_ptz(control=camera_control)
             self.window.close()
         except Exception as e:
             print(e)
@@ -75,7 +75,7 @@ class AssignNetworkPTZIU(object):
         _translate = QtCore.QCoreApplication.translate
         add_face.setWindowTitle(_translate("assign_net_ptz", "Assign Network PTZ"))
         self.allow_network_control.setText(
-            _translate("allow_network_control", "ONVIF Login for " + self.camera.objectName() + ":"))
+            _translate("allow_network_control", "ONVIF Login for " + self.camera_widget.objectName() + ":"))
         self.username_line.setPlaceholderText(_translate("username_line", "Enter Username (Optional)"))
         self.password_line.setPlaceholderText(_translate("password_line", "Enter Password (Optional)"))
         self.submit.setText(_translate("submit", "Submit"))
@@ -91,4 +91,4 @@ class AssignNetworkPTZDlg(QDialog):
         # Create an instance of the GUI
         self.ui = AssignNetworkPTZIU()
         # Run the .setupUi() method to show the GUI
-        self.ui.setupUi(self, camera=camera)
+        self.ui.setupUi(self, camera_widget=camera)
