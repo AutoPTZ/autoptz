@@ -8,4 +8,5 @@ watchdog
 pyserial
 ndi-python
 sensecam-control
+git+https://github.com/ageitgey/face_recognition_models
 # conda install -c conda-forge dlib
