@@ -9,7 +9,7 @@ import dlib
 import shared.constants as constants
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.move_ptz import MovePTZ
-from logic.facial_tracking.testing_image_processor import ImageProcessor
+from logic.facial_tracking.image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
 
 
@@ -207,7 +207,7 @@ class CameraWidget(QLabel):
         :param frame:
         :return:
         """
-        if self.processor_thread.isRunning():
+        if self.processor_thread is not None:
             if self.processor_thread.face_locations is not None and self.processor_thread.face_names is not None and self.processor_thread.confidence_list is not None:
                 for (top, right, bottom, left), name, confidence in zip(self.processor_thread.face_locations,
                                                                         self.processor_thread.face_names,
@@ -300,7 +300,11 @@ class CameraWidget(QLabel):
 
         return frame
 
-    def run_trainer(self):
+    @staticmethod
+    def run_trainer():
+        """
+        Runs Trainer on Main Thread
+        """
         TrainerDlg().show()
 
     def closeEvent(self, event):

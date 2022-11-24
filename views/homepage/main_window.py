@@ -9,7 +9,7 @@ import watchdog.events
 import watchdog.observers
 import shared.constants as constants
 from logic.camera_search.search_ndi import get_ndi_sources
-from logic.facial_tracking.move_visca_ptz import ViscaPTZ
+from libraries.move_visca_ptz import ViscaPTZ
 from logic.camera_search.get_serial_cameras import COMPorts
 from views.functions.show_dialogs_ui import ShowDialog
 from views.functions.assign_network_ptz_ui import AssignNetworkPTZDlg
@@ -467,6 +467,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.watch_trainer.remove_camera(camera_widget=camera_widget)
         if constants.CURRENT_ACTIVE_CAM_WIDGET == camera_widget:
             constants.CURRENT_ACTIVE_CAM_WIDGET = None
+            self.updateElements()
         camera_widget.stop()
         camera_widget.deleteLater()
 

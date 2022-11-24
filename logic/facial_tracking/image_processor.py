@@ -72,9 +72,8 @@ class ImageProcessor(QThread):
             self.lock.acquire(blocking=True)
             frame = self.stream.cv_img
             if frame is not None:
-                gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
                 if self.add_name is not None:
+                    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     self.add_face(frame=frame, gray_frame=gray_frame)
                 elif self.encoding_data is not None:
                     try:
@@ -83,7 +82,8 @@ class ImageProcessor(QThread):
                         print(e)
             # else:  # Free up threads and fixes Window's performance issue with useless thread
             #     self.stop()
-            self.lock.release()
+            if self.lock.locked():
+                self.lock.release()
 
     def add_face(self, frame, gray_frame):
         """

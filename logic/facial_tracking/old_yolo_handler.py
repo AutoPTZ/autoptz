@@ -1,8 +1,4 @@
-import math
-import pickle
 import cv2
-import os
-from libraries import face_recognition
 import numpy as np
 
 TARGET_WH = 320
