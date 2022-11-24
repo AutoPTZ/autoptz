@@ -65,7 +65,8 @@ class ImageProcessor(QThread):
 
     def run(self):
         """
-        Runs continuously on CameraWidget.start() to provide the latest face boxes for CameraWidget to drawn until _run_flag is False.
+        Runs continuously on CameraWidget.start() to provide the latest face boxes for
+        CameraWidget to drawn until _run_flag is False.
         """
         while self._run_flag:
             self.lock.acquire(blocking=True)
@@ -80,8 +81,8 @@ class ImageProcessor(QThread):
                         self.recognize_face(frame=frame)
                     except Exception as e:
                         print(e)
-            else:  # Free up threads and fixes Window's performance issue with useless thread
-                self.stop()
+            # else:  # Free up threads and fixes Window's performance issue with useless thread
+            #     self.stop()
             self.lock.release()
 
     def add_face(self, frame, gray_frame):

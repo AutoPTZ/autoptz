@@ -1,4 +1,6 @@
 import re
+from threading import Thread
+
 from sensecam_control import onvif_control
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtWidgets import QDialog
@@ -56,6 +58,11 @@ class AssignNetworkPTZIU(object):
         QtCore.QMetaObject.connectSlotsByName(assign_net_ptz)
 
     def assign_net_ptz_prompt(self):
+        thread = Thread(target=self.control_start_threaded)
+        thread.start()
+        self.window.close()
+
+    def control_start_threaded(self):
         try:
             ip_address = re.findall(r'(?:\d{1,3}\.)+\d{1,3}', self.camera_widget.objectName())
             print(ip_address, self.camera_widget.objectName())
@@ -64,12 +71,12 @@ class AssignNetworkPTZIU(object):
             camera_control.camera_start()
             print("camera control started for " + ip_address[0])
             self.camera_widget.set_ptz(control=camera_control)
-            self.window.close()
         except Exception as e:
             print(e)
             show_critical_messagebox(window_title="ONVIF Camera Control",
                                      critical_message="Username or password is incorrect.\nPlease check if ONVIF "
                                                       "is enabled in your camera settings.")
+
 
     def translate_ui(self, add_face):
         _translate = QtCore.QCoreApplication.translate

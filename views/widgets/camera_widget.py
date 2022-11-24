@@ -8,6 +8,7 @@ import time
 import dlib
 import shared.constants as constants
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
+from logic.facial_tracking.move_ptz import MovePTZ
 from logic.facial_tracking.testing_image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
 
@@ -82,7 +83,7 @@ class CameraWidget(QLabel):
         When CameraWidget is being removed from the UI, we should stop all relevant threads before deletion.
         """
         if self.ptz_control_thread is not None:
-            self.ptz_control_thread.stop_move()
+            self.ptz_control_thread.stop()
         self.ptz_control_thread = None
         self.processor_thread.stop()
         self.stream_thread.stop()
@@ -91,12 +92,12 @@ class CameraWidget(QLabel):
 
     def set_ptz(self, control):
         if control is None:
-            # self.ptz_control_thread.stop()
+            if self.ptz_control_thread is not None:
+                self.ptz_control_thread.stop()
             self.ptz_control_thread = None
         else:
-            self.ptz_control_thread = control
-            # self.ptz_control_thread.daemon = True
-            # self.ptz_control_thread.start()
+            self.ptz_control_thread = MovePTZ(ptz_controller=control, lock=self.lock)
+            self.ptz_control_thread.start()
 
     def set_add_name(self, name):
         """
@@ -134,6 +135,8 @@ class CameraWidget(QLabel):
         self.track_w = None
         self.track_h = None
         self.is_tracking = not self.is_tracking
+        # if self.ptz_control_thread is not None:
+        #     self.ptz_control_thread.stop_move()
 
     def set_tracked_name(self, name):
         """
@@ -283,19 +286,16 @@ class CameraWidget(QLabel):
 
         if self.ptz_control_thread is not None:
             # For ONVIF PTZ
-            if x > min_x and w < max_x and y > min_y and h < max_y and self.is_moving:
+            if x > min_x and w < max_x and y > min_y and h < max_y:
                 self.ptz_control_thread.stop_move()
-                self.is_moving = False
-            if w > max_x and self.is_moving is False:
-                self.ptz_control_thread.continuous_move(0.2, 0, 0)
-                self.is_moving = True
-            elif x < min_x and self.is_moving is False:
-                self.ptz_control_thread.continuous_move(-0.2, 0, 0)
-                self.is_moving = True
-            # if h > min_y:
-            #     self.camera_control.continuous_move(0, -0.05, 0)
+            if w > max_x:
+                self.ptz_control_thread._moving_right = True
+            elif x < min_x:
+                self.ptz_control_thread._moving_left = True
             # elif y < max_y:
-            #     self.camera_control.continuous_move(0, 0.05, 0)
+            #     self.ptz_control_thread._moving_
+            # elif h < min_y and self.is_moving is False:
+            #     self.ptz_control_thread.continuous_move(0, -0.05, 0)
 
         return frame
 

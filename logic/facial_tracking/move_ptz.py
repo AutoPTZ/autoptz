@@ -1,50 +1,47 @@
-from threading import Thread
+import time
+
+from PySide6.QtCore import QThread
 
 
-class MovePTZ(Thread):
+class MovePTZ(QThread):
 
-    def __init__(self, ptz_controller):
+    def __init__(self, ptz_controller, lock):
         super(MovePTZ, self).__init__()
         self.ptz_control = ptz_controller
-        self.is_ready = False
         self._run_flag = True
-        self.moving_right = False
-        self.moving_left = False
-        self.moving_up = False
-        self.moving_down = False
-        self.stop_moving = False
+        self.lock = lock
+
+        # self._is_ready = True
+        self._moving_left = False
+        self._moving_right = False
+        self._moving_up = False
+        self._moving_down = False
 
     def stop_moving(self):
         self.ptz_control.stop_move()
+        time.sleep(0.1)
 
     def move_right(self):
         self.ptz_control.continuous_move(0.05, 0, 0)
+        self._moving_right = False
+        time.sleep(0.1)
 
     def move_left(self):
         self.ptz_control.continuous_move(-0.05, 0, 0)
+        self._moving_left = False
+        time.sleep(0.1)
 
+    def run(self):
+        while self._run_flag:
+            self.lock.acquire(blocking=True)
+            if self._moving_left:
+                self.move_left()
+            elif self._moving_right:
+                self.move_right()
+            self.lock.release()
 
-    # def run(self):
-    #     while self._run_flag:
-    #         print("moving")
-    #         self.ptz_control.continuous_move(0.05, 0, 0)
-    #         if self.is_ready:
-    #             self.is_ready = False
-    #             if self.stop_moving:
-    #                 self.ptz_control.stop_move()
-    #                 self.stop_moving = False
-    #             if self.moving_right:
-    #                 self.ptz_control.continuous_move(0.05, 0, 0)
-    #                 self.moving_right = False
-    #             if self.moving_left:
-    #                 self.ptz_control.continuous_move(-0.05, 0, 0)
-    #                 self.moving_left = False
-    #             # if h > min_y:
-    #             #     self.ptz_control.continuous_move(0, -0.05, 0)
-    #             #     # movementY = False
-    #             # elif y < max_y:
-    #             #     self.ptz_control.continuous_move(0, 0.05, 0)
-    #             self.is_ready = True
 
     def stop(self):
         self._run_flag = False
+        self.stop_moving()
+        self.wait()
