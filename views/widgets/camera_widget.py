@@ -97,6 +97,7 @@ class CameraWidget(QLabel):
             self.ptz_control_thread = None
         else:
             self.ptz_control_thread = MovePTZ(ptz_controller=control, lock=self.lock)
+            time.sleep(0.2)
             self.ptz_control_thread.start()
 
     def set_add_name(self, name):
@@ -287,15 +288,15 @@ class CameraWidget(QLabel):
         if self.ptz_control_thread is not None:
             # For ONVIF PTZ
             if x > min_x and w < max_x and y > min_y and h < max_y:
-                self.ptz_control_thread.stop_move()
+                self.ptz_control_thread._is_stopped = True
             if w > max_x:
                 self.ptz_control_thread._moving_right = True
             elif x < min_x:
                 self.ptz_control_thread._moving_left = True
             # elif y < max_y:
-            #     self.ptz_control_thread._moving_
-            # elif h < min_y and self.is_moving is False:
-            #     self.ptz_control_thread.continuous_move(0, -0.05, 0)
+            #     self.ptz_control_thread._moving_up = True
+            # elif h < min_y:
+            #     self.ptz_control_thread._moving_down = True
 
         return frame
 
