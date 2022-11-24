@@ -2,11 +2,16 @@ import os
 import shutil
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtWidgets import QDialog
+
+from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from shared import constants
 from shared.message_prompts import show_info_messagebox
 
 
 class RemoveFaceUI(object):
+    """
+    Creation for Remove Face UI
+    """
     def __init__(self):
         self.path = None
         self.name_list = None
@@ -19,6 +24,10 @@ class RemoveFaceUI(object):
         self.count = 0
 
     def setupUi(self, remove_face):
+        """
+        Used for setup when calling the RemoveFaceDlg Class
+        :param remove_face:
+        """
         self.window = remove_face
         remove_face.setObjectName("remove_face")
         remove_face.resize(180, 60)
@@ -54,12 +63,21 @@ class RemoveFaceUI(object):
         QtCore.QMetaObject.connectSlotsByName(remove_face)
 
     def remove_face_prompt(self):
+        """
+        Method runs when user selects face in the list to delete.
+        Removes the folder and all images inside.
+        """
         selected_face = constants.IMAGE_PATH + self.name_list.currentItem().text()
         shutil.rmtree(selected_face)
         show_info_messagebox("Face Removed. \nRetraining model,  please wait...")
+        TrainerDlg().show()
         self.window.close()
 
     def translate_ui(self, remove_face):
+        """
+        Automatic Translation Locale
+        :param remove_face:
+        """
         _translate = QtCore.QCoreApplication.translate
         remove_face.setWindowTitle(_translate("remove_face", "Remove Face"))
         self.remove_face_title_label.setText(_translate("remove_face_title", "Select Name:"))
@@ -68,7 +86,7 @@ class RemoveFaceUI(object):
 
 
 class RemoveFaceDlg(QDialog):
-    """Setup Add Face Dialog"""
+    """Setup Remove Face Dialog"""
 
     def __init__(self, parent=None):
         super().__init__(parent)

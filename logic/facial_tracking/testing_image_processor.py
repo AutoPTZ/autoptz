@@ -1,7 +1,5 @@
-from threading import Thread
-
 import cv2
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, Signal
 import shared.constants as constants
 import os
 import pickle
@@ -28,11 +26,12 @@ def face_confidence(face_distance, face_match_threshold=0.6):
         return str(round(value, 2)) + '%'
 
 
-class ImageProcessor(Thread):
+class ImageProcessor(QThread):
     """
     Threaded ImageProcessor for CameraWidget.
     Used for added faces to database and facial recognition.
     """
+    retrain_model_signal = Signal()
     stream = None
     _run_flag = None
     lock = None
@@ -81,9 +80,9 @@ class ImageProcessor(Thread):
                         self.recognize_face(frame=frame)
                     except Exception as e:
                         print(e)
+            else:  # Free up threads and fixes Window's performance issue with useless thread
+                self.stop()
             self.lock.release()
-                # else:  # Free up threads and fixes Window's performance issue with useless thread
-                #     self.stop()
 
     def add_face(self, frame, gray_frame):
         """
@@ -106,7 +105,7 @@ class ImageProcessor(Thread):
             print("\n [INFO] Creating Images at " + location)
             cv2.imwrite(location, frame)
             self.face_names.append("Adding: " + self.add_name)
-            self.face_locations = [(int(y / 2), int((x + w) / 2), int((y + h) / 2), int(x / 2))]
+            self.face_locations = [(int(y), int((x + w)), int((y + h)), int(x))]
             self.confidence_list.append("100%")
 
         if self.count >= 10:  # Take 50 face sample and stop video
@@ -114,9 +113,7 @@ class ImageProcessor(Thread):
             self.count = 0
             self.face_locations = None
             self.face_names = None
-        else:
-            pass
-            # send signal for TrainingDlg
+            self.retrain_model_signal.emit()
 
     def recognize_face(self, frame):
         """
@@ -164,5 +161,5 @@ class ImageProcessor(Thread):
         """Sets run flag to False and waits for thread to finish"""
         self._run_flag = False
         self.lock.release()
-        # self.wait()
-        # self.deleteLater()
+        self.wait()
+        self.deleteLater()

@@ -9,6 +9,9 @@ from PySide6.QtWidgets import QDialog
 
 
 class TrainerUI(object):
+    """
+    Creation for Trainer UI
+    """
     def __init__(self):
         self.training_progress_bar_title = None
         self.verticalLayout = None
@@ -19,17 +22,37 @@ class TrainerUI(object):
         self.count = 0
 
     def setMaximumVal(self, value):
+        """
+        Sets Progress Bar Max Value.
+        Based off the number of files in the image directory
+        :param value:
+        """
         self.progress_bar_line.setMaximum(value)
 
     def setCurrentVal(self, value):
+        """
+        Updated Current Progress Bar Value.
+        Based off the number of files already processed.
+        When processing is completed it will close the Trainer Dialog.
+        :param value:
+        """
         self.progress_bar_line.setValue(value)
         if value == self.progress_bar_line.maximum():
             self.window.close()
 
     def setCurrentTitle(self, text):
+        """
+        Updated Current Text on top of the Progress Bar.
+        Based off the number of files already processed.
+        :param text:
+        """
         self.training_progress_bar_title.setText(text + " Images")
 
     def setupUi(self, training_progress_bar):
+        """
+        Used for setup when calling the TrainerDlg Class
+        :param training_progress_bar:
+        """
         self.window = training_progress_bar
         training_progress_bar.setObjectName("training_progress_bar")
         training_progress_bar.resize(325, 100)
@@ -67,11 +90,16 @@ class TrainerUI(object):
 
     @staticmethod
     def translate_ui(training_progress_bar):
+        """
+        Automatic Translation Locale
+        :param training_progress_bar:
+        """
         _translate = QtCore.QCoreApplication.translate
         training_progress_bar.setWindowTitle(_translate("training_progress_bar", "Training Model"))
 
 
 class TrainerThread(QtCore.QThread):
+    """Creates Thread to separate Trainer from Progress Bar UI to prevent GUI lag"""
     MAX_VALUE_SIGNAL = QtCore.Signal(int)
     CURRENT_VALUE_SIGNAL = QtCore.Signal(int)
     CURRENT_TEXT_SIGNAL = QtCore.Signal(str)
@@ -85,6 +113,10 @@ class TrainerThread(QtCore.QThread):
         self.wait()
 
     def run(self):
+        """
+        When Trainer Thread starts, this will automatically run.
+        It processes all the images using Face Recognition library and pickles trained data into encodings.pickle.
+        """
         print("\n [INFO] Training faces. It will take a few minutes. Please Wait ...")
         # Image path for face image database
         image_paths = list(paths.list_images(constants.IMAGE_PATH))
@@ -122,7 +154,7 @@ class TrainerThread(QtCore.QThread):
 
 
 class TrainerDlg(QDialog):
-    """Setup Progress Bar Dialog"""
+    """Setup Trainer Progress Bar Dialog"""
 
     def __init__(self, parent=None):
         super().__init__(parent)

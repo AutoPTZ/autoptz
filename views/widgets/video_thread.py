@@ -61,7 +61,6 @@ class VideoThread(QThread):
                     self.cv_img = imutils.resize(cv_img, width=self.width)
                     self.change_pixmap_signal.emit(self.cv_img)
 
-
         # shut down capture system
         if self.isNDI:
             ndi.recv_destroy(self.ndi_recv)

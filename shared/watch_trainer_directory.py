@@ -48,6 +48,16 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         for camera in self.camera_widget_list:
             camera.check_encodings()
 
+    def on_modified(self, event):
+        """
+        Only when encodings file is modified, then tell all the cameras sources to refresh encoded data
+        :param event:
+        """
+        print("Watchdog received an event at - % s." % event.src_path)
+        self.spin(5)
+        for camera in self.camera_widget_list:
+            camera.check_encodings()
+
     @staticmethod
     def spin(seconds):
         """Pause for set amount of seconds, replaces time.sleep so program doesnt stall"""

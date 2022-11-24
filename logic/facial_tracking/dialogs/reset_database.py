@@ -8,6 +8,9 @@ from shared.message_prompts import show_critical_messagebox
 
 
 class ResetDatabaseUI(object):
+    """
+    Creation for Reset Database UI
+    """
     def __init__(self):
         self.confirm_line = None
         self.horizontalLayout = None
@@ -19,6 +22,10 @@ class ResetDatabaseUI(object):
         self.count = 0
 
     def setupUi(self, reset_database):
+        """
+        Used for setup when calling the ResetDatabaseDlg Class
+        :param reset_database:
+        """
         self.window = reset_database
         reset_database.setObjectName("reset_database")
         reset_database.resize(150, 60)
@@ -50,6 +57,11 @@ class ResetDatabaseUI(object):
         QtCore.QMetaObject.connectSlotsByName(reset_database)
 
     def reset_database_prompt(self):
+        """
+        Methods that checks what the user inputs in the dialog.
+        Checks to see if the user enters "RESET ALL" exactly to remove all trainer and stored image files.
+        :return:
+        """
         if self.confirm_line.text().strip() == "":
             return
         else:
@@ -68,6 +80,10 @@ class ResetDatabaseUI(object):
                 return
 
     def translate_ui(self, reset_database):
+        """
+        Automatic Translation Locale
+        :param reset_database:
+        """
         _translate = QtCore.QCoreApplication.translate
         reset_database.setWindowTitle(_translate("reset_database", "Reset Database"))
         self.reset_database_title_label.setText(_translate("reset_database_title", "Type 'RESET ALL' to confirm"))
@@ -76,7 +92,7 @@ class ResetDatabaseUI(object):
 
 
 class ResetDatabaseDlg(QDialog):
-    """Setup Add Face Dialog"""
+    """Setup Reset Database Dialog"""
 
     def __init__(self, parent=None):
         super().__init__(parent)

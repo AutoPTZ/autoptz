@@ -1,5 +1,4 @@
 import os
-from functools import partial
 from threading import Lock
 from functools import partial
 from PySide6 import QtCore, QtWidgets
@@ -405,13 +404,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.menubar.addAction(self.menuFacial_Recognition.menuAction())
         self.menubar.addAction(self.menuHelp.menuAction())
 
-        self.current_selected_source = None
-        # other setup variables and methods
         self.findNDISources()
         self.findHardwareSources()
-
-        self.assigned_ptz_camera = []
-        self.serial_widget_list = []
         if os.path.exists(constants.TRAINER_PATH) is False:
             os.mkdir(constants.TRAINER_PATH)
         self.watch_trainer = WatchTrainer()
@@ -425,23 +419,32 @@ class AutoPTZ_MainWindow(QMainWindow):
         """Adds camera sources to the Hardware source list"""
         available_cameras = QMediaDevices.videoInputs()
 
-        for index, cam in enumerate(available_cameras, start=0):
+        for index, cam in enumerate(available_cameras):
             menu_item = QtWidgets.QWidgetAction(self)
             menu_item.setText(cam.description())
             menu_item.setCheckable(True)
-            menu_item.triggered.connect(
-                lambda source=index, item=menu_item: self.addCameraWidget(source=source, menu_item=item))
+            menu_item.triggered.connect(self.create_lambda(src=index, menu_item=menu_item, isNDI=False))
             self.menuAdd_Hardware.addAction(menu_item)
 
     def findNDISources(self):
         """Adds NDI sources to the NDI source list"""
         source_list = get_ndi_sources()
-        for index, cam in enumerate(source_list, start=0):
+        for index, cam in enumerate(source_list):
             menu_item = QtWidgets.QWidgetAction(self)
             menu_item.setText(cam.ndi_name)
             menu_item.setCheckable(True)
-            menu_item.triggered.connect(self.create_lambda(cam, menu_item))
+            menu_item.triggered.connect(self.create_lambda(src=cam, menu_item=menu_item, isNDI=True))
             self.menuAdd_NDI.addAction(menu_item)
+
+    def create_lambda(self, src, menu_item, isNDI):
+        """
+        Fixes MenuItem late assignment for Camera Sources by returning lambda statement
+        :param src:
+        :param menu_item:
+        :param isNDI:
+        :return:
+        """
+        return lambda: self.addCameraWidget(source=src, menu_item=menu_item, isNDI=isNDI)
 
     def addCameraWidget(self, source, menu_item, isNDI=False):
         """Add NDI/Serial camera source from the menu to the FlowLayout"""
@@ -455,9 +458,6 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.watch_trainer.add_camera(camera_widget=camera_widget)
         self.flowLayout.addWidget(camera_widget)
         camera_widget.show()
-
-    def create_lambda(self, src, menu_item):
-        return lambda: self.addCameraWidget(source=src, menu_item=menu_item, isNDI=True)
 
     def deleteCameraWidget(self, source, menu_item, camera_widget):
         """Remove NDI/Serial camera source from camera FlowLayout"""
@@ -485,23 +485,30 @@ class AutoPTZ_MainWindow(QMainWindow):
         else:
             print(f"{constants.CURRENT_ACTIVE_CAM_WIDGET.objectName()} is active")
             self.select_face_dropdown.setEnabled(True)
-            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread.is_alive():
+            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread.isRunning():
                 print("Processor Thread is running")
                 if constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name() is None:
                     print("no tracked name")
                     self.select_face_dropdown.setCurrentText('')
+                    self.enable_track.blockSignals(True)
                     self.enable_track.setEnabled(False)
                     self.enable_track.setChecked(False)
+                    self.enable_track.blockSignals(False)
                 else:
                     self.select_face_dropdown.setCurrentText(constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name())
-                    self.enable_track.setEnabled(True)
+                    self.enable_track.blockSignals(True)
+                    self.enable_track.setChecked(True)
+                    self.enable_track.blockSignals(False)
                     if constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking() is False:
+                        self.enable_track.blockSignals(True)
                         self.enable_track.setChecked(False)
+                        self.enable_track.blockSignals(False)
                         print(
                             f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name()} but tracking is disabled")
                     else:
-                        self.enable_track.setChecked(False)
-                        # self.enable_track.setChecked(True)
+                        self.enable_track.blockSignals(True)
+                        self.enable_track.setChecked(True)
+                        self.enable_track.blockSignals(False)
                         print(
                             f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name()} and tracking is enabled")
             else:
@@ -521,6 +528,9 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.assign_network_ptz_btn.hide()
 
     def selected_face_change(self):
+        """
+        Update Current Active CameraWidget's Tracked Name and UI
+        """
         if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
             if self.select_face_dropdown.currentText() == '':
                 constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracked_name(None)
@@ -531,30 +541,25 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.enable_track.setEnabled(True)
 
     def enable_track_change(self):
-        print("called to change")
+        """
+        Update Current Active CameraWidget's Enable/Disable Tracking and UI
+        """
         if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
-            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread.is_alive() and constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking() and self.enable_track.isChecked():
-                print("already set, will not touch")
-            else:
-                print(f"setting track button for {self.enable_track.isChecked()}")
-                constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracking()
-        # else:
-        #     try:
-        #         constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracking()
-        #         self.enable_track.setChecked(constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking())
-        #     except Exception as e:
-        #         print(e)
-        #         self.enable_track.setChecked(False)
+            print(f"setting track button for {self.enable_track.isChecked()}")
+            constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracking()
 
-    # def config_enable_track(self):
-    #     if self.current_selected_source is not None and self.current_selected_source.image_processor.is_track_enabled() and self.enable_track.isChecked():
-    #         pass
-    #     else:
-    #         try:
-    #             self.current_selected_source.image_processor.config_enable_track()
-    #             self.enable_track.setChecked(self.current_selected_source.image_processor.is_track_enabled())
-    #         except:
-    #             self.enable_track.setChecked(False)
+    def update_face_dropdown(self, event):
+        """
+        Update Face Dropdown List when faces are added or removed
+        """
+        current_text_temp = self.select_face_dropdown.currentText()
+        self.select_face_dropdown.clear()
+        self.select_face_dropdown.addItem('')
+        if os.path.exists(constants.IMAGE_PATH):
+            for folder in os.listdir(constants.IMAGE_PATH):
+                self.select_face_dropdown.addItem(folder)
+            if self.select_face_dropdown.findText(current_text_temp) != -1:
+                self.select_face_dropdown.setCurrentText(current_text_temp)
 
     def init_manual_control(self, device):
         """Initializing manual camera control. ONLY VISCA devices for now."""
@@ -638,16 +643,6 @@ class AutoPTZ_MainWindow(QMainWindow):
         constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=None)
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.show()
-
-    def update_face_dropdown(self, event):
-        current_text_temp = self.select_face_dropdown.currentText()
-        self.select_face_dropdown.clear()
-        self.select_face_dropdown.addItem('')
-        if os.path.exists(constants.IMAGE_PATH):
-            for folder in os.listdir(constants.IMAGE_PATH):
-                self.select_face_dropdown.addItem(folder)
-            if self.select_face_dropdown.findText(current_text_temp) != -1:
-                self.select_face_dropdown.setCurrentText(current_text_temp)
 
     def refreshViscaBtn(self, event):
         """Check is VISCA PTZ is assigned and change assignment button if so"""

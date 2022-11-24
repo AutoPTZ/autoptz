@@ -7,7 +7,7 @@ import cv2
 import time
 import dlib
 import shared.constants as constants
-from logic.facial_tracking.move_ptz import MovePTZ
+from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.testing_image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
 
@@ -20,7 +20,6 @@ class CameraWidget(QLabel):
     With the latest frame, Dlib Object Tracking is in use and works alongside with FaceRecognition to fix any inconsistencies when tracking.
     """
     change_selection_signal = Signal()
-    # FPS for Performance
     start_time = time.time()
     display_time = 2
     fc = 0
@@ -35,7 +34,6 @@ class CameraWidget(QLabel):
     track_h = None
     is_tracking = None
     tracked_name = None
-
     is_moving = False
 
     def __init__(self, source, width, height, lock, isNDI=False):
@@ -63,7 +61,11 @@ class CameraWidget(QLabel):
 
         # Create and Run Image Processor Thread
         self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
+        self.processor_thread.retrain_model_signal.connect(self.run_trainer)
         self.processor_thread.start()
+
+        # PTZ Movement Thread
+        self.ptz_control_thread = None
 
         self.track_started = False
         self.temp_tracked_name = None
@@ -74,8 +76,6 @@ class CameraWidget(QLabel):
         self.is_tracking = False  # If Track Checkbox is checked
         self.tracked_name = None  # Face that needs to be tracked
         self.tracker = dlib.correlation_tracker()
-
-        self.ptz_control_thread = None
 
     def stop(self):
         """
@@ -105,13 +105,11 @@ class CameraWidget(QLabel):
         If the Processor thread is not alive then start up the thread, then add the face.
         :param name:
         """
-        if self.processor_thread.is_alive():
+        if self.processor_thread.isRunning():
             self.processor_thread.add_name = name
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
             # Create and Run Image Processor Thread
-            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
-            time.sleep(0.9)
             self.processor_thread.add_name = name
             self.processor_thread.start()
 
@@ -121,11 +119,10 @@ class CameraWidget(QLabel):
         If the Processor thread is already alive then tell the thread to check encodings again.
         If the Processor thread is not alive then start up the thread, the thread will automatically check encodings.
         """
-        if self.processor_thread.is_alive():
+        if self.processor_thread.isRunning():
             self.processor_thread.check_encodings()
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
-            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
             self.processor_thread.start()
 
     def set_tracking(self):
@@ -204,12 +201,9 @@ class CameraWidget(QLabel):
         """
         Is called by update_image and returns the latest frame with FPS + face box drawings if there are any.
         :param frame:
-        :param face_locations:
-        :param face_names:
-        :param confidence_list:
         :return:
         """
-        if self.processor_thread.is_alive():
+        if self.processor_thread.isRunning():
             if self.processor_thread.face_locations is not None and self.processor_thread.face_names is not None and self.processor_thread.confidence_list is not None:
                 for (top, right, bottom, left), name, confidence in zip(self.processor_thread.face_locations,
                                                                         self.processor_thread.face_names,
@@ -305,6 +299,9 @@ class CameraWidget(QLabel):
 
         return frame
 
+    def run_trainer(self):
+        TrainerDlg().show()
+
     def closeEvent(self, event):
         """
         On event call, stop all the related threads.
@@ -313,5 +310,4 @@ class CameraWidget(QLabel):
         self.processor_thread.stop()
         self.stream_thread.stop()
         self.deleteLater()
-        # self.destroy()
         event.accept()
