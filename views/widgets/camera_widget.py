@@ -103,15 +103,17 @@ class CameraWidget(QLabel):
     def set_add_name(self, name):
         """
         Run when the user wants to register a new face for recognition.
-        If the Processor thread is already alive then just set the name to start taking images,
+        If the Processor thread is already alive then just set the name to start taking images
         If the Processor thread is not alive then start up the thread, then add the face.
         :param name:
         """
-        if self.processor_thread.isRunning():
+        if self.processor_thread is not None:
+            print("is running")
             self.processor_thread.add_name = name
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
             # Create and Run Image Processor Thread
+            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
             self.processor_thread.add_name = name
             self.processor_thread.start()
 
@@ -121,10 +123,11 @@ class CameraWidget(QLabel):
         If the Processor thread is already alive then tell the thread to check encodings again.
         If the Processor thread is not alive then start up the thread, the thread will automatically check encodings.
         """
-        if self.processor_thread.isRunning():
+        if self.processor_thread is not None:
             self.processor_thread.check_encodings()
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
+            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
             self.processor_thread.start()
 
     def set_tracking(self):

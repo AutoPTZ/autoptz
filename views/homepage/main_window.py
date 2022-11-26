@@ -486,7 +486,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         else:
             print(f"{constants.CURRENT_ACTIVE_CAM_WIDGET.objectName()} is active")
             self.select_face_dropdown.setEnabled(True)
-            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread.isRunning():
+            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread is not None:
                 print("Processor Thread is running")
                 if constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name() is None:
                     print("no tracked name")

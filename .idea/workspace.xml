@@ -7,12 +7,9 @@
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="maybe moving dlib">
       <change beforePath="$PROJECT_DIR$/.idea/autoptz.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/autoptz.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/shelf/maybe_moving_dlib.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/shelf/maybe_moving_dlib.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/move_visca_ptz.py" beforeDir="false" afterPath="$PROJECT_DIR$/libraries/move_visca_ptz.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/old_image_processor.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/old_yolo_handler.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/old_yolo_handler.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/testing_image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/views/functions/assign_visca_ptz_ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/functions/assign_visca_ptz_ui.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/views/homepage/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/homepage/main_window.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/views/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/widgets/camera_widget.py" afterDir="false" />
     </list>
@@ -54,7 +51,7 @@
     &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;last_opened_file_path&quot;: &quot;/Users/prince/development/autoptz/logic/facial_tracking/images&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;Errors&quot;
+    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
   }
 }</component>
   <component name="RecentsManager">
