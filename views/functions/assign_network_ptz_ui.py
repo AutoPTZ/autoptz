@@ -10,8 +10,7 @@ from shared.message_prompts import show_critical_messagebox
 class AssignNetworkPTZIU(object):
     def __init__(self):
         self.CachingCamera = None
-        self.username_line = None
-        self.password_line = None
+        self.port_line = None
         self.horizontalLayout = None
         self.cancel_btn = None
         self.submit = None
@@ -32,13 +31,9 @@ class AssignNetworkPTZIU(object):
         self.allow_network_control.setText("allow_network_control")
         self.verticalLayout.addWidget(self.allow_network_control)
 
-        self.username_line = QtWidgets.QLineEdit(assign_net_ptz)
-        self.username_line.setPlaceholderText("username_line")
-        self.verticalLayout.addWidget(self.username_line)
-
-        self.password_line = QtWidgets.QLineEdit(assign_net_ptz)
-        self.password_line.setPlaceholderText("password_line")
-        self.verticalLayout.addWidget(self.password_line)
+        self.port_line = QtWidgets.QLineEdit(assign_net_ptz)
+        self.port_line.setPlaceholderText("port_line")
+        self.verticalLayout.addWidget(self.port_line)
 
         self.horizontalLayout = QtWidgets.QHBoxLayout()
         self.horizontalLayout.setObjectName("horizontalLayout")
@@ -66,9 +61,10 @@ class AssignNetworkPTZIU(object):
         try:
             ip_address = re.findall(r'(?:\d{1,3}\.)+\d{1,3}', self.camera_widget.objectName())
             print(ip_address, self.camera_widget.objectName())
-            camera_control = CachingCamera(ip=ip_address[0]) #, port=5678
-            # camera_control = onvif_control.CameraControl(ip_address[0], self.username_line.text().strip(), self.password_line.text().strip())
-            # camera_control.camera_start()
+            if self.port_line.text().strip() == "":
+                camera_control = CachingCamera(ip=ip_address[0], port=52381)
+            else:
+                camera_control = CachingCamera(ip=ip_address[0], port=self.port_line.text().strip())  # , port=5678
             print("camera control started for " + ip_address[0])
             self.camera_widget.set_ptz(control=camera_control)
         except Exception as e:
@@ -82,8 +78,7 @@ class AssignNetworkPTZIU(object):
         add_face.setWindowTitle(_translate("assign_net_ptz", "Assign Network PTZ"))
         self.allow_network_control.setText(
             _translate("allow_network_control", "VISCA Login for " + self.camera_widget.objectName() + ":"))
-        self.username_line.setPlaceholderText(_translate("username_line", "Enter Username (Optional)"))
-        self.password_line.setPlaceholderText(_translate("password_line", "Enter Password (Optional)"))
+        self.port_line.setPlaceholderText(_translate("port_line", "Enter Port (Default=52381)"))
         self.submit.setText(_translate("submit", "Submit"))
         self.cancel_btn.setText(_translate("cancel_btn", "Cancel"))
 
