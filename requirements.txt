@@ -7,6 +7,6 @@ scipy
 watchdog
 pyserial
 ndi-python
-sensecam-control
+visca-over-ip
 git+https://github.com/ageitgey/face_recognition_models
 # conda install -c conda-forge dlib

@@ -11,6 +11,7 @@ from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.move_ptz import MovePTZ
 from logic.facial_tracking.image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
+from queue import Queue
 
 
 class CameraWidget(QLabel):
@@ -43,6 +44,7 @@ class CameraWidget(QLabel):
         self.height = height
         self.lock = lock
         self.isNDI = isNDI
+        self._is_stopped = True
         self.setProperty('active', False)
         # self.resize(width, height)
         if self.isNDI:
@@ -66,6 +68,9 @@ class CameraWidget(QLabel):
         self.processor_thread.start()
 
         # PTZ Movement Thread
+        self.ptz_request_queue = Queue()
+        self.last_request = None
+        # self.ptz_request_queue.maxsize = 1
         self.ptz_control_thread = None
 
         self.track_started = False
@@ -94,10 +99,9 @@ class CameraWidget(QLabel):
         if control is None:
             if self.ptz_control_thread is not None:
                 self.ptz_control_thread.stop()
-            self.ptz_control_thread = None
+                self.ptz_control_thread = None
         else:
-            self.ptz_control_thread = MovePTZ(ptz_controller=control, lock=self.lock, isVISCA=isVISCA)
-            time.sleep(0.2)
+            self.ptz_control_thread = MovePTZ(ptz_controller=control, lock=self.lock, ptz_request_queue=self.ptz_request_queue)
             self.ptz_control_thread.start()
 
     def set_add_name(self, name):
@@ -139,8 +143,9 @@ class CameraWidget(QLabel):
         self.track_w = None
         self.track_h = None
         self.is_tracking = not self.is_tracking
-        # if self.ptz_control_thread is not None:
-        #     self.ptz_control_thread.stop_move()
+        if self.ptz_control_thread is not None:
+            self.ptz_request_queue.put("stop")
+            self.last_request = None
 
     def set_tracked_name(self, name):
         """
@@ -283,17 +288,27 @@ class CameraWidget(QLabel):
             cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
 
         if self.ptz_control_thread is not None:
-            # For ONVIF PTZ
+            # For VISCA OVER IP PTZ
             if x > min_x and w < max_x and y > min_y and h < max_y:
-                self.ptz_control_thread._is_stopped = True
+                if self.last_request != "stop":
+                    self.ptz_request_queue.put("stop")
+                    self.last_request = "stop"
             if w > max_x:
-                self.ptz_control_thread._moving_right = True
-            elif x < min_x:
-                self.ptz_control_thread._moving_left = True
-            # elif y < max_y:
-            #     self.ptz_control_thread._moving_up = True
-            # elif h < min_y:
-            #     self.ptz_control_thread._moving_down = True
+                if self.last_request != "right":
+                    self.ptz_request_queue.put("right")
+                    self.last_request = "right"
+            if x < min_x:
+                if self.last_request != "left":
+                    self.ptz_request_queue.put("left")
+                    self.last_request = "left"
+            # if y < max_y:
+            #     if self.last_request != "up":
+            #         self.ptz_request_queue.put("up")
+            #         self.last_request = "up"
+            # if h < min_y:
+            #     if self.last_request != "down":
+            #         self.ptz_request_queue.put("down")
+            #         self.last_request = "down"
 
         return frame
 

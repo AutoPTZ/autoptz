@@ -1,7 +1,6 @@
 import re
 from threading import Thread
-
-from sensecam_control import onvif_control
+from visca_over_ip import CachingCamera
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtWidgets import QDialog
 
@@ -10,6 +9,7 @@ from shared.message_prompts import show_critical_messagebox
 
 class AssignNetworkPTZIU(object):
     def __init__(self):
+        self.CachingCamera = None
         self.username_line = None
         self.password_line = None
         self.horizontalLayout = None
@@ -66,23 +66,22 @@ class AssignNetworkPTZIU(object):
         try:
             ip_address = re.findall(r'(?:\d{1,3}\.)+\d{1,3}', self.camera_widget.objectName())
             print(ip_address, self.camera_widget.objectName())
-            camera_control = onvif_control.CameraControl(ip_address[0], self.username_line.text().strip(),
-                                                         self.password_line.text().strip())
-            camera_control.camera_start()
+            camera_control = CachingCamera(ip=ip_address[0]) #, port=5678
+            # camera_control = onvif_control.CameraControl(ip_address[0], self.username_line.text().strip(), self.password_line.text().strip())
+            # camera_control.camera_start()
             print("camera control started for " + ip_address[0])
             self.camera_widget.set_ptz(control=camera_control)
         except Exception as e:
             print(e)
-            show_critical_messagebox(window_title="ONVIF Camera Control",
-                                     critical_message="Username or password is incorrect.\nPlease check if ONVIF "
+            show_critical_messagebox(window_title="VISCA Camera Control",
+                                     critical_message="Username or password is incorrect.\nPlease check if VISCA "
                                                       "is enabled in your camera settings.")
-
 
     def translate_ui(self, add_face):
         _translate = QtCore.QCoreApplication.translate
         add_face.setWindowTitle(_translate("assign_net_ptz", "Assign Network PTZ"))
         self.allow_network_control.setText(
-            _translate("allow_network_control", "ONVIF Login for " + self.camera_widget.objectName() + ":"))
+            _translate("allow_network_control", "VISCA Login for " + self.camera_widget.objectName() + ":"))
         self.username_line.setPlaceholderText(_translate("username_line", "Enter Username (Optional)"))
         self.password_line.setPlaceholderText(_translate("password_line", "Enter Password (Optional)"))
         self.submit.setText(_translate("submit", "Submit"))
