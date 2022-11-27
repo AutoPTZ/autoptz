@@ -3,8 +3,10 @@ import threading
 
 
 class ViscaPTZ:
+
     def __init__(self, device_id):
         if device_id != "":
+            self.id = device_id
             self.visca_ptz = camera.D100(device_id)
             self.visca_ptz.init()
             print("Camera Initialized")
@@ -12,25 +14,29 @@ class ViscaPTZ:
     def move_left_track(self):
         try:
             self.visca_ptz.left(5)
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_right_track(self):
         try:
             self.visca_ptz.right(5)
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_up_track(self):
         try:
             self.visca_ptz.up(5)
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_down_track(self):
         try:
             self.visca_ptz.down(5)
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_up(self):
@@ -38,7 +44,8 @@ class ViscaPTZ:
             self.visca_ptz.up(5)
             S = threading.Timer(0.4, self.move_stop)
             S.start()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_left(self):
@@ -46,7 +53,8 @@ class ViscaPTZ:
             self.visca_ptz.left(5)
             S = threading.Timer(0.4, self.move_stop)
             S.start()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_right(self):
@@ -54,7 +62,8 @@ class ViscaPTZ:
             self.visca_ptz.right(5)
             S = threading.Timer(0.4, self.move_stop)
             S.start()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_down(self):
@@ -62,7 +71,8 @@ class ViscaPTZ:
             self.visca_ptz.down(5)
             S = threading.Timer(0.4, self.move_stop)
             S.start()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_left_up(self):
@@ -70,7 +80,8 @@ class ViscaPTZ:
             self.visca_ptz.left_up(5, 5)
             S = threading.Timer(0.4, self.move_stop)
             S.start()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_right_up(self):
@@ -78,7 +89,8 @@ class ViscaPTZ:
             self.visca_ptz.right_up(5, 5)
             S = threading.Timer(0.4, self.move_stop)
             S.start()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_left_down(self):
@@ -86,7 +98,8 @@ class ViscaPTZ:
             self.visca_ptz.left_down(5, 5)
             S = threading.Timer(0.4, self.move_stop)
             S.start()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_right_down(self):
@@ -94,7 +107,8 @@ class ViscaPTZ:
             self.visca_ptz.right_down(5, 5)
             S = threading.Timer(0.4, self.move_stop)
             S.start()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_home(self):
@@ -102,19 +116,22 @@ class ViscaPTZ:
             self.visca_ptz.home()
             S = threading.Timer(3, self.move_stop)
             S.start()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def move_stop(self):
         try:
             self.visca_ptz.stop()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def menu(self):
         try:
             self.visca_ptz.menu()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def zoom_in(self):
@@ -122,7 +139,8 @@ class ViscaPTZ:
             self.visca_ptz.zoom_in()
             S = threading.Timer(0.5, self.zoom_stop)
             S.start()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def zoom_out(self):
@@ -130,17 +148,20 @@ class ViscaPTZ:
             self.visca_ptz.zoom_out()
             S = threading.Timer(0.5, self.zoom_stop)
             S.start()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def zoom_stop(self):
         try:
             self.visca_ptz.zoom_stop()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")
 
     def reset(self):
         try:
             self.visca_ptz.reset()
-        except:
+        except Exception as e:
+            print(e)
             print("Please initialize a camera")

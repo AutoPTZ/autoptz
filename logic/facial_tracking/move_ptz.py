@@ -6,9 +6,10 @@ from PySide6.QtCore import QThread
 
 class MovePTZ(Thread):
 
-    def __init__(self, ptz_controller, lock):
+    def __init__(self, ptz_controller, lock, isVISCA=False):
         super(MovePTZ, self).__init__()
         self.ptz_control = ptz_controller
+        self.isVISCA = isVISCA
         self._run_flag = True
         self.lock = lock
 
@@ -49,6 +50,7 @@ class MovePTZ(Thread):
         self.ptz_control.continuous_move(0, -0.05, 0)
         self._moving_down = False
         time.sleep(0.1)
+
 
     def run(self):
         while self._run_flag:

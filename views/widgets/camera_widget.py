@@ -90,13 +90,13 @@ class CameraWidget(QLabel):
         self.deleteLater()
         self.destroy()
 
-    def set_ptz(self, control):
+    def set_ptz(self, control, isVISCA=False):
         if control is None:
             if self.ptz_control_thread is not None:
                 self.ptz_control_thread.stop()
             self.ptz_control_thread = None
         else:
-            self.ptz_control_thread = MovePTZ(ptz_controller=control, lock=self.lock)
+            self.ptz_control_thread = MovePTZ(ptz_controller=control, lock=self.lock, isVISCA=isVISCA)
             time.sleep(0.2)
             self.ptz_control_thread.start()
 
@@ -215,12 +215,6 @@ class CameraWidget(QLabel):
                 for (top, right, bottom, left), name, confidence in zip(self.processor_thread.face_locations,
                                                                         self.processor_thread.face_names,
                                                                         self.processor_thread.confidence_list):
-                    # Scale back up face locations since the frame we detected in was scaled to 1/2 size
-                    # top *= 2
-                    # right *= 2
-                    # bottom *= 2
-                    # left *= 2
-
                     if name == self.tracked_name:
                         self.temp_tracked_name = name
                         self.track_x = left

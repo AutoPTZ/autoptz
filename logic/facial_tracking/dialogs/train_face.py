@@ -134,7 +134,7 @@ class TrainerThread(QtCore.QThread):
                 name = os.path.basename(os.path.dirname(imagePath))
                 image = cv2.imread(imagePath)
                 rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                boxes = self.face_recognition.face_locations(rgb)
+                boxes = self.face_recognition.face_locations(rgb, model="cnn")
                 encodings = self.face_recognition.face_encodings(rgb, boxes)
                 for encoding in encodings:
                     known_encodings.append(encoding)

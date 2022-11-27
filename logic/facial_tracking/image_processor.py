@@ -80,8 +80,8 @@ class ImageProcessor(QThread):
                         self.recognize_face(frame=frame)
                     except Exception as e:
                         print(e)
-                else:
-                    self.stop()
+                # else:
+                #     self.stop()
             if self.lock.locked():
                 self.lock.release()
 

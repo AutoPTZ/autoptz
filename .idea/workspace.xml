@@ -7,9 +7,13 @@
     <list default="true" id="38ebf632-8fcc-432a-b960-3dfb24f85e9e" name="Changes" comment="maybe moving dlib">
       <change beforePath="$PROJECT_DIR$/.idea/autoptz.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/autoptz.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/shelf/maybe_moving_dlib.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/shelf/maybe_moving_dlib.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/libraries/move_visca_ptz.py" beforeDir="false" afterPath="$PROJECT_DIR$/libraries/visca/move_visca_ptz.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/dialogs/train_face.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/image_processor.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logic/facial_tracking/move_ptz.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/move_ptz.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/shared/constants.py" beforeDir="false" afterPath="$PROJECT_DIR$/shared/constants.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/views/functions/assign_visca_ptz_ui.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/views/homepage/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/homepage/main_window.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/views/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/widgets/camera_widget.py" afterDir="false" />
     </list>
@@ -61,11 +65,11 @@
       <recent name="$PROJECT_DIR$/logic/facial_tracking" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\steve\development\autoptz\libraries\visca" />
+      <recent name="C:\Users\steve\development\autoptz\libraries" />
       <recent name="$PROJECT_DIR$/libraries" />
       <recent name="$PROJECT_DIR$/views/test" />
       <recent name="C:\Users\steve\development\autoptz\views\functions" />
-      <recent name="$PROJECT_DIR$/shared" />
-      <recent name="$PROJECT_DIR$/ui/widgets" />
     </key>
   </component>
   <component name="RunManager">

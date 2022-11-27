@@ -21,3 +21,7 @@ CAMERA_STYLESHEET = """
                         border-radius: 3px;}
                     """
 CURRENT_ACTIVE_CAM_WIDGET = None
+CURRENT_ACTIVE_PTZ_DEVICE = None
+IN_USE_VISCA_DEVICES = []
+ASSIGNED_VISCA_CAMERA_WIDGETS = []
+RUNNING_HARDWARE_CAMERA_WIDGETS = []

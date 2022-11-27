@@ -9,11 +9,11 @@ import watchdog.events
 import watchdog.observers
 import shared.constants as constants
 from logic.camera_search.search_ndi import get_ndi_sources
-from libraries.move_visca_ptz import ViscaPTZ
+from libraries.visca.move_visca_ptz import ViscaPTZ
 from logic.camera_search.get_serial_cameras import COMPorts
+from shared.message_prompts import show_info_messagebox
 from views.functions.show_dialogs_ui import ShowDialog
 from views.functions.assign_network_ptz_ui import AssignNetworkPTZDlg
-from views.functions.assign_visca_ptz_ui import AssignViscaPTZDlg
 from views.homepage.flow_layout import FlowLayout
 from shared.watch_trainer_directory import WatchTrainer
 from views.widgets.camera_widget import CameraWidget
@@ -154,7 +154,7 @@ class AutoPTZ_MainWindow(QMainWindow):
                 print(port.device, port.description, data_list.index(port))
                 self.select_camera_dropdown.addItem(port.device)
 
-        self.select_camera_dropdown.currentTextChanged.connect(self.init_manual_control)
+        self.select_camera_dropdown.currentTextChanged.connect(self.set_manual_control)
 
         # manual control buttons
         self.gridLayoutWidget = QtWidgets.QWidget(self.manualControlPage)
@@ -450,6 +450,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         """Add NDI/Serial camera source from the menu to the FlowLayout"""
         camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3,
                                      isNDI=isNDI, lock=self.lock)
+        if isNDI is False:
+            constants.RUNNING_HARDWARE_CAMERA_WIDGETS.append(camera_widget)
         camera_widget.change_selection_signal.connect(self.updateElements)
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
@@ -465,6 +467,9 @@ class AutoPTZ_MainWindow(QMainWindow):
         menu_item.triggered.connect(
             lambda index=source, item=menu_item: self.addCameraWidget(source=index, menu_item=item))
         self.watch_trainer.remove_camera(camera_widget=camera_widget)
+        if camera_widget in constants.RUNNING_HARDWARE_CAMERA_WIDGETS:
+            constants.IN_USE_VISCA_DEVICES.remove(camera_widget.ptz_control_thread.ptz_control)
+            constants.RUNNING_HARDWARE_CAMERA_WIDGETS.remove(camera_widget)
         if constants.CURRENT_ACTIVE_CAM_WIDGET == camera_widget:
             constants.CURRENT_ACTIVE_CAM_WIDGET = None
             self.updateElements()
@@ -476,13 +481,15 @@ class AutoPTZ_MainWindow(QMainWindow):
         Update UI elements like FaceDropDownMenu and Enable Track Checkbox when a CameraWidget is activated/deactivated
         """
         if constants.CURRENT_ACTIVE_CAM_WIDGET is None:
-            print(f"No Camera Source is active")
+            print("No Camera Source is active")
             self.select_face_dropdown.setEnabled(False)
             self.select_face_dropdown.setCurrentText('')
             self.enable_track.setEnabled(False)
             self.enable_track.setChecked(False)
             self.assign_network_ptz_btn.hide()
-            self.assign_network_ptz_btn.hide()
+            self.unassign_network_ptz_btn.hide()
+            self.assign_visca_ptz_btn.hide()
+            self.unassign_visca_ptz_btn.hide()
         else:
             print(f"{constants.CURRENT_ACTIVE_CAM_WIDGET.objectName()} is active")
             self.select_face_dropdown.setEnabled(True)
@@ -528,6 +535,8 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.assign_network_ptz_btn.hide()
                 self.assign_network_ptz_btn.hide()
 
+                self.refreshViscaBtn()
+
     def selected_face_change(self):
         """
         Update Current Active CameraWidget's Tracked Name and UI
@@ -546,7 +555,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         Update Current Active CameraWidget's Enable/Disable Tracking and UI
         """
         if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
-            print(f"setting track button for {self.enable_track.isChecked()}")
+            print(f'setting track button for {self.enable_track.isChecked()}')
             constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracking()
 
     def update_face_dropdown(self, event):
@@ -562,73 +571,77 @@ class AutoPTZ_MainWindow(QMainWindow):
             if self.select_face_dropdown.findText(current_text_temp) != -1:
                 self.select_face_dropdown.setCurrentText(current_text_temp)
 
-    def init_manual_control(self, device):
+    def set_manual_control(self, device):
         """Initializing manual camera control. ONLY VISCA devices for now."""
-        self.current_manual_device = ViscaPTZ(device_id=device)
-
-        if device != "":
-            # Enable Button Commands
-            self.up_left_btn.clicked.connect(self.current_manual_device.move_left_up)
-            self.up_btn.clicked.connect(self.current_manual_device.move_up)
-            self.up_right_btn.clicked.connect(self.current_manual_device.move_right_up)
-            self.left_btn.clicked.connect(self.current_manual_device.move_left)
-            self.right_btn.clicked.connect(self.current_manual_device.move_right)
-            self.down_left_btn.clicked.connect(self.current_manual_device.move_left_down)
-            self.down_btn.clicked.connect(self.current_manual_device.move_down)
-            self.down_right_btn.clicked.connect(self.current_manual_device.move_right_down)
-            self.home_btn.clicked.connect(self.current_manual_device.move_home)
-            self.zoom_in_btn.clicked.connect(self.current_manual_device.zoom_in)
-            self.zoom_out_btn.clicked.connect(self.current_manual_device.zoom_out)
-            self.menu_btn.clicked.connect(self.current_manual_device.menu)
-            self.reset_btn.clicked.connect(self.current_manual_device.reset)
-        else:
-            # Disable Button Commands
-            self.up_left_btn.clicked.disconnect()
-            self.up_btn.clicked.disconnect()
-            self.up_right_btn.clicked.disconnect()
-            self.left_btn.clicked.disconnect()
-            self.right_btn.clicked.disconnect()
-            self.down_left_btn.clicked.disconnect()
-            self.down_btn.clicked.disconnect()
-            self.down_right_btn.clicked.disconnect()
-            self.home_btn.clicked.disconnect()
-            self.zoom_in_btn.clicked.disconnect()
-            self.zoom_out_btn.clicked.disconnect()
-            self.menu_btn.clicked.disconnect()
-            self.reset_btn.clicked.disconnect()
+        for cam in constants.IN_USE_VISCA_DEVICES:
+            if cam.id == device:
+                constants.CURRENT_ACTIVE_PTZ_DEVICE = cam
+                self.unassign_visca_ptz_btn.show()
+                break
+        if constants.CURRENT_ACTIVE_PTZ_DEVICE is None:
+            constants.CURRENT_ACTIVE_PTZ_DEVICE = ViscaPTZ(device_id=device)
 
         # shows button depending on if device has already been assigned to a camera source
-        try:
-            if device in self.assigned_ptz_camera:
-                self.unassign_visca_ptz_btn.show()
-            else:
-                self.assign_visca_ptz_btn.show()
-        except Exception as e:
-            print(e)
-            self.assign_visca_ptz_btn.hide()
-            self.unassign_visca_ptz_btn.hide()
+        if device != "":
+            # Enable Button Commands
+            self.up_left_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_left_up)
+            self.up_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_up)
+            self.up_right_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_right_up)
+            self.left_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_left)
+            self.right_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_right)
+            self.down_left_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_left_down)
+            self.down_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_down)
+            self.down_right_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_right_down)
+            self.home_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_home)
+            self.zoom_in_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.zoom_in)
+            self.zoom_out_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.zoom_out)
+            self.menu_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.menu)
+            self.reset_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.reset)
+        else:
+            # Disable Button Commands
+            constants.CURRENT_ACTIVE_PTZ_DEVICE = None
+            try:
+                self.up_left_btn.clicked.disconnect()
+                self.up_btn.clicked.disconnect()
+                self.up_right_btn.clicked.disconnect()
+                self.left_btn.clicked.disconnect()
+                self.right_btn.clicked.disconnect()
+                self.down_left_btn.clicked.disconnect()
+                self.down_btn.clicked.disconnect()
+                self.down_right_btn.clicked.disconnect()
+                self.home_btn.clicked.disconnect()
+                self.zoom_in_btn.clicked.disconnect()
+                self.zoom_out_btn.clicked.disconnect()
+                self.menu_btn.clicked.disconnect()
+                self.reset_btn.clicked.disconnect()
+            except Exception as e:
+                print(e)
+
+        self.refreshViscaBtn()
 
     def assign_visca_ptz_dlg(self):
         """Launch the Assign VISCA PTZ to Camera Source dialog."""
-        if not self.serial_widget_list or self.select_camera_dropdown.currentText() == "":
-            print("Need to select or add a camera")
+        if not constants.RUNNING_HARDWARE_CAMERA_WIDGETS:
+            show_info_messagebox(info_message="Please add a Hardware Camera Source")
+        elif constants.CURRENT_ACTIVE_CAM_WIDGET is None:
+            show_info_messagebox(info_message="Please select a Hardware Camera Source")
         else:
-            dlg = AssignViscaPTZDlg(self, camera_list=self.serial_widget_list, assigned_list=self.assigned_ptz_camera,
-                                    ptz_id=self.select_camera_dropdown.currentText())
-            dlg.closeEvent = self.refreshViscaBtn
-            dlg.exec()
+            constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=constants.CURRENT_ACTIVE_PTZ_DEVICE, isVISCA=True)
+            constants.IN_USE_VISCA_DEVICES.append(constants.CURRENT_ACTIVE_PTZ_DEVICE)
+            constants.ASSIGNED_VISCA_CAMERA_WIDGETS.append(constants.CURRENT_ACTIVE_CAM_WIDGET)
+            self.assign_visca_ptz_btn.hide()
+            self.unassign_visca_ptz_btn.show()
 
     def unassign_visca_ptz(self):
         """Allow User to Unassign current VISCA PTZ device from Camera Source"""
-        index = self.assigned_ptz_camera.index(self.select_camera_dropdown.currentText())
-
-        camera = self.assigned_ptz_camera[index + 1]
-        camera.image_processor.set_ptz_controller(None)
-        self.assigned_ptz_camera.remove(camera)
-        self.assigned_ptz_camera.remove(self.select_camera_dropdown.currentText())
-
-        self.unassign_visca_ptz_btn.hide()
-        self.assign_visca_ptz_btn.show()
+        if constants.CURRENT_ACTIVE_CAM_WIDGET is None:
+            show_info_messagebox(info_message="Please select the Hardware Camera Source")
+        else:
+            constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=None)
+            constants.IN_USE_VISCA_DEVICES.remove(constants.CURRENT_ACTIVE_PTZ_DEVICE)
+            constants.ASSIGNED_VISCA_CAMERA_WIDGETS.remove(constants.CURRENT_ACTIVE_CAM_WIDGET)
+            self.unassign_visca_ptz_btn.hide()
+            self.assign_visca_ptz_btn.show()
 
     def assign_network_ptz_dlg(self):
         """Launch the Assign Network PTZ to Camera Source dialog."""
@@ -645,13 +658,20 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.show()
 
-    def refreshViscaBtn(self, event):
+    def refreshViscaBtn(self, event=None):
         """Check is VISCA PTZ is assigned and change assignment button if so"""
-        if self.select_camera_dropdown.currentText() in self.assigned_ptz_camera:
-            self.unassign_visca_ptz_btn.show()
-            self.assign_visca_ptz_btn.hide()
+        if constants.CURRENT_ACTIVE_PTZ_DEVICE is not None:
+            if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
+                if constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_control_thread is not None:
+                    if constants.CURRENT_ACTIVE_PTZ_DEVICE == constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_control_thread.ptz_control:
+                        self.unassign_visca_ptz_btn.show()
+                        return
+                self.assign_visca_ptz_btn.hide()
+                self.unassign_visca_ptz_btn.hide()
+            if constants.CURRENT_ACTIVE_PTZ_DEVICE not in constants.IN_USE_VISCA_DEVICES:
+                self.assign_visca_ptz_btn.show()
         else:
-            self.assign_visca_ptz_btn.show()
+            self.assign_visca_ptz_btn.hide()
             self.unassign_visca_ptz_btn.hide()
 
     def refreshNetworkBtn(self, event):
