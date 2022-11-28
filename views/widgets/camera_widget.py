@@ -1,4 +1,3 @@
-import numpy as np
 from PySide6 import QtGui
 from PySide6.QtWidgets import QLabel
 from PySide6.QtGui import QPixmap
@@ -72,6 +71,7 @@ class CameraWidget(QLabel):
         self.ptz_request_queue = Queue()
         self.last_request = None
         self.ptz_control_thread = None
+        self.ptz_controller = None
 
         self.track_started = False
         self.temp_tracked_name = None
@@ -96,15 +96,17 @@ class CameraWidget(QLabel):
         self.destroy()
 
     def set_ptz(self, control, isUSB=False):
+        self.ptz_controller = control
         if control is None:
             if self.ptz_control_thread is not None:
                 self.ptz_control_thread.stop()
                 self.ptz_control_thread = None
         else:
-            self.ptz_control_thread = MovePTZ(ptz_controller=control, lock=self.lock,
+            self.ptz_control_thread = MovePTZ(ptz_controller=self.ptz_controller, lock=self.lock,
                                               ptz_request_queue=self.ptz_request_queue, isUSB=isUSB)
             self.ptz_control_thread.daemon = True
             self.ptz_control_thread.start()
+
 
     def set_add_name(self, name):
         """

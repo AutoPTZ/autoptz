@@ -468,7 +468,8 @@ class AutoPTZ_MainWindow(QMainWindow):
             lambda index=source, item=menu_item: self.addCameraWidget(source=index, menu_item=item))
         self.watch_trainer.remove_camera(camera_widget=camera_widget)
         if camera_widget in constants.RUNNING_HARDWARE_CAMERA_WIDGETS:
-            constants.IN_USE_USB_PTZ_DEVICES.remove(camera_widget.ptz_control_thread.ptz_control)
+            if camera_widget.ptz_controller is not None:
+                constants.IN_USE_USB_PTZ_DEVICES.remove(camera_widget.ptz_controller)
             constants.RUNNING_HARDWARE_CAMERA_WIDGETS.remove(camera_widget)
         if constants.CURRENT_ACTIVE_CAM_WIDGET == camera_widget:
             constants.CURRENT_ACTIVE_CAM_WIDGET = None

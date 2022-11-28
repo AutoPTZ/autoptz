@@ -1,6 +1,5 @@
 import time
 from threading import Thread
-from PySide6.QtCore import QThread
 
 
 class MovePTZ(Thread):
@@ -48,8 +47,7 @@ class MovePTZ(Thread):
     def stop(self):
         self._run_flag = False
         if self.isUSB:
-            pass
+            self.ptz_control.move_stop()
         else:
             self.ptz_control.pantilt(pan_speed=0, tilt_speed=0)
             self.ptz_control.close_connection()
-        self.wait()
