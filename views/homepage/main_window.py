@@ -88,14 +88,14 @@ class AutoPTZ_MainWindow(QMainWindow):
             for folder in os.listdir(constants.IMAGE_PATH):
                 self.select_face_dropdown.addItem(folder)
 
-        # assign VISCA PTZ to Serial Camera Source
+        # assign usb PTZ to Serial Camera Source
         self.assign_network_ptz_btn = QtWidgets.QPushButton(self.selectedCamPage)
         self.assign_network_ptz_btn.setGeometry(QtCore.QRect(10, 380, 150, 32))
         self.assign_network_ptz_btn.setObjectName("assign_network_ptz_btn")
         self.assign_network_ptz_btn.hide()
         self.unassign_network_ptz_btn = QtWidgets.QPushButton(self.selectedCamPage)
         self.unassign_network_ptz_btn.setGeometry(QtCore.QRect(0, 380, 162, 32))
-        self.unassign_network_ptz_btn.setObjectName("unassign_visca_ptz_btn")
+        self.unassign_network_ptz_btn.setObjectName("unassign_usb_ptz_btn")
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.clicked.connect(self.assign_network_ptz_dlg)
         self.unassign_network_ptz_btn.clicked.connect(self.unassign_network_ptz)
@@ -147,7 +147,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.select_camera_dropdown.setObjectName("select_camera_dropdown")
         self.select_camera_dropdown.addItem("")
 
-        # add all the USB VISCA devices to the dropdown menu
+        # add all the USB usb devices to the dropdown menu
         data_list = COMPorts.get_com_ports().data
         for port in data_list:
             if "USB" in port.description:
@@ -306,17 +306,17 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.reset_btn.setObjectName("reset_btn")
         self.menu_layout.addWidget(self.reset_btn)
 
-        # assign VISCA PTZ to Serial Camera Source
-        self.assign_visca_ptz_btn = QtWidgets.QPushButton(self.manualControlPage)
-        self.assign_visca_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
-        self.assign_visca_ptz_btn.setObjectName("assign_visca_ptz_btn")
-        self.assign_visca_ptz_btn.hide()
-        self.unassign_visca_ptz_btn = QtWidgets.QPushButton(self.manualControlPage)
-        self.unassign_visca_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
-        self.unassign_visca_ptz_btn.setObjectName("unassign_visca_ptz_btn")
-        self.unassign_visca_ptz_btn.hide()
-        self.assign_visca_ptz_btn.clicked.connect(self.assign_visca_ptz_dlg)
-        self.unassign_visca_ptz_btn.clicked.connect(self.unassign_visca_ptz)
+        # assign usb PTZ to Serial Camera Source
+        self.assign_usb_ptz_btn = QtWidgets.QPushButton(self.manualControlPage)
+        self.assign_usb_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
+        self.assign_usb_ptz_btn.setObjectName("assign_usb_ptz_btn")
+        self.assign_usb_ptz_btn.hide()
+        self.unassign_usb_ptz_btn = QtWidgets.QPushButton(self.manualControlPage)
+        self.unassign_usb_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
+        self.unassign_usb_ptz_btn.setObjectName("unassign_usb_ptz_btn")
+        self.unassign_usb_ptz_btn.hide()
+        self.assign_usb_ptz_btn.clicked.connect(self.assign_usb_ptz_dlg)
+        self.unassign_usb_ptz_btn.clicked.connect(self.unassign_usb_ptz)
         self.formTabWidget.addTab(self.manualControlPage, "")
 
         self.gridLayout.addWidget(self.formTabWidget, 0, 0, 3, 1)
@@ -468,7 +468,7 @@ class AutoPTZ_MainWindow(QMainWindow):
             lambda index=source, item=menu_item: self.addCameraWidget(source=index, menu_item=item))
         self.watch_trainer.remove_camera(camera_widget=camera_widget)
         if camera_widget in constants.RUNNING_HARDWARE_CAMERA_WIDGETS:
-            constants.IN_USE_VISCA_DEVICES.remove(camera_widget.ptz_control_thread.ptz_control)
+            constants.IN_USE_USB_PTZ_DEVICES.remove(camera_widget.ptz_control_thread.ptz_control)
             constants.RUNNING_HARDWARE_CAMERA_WIDGETS.remove(camera_widget)
         if constants.CURRENT_ACTIVE_CAM_WIDGET == camera_widget:
             constants.CURRENT_ACTIVE_CAM_WIDGET = None
@@ -488,8 +488,8 @@ class AutoPTZ_MainWindow(QMainWindow):
             self.enable_track.setChecked(False)
             self.assign_network_ptz_btn.hide()
             self.unassign_network_ptz_btn.hide()
-            self.assign_visca_ptz_btn.hide()
-            self.unassign_visca_ptz_btn.hide()
+            self.assign_usb_ptz_btn.hide()
+            self.unassign_usb_ptz_btn.hide()
         else:
             print(f"{constants.CURRENT_ACTIVE_CAM_WIDGET.objectName()} is active")
             self.select_face_dropdown.setEnabled(True)
@@ -535,7 +535,7 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.assign_network_ptz_btn.hide()
                 self.assign_network_ptz_btn.hide()
 
-                self.refreshViscaBtn()
+                self.refreshusbBtn()
 
     def selected_face_change(self):
         """
@@ -572,11 +572,11 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.select_face_dropdown.setCurrentText(current_text_temp)
 
     def set_manual_control(self, device):
-        """Initializing manual camera control. ONLY VISCA devices for now."""
-        for cam in constants.IN_USE_VISCA_DEVICES:
+        """Initializing manual camera control. ONLY USB devices for now."""
+        for cam in constants.IN_USE_USB_PTZ_DEVICES:
             if cam.id == device:
                 constants.CURRENT_ACTIVE_PTZ_DEVICE = cam
-                self.unassign_visca_ptz_btn.show()
+                self.unassign_usb_ptz_btn.show()
                 break
         if constants.CURRENT_ACTIVE_PTZ_DEVICE is None:
             constants.CURRENT_ACTIVE_PTZ_DEVICE = ViscaPTZ(device_id=device)
@@ -617,31 +617,31 @@ class AutoPTZ_MainWindow(QMainWindow):
             except Exception as e:
                 print(e)
 
-        self.refreshViscaBtn()
+        self.refreshusbBtn()
 
-    def assign_visca_ptz_dlg(self):
-        """Launch the Assign VISCA PTZ to Camera Source dialog."""
+    def assign_usb_ptz_dlg(self):
+        """Launch the Assign USB PTZ to Camera Source dialog."""
         if not constants.RUNNING_HARDWARE_CAMERA_WIDGETS:
             show_info_messagebox(info_message="Please add a Hardware Camera Source")
         elif constants.CURRENT_ACTIVE_CAM_WIDGET is None:
             show_info_messagebox(info_message="Please select a Hardware Camera Source")
         else:
-            constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=constants.CURRENT_ACTIVE_PTZ_DEVICE, isVISCA=True)
-            constants.IN_USE_VISCA_DEVICES.append(constants.CURRENT_ACTIVE_PTZ_DEVICE)
-            constants.ASSIGNED_VISCA_CAMERA_WIDGETS.append(constants.CURRENT_ACTIVE_CAM_WIDGET)
-            self.assign_visca_ptz_btn.hide()
-            self.unassign_visca_ptz_btn.show()
+            constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=constants.CURRENT_ACTIVE_PTZ_DEVICE, isUSB=True)
+            constants.IN_USE_USB_PTZ_DEVICES.append(constants.CURRENT_ACTIVE_PTZ_DEVICE)
+            constants.ASSIGNED_USB_PTZ_CAMERA_WIDGETS.append(constants.CURRENT_ACTIVE_CAM_WIDGET)
+            self.assign_usb_ptz_btn.hide()
+            self.unassign_usb_ptz_btn.show()
 
-    def unassign_visca_ptz(self):
-        """Allow User to Unassign current VISCA PTZ device from Camera Source"""
+    def unassign_usb_ptz(self):
+        """Allow User to Unassign current USB PTZ device from Camera Source"""
         if constants.CURRENT_ACTIVE_CAM_WIDGET is None:
             show_info_messagebox(info_message="Please select the Hardware Camera Source")
         else:
             constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=None)
-            constants.IN_USE_VISCA_DEVICES.remove(constants.CURRENT_ACTIVE_PTZ_DEVICE)
-            constants.ASSIGNED_VISCA_CAMERA_WIDGETS.remove(constants.CURRENT_ACTIVE_CAM_WIDGET)
-            self.unassign_visca_ptz_btn.hide()
-            self.assign_visca_ptz_btn.show()
+            constants.IN_USE_USB_PTZ_DEVICES.remove(constants.CURRENT_ACTIVE_PTZ_DEVICE)
+            constants.ASSIGNED_USB_PTZ_CAMERA_WIDGETS.remove(constants.CURRENT_ACTIVE_CAM_WIDGET)
+            self.unassign_usb_ptz_btn.hide()
+            self.assign_usb_ptz_btn.show()
 
     def assign_network_ptz_dlg(self):
         """Launch the Assign Network PTZ to Camera Source dialog."""
@@ -658,21 +658,21 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.show()
 
-    def refreshViscaBtn(self, event=None):
-        """Check is VISCA PTZ is assigned and change assignment button if so"""
+    def refreshusbBtn(self, event=None):
+        """Check is USB PTZ is assigned and change assignment button if so"""
         if constants.CURRENT_ACTIVE_PTZ_DEVICE is not None:
             if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
                 if constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_control_thread is not None:
                     if constants.CURRENT_ACTIVE_PTZ_DEVICE == constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_control_thread.ptz_control:
-                        self.unassign_visca_ptz_btn.show()
+                        self.unassign_usb_ptz_btn.show()
                         return
-                self.assign_visca_ptz_btn.hide()
-                self.unassign_visca_ptz_btn.hide()
-            if constants.CURRENT_ACTIVE_PTZ_DEVICE not in constants.IN_USE_VISCA_DEVICES:
-                self.assign_visca_ptz_btn.show()
+                self.assign_usb_ptz_btn.hide()
+                self.unassign_usb_ptz_btn.hide()
+            if constants.CURRENT_ACTIVE_PTZ_DEVICE not in constants.IN_USE_USB_PTZ_DEVICES:
+                self.assign_usb_ptz_btn.show()
         else:
-            self.assign_visca_ptz_btn.hide()
-            self.unassign_visca_ptz_btn.hide()
+            self.assign_usb_ptz_btn.hide()
+            self.unassign_usb_ptz_btn.hide()
 
     def refreshNetworkBtn(self, event):
         """Check is Network PTZ is assigned and change assignment button if so"""
@@ -708,8 +708,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.focus_minus_btn.setText(_translate("AutoPTZ", "Focus -"))
         self.menu_btn.setText(_translate("AutoPTZ", "Menu"))
         self.reset_btn.setText(_translate("AutoPTZ", "Reset"))
-        self.assign_visca_ptz_btn.setText(_translate("AutoPTZ", "Assign VISCA PTZ"))
-        self.unassign_visca_ptz_btn.setText(_translate("AutoPTZ", "Unassign VISCA PTZ"))
+        self.assign_usb_ptz_btn.setText(_translate("AutoPTZ", "Assign USB PTZ"))
+        self.unassign_usb_ptz_btn.setText(_translate("AutoPTZ", "Unassign USB PTZ"))
         self.formTabWidget.setTabText(self.formTabWidget.indexOf(self.manualControlPage),
                                       _translate("AutoPTZ", "Manual"))
         self.menuFile.setTitle(_translate("AutoPTZ", "File"))

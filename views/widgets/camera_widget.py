@@ -1,3 +1,4 @@
+import numpy as np
 from PySide6 import QtGui
 from PySide6.QtWidgets import QLabel
 from PySide6.QtGui import QPixmap
@@ -70,7 +71,6 @@ class CameraWidget(QLabel):
         # PTZ Movement Thread
         self.ptz_request_queue = Queue()
         self.last_request = None
-        # self.ptz_request_queue.maxsize = 1
         self.ptz_control_thread = None
 
         self.track_started = False
@@ -95,13 +95,15 @@ class CameraWidget(QLabel):
         self.deleteLater()
         self.destroy()
 
-    def set_ptz(self, control, isVISCA=False):
+    def set_ptz(self, control, isUSB=False):
         if control is None:
             if self.ptz_control_thread is not None:
                 self.ptz_control_thread.stop()
                 self.ptz_control_thread = None
         else:
-            self.ptz_control_thread = MovePTZ(ptz_controller=control, lock=self.lock, ptz_request_queue=self.ptz_request_queue)
+            self.ptz_control_thread = MovePTZ(ptz_controller=control, lock=self.lock,
+                                              ptz_request_queue=self.ptz_request_queue, isUSB=isUSB)
+            self.ptz_control_thread.daemon = True
             self.ptz_control_thread.start()
 
     def set_add_name(self, name):
@@ -265,6 +267,7 @@ class CameraWidget(QLabel):
         cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (255, 0, 0), 2)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.putText(frame, "Tracking Enabled", (75, 75), constants.FONT, 0.7, (0, 0, 255), 2)
+
         if self.track_started is False:
             rect = dlib.rectangle(x, y, w, h)
             self.tracker.start_track(rgb_frame, rect)
@@ -288,19 +291,19 @@ class CameraWidget(QLabel):
             cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
 
         if self.ptz_control_thread is not None:
-            # For VISCA OVER IP PTZ
-            if x > min_x and w < max_x and y > min_y and h < max_y:
-                if self.last_request != "stop":
-                    self.ptz_request_queue.put("stop")
-                    self.last_request = "stop"
-            if w > max_x:
-                if self.last_request != "right":
-                    self.ptz_request_queue.put("right")
-                    self.last_request = "right"
-            if x < min_x:
-                if self.last_request != "left":
-                    self.ptz_request_queue.put("left")
-                    self.last_request = "left"
+            if self.ptz_request_queue.empty():
+                if x > min_x and w < max_x and y > min_y and h < max_y:
+                    if self.last_request != "stop":
+                        self.ptz_request_queue.put("stop")
+                        self.last_request = "stop"
+                if w > max_x:
+                    if self.last_request != "right":
+                        self.ptz_request_queue.put("right")
+                        self.last_request = "right"
+                if x < min_x:
+                    if self.last_request != "left":
+                        self.ptz_request_queue.put("left")
+                        self.last_request = "left"
             # if y < max_y:
             #     if self.last_request != "up":
             #         self.ptz_request_queue.put("up")

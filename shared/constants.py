@@ -3,8 +3,8 @@ import os
 
 ROOT_DIR = os.path.abspath(os.curdir)
 IMAGE_PATH = ROOT_DIR + '/logic/facial_tracking/images/'
-TRAINER_PATH = ROOT_DIR + "/logic/facial_tracking/trainer/"
-ENCODINGS_PATH = ROOT_DIR + '/logic/facial_tracking/trainer/encodings.pickle'
+TRAINER_PATH = ROOT_DIR + "/logic/facial_tracking/models/"
+ENCODINGS_PATH = ROOT_DIR + '/logic/facial_tracking/models/encodings.pickle'
 FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 CAMERA_STYLESHEET = """
@@ -22,6 +22,6 @@ CAMERA_STYLESHEET = """
                     """
 CURRENT_ACTIVE_CAM_WIDGET = None
 CURRENT_ACTIVE_PTZ_DEVICE = None
-IN_USE_VISCA_DEVICES = []
-ASSIGNED_VISCA_CAMERA_WIDGETS = []
+IN_USE_USB_PTZ_DEVICES = []
+ASSIGNED_USB_PTZ_CAMERA_WIDGETS = []
 RUNNING_HARDWARE_CAMERA_WIDGETS = []

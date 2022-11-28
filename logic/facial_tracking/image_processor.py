@@ -152,7 +152,7 @@ class ImageProcessor(QThread):
 
     def check_encodings(self):
         """
-        Refresh encodings_data to use the latest trainer data. If there is any.
+        Refresh encodings_data to use the latest models data. If there is any.
         """
         self.encoding_data = None
         if os.path.exists(constants.ENCODINGS_PATH):

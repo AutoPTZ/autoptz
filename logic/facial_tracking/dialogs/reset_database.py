@@ -59,13 +59,13 @@ class ResetDatabaseUI(object):
     def reset_database_prompt(self):
         """
         Methods that checks what the user inputs in the dialog.
-        Checks to see if the user enters "RESET ALL" exactly to remove all trainer and stored image files.
+        Checks to see if the user enters "RESET ALL" exactly to remove all models and stored image files.
         :return:
         """
         if self.confirm_line.text().strip() == "":
             return
         else:
-            # check if phrase is correct, if so delete all images + trainer.yml
+            # check if phrase is correct, if so delete all images + models.yml
             if self.confirm_line.text().strip() == 'RESET ALL':
                 if os.path.exists(constants.IMAGE_PATH):
                     shutil.rmtree(constants.IMAGE_PATH)

@@ -7,9 +7,9 @@
 /logic/camera_search/__pycache__
 /facial_tracking/__pycache__
 /views/vapix.log
-/logic/facial_tracking/trainer/trainer.json
+/logic/facial_tracking/models/trainer.json
 /logic/facial_tracking/dialogs/__pycache__
 /vapix.log
-/logic/facial_tracking/trainer/encodings.pickle
+/logic/facial_tracking/models/encodings.pickle
 /libraries/face_recognition/__pycache__
 /views/functions/__pycache__

@@ -9,9 +9,9 @@ NMS_THRESHOLD = 0.3
 class YoloHandler:
 
     # YoloV4
-    # self.net = cv2.dnn.readNetFromDarknet('../logic/facial_tracking/trainer/yolo.cfg', '../logic/facial_tracking/trainer/yolov4-obj_final.weights')
+    # self.net = cv2.dnn.readNetFromDarknet('../logic/facial_tracking/models/yolo.cfg', '../logic/facial_tracking/models/yolov4-obj_final.weights')
     # self.classes = []
-    # with open("../logic/facial_tracking/trainer/coco.names", "r") as f:
+    # with open("../logic/facial_tracking/models/coco.names", "r") as f:
     #     self.classes = [line.strip() for line in f.readlines()]
     # layers_names = self.net.getLayerNames()
     # self.output_layers = [layers_names[i - 1] for i in self.net.getUnconnectedOutLayers()]
@@ -24,8 +24,8 @@ class YoloHandler:
     #                    10: 'cow', 11: 'diningtable', 12: 'dog', 13: 'horse',
     #                    14: 'motorbike', 15: 'person', 16: 'pottedplant',
     #                    17: 'sheep', 18: 'sofa', 19: 'train', 20: 'tvmonitor'}
-    # self.net = cv2.dnn.readNetFromCaffe('../logic/facial_tracking/trainer/MobileNetSSD_deploy.prototxt',
-    #                                     '../logic/facial_tracking/trainer/MobileNetSSD_deploy.caffemodel')
+    # self.net = cv2.dnn.readNetFromCaffe('../logic/facial_tracking/models/MobileNetSSD_deploy.prototxt',
+    #                                     '../logic/facial_tracking/models/MobileNetSSD_deploy.caffemodel')
 
     # self.net.setPreferableBackend(cv2.dnn.DNN_TARGET_CUDA)
     # self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
