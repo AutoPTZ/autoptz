@@ -2,6 +2,10 @@ import NDIlib as ndi
 
 
 def get_ndi_sources():
+    """
+    Returns NDI sources found by NDILib
+    :return:
+    """
     if not ndi.initialize():
         return 0
 

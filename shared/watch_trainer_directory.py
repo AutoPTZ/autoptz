@@ -60,7 +60,7 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
 
     @staticmethod
     def spin(seconds):
-        """Pause for set amount of seconds, replaces time.sleep so program doesnt stall"""
+        """Pause for set amount of seconds, replaces time.sleep() so program doesn't stall"""
 
         time_end = time.time() + seconds
         while time.time() < time_end:

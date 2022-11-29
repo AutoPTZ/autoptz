@@ -147,7 +147,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.select_camera_dropdown.setObjectName("select_camera_dropdown")
         self.select_camera_dropdown.addItem("")
 
-        # add all the USB usb devices to the dropdown menu
+        # add all the USB devices to the dropdown menu
         data_list = COMPorts.get_com_ports().data
         for port in data_list:
             if "USB" in port.description:
@@ -536,7 +536,7 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.assign_network_ptz_btn.hide()
                 self.assign_network_ptz_btn.hide()
 
-                self.refreshusbBtn()
+                self.refreshUSBBtn()
 
     def selected_face_change(self):
         """
@@ -618,7 +618,7 @@ class AutoPTZ_MainWindow(QMainWindow):
             except Exception as e:
                 print(e)
 
-        self.refreshusbBtn()
+        self.refreshUSBBtn()
 
     def assign_usb_ptz_dlg(self):
         """Launch the Assign USB PTZ to Camera Source dialog."""
@@ -659,7 +659,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.show()
 
-    def refreshusbBtn(self, event=None):
+    def refreshUSBBtn(self, event=None):
         """Check is USB PTZ is assigned and change assignment button if so"""
         if constants.CURRENT_ACTIVE_PTZ_DEVICE is not None:
             if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:

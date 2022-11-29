@@ -11,7 +11,7 @@ class Camera(object):
     _input_string = None
 
     def __init__(self, output='COM1'):
-        """Sony VISCA control class.
+        """USB VISCA control class.
 
         :param output: Outbound serial port string. (default: 'COM1')
         :type output: str

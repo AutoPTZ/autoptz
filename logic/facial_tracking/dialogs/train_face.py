@@ -150,7 +150,7 @@ class TrainerThread(QtCore.QThread):
             print("No images to train.")
             if os.path.exists(constants.ENCODINGS_PATH):
                 os.remove(constants.ENCODINGS_PATH)
-        print("\n [INFO] {0} faces trained.".format(len(known_names)))
+        print("\n [INFO] {0} faces trained.".format(len(image_paths)))
 
 
 class TrainerDlg(QDialog):

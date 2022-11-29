@@ -1,3 +1,4 @@
+cmake
 numpy
 pillow
 opencv-contrib-python
@@ -9,4 +10,4 @@ pyserial
 ndi-python
 visca-over-ip
 git+https://github.com/ageitgey/face_recognition_models
-# conda install -c conda-forge dlib
+dlib

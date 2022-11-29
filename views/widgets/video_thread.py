@@ -1,5 +1,4 @@
 import os
-
 import cv2
 from PySide6.QtCore import QThread, Signal
 import numpy as np

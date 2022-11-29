@@ -8,7 +8,6 @@ import time
 import dlib
 import shared.constants as constants
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
-from logic.facial_tracking.move_ptz import MovePTZ
 from logic.facial_tracking.image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
 from queue import Queue
@@ -249,6 +248,7 @@ class CameraWidget(QLabel):
     def track_face(self, frame, x, y, w, h):
         """
         Uses Dlib Object Tracking to set and update the currently tracked person
+        Then if a PTZ camera is associated, it should move the camera in any direction automatically
         :param frame:
         :param x:
         :param y:
@@ -287,26 +287,33 @@ class CameraWidget(QLabel):
             cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
 
         if self.ptz_controller is not None:
-            if x > min_x and w < max_x and y > min_y and h < max_y:
-                if self.last_request != "stop":
-                    self.ptz_controller.move_stop()
-                    self.last_request = "stop"
-            if y < min_y:
-                if self.last_request != "up":
-                    self.ptz_controller.move_up_track()
-                    self.last_request = "up"
-            if h > max_y:
-                if self.last_request != "down":
-                    self.ptz_controller.move_down_track()
-                    self.last_request = "down"
-            if x < min_x:
-                if self.last_request != "left":
-                    self.ptz_controller.move_left_track()
-                    self.last_request = "left"
-            if w > max_x:
-                if self.last_request != "right":
-                    self.ptz_controller.move_right_track()
-                    self.last_request = "right"
+            if x > min_x and w < max_x and y > min_y and h < max_y and self.last_request != "stop":
+                self.ptz_controller.move_stop()
+                self.last_request = "stop"
+            if y < min_y and x < min_x and self.last_request != "up_left":
+                self.ptz_controller.move_left_up_track()
+                self.last_request = "up_left"
+            elif y < min_y and w > max_x and self.last_request != "up_right":
+                self.ptz_controller.move_right_up_track()
+                self.last_request = "up_right"
+            elif h > max_y and x < min_x and self.last_request != "down_left":
+                self.ptz_controller.move_left_down_track()
+                self.last_request = "down_left"
+            elif h > max_y and w > max_x and self.last_request != "down_right":
+                self.ptz_controller.move_right_down_track()
+                self.last_request = "down_right"
+            elif y < min_y and self.last_request != "up":
+                self.ptz_controller.move_up_track()
+                self.last_request = "up"
+            elif h > max_y and self.last_request != "down":
+                self.ptz_controller.move_down_track()
+                self.last_request = "down"
+            elif x < min_x and self.last_request != "left":
+                self.ptz_controller.move_left_track()
+                self.last_request = "left"
+            elif w > max_x and self.last_request != "right":
+                self.ptz_controller.move_right_track()
+                self.last_request = "right"
 
         return frame
 
