@@ -13,3 +13,4 @@
 /logic/facial_tracking/models/encodings.pickle
 /libraries/face_recognition/__pycache__
 /views/functions/__pycache__
+/.idea
