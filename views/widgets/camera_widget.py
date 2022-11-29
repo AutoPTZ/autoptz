@@ -242,7 +242,7 @@ class CameraWidget(QLabel):
             self.start_time = time.time()
         fps = "FPS: " + str(self.FPS)[:5]
 
-        cv2.putText(frame, fps, (50, 50), constants.FONT, 1, (0, 0, 255), 2)
+        cv2.putText(frame, fps, (20, 30), constants.FONT, 0.7, (0, 0, 255), 2)
         return frame
 
     def track_face(self, frame, x, y, w, h):
@@ -262,7 +262,7 @@ class CameraWidget(QLabel):
         max_y = int(frame.shape[0] / 1.3)
         cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (255, 0, 0), 2)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        cv2.putText(frame, "Tracking Enabled", (75, 75), constants.FONT, 0.7, (0, 0, 255), 2)
+        cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}", (20, 52), constants.FONT, 0.7, (0, 0, 255), 2)
 
         if self.track_started is False:
             rect = dlib.rectangle(x, y, w, h)
