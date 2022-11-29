@@ -10,7 +10,6 @@ import shared.constants as constants
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
-from queue import Queue
 
 
 class CameraWidget(QLabel):
@@ -83,23 +82,32 @@ class CameraWidget(QLabel):
 
     def stop(self):
         """
-        When CameraWidget is being removed from the UI, we should stop all relevant threads before deletion.
+        When CameraWidget is being removed from the UI, we should stop associated PTZ cameras and all threads before deletion.
         """
         if self.ptz_controller is not None:
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
             else:
-                self.ptz_control.pantilt(pan_speed=0, tilt_speed=0)
-                self.ptz_control.close_connection()
+                self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
+                self.ptz_controller.close_connection()
         self.processor_thread.stop()
         self.stream_thread.stop()
         self.deleteLater()
         self.destroy()
 
     def set_ptz(self, control, isUSB=False):
-        if control is None:
-            if self.ptz_controller is not None:
+        """
+        Sets PTZ controller from Homepage
+        If control is None then first stop PTZ and disconnect from it
+        :param control:
+        :param isUSB:
+        """
+        if control is None and self.ptz_controller is not None:
+            if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
+            else:
+                self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
+                self.ptz_controller.close_connection()
         self.ptz_controller = control
         self.ptz_is_usb = isUSB
 
@@ -370,6 +378,12 @@ class CameraWidget(QLabel):
         On event call, stop all the related threads.
         :param event:
         """
+        if self.ptz_controller is not None:
+            if self.ptz_is_usb:
+                self.ptz_controller.move_stop()
+            else:
+                self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
+                self.ptz_controller.close_connection()
         self.processor_thread.stop()
         self.stream_thread.stop()
         self.deleteLater()
