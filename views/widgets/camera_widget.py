@@ -67,9 +67,9 @@ class CameraWidget(QLabel):
         self.processor_thread.start()
 
         # PTZ Movement Thread
-        self.ptz_request_queue = Queue()
         self.last_request = None
         self.ptz_controller = None
+        self.ptz_is_usb = None
 
         self.track_started = False
         self.temp_tracked_name = None
@@ -86,7 +86,11 @@ class CameraWidget(QLabel):
         When CameraWidget is being removed from the UI, we should stop all relevant threads before deletion.
         """
         if self.ptz_controller is not None:
-            self.ptz_controller.move_stop()
+            if self.ptz_is_usb:
+                self.ptz_controller.move_stop()
+            else:
+                self.ptz_control.pantilt(pan_speed=0, tilt_speed=0)
+                self.ptz_control.close_connection()
         self.processor_thread.stop()
         self.stream_thread.stop()
         self.deleteLater()
@@ -97,10 +101,7 @@ class CameraWidget(QLabel):
             if self.ptz_controller is not None:
                 self.ptz_controller.move_stop()
         self.ptz_controller = control
-        # self.ptz_control_thread = MovePTZ(ptz_controller=self.ptz_controller, lock=self.lock,
-        #                                   ptz_request_queue=self.ptz_request_queue, isUSB=isUSB)
-        # self.ptz_control_thread.daemon = True
-        # self.ptz_control_thread.start()
+        self.ptz_is_usb = isUSB
 
     def set_add_name(self, name):
         """
@@ -142,6 +143,10 @@ class CameraWidget(QLabel):
         self.track_h = None
         self.is_tracking = not self.is_tracking
         if self.ptz_controller is not None:
+            if self.ptz_is_usb:
+                self.ptz_controller.move_stop()
+            else:
+                self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
             self.last_request = None
 
     def set_tracked_name(self, name):
@@ -149,6 +154,7 @@ class CameraWidget(QLabel):
         Sets the name to track, used to start tracking based on face recognition data
         :param name:
         """
+        self.track_started = False
         self.tracked_name = name
 
     def get_tracking(self):
@@ -288,57 +294,69 @@ class CameraWidget(QLabel):
 
         if self.ptz_controller is not None:
             if x > min_x and w < max_x and y > min_y and h < max_y and self.last_request != "stop":
-                self.ptz_controller.move_stop()
+                if self.ptz_is_usb:
+                    self.ptz_controller.move_stop()
+                else:
+                    self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
                 self.last_request = "stop"
+
             if y < min_y and x < min_x and self.last_request != "up_left":
-                self.ptz_controller.move_left_up_track()
+                if self.ptz_is_usb:
+                    self.ptz_controller.move_left_up_track()
+                else:
+                    self.ptz_controller.pantilt(pan_speed=1, tilt_speed=-1)
                 self.last_request = "up_left"
+
             elif y < min_y and w > max_x and self.last_request != "up_right":
-                self.ptz_controller.move_right_up_track()
+                if self.ptz_is_usb:
+                    self.ptz_controller.move_right_up_track()
+                else:
+                    self.ptz_controller.pantilt(pan_speed=-1, tilt_speed=-1)
                 self.last_request = "up_right"
+
             elif h > max_y and x < min_x and self.last_request != "down_left":
-                self.ptz_controller.move_left_down_track()
+                if self.ptz_is_usb:
+                    self.ptz_controller.move_left_down_track()
+                else:
+                    self.ptz_controller.pantilt(pan_speed=1, tilt_speed=1)
                 self.last_request = "down_left"
+
             elif h > max_y and w > max_x and self.last_request != "down_right":
-                self.ptz_controller.move_right_down_track()
+                if self.ptz_is_usb:
+                    self.ptz_controller.move_right_down_track()
+                else:
+                    self.ptz_controller.pantilt(pan_speed=-1, tilt_speed=1)
                 self.last_request = "down_right"
+
             elif y < min_y and self.last_request != "up":
-                self.ptz_controller.move_up_track()
+                if self.ptz_is_usb:
+                    self.ptz_controller.move_up_track()
+                else:
+                    self.ptz_controller.pantilt(pan_speed=0, tilt_speed=-1)
                 self.last_request = "up"
+
             elif h > max_y and self.last_request != "down":
-                self.ptz_controller.move_down_track()
+                if self.ptz_is_usb:
+                    self.ptz_controller.move_down_track()
+                else:
+                    self.ptz_controller.pantilt(pan_speed=0, tilt_speed=1)
                 self.last_request = "down"
+
             elif x < min_x and self.last_request != "left":
-                self.ptz_controller.move_left_track()
+                if self.ptz_is_usb:
+                    self.ptz_controller.move_left_track()
+                else:
+                    self.ptz_controller.pantilt(pan_speed=1, tilt_speed=0)
                 self.last_request = "left"
+
             elif w > max_x and self.last_request != "right":
-                self.ptz_controller.move_right_track()
+                if self.ptz_is_usb:
+                    self.ptz_controller.move_right_track()
+                else:
+                    self.ptz_controller.pantilt(pan_speed=-1, tilt_speed=0)
                 self.last_request = "right"
 
         return frame
-
-    # if self.isUSB:
-    #     if request == "stop":
-    #         self.ptz_control.move_stop()
-    #     if request == "left":
-    #         self.ptz_control.move_left_track()
-    #     if request == "right":
-    #         self.ptz_control.move_right_track()
-    #     if request == "down":
-    #         self.ptz_control.move_down_track()
-    #     if request == "up":
-    #         self.ptz_control.move_up_track()
-    # else:
-    #     if request == "stop":
-    #         self.ptz_control.pantilt(pan_speed=0, tilt_speed=0)
-    #     if request == "left":
-    #         self.ptz_control.pantilt(pan_speed=1, tilt_speed=0)
-    #     if request == "right":
-    #         self.ptz_control.pantilt(pan_speed=-1, tilt_speed=0)
-    #     if request == "down":
-    #         self.ptz_control.pantilt(pan_speed=0, tilt_speed=1)
-    #     if request == "up":
-    #         self.ptz_control.pantilt(pan_speed=0, tilt_speed=-1)
 
     @staticmethod
     def run_trainer():
