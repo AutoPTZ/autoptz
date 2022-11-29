@@ -70,7 +70,6 @@ class CameraWidget(QLabel):
         # PTZ Movement Thread
         self.ptz_request_queue = Queue()
         self.last_request = None
-        self.ptz_control_thread = None
         self.ptz_controller = None
 
         self.track_started = False
@@ -87,26 +86,22 @@ class CameraWidget(QLabel):
         """
         When CameraWidget is being removed from the UI, we should stop all relevant threads before deletion.
         """
-        if self.ptz_control_thread is not None:
-            self.ptz_control_thread.stop()
-        self.ptz_control_thread = None
+        if self.ptz_controller is not None:
+            self.ptz_controller.move_stop()
         self.processor_thread.stop()
         self.stream_thread.stop()
         self.deleteLater()
         self.destroy()
 
     def set_ptz(self, control, isUSB=False):
-        self.ptz_controller = control
         if control is None:
-            if self.ptz_control_thread is not None:
-                self.ptz_control_thread.stop()
-                self.ptz_control_thread = None
-        else:
-            self.ptz_control_thread = MovePTZ(ptz_controller=self.ptz_controller, lock=self.lock,
-                                              ptz_request_queue=self.ptz_request_queue, isUSB=isUSB)
-            self.ptz_control_thread.daemon = True
-            self.ptz_control_thread.start()
-
+            if self.ptz_controller is not None:
+                self.ptz_controller.move_stop()
+        self.ptz_controller = control
+        # self.ptz_control_thread = MovePTZ(ptz_controller=self.ptz_controller, lock=self.lock,
+        #                                   ptz_request_queue=self.ptz_request_queue, isUSB=isUSB)
+        # self.ptz_control_thread.daemon = True
+        # self.ptz_control_thread.start()
 
     def set_add_name(self, name):
         """
@@ -147,8 +142,7 @@ class CameraWidget(QLabel):
         self.track_w = None
         self.track_h = None
         self.is_tracking = not self.is_tracking
-        if self.ptz_control_thread is not None:
-            self.ptz_request_queue.put("stop")
+        if self.ptz_controller is not None:
             self.last_request = None
 
     def set_tracked_name(self, name):
@@ -292,30 +286,52 @@ class CameraWidget(QLabel):
             cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
             cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
 
-        if self.ptz_control_thread is not None:
-            if self.ptz_request_queue.empty():
-                if x > min_x and w < max_x and y > min_y and h < max_y:
-                    if self.last_request != "stop":
-                        self.ptz_request_queue.put("stop")
-                        self.last_request = "stop"
-                if w > max_x:
-                    if self.last_request != "right":
-                        self.ptz_request_queue.put("right")
-                        self.last_request = "right"
-                if x < min_x:
-                    if self.last_request != "left":
-                        self.ptz_request_queue.put("left")
-                        self.last_request = "left"
-            # if y < max_y:
-            #     if self.last_request != "up":
-            #         self.ptz_request_queue.put("up")
-            #         self.last_request = "up"
-            # if h < min_y:
-            #     if self.last_request != "down":
-            #         self.ptz_request_queue.put("down")
-            #         self.last_request = "down"
+        if self.ptz_controller is not None:
+            if x > min_x and w < max_x and y > min_y and h < max_y:
+                if self.last_request != "stop":
+                    self.ptz_controller.move_stop()
+                    self.last_request = "stop"
+            if y < min_y:
+                if self.last_request != "up":
+                    self.ptz_controller.move_up_track()
+                    self.last_request = "up"
+            if h > max_y:
+                if self.last_request != "down":
+                    self.ptz_controller.move_down_track()
+                    self.last_request = "down"
+            if x < min_x:
+                if self.last_request != "left":
+                    self.ptz_controller.move_left_track()
+                    self.last_request = "left"
+            if w > max_x:
+                if self.last_request != "right":
+                    self.ptz_controller.move_right_track()
+                    self.last_request = "right"
 
         return frame
+
+    # if self.isUSB:
+    #     if request == "stop":
+    #         self.ptz_control.move_stop()
+    #     if request == "left":
+    #         self.ptz_control.move_left_track()
+    #     if request == "right":
+    #         self.ptz_control.move_right_track()
+    #     if request == "down":
+    #         self.ptz_control.move_down_track()
+    #     if request == "up":
+    #         self.ptz_control.move_up_track()
+    # else:
+    #     if request == "stop":
+    #         self.ptz_control.pantilt(pan_speed=0, tilt_speed=0)
+    #     if request == "left":
+    #         self.ptz_control.pantilt(pan_speed=1, tilt_speed=0)
+    #     if request == "right":
+    #         self.ptz_control.pantilt(pan_speed=-1, tilt_speed=0)
+    #     if request == "down":
+    #         self.ptz_control.pantilt(pan_speed=0, tilt_speed=1)
+    #     if request == "up":
+    #         self.ptz_control.pantilt(pan_speed=0, tilt_speed=-1)
 
     @staticmethod
     def run_trainer():

@@ -1,3 +1,5 @@
+import os
+
 import cv2
 from PySide6.QtCore import QThread, Signal
 import numpy as np
@@ -12,7 +14,7 @@ class VideoThread(QThread):
     """
     change_pixmap_signal = Signal(np.ndarray)
     _run_flag = None
-    width = None
+    resize_width = None
     isNDI = None
     ndi_recv = None
     ret = None
@@ -22,15 +24,18 @@ class VideoThread(QThread):
     def __init__(self, src, width, isNDI=False):
         super().__init__()
         self._run_flag = True
-        self.width = width
+        self.resize_width = width
         self.daemon = True
         self.isNDI = isNDI
         self.imutils = imutils
         self.src = src
         if type(src) == int:
             self.cap = cv2.VideoCapture(src)
+            if os.name == 'nt':  # fixes Windows OpenCV resolution
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 5000)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 5000)
             (self.ret, img) = self.cap.read()
-            self.cv_img = self.imutils.resize(img, width=self.width)
+            self.cv_img = self.imutils.resize(img, width=self.resize_width)
         else:
             ndi_recv_create = ndi.RecvCreateV3()
             ndi_recv_create.color_format = ndi.RECV_COLOR_FORMAT_BGRX_BGRA
@@ -41,7 +46,7 @@ class VideoThread(QThread):
             if self.ret == ndi.FRAME_TYPE_VIDEO:
                 cv_img = np.copy(v.data)
                 ndi.recv_free_video_v2(self.ndi_recv, v)
-                self.cv_img = imutils.resize(cv_img, width=self.width)
+                self.cv_img = imutils.resize(cv_img, width=self.resize_width)
 
     def run(self):
         """
@@ -51,14 +56,14 @@ class VideoThread(QThread):
             if type(self.src) == int:
                 (self.ret, img) = self.cap.read()
                 if self.ret:
-                    self.cv_img = self.imutils.resize(img, width=self.width)
+                    self.cv_img = self.imutils.resize(img, width=self.resize_width)
                     self.change_pixmap_signal.emit(self.cv_img)
             else:
                 self.ret, v, _, _ = ndi.recv_capture_v2(self.ndi_recv, 5000)
                 if self.ret == ndi.FRAME_TYPE_VIDEO:
                     cv_img = np.copy(v.data)
                     ndi.recv_free_video_v2(self.ndi_recv, v)
-                    self.cv_img = imutils.resize(cv_img, width=self.width)
+                    self.cv_img = imutils.resize(cv_img, width=self.resize_width)
                     self.change_pixmap_signal.emit(self.cv_img)
 
         # shut down capture system

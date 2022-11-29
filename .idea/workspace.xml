@@ -10,6 +10,7 @@
       <change beforePath="$PROJECT_DIR$/logic/facial_tracking/move_ptz.py" beforeDir="false" afterPath="$PROJECT_DIR$/logic/facial_tracking/move_ptz.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/views/homepage/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/homepage/main_window.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/views/widgets/camera_widget.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/widgets/camera_widget.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/views/widgets/video_thread.py" beforeDir="false" afterPath="$PROJECT_DIR$/views/widgets/video_thread.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

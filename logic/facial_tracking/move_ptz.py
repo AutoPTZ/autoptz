@@ -2,7 +2,7 @@ import time
 from threading import Thread
 
 
-class MovePTZ(Thread):
+class MovePTZ:
 
     def __init__(self, ptz_controller, ptz_request_queue, lock, isUSB=False):
         super(MovePTZ, self).__init__()

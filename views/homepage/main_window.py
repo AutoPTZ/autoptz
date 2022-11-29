@@ -526,10 +526,10 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.select_face_dropdown.setCurrentText('')
                 self.enable_track.setEnabled(False)
                 self.enable_track.setChecked(False)
-            if constants.CURRENT_ACTIVE_CAM_WIDGET.isNDI and constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_control_thread is None:
+            if constants.CURRENT_ACTIVE_CAM_WIDGET.isNDI and constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_controller is None:
                 self.unassign_network_ptz_btn.hide()
                 self.assign_network_ptz_btn.show()
-            elif constants.CURRENT_ACTIVE_CAM_WIDGET.isNDI and constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_control_thread is not None:
+            elif constants.CURRENT_ACTIVE_CAM_WIDGET.isNDI and constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_controller is not None:
                 self.unassign_network_ptz_btn.show()
                 self.assign_network_ptz_btn.hide()
             else:
@@ -663,8 +663,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         """Check is USB PTZ is assigned and change assignment button if so"""
         if constants.CURRENT_ACTIVE_PTZ_DEVICE is not None:
             if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
-                if constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_control_thread is not None:
-                    if constants.CURRENT_ACTIVE_PTZ_DEVICE == constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_control_thread.ptz_control:
+                if constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_controller is not None:
+                    if constants.CURRENT_ACTIVE_PTZ_DEVICE == constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_controller:
                         self.unassign_usb_ptz_btn.show()
                         return
                 self.assign_usb_ptz_btn.hide()
