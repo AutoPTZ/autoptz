@@ -1,4 +1,4 @@
-from visca import camera
+from libraries.visca import camera
 import time
 
 cam = camera.D100('/dev/cu.usbserial-144210')

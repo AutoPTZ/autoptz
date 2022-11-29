@@ -1,22 +1,17 @@
-from PyQt5 import QtWidgets
-from PyQt5.QtWidgets import QApplication
 import sys
+from PySide6.QtWidgets import QApplication
 
-from ui.homepage.homepage import Ui_AutoPTZ
-
-
-class AutoPTZ(QtWidgets.QMainWindow, Ui_AutoPTZ):
-    def __init__(self, parent=None):
-        super(AutoPTZ, self).__init__(parent)
-
-        self.setupUi(self)
+from views.homepage.main_window import AutoPTZ_MainWindow
 
 
 def main():
+    """
+    Starts the AutoPTZ Application
+    """
     app = QApplication(sys.argv)
-    form = AutoPTZ()
-    form.show()
-    app.exec_()
+    window = AutoPTZ_MainWindow()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == '__main__':

@@ -1,11 +1,15 @@
 import os
-from PyQt5 import QtCore, QtWidgets
-from PyQt5.QtWidgets import QDialog
+from PySide6 import QtCore, QtWidgets
+from PySide6.QtWidgets import QDialog
 
+from shared import constants
 from shared.message_prompts import show_critical_messagebox, show_info_messagebox
 
 
 class AddFaceUI(object):
+    """
+    Creation for Add Face UI
+    """
     def __init__(self):
         self.name_line = None
         self.horizontalLayout = None
@@ -18,6 +22,11 @@ class AddFaceUI(object):
         self.count = 0
 
     def setupUi(self, add_face, camera):
+        """
+        Used for setup when calling the AddFaceDlg Class
+        :param add_face:
+        :param camera:
+        """
         self.window = add_face
         self.camera = camera
         add_face.setObjectName("add_face")
@@ -50,26 +59,37 @@ class AddFaceUI(object):
         QtCore.QMetaObject.connectSlotsByName(add_face)
 
     def add_face_prompt(self):
-        print("Adding Face with " + self.camera.objectName())
+        """
+        Methods that checks what the user inputs in the dialog.
+        If the name/folder already exists then tell the user to try again with a different name.
+        Otherwise, set the current active CameraWidget's add_name variable to start detecting and saving images with a person.
+        :return:
+        """
         if self.name_line.text().strip() == "":
             return
         else:
+            print("Adding Face with " + self.camera.objectName())
             # check if path exists, if not create path for images to be stored
-            path = '../logic/facial_tracking/images/' + self.name_line.text().strip()
+            path = constants.IMAGE_PATH + self.name_line.text().strip()
             if os.path.exists(path):
+                print(path)
                 print("\n [INFO] Name Already Taken")
                 show_critical_messagebox(window_title="Add Face Process",
-                                         critical_message="User's Face Already Exists.\nPlease add another user.")
+                                         critical_message="User's Face Already Exists.\nPlease add a different user.")
                 return
             else:
                 os.makedirs(path)
                 print("\n [INFO] New Path Created")
                 show_info_messagebox("Initializing face capture. \nLook at the select camera and wait...")
                 print("\n [INFO] Initializing face capture. Look at the select camera and wait...")
-                self.camera.image_processor.config_add_face(name=self.name_line.text().strip())
+                self.camera.set_add_name(name=self.name_line.text().strip())
                 self.window.close()
 
     def translate_ui(self, add_face):
+        """
+        Automatic Translation Locale
+        :param add_face:
+        """
         _translate = QtCore.QCoreApplication.translate
         add_face.setWindowTitle(_translate("add_face", "Add Face"))
         self.add_face_title_label.setText(_translate("add_face_title", "Enter Name:"))
@@ -78,7 +98,7 @@ class AddFaceUI(object):
 
 
 class AddFaceDlg(QDialog):
-    """Setup Add Face Dialog"""
+    """Run Add Face Dialog"""
 
     def __init__(self, parent=None, camera=None):
         super().__init__(parent)

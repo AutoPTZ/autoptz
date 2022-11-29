@@ -1,11 +1,13 @@
+cmake
 numpy
 pillow
 opencv-contrib-python
-PyQT5
+PySide6
 imutils
 scipy
 watchdog
 pyserial
 ndi-python
-sensecam-control
-# conda install -c conda-forge dlib
+visca-over-ip
+git+https://github.com/ageitgey/face_recognition_models
+dlib
