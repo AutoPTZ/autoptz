@@ -312,42 +312,42 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_left_up_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=1, tilt_speed=-1)
+                    self.ptz_controller.pantilt(pan_speed=1, tilt_speed=1)
                 self.last_request = "up_left"
 
             elif y < min_y and w > max_x and self.last_request != "up_right":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_right_up_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=-1, tilt_speed=-1)
+                    self.ptz_controller.pantilt(pan_speed=-1, tilt_speed=1)
                 self.last_request = "up_right"
 
             elif h > max_y and x < min_x and self.last_request != "down_left":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_left_down_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=1, tilt_speed=1)
+                    self.ptz_controller.pantilt(pan_speed=1, tilt_speed=-1)
                 self.last_request = "down_left"
 
             elif h > max_y and w > max_x and self.last_request != "down_right":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_right_down_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=-1, tilt_speed=1)
+                    self.ptz_controller.pantilt(pan_speed=-1, tilt_speed=-1)
                 self.last_request = "down_right"
 
             elif y < min_y and self.last_request != "up":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_up_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=0, tilt_speed=-1)
+                    self.ptz_controller.pantilt(pan_speed=0, tilt_speed=1)
                 self.last_request = "up"
 
             elif h > max_y and self.last_request != "down":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_down_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=0, tilt_speed=1)
+                    self.ptz_controller.pantilt(pan_speed=0, tilt_speed=-1)
                 self.last_request = "down"
 
             elif x < min_x and self.last_request != "left":
