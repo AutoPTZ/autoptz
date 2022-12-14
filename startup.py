@@ -1,7 +1,9 @@
 import sys
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+from PySide6.QtGui import QIcon, QPixmap
 
 from views.homepage.main_window import AutoPTZ_MainWindow
+import shared.constants as constants
 
 
 def main():
@@ -10,6 +12,7 @@ def main():
     """
     app = QApplication(sys.argv)
     window = AutoPTZ_MainWindow()
+    window.setWindowIcon(QIcon(constants.ICON_PNG))
     window.show()
     sys.exit(app.exec())
 
