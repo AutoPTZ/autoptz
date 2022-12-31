@@ -39,7 +39,7 @@ Our application is to be used mainly with PTZ cameras and have them physically m
 ### Installation Options:
 Clone the project
 ```bash
-  git clone https://github.com/AutoPTZ/autoptz-copy.git
+  git clone https://github.com/AutoPTZ/autoptz.git
 ```
 
 Then instal cmake to build a copy a dlib for your system.
