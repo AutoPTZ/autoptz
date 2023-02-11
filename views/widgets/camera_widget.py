@@ -6,6 +6,7 @@ from PySide6.QtCore import Signal
 import cv2
 import time
 import dlib
+import NDIlib as ndi
 import shared.constants as constants
 from logic.facial_tracking.dialogs.train_face import TrainerDlg
 from logic.facial_tracking.image_processor import ImageProcessor
@@ -44,7 +45,6 @@ class CameraWidget(QLabel):
         self.isNDI = isNDI
         self._is_stopped = True
         self.setProperty('active', False)
-        # self.resize(width, height)
         if self.isNDI:
             self.setObjectName(f"Camera Source: {source.ndi_name}")
         else:
@@ -67,7 +67,13 @@ class CameraWidget(QLabel):
 
         # PTZ Movement Thread
         self.last_request = None
-        self.ptz_controller = None
+        if isNDI and ndi.recv_ptz_is_supported(instance=self.stream_thread.ndi_recv):
+            print(f"This NDI Source {source.ndi_name} Supports PTZ Movement")
+            self.ptz_controller = self.stream_thread.ndi_recv
+        else:
+            if isNDI:
+                print(f"This NDI Source {source.ndi_name} Does NOT Supports PTZ Movement")
+            self.ptz_controller = None
         self.ptz_is_usb = None
 
         self.track_started = False
@@ -245,6 +251,7 @@ class CameraWidget(QLabel):
 
         if self.is_tracking and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
             frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
+            # frame = self.track_face(frame, self.track_x - 2, self.track_y - 5, self.track_w + 8, self.track_h + +15)
         self.temp_tracked_name = None
 
         # FPS Counter
@@ -270,10 +277,10 @@ class CameraWidget(QLabel):
         :param h:
         :return:
         """
-        min_x = int(frame.shape[1] / 11.5)
-        max_x = int(frame.shape[1] / 1.1)
-        min_y = int(frame.shape[0] / 8.5)
-        max_y = int(frame.shape[0] / 1.3)
+        min_x = int(frame.shape[1] / 9.2)
+        max_x = int(frame.shape[1] / 1.2)
+        min_y = int(frame.shape[0] / 18)
+        max_y = int(frame.shape[0] / 1.6)
         cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (255, 0, 0), 2)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}", (20, 52), constants.FONT, 0.7, (0, 0, 255), 2)
@@ -305,63 +312,72 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_stop()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
+                    # self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
                 self.last_request = "stop"
 
             if y < min_y and x < min_x and self.last_request != "up_left":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_left_up_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=1, tilt_speed=1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=2, tilt_speed=1)
+                    # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=1)
                 self.last_request = "up_left"
 
             elif y < min_y and w > max_x and self.last_request != "up_right":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_right_up_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=-1, tilt_speed=1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-2, tilt_speed=1)
+                    # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=1)
                 self.last_request = "up_right"
 
             elif h > max_y and x < min_x and self.last_request != "down_left":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_left_down_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=1, tilt_speed=-1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=2, tilt_speed=-1)
+                    # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=-1)
                 self.last_request = "down_left"
 
             elif h > max_y and w > max_x and self.last_request != "down_right":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_right_down_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=-1, tilt_speed=-1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-2, tilt_speed=-1)
+                    # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=-1)
                 self.last_request = "down_right"
 
             elif y < min_y and self.last_request != "up":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_up_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=0, tilt_speed=1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=1)
+                    # self.ptz_controller.pantilt(pan_speed=0, tilt_speed=1)
                 self.last_request = "up"
 
             elif h > max_y and self.last_request != "down":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_down_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=0, tilt_speed=-1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=-1)
+                    # self.ptz_controller.pantilt(pan_speed=0, tilt_speed=-1)
                 self.last_request = "down"
 
             elif x < min_x and self.last_request != "left":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_left_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=1, tilt_speed=0)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=2, tilt_speed=0)
+                    # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=0)
                 self.last_request = "left"
 
             elif w > max_x and self.last_request != "right":
                 if self.ptz_is_usb:
                     self.ptz_controller.move_right_track()
                 else:
-                    self.ptz_controller.pantilt(pan_speed=-1, tilt_speed=0)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-2, tilt_speed=0)
+                    # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=0)
                 self.last_request = "right"
 
         return frame

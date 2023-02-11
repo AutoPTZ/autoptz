@@ -10,4 +10,3 @@ pyserial
 ndi-python
 visca-over-ip
 git+https://github.com/ageitgey/face_recognition_models
-dlib
