@@ -94,8 +94,7 @@ class CameraWidget(QLabel):
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
             else:
-                self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
-                self.ptz_controller.close_connection()
+                ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
         self.processor_thread.stop()
         self.stream_thread.stop()
         self.deleteLater()
@@ -160,7 +159,7 @@ class CameraWidget(QLabel):
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
             else:
-                self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
+                ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
             self.last_request = None
 
     def set_tracked_name(self, name):
@@ -320,7 +319,7 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_left_up_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=2, tilt_speed=1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0.1, tilt_speed=0.1)
                     # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=1)
                 self.last_request = "up_left"
 
@@ -328,7 +327,7 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_right_up_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-2, tilt_speed=1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=0.1)
                     # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=1)
                 self.last_request = "up_right"
 
@@ -336,7 +335,7 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_left_down_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=2, tilt_speed=-1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0.1, tilt_speed=-0.1)
                     # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=-1)
                 self.last_request = "down_left"
 
@@ -344,7 +343,7 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_right_down_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-2, tilt_speed=-1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=-0.1)
                     # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=-1)
                 self.last_request = "down_right"
 
@@ -352,7 +351,7 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_up_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0.1)
                     # self.ptz_controller.pantilt(pan_speed=0, tilt_speed=1)
                 self.last_request = "up"
 
@@ -360,7 +359,7 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_down_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=-1)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=-0.1)
                     # self.ptz_controller.pantilt(pan_speed=0, tilt_speed=-1)
                 self.last_request = "down"
 
@@ -368,7 +367,7 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_left_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=2, tilt_speed=0)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0.1, tilt_speed=0)
                     # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=0)
                 self.last_request = "left"
 
@@ -376,7 +375,7 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_right_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-2, tilt_speed=0)
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=0)
                     # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=0)
                 self.last_request = "right"
 

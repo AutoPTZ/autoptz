@@ -14,3 +14,4 @@
 /libraries/face_recognition/__pycache__
 /views/functions/__pycache__
 /.idea
+/dlib/
