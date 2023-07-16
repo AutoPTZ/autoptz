@@ -47,6 +47,7 @@ class VideoThread(QThread):
                 ndi.recv_free_video_v2(self.ndi_recv, v)
                 self.cv_img = imutils.resize(cv_img, width=self.resize_width)
 
+
     def run(self):
         """
         Runs continuously on CameraWidget.start() to provide the latest video frame until _run_flag is False.

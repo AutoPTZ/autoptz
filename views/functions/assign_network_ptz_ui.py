@@ -72,7 +72,7 @@ class AssignNetworkPTZIU(object):
             if self.port_line.text().strip() == "":
                 camera_control = CachingCamera(ip=ip_address[0])
             else:
-                camera_control = CachingCamera(ip=ip_address[0], port=self.port_line.text().strip())
+                camera_control = CachingCamera(ip=ip_address[0], port=int(self.port_line.text().strip()))
             print("camera control started for " + ip_address[0])
             self.camera_widget.set_ptz(control=camera_control)
         except Exception as e:
