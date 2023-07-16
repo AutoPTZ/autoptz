@@ -236,12 +236,16 @@ class CameraWidget(QLabel):
                 for (top, right, bottom, left), name, confidence in zip(self.processor_thread.face_locations,
                                                                         self.processor_thread.face_names,
                                                                         self.processor_thread.confidence_list):
-                    if name == self.tracked_name:
-                        self.temp_tracked_name = name
-                        self.track_x = left
-                        self.track_y = top
-                        self.track_w = right
-                        self.track_h = bottom
+
+                    for box in self.processor_thread.body_locations:
+                        (startX, startY, endX, endY) = box.astype("int")
+                        cv2.rectangle(frame, (startX, startY), (endX, endY), (0, 255, 0), 2)
+                        if name == self.tracked_name and left >= startX and top >= startY and right <= endX and bottom <= endY:
+                            self.temp_tracked_name = name
+                            self.track_x = startX
+                            self.track_y = startY
+                            self.track_w = endX
+                            self.track_h = endY
                     # Draw a box around the face
                     cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
                     # Draw a label with name and confidence for the face
@@ -250,7 +254,6 @@ class CameraWidget(QLabel):
 
         if self.is_tracking and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
             frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
-            # frame = self.track_face(frame, self.track_x - 2, self.track_y - 5, self.track_w + 8, self.track_h + +15)
         self.temp_tracked_name = None
 
         # FPS Counter
