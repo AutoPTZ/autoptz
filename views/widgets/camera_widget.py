@@ -1,3 +1,5 @@
+import math
+
 from PySide6 import QtGui
 from PySide6.QtWidgets import QLabel
 from PySide6.QtGui import QPixmap
@@ -36,6 +38,8 @@ class CameraWidget(QLabel):
     is_tracking = None
     tracked_name = None
     is_moving = False
+    face_center_x = None
+    face_center_y = None
 
     def __init__(self, source, width, height, lock, isNDI=False):
         super().__init__()
@@ -51,7 +55,8 @@ class CameraWidget(QLabel):
             self.setObjectName(f"Camera Source: {source}")
         self.setStyleSheet(constants.CAMERA_STYLESHEET)
         self.setText(f"Camera Source: {source}")
-        self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(event, widget)
+        self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(
+            event, widget)
 
         # Create Video Capture Thread
         self.stream_thread = VideoThread(src=source, width=width, isNDI=isNDI)
@@ -61,7 +66,8 @@ class CameraWidget(QLabel):
         self.stream_thread.start()
 
         # Create and Run Image Processor Thread
-        self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
+        self.processor_thread = ImageProcessor(
+            stream_thread=self.stream_thread, lock=self.lock)
         self.processor_thread.retrain_model_signal.connect(self.run_trainer)
         self.processor_thread.start()
 
@@ -72,7 +78,8 @@ class CameraWidget(QLabel):
             self.ptz_controller = self.stream_thread.ndi_recv
         else:
             if isNDI:
-                print(f"This NDI Source {source.ndi_name} Does NOT Supports PTZ Movement")
+                print(
+                    f"This NDI Source {source.ndi_name} Does NOT Supports PTZ Movement")
             self.ptz_controller = None
         self.ptz_is_usb = None
 
@@ -84,6 +91,8 @@ class CameraWidget(QLabel):
         self.track_h = None
         self.is_tracking = False  # If Track Checkbox is checked
         self.tracked_name = None  # Face that needs to be tracked
+        self.face_center_x = None
+        self.face_center_y = None
         self.tracker = dlib.correlation_tracker()
 
     def stop(self):
@@ -94,7 +103,8 @@ class CameraWidget(QLabel):
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
             else:
-                ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
+                ndi.recv_ptz_pan_tilt_speed(
+                    instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
         self.processor_thread.stop()
         self.stream_thread.stop()
         self.deleteLater()
@@ -129,7 +139,8 @@ class CameraWidget(QLabel):
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
             # Create and Run Image Processor Thread
-            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
+            self.processor_thread = ImageProcessor(
+                stream_thread=self.stream_thread, lock=self.lock)
             self.processor_thread.add_name = name
             self.processor_thread.start()
 
@@ -143,7 +154,8 @@ class CameraWidget(QLabel):
             self.processor_thread.check_encodings()
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
-            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
+            self.processor_thread = ImageProcessor(
+                stream_thread=self.stream_thread, lock=self.lock)
             self.processor_thread.start()
 
     def set_tracking(self):
@@ -159,7 +171,8 @@ class CameraWidget(QLabel):
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
             else:
-                ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
+                ndi.recv_ptz_pan_tilt_speed(
+                    instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
             self.last_request = None
 
     def set_tracked_name(self, name):
@@ -195,8 +208,10 @@ class CameraWidget(QLabel):
         rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
-        convert_to_qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
-        p = convert_to_qt_format.scaled(self.width, self.height, Qt.AspectRatioMode.KeepAspectRatio)
+        convert_to_qt_format = QtGui.QImage(
+            rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+        p = convert_to_qt_format.scaled(
+            self.width, self.height, Qt.AspectRatioMode.KeepAspectRatio)
         return QPixmap.fromImage(p)
 
     def clicked_widget(self, event, widget):
@@ -210,8 +225,10 @@ class CameraWidget(QLabel):
         if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
             constants.CURRENT_ACTIVE_CAM_WIDGET.setProperty(
                 'active', not constants.CURRENT_ACTIVE_CAM_WIDGET.property('active'))
-            constants.CURRENT_ACTIVE_CAM_WIDGET.style().unpolish(constants.CURRENT_ACTIVE_CAM_WIDGET)
-            constants.CURRENT_ACTIVE_CAM_WIDGET.style().polish(constants.CURRENT_ACTIVE_CAM_WIDGET)
+            constants.CURRENT_ACTIVE_CAM_WIDGET.style().unpolish(
+                constants.CURRENT_ACTIVE_CAM_WIDGET)
+            constants.CURRENT_ACTIVE_CAM_WIDGET.style().polish(
+                constants.CURRENT_ACTIVE_CAM_WIDGET)
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
 
         if constants.CURRENT_ACTIVE_CAM_WIDGET == widget:
@@ -220,8 +237,10 @@ class CameraWidget(QLabel):
             constants.CURRENT_ACTIVE_CAM_WIDGET = widget
             constants.CURRENT_ACTIVE_CAM_WIDGET.setProperty(
                 'active', not constants.CURRENT_ACTIVE_CAM_WIDGET.property('active'))
-            constants.CURRENT_ACTIVE_CAM_WIDGET.style().unpolish(constants.CURRENT_ACTIVE_CAM_WIDGET)
-            constants.CURRENT_ACTIVE_CAM_WIDGET.style().polish(constants.CURRENT_ACTIVE_CAM_WIDGET)
+            constants.CURRENT_ACTIVE_CAM_WIDGET.style().unpolish(
+                constants.CURRENT_ACTIVE_CAM_WIDGET)
+            constants.CURRENT_ACTIVE_CAM_WIDGET.style().polish(
+                constants.CURRENT_ACTIVE_CAM_WIDGET)
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
         self.change_selection_signal.emit()
 
@@ -239,21 +258,31 @@ class CameraWidget(QLabel):
 
                     for box in self.processor_thread.body_locations:
                         (startX, startY, endX, endY) = box.astype("int")
-                        cv2.rectangle(frame, (startX, startY), (endX, endY), (0, 255, 0), 2)
+                        cv2.rectangle(frame, (startX, startY),
+                                      (endX, endY), (0, 255, 0), 2)
                         if name == self.tracked_name and left >= startX and top >= startY and right <= endX and bottom <= endY:
                             self.temp_tracked_name = name
                             self.track_x = startX
                             self.track_y = startY
                             self.track_w = endX
                             self.track_h = endY
-                    # Draw a box around the face
-                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-                    # Draw a label with name and confidence for the face
-                    cv2.putText(frame, name, (left + 5, top - 5), constants.FONT, 0.5, (255, 255, 255), 1)
-                    cv2.putText(frame, confidence, (right - 52, bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
 
-        if self.is_tracking and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
-            frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
+                            # Calculate the center of the face
+                            self.face_center_x = (left + right) // 2
+                            self.face_center_y = (top + bottom) // 2
+
+                    # Draw a box around the face
+                    cv2.rectangle(frame, (left, top),
+                                  (right, bottom), (0, 255, 0), 2)
+                    # Draw a label with name and confidence for the face
+                    cv2.putText(frame, name, (left + 5, top - 5),
+                                constants.FONT, 0.5, (255, 255, 255), 1)
+                    cv2.putText(frame, confidence, (right - 52, bottom - 5),
+                                constants.FONT, 0.45, (255, 255, 0), 1)
+
+        if self.is_tracking:
+            frame = self.track_face(
+                frame)
         self.temp_tracked_name = None
 
         # FPS Counter
@@ -268,7 +297,7 @@ class CameraWidget(QLabel):
         cv2.putText(frame, fps, (20, 30), constants.FONT, 0.7, (0, 0, 255), 2)
         return frame
 
-    def track_face(self, frame, x, y, w, h):
+    def track_face(self, frame):
         """
         Uses Dlib Object Tracking to set and update the currently tracked person
         Then if a PTZ camera is associated, it should move the camera in any direction automatically
@@ -279,110 +308,126 @@ class CameraWidget(QLabel):
         :param h:
         :return:
         """
-        min_x = int(frame.shape[1] / 9.2)
-        max_x = int(frame.shape[1] / 1.2)
-        min_y = int(frame.shape[0] / 18)
-        max_y = int(frame.shape[0] / 1.6)
-        cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (255, 0, 0), 2)
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}", (20, 52), constants.FONT, 0.7, (0, 0, 255), 2)
+        frame_center_x = frame.shape[1] // 2
+        frame_center_y = frame.shape[0] // 2
 
-        if self.track_started is False:
-            rect = dlib.rectangle(x, y, w, h)
+        delta_x = 90  # Delta for left and right
+        delta_y = 35  # Delta for up and down
+
+        # Safe Zone
+        cv2.ellipse(frame, (frame_center_x, frame_center_y), (delta_x, delta_y),
+                    0, 0, 360, (0, 255, 0), 1)
+
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}",
+                    (20, 52), constants.FONT, 0.7, (0, 0, 255), 2)
+
+        if not self.track_started or self.temp_tracked_name == self.tracked_name:
+            rect = dlib.rectangle(self.track_x, self.track_y,
+                                  self.track_w, self.track_h)
             self.tracker.start_track(rgb_frame, rect)
-            cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
-            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
             self.track_started = True
-        if self.temp_tracked_name == self.tracked_name:
-            rect = dlib.rectangle(x, y, w, h)
-            self.tracker.start_track(rgb_frame, rect)
-            cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
-            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
         else:
             self.tracker.update(rgb_frame)
             pos = self.tracker.get_position()
+
             # unpack the position object
-            x = int(pos.left())
-            y = int(pos.top())
-            w = int(pos.right())
-            h = int(pos.bottom())
-            cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
-            cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
+            self.track_x = int(pos.left())
+            self.track_y = int(pos.top())
+            self.track_w = int(pos.right())
+            self.track_h = int(pos.bottom())
+
+        # Calculate the center of the bounding box
+        body_center_x = (self.track_x + self.track_w) // 2
+        body_center_y = (self.track_y + self.track_h) // 2
+
+        # If face is detected, calculate the center of the object as the average of the body center and face center
+        if self.face_center_x is not None and self.face_center_y is not None:
+            centerX = (body_center_x + self.face_center_x) // 2
+            centerY = (body_center_y + self.face_center_y) // 1.75
+            self.face_center_x = None
+            self.face_center_y = None
+        # If face is not detected, use the body center as the center of the object
+        else:
+            centerX = body_center_x
+            centerY = body_center_y
+
+        # Draw the center of the tracked object
+        cv2.circle(frame, (centerX, int(centerY)), 5, (0, 0, 255), -1)
+
+        cv2.putText(frame, "tracking", (self.track_x, self.track_h + 15),
+                    constants.FONT, 0.45, (0, 255, 0), 1)
+        cv2.rectangle(frame, (self.track_x, self.track_y),
+                      (self.track_w, self.track_h), (255, 0, 255), 3, 1)
+
+        # Draw the center of the frame
+        cv2.circle(frame, (frame_center_x, frame_center_y),
+                   5, (255, 0, 0), -1)
+
+        # Draw the center of the tracked object
+        cv2.circle(frame, (centerX, int(centerY)), 5, (0, 0, 255), -1)
+
+        # Calculate the distance from the center
+        distance_x = abs(centerX - frame_center_x)
+        distance_y = abs(centerY - frame_center_y)
+
+        # Calculate the maximum possible distance (from center to edge)
+        max_distance_x = frame.shape[1] / 2
+        max_distance_y = frame.shape[0] / 2
+
+        # Normalize the distance (make it a value between 0 and 1)
+        normalized_distance_x = distance_x / max_distance_x
+        normalized_distance_y = distance_y / max_distance_y
+
+        # Calculate the speed based on the normalized distance
+        # The speed will be a value between 0.05 (for normalized_distance = 0) and 0.18 (for normalized_distance = 1)
+        # Use a power function to make the speed increase more rapidly as the distance increases
+        speed_x = 0.05 + (normalized_distance_x ** 3) * (0.2 - 0.05)
+        speed_y = 0.05 + (normalized_distance_y ** 3) * (0.13 - 0.05)
+
+        # If the object is within the delta range, set the speed to 0
+        if abs(centerX - frame_center_x) <= delta_x:
+            speed_x = 0
+        if abs(centerY - frame_center_y) <= delta_y:
+            speed_y = 0
+
+        # Apply the direction to the speed
+        if centerX > frame_center_x:
+            speed_x = -speed_x
+        if centerY > frame_center_y:
+            speed_y = -speed_y
 
         if self.ptz_controller is not None:
-            if x > min_x and w < max_x and y > min_y and h < max_y and self.last_request != "stop":
-                if self.ptz_is_usb:
-                    self.ptz_controller.move_stop()
-                else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
-                    # self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
-                self.last_request = "stop"
-
-            if y < min_y and x < min_x and self.last_request != "up_left":
-                if self.ptz_is_usb:
-                    self.ptz_controller.move_left_up_track()
-                else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0.1, tilt_speed=0.1)
-                    # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=1)
-                self.last_request = "up_left"
-
-            elif y < min_y and w > max_x and self.last_request != "up_right":
-                if self.ptz_is_usb:
-                    self.ptz_controller.move_right_up_track()
-                else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=0.1)
-                    # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=1)
-                self.last_request = "up_right"
-
-            elif h > max_y and x < min_x and self.last_request != "down_left":
-                if self.ptz_is_usb:
-                    self.ptz_controller.move_left_down_track()
-                else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0.1, tilt_speed=-0.1)
-                    # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=-1)
-                self.last_request = "down_left"
-
-            elif h > max_y and w > max_x and self.last_request != "down_right":
-                if self.ptz_is_usb:
-                    self.ptz_controller.move_right_down_track()
-                else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=-0.1)
-                    # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=-1)
-                self.last_request = "down_right"
-
-            elif y < min_y and self.last_request != "up":
-                if self.ptz_is_usb:
-                    self.ptz_controller.move_up_track()
-                else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0.1)
-                    # self.ptz_controller.pantilt(pan_speed=0, tilt_speed=1)
-                self.last_request = "up"
-
-            elif h > max_y and self.last_request != "down":
-                if self.ptz_is_usb:
-                    self.ptz_controller.move_down_track()
-                else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=-0.1)
-                    # self.ptz_controller.pantilt(pan_speed=0, tilt_speed=-1)
-                self.last_request = "down"
-
-            elif x < min_x and self.last_request != "left":
-                if self.ptz_is_usb:
-                    self.ptz_controller.move_left_track()
-                else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0.1, tilt_speed=0)
-                    # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=0)
-                self.last_request = "left"
-
-            elif w > max_x and self.last_request != "right":
-                if self.ptz_is_usb:
-                    self.ptz_controller.move_right_track()
-                else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=0)
-                    # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=0)
-                self.last_request = "right"
+            # Use centerX and centerY for PTZ control
+            self.ptz_control(centerX, centerY, speed_x, speed_y,
+                             frame_center_x, frame_center_y, delta_x, delta_y)
 
         return frame
+
+    def ptz_control(self, centerX, centerY, speed_x, speed_y, frame_center_x, frame_center_y, delta_x, delta_y):
+        # Define the directions
+        directions = [("up_left", centerX < frame_center_x and centerY < frame_center_y),
+                      ("down_left", centerX <
+                       frame_center_x and centerY > frame_center_y),
+                      ("left", centerX < frame_center_x),
+                      ("up_right", centerX >
+                       frame_center_x and centerY < frame_center_y),
+                      ("down_right", centerX >
+                       frame_center_x and centerY > frame_center_y),
+                      ("right", centerX > frame_center_x),
+                      ("up", centerY < frame_center_y),
+                      ("down", centerY > frame_center_y),
+                      ("stop", True)]
+
+        for direction, condition in directions:
+            if condition and self.last_request != direction:
+                if self.ptz_is_usb:
+                    getattr(self.ptz_controller, f"move_{direction}_track")()
+                else:
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=speed_x, tilt_speed=speed_y)
+                self.last_request = direction
+                break
 
     @staticmethod
     def run_trainer():

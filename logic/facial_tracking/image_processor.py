@@ -133,12 +133,13 @@ class ImageProcessor(QThread):
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             blob = cv2.dnn.blobFromImage(cv2.resize(
                 frame, (300, 300)), 0.007843, (300, 300), 127.5)
+            # blob = cv2.dnn.blobFromImage(frame)
             self.model.setInput(blob)
             detections = self.model.forward()
             self.body_locations = []
             for i in np.arange(0, detections.shape[2]):
                 confidence = detections[0, 0, i, 2]
-                if confidence > 0.2:
+                if confidence > 0.5:
                     idx = int(detections[0, 0, i, 1])
                     if idx == 15:  # Assuming 15 is the class ID for humans
                         box = detections[0, 0, i, 3:7] * np.array(
