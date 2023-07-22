@@ -70,21 +70,4 @@ class FacialRecognition:
             face_names.append(name)
             confidence_list.append(confidence)
 
-            # face_distances = self.face_recognition.face_distance(
-            #     self.known_face_encodings['encodings'], face_encoding)
-            # # If a match was found in known_face_encodings, just use the first one.
-            # # if True in matches:
-            # #     first_match_index = matches.index(True)
-            # #     name = self.known_face_encodings['encodings'][first_match_index]
-            # #     confidence = face_confidence(
-            # #         face_distances[first_match_index])
-
-            # best_match_index = np.argmin(face_distances)
-            # if matches[best_match_index]:
-            #     name = self.known_face_encodings['encodings'][best_match_index]
-
-            # face_names.append(name)
-            # # confidence_list.append(confidence)
-
-        print(face_locations, face_names, confidence_list)
         return face_locations, face_names, confidence_list
