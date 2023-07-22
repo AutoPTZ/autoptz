@@ -7,10 +7,31 @@ import cv2
 import time
 import dlib
 import NDIlib as ndi
+from logic.facial_recognition.facial_recognition import FacialRecognition
 import shared.constants as constants
-from logic.facial_tracking.dialogs.train_face import TrainerDlg
-from logic.facial_tracking.image_processor import ImageProcessor
+from logic.facial_recognition.dialogs.train_face import TrainerDlg
+from logic.facial_recognition.image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
+from multiprocessing import Process, Manager, Queue, Value
+
+# Define run_facial_recognition as a standalone function
+
+
+def run_facial_recognition(frame_queue, facial_recognition_results, object_name, stop_signal):
+    facial_recognition = FacialRecognition()
+
+    while not stop_signal.value:
+        # Get the latest frame from the queue
+        if not frame_queue.empty():
+            frame = frame_queue.get()
+
+            # Run the facial recognition on the frame
+            face_locations, face_names, confidence_list = facial_recognition.recognize(
+                frame)
+
+            # Update the facial recognition results for this camera
+            facial_recognition_results[object_name] = (
+                face_locations, face_names, confidence_list)
 
 
 class CameraWidget(QLabel):
@@ -51,19 +72,34 @@ class CameraWidget(QLabel):
             self.setObjectName(f"Camera Source: {source}")
         self.setStyleSheet(constants.CAMERA_STYLESHEET)
         self.setText(f"Camera Source: {source}")
-        self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(event, widget)
+        self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(
+            event, widget)
+
+        # Create a Queue to hold the latest frame
+        self.frame_queue = Queue(maxsize=1)
+        self.stop_signal = Value('b', False)
 
         # Create Video Capture Thread
         self.stream_thread = VideoThread(src=source, width=width, isNDI=isNDI)
         # Connect it's Signal to the update_image Slot Method
-        self.stream_thread.change_pixmap_signal.connect(self.update_image)
+        self.stream_thread.change_pixmap_signal.connect(
+            self.update_image_and_queue)
+
         # Start the Thread
         self.stream_thread.start()
 
-        # Create and Run Image Processor Thread
-        self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
-        self.processor_thread.retrain_model_signal.connect(self.run_trainer)
-        self.processor_thread.start()
+        # Create a Manager object to manage a dictionary that will be shared between processes
+        self.manager = Manager()
+        self.facial_recognition_results = self.manager.dict()
+
+        # Create and start a facial recognition process for this camera
+        self.facial_recognition = FacialRecognition()
+        self.facial_recognition_process = Process(
+            target=run_facial_recognition,
+            args=(self.frame_queue, self.facial_recognition_results,
+                  self.objectName(), self.stop_signal)
+        )
+        self.facial_recognition_process.start()
 
         # PTZ Movement Thread
         self.last_request = None
@@ -72,7 +108,8 @@ class CameraWidget(QLabel):
             self.ptz_controller = self.stream_thread.ndi_recv
         else:
             if isNDI:
-                print(f"This NDI Source {source.ndi_name} Does NOT Supports PTZ Movement")
+                print(
+                    f"This NDI Source {source.ndi_name} Does NOT Supports PTZ Movement")
             self.ptz_controller = None
         self.ptz_is_usb = None
 
@@ -94,8 +131,11 @@ class CameraWidget(QLabel):
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
             else:
-                ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
-        self.processor_thread.stop()
+                ndi.recv_ptz_pan_tilt_speed(
+                    instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
+        # self.processor_thread.stop()
+        self.stop_signal.value = True
+        self.facial_recognition_process.join()
         self.stream_thread.stop()
         self.deleteLater()
         self.destroy()
@@ -129,7 +169,8 @@ class CameraWidget(QLabel):
         else:
             print(f"starting ImageProcessor Thread for {self.objectName()}")
             # Create and Run Image Processor Thread
-            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
+            self.processor_thread = ImageProcessor(
+                stream_thread=self.stream_thread, lock=self.lock)
             self.processor_thread.add_name = name
             self.processor_thread.start()
 
@@ -139,12 +180,13 @@ class CameraWidget(QLabel):
         If the Processor thread is already alive then tell the thread to check encodings again.
         If the Processor thread is not alive then start up the thread, the thread will automatically check encodings.
         """
-        if self.processor_thread is not None:
-            self.processor_thread.check_encodings()
-        else:
-            print(f"starting ImageProcessor Thread for {self.objectName()}")
-            self.processor_thread = ImageProcessor(stream_thread=self.stream_thread, lock=self.lock)
-            self.processor_thread.start()
+        if self.facial_recognition is not None:
+            self.facial_recognition.check_encodings()
+        # else:
+        #     print(f"starting ImageProcessor Thread for {self.objectName()}")
+        #     self.facial_recognition = ImageProcessor(
+        #         stream_thread=self.stream_thread, lock=self.lock)
+        #     self.processor_thread.start()
 
     def set_tracking(self):
         """
@@ -159,7 +201,8 @@ class CameraWidget(QLabel):
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
             else:
-                ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
+                ndi.recv_ptz_pan_tilt_speed(
+                    instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
             self.last_request = None
 
     def set_tracked_name(self, name):
@@ -190,13 +233,21 @@ class CameraWidget(QLabel):
         qt_img = self.convert_cv_qt(cv_img)
         self.setPixmap(qt_img)
 
+    def update_image_and_queue(self, cv_img):
+        # Update the image as before
+        self.update_image(cv_img)
+        if not self.frame_queue.full():
+            self.frame_queue.put(cv_img)
+
     def convert_cv_qt(self, cv_img):
         """Convert from an opencv image to QPixmap"""
         rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
-        convert_to_qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
-        p = convert_to_qt_format.scaled(self.width, self.height, Qt.AspectRatioMode.KeepAspectRatio)
+        convert_to_qt_format = QtGui.QImage(
+            rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+        p = convert_to_qt_format.scaled(
+            self.width, self.height, Qt.AspectRatioMode.KeepAspectRatio)
         return QPixmap.fromImage(p)
 
     def clicked_widget(self, event, widget):
@@ -210,8 +261,10 @@ class CameraWidget(QLabel):
         if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
             constants.CURRENT_ACTIVE_CAM_WIDGET.setProperty(
                 'active', not constants.CURRENT_ACTIVE_CAM_WIDGET.property('active'))
-            constants.CURRENT_ACTIVE_CAM_WIDGET.style().unpolish(constants.CURRENT_ACTIVE_CAM_WIDGET)
-            constants.CURRENT_ACTIVE_CAM_WIDGET.style().polish(constants.CURRENT_ACTIVE_CAM_WIDGET)
+            constants.CURRENT_ACTIVE_CAM_WIDGET.style().unpolish(
+                constants.CURRENT_ACTIVE_CAM_WIDGET)
+            constants.CURRENT_ACTIVE_CAM_WIDGET.style().polish(
+                constants.CURRENT_ACTIVE_CAM_WIDGET)
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
 
         if constants.CURRENT_ACTIVE_CAM_WIDGET == widget:
@@ -220,8 +273,10 @@ class CameraWidget(QLabel):
             constants.CURRENT_ACTIVE_CAM_WIDGET = widget
             constants.CURRENT_ACTIVE_CAM_WIDGET.setProperty(
                 'active', not constants.CURRENT_ACTIVE_CAM_WIDGET.property('active'))
-            constants.CURRENT_ACTIVE_CAM_WIDGET.style().unpolish(constants.CURRENT_ACTIVE_CAM_WIDGET)
-            constants.CURRENT_ACTIVE_CAM_WIDGET.style().polish(constants.CURRENT_ACTIVE_CAM_WIDGET)
+            constants.CURRENT_ACTIVE_CAM_WIDGET.style().unpolish(
+                constants.CURRENT_ACTIVE_CAM_WIDGET)
+            constants.CURRENT_ACTIVE_CAM_WIDGET.style().polish(
+                constants.CURRENT_ACTIVE_CAM_WIDGET)
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
         self.change_selection_signal.emit()
 
@@ -231,25 +286,28 @@ class CameraWidget(QLabel):
         :param frame:
         :return:
         """
-        if self.processor_thread is not None:
-            if self.processor_thread.face_locations is not None and self.processor_thread.face_names is not None and self.processor_thread.confidence_list is not None:
-                for (top, right, bottom, left), name, confidence in zip(self.processor_thread.face_locations,
-                                                                        self.processor_thread.face_names,
-                                                                        self.processor_thread.confidence_list):
-                    if name == self.tracked_name:
-                        self.temp_tracked_name = name
-                        self.track_x = left
-                        self.track_y = top
-                        self.track_w = right
-                        self.track_h = bottom
-                    # Draw a box around the face
-                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-                    # Draw a label with name and confidence for the face
-                    cv2.putText(frame, name, (left + 5, top - 5), constants.FONT, 0.5, (255, 255, 255), 1)
-                    cv2.putText(frame, confidence, (right - 52, bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
+        if self.objectName() in self.facial_recognition_results:
+            face_locations, face_names, confidence_list = self.facial_recognition_results[self.objectName(
+            )]
+            for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
+                if name == self.tracked_name:
+                    self.temp_tracked_name = name
+                    self.track_x = left
+                    self.track_y = top
+                    self.track_w = right
+                    self.track_h = bottom
+                # Draw a box around the face
+                cv2.rectangle(frame, (left, top),
+                              (right, bottom), (0, 255, 0), 2)
+                # Draw a label with name and confidence for the face
+                cv2.putText(frame, name, (left + 5, top - 5),
+                            constants.FONT, 0.5, (255, 255, 255), 1)
+                cv2.putText(frame, confidence, (right - 52, bottom - 5),
+                            constants.FONT, 0.45, (255, 255, 0), 1)
 
         if self.is_tracking and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
-            frame = self.track_face(frame, self.track_x, self.track_y, self.track_w, self.track_h)
+            frame = self.track_face(
+                frame, self.track_x, self.track_y, self.track_w, self.track_h)
             # frame = self.track_face(frame, self.track_x - 2, self.track_y - 5, self.track_w + 8, self.track_h + +15)
         self.temp_tracked_name = None
 
@@ -282,18 +340,21 @@ class CameraWidget(QLabel):
         max_y = int(frame.shape[0] / 1.6)
         cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (255, 0, 0), 2)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}", (20, 52), constants.FONT, 0.7, (0, 0, 255), 2)
+        cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}",
+                    (20, 52), constants.FONT, 0.7, (0, 0, 255), 2)
 
         if self.track_started is False:
             rect = dlib.rectangle(x, y, w, h)
             self.tracker.start_track(rgb_frame, rect)
-            cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
+            cv2.putText(frame, "tracking", (x, h + 15),
+                        constants.FONT, 0.45, (0, 255, 0), 1)
             cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
             self.track_started = True
         if self.temp_tracked_name == self.tracked_name:
             rect = dlib.rectangle(x, y, w, h)
             self.tracker.start_track(rgb_frame, rect)
-            cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
+            cv2.putText(frame, "tracking", (x, h + 15),
+                        constants.FONT, 0.45, (0, 255, 0), 1)
             cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
         else:
             self.tracker.update(rgb_frame)
@@ -303,7 +364,8 @@ class CameraWidget(QLabel):
             y = int(pos.top())
             w = int(pos.right())
             h = int(pos.bottom())
-            cv2.putText(frame, "tracking", (x, h + 15), constants.FONT, 0.45, (0, 255, 0), 1)
+            cv2.putText(frame, "tracking", (x, h + 15),
+                        constants.FONT, 0.45, (0, 255, 0), 1)
             cv2.rectangle(frame, (x, y), (w, h), (255, 0, 255), 3, 1)
 
         if self.ptz_controller is not None:
@@ -311,7 +373,8 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_stop()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
                     # self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
                 self.last_request = "stop"
 
@@ -319,7 +382,8 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_left_up_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0.1, tilt_speed=0.1)
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=0.1, tilt_speed=0.1)
                     # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=1)
                 self.last_request = "up_left"
 
@@ -327,7 +391,8 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_right_up_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=0.1)
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=0.1)
                     # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=1)
                 self.last_request = "up_right"
 
@@ -335,7 +400,8 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_left_down_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0.1, tilt_speed=-0.1)
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=0.1, tilt_speed=-0.1)
                     # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=-1)
                 self.last_request = "down_left"
 
@@ -343,7 +409,8 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_right_down_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=-0.1)
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=-0.1)
                     # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=-1)
                 self.last_request = "down_right"
 
@@ -351,7 +418,8 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_up_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0.1)
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=0, tilt_speed=0.1)
                     # self.ptz_controller.pantilt(pan_speed=0, tilt_speed=1)
                 self.last_request = "up"
 
@@ -359,7 +427,8 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_down_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=-0.1)
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=0, tilt_speed=-0.1)
                     # self.ptz_controller.pantilt(pan_speed=0, tilt_speed=-1)
                 self.last_request = "down"
 
@@ -367,7 +436,8 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_left_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0.1, tilt_speed=0)
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=0.1, tilt_speed=0)
                     # self.ptz_controller.pantilt(pan_speed=2, tilt_speed=0)
                 self.last_request = "left"
 
@@ -375,7 +445,8 @@ class CameraWidget(QLabel):
                 if self.ptz_is_usb:
                     self.ptz_controller.move_right_track()
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=0)
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=-0.1, tilt_speed=0)
                     # self.ptz_controller.pantilt(pan_speed=-2, tilt_speed=0)
                 self.last_request = "right"
 

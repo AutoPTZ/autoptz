@@ -22,7 +22,8 @@ def face_confidence(face_distance, face_match_threshold=0.6):
     if face_distance > face_match_threshold:
         return str(round(linear_val * 100, 2)) + '%'
     else:
-        value = (linear_val + ((1.0 - linear_val) * math.pow((linear_val - 0.5) * 2, 0.2))) * 100
+        value = (linear_val + ((1.0 - linear_val) *
+                 math.pow((linear_val - 0.5) * 2, 0.2))) * 100
         return str(round(value, 2)) + '%'
 
 
@@ -99,14 +100,17 @@ class ImageProcessor(QThread):
         self.face_locations = []
         self.face_names = []
         self.confidence_list = []
-        time.sleep(0.07)  # add artificial timer sleep so users can see the boxes draw
+        # add artificial timer sleep so users can see the boxes draw
+        time.sleep(0.07)
         for x, y, w, h in faces:
             self.count += 1
-            location = constants.IMAGE_PATH + self.add_name + '/' + str(self.count) + '.jpg'
+            location = constants.IMAGE_PATH + \
+                self.add_name + '/' + str(self.count) + '.jpg'
             print("\n [INFO] Creating Images at " + location)
             cv2.imwrite(location, frame)
             self.face_names.append("Adding: " + self.add_name)
-            self.face_locations = [(int(y), int((x + w)), int((y + h)), int(x))]
+            self.face_locations = [
+                (int(y), int((x + w)), int((y + h)), int(x))]
             self.confidence_list.append("100%")
 
         if self.count >= 10:  # Take 50 face sample and stop video
@@ -129,23 +133,28 @@ class ImageProcessor(QThread):
             rgb_small_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             # Find all the faces and face encodings in the current frame of video
-            self.face_locations = self.face_rec.face_locations(rgb_small_frame, number_of_times_to_upsample=0)
-            face_encodings = self.face_rec.face_encodings(rgb_small_frame, self.face_locations)
+            self.face_locations = self.face_rec.face_locations(
+                rgb_small_frame, number_of_times_to_upsample=0)
+            face_encodings = self.face_rec.face_encodings(
+                rgb_small_frame, self.face_locations)
 
             self.face_names = []
             self.confidence_list = []
 
             for face_encoding in face_encodings:
                 # See if the face is a match for the known face(s)
-                matches = self.face_rec.compare_faces(self.encoding_data['encodings'], face_encoding)
+                matches = self.face_rec.compare_faces(
+                    self.encoding_data['encodings'], face_encoding)
                 name = "Unknown"
                 confidence = ''
                 # Or instead, use the known face with the smallest distance to the new face
-                face_distances = self.face_rec.face_distance(self.encoding_data['encodings'], face_encoding)
+                face_distances = self.face_rec.face_distance(
+                    self.encoding_data['encodings'], face_encoding)
                 best_match_index = np.argmin(face_distances)
                 if matches[best_match_index]:
                     name = self.encoding_data['names'][best_match_index]
-                    confidence = face_confidence(face_distances[best_match_index])
+                    confidence = face_confidence(
+                        face_distances[best_match_index])
                 self.face_names.append(name)
                 self.confidence_list.append(confidence)
         self.skip_frame = not self.skip_frame
@@ -156,7 +165,8 @@ class ImageProcessor(QThread):
         """
         self.encoding_data = None
         if os.path.exists(constants.ENCODINGS_PATH):
-            self.encoding_data = pickle.loads(open(constants.ENCODINGS_PATH, "rb").read())
+            self.encoding_data = pickle.loads(
+                open(constants.ENCODINGS_PATH, "rb").read())
 
     def stop(self):
         """Sets run flag to False and waits for thread to finish"""

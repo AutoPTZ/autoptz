@@ -1,10 +1,10 @@
 import os
 import shutil
 
-from logic.facial_tracking.dialogs.add_face import AddFaceDlg
-from logic.facial_tracking.dialogs.remove_face import RemoveFaceDlg
-from logic.facial_tracking.dialogs.reset_database import ResetDatabaseDlg
-from logic.facial_tracking.dialogs.train_face import TrainerDlg
+from logic.facial_recognition.dialogs.add_face import AddFaceDlg
+from logic.facial_recognition.dialogs.remove_face import RemoveFaceDlg
+from logic.facial_recognition.dialogs.reset_database import ResetDatabaseDlg
+from logic.facial_recognition.dialogs.train_face import TrainerDlg
 from shared.message_prompts import show_info_messagebox
 import shared.constants as constants
 
@@ -13,6 +13,7 @@ class ShowDialog:
     """
     Simplified Add/Train/Remove/Reset Dialog methods into one place
     """
+
     def __init__(self):
         super(ShowDialog, self).__init__()
 
