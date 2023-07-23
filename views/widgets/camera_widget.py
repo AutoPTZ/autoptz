@@ -234,8 +234,6 @@ class CameraWidget(QLabel):
         :param frame:
         :return:
         """
-        print(
-            self.shared_data['facial_recognition_results'])
         if self.shared_data['facial_recognition_results'] != ([], [], []):
             face_locations, face_names, confidence_list = self.shared_data[
                 'facial_recognition_results']

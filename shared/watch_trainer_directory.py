@@ -35,7 +35,6 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         :param event:
         """
         print("Watchdog received an event at - % s." % event.src_path)
-        self.spin(5)
         for camera in self.camera_widget_list:
             camera.facial_recognition.check_encodings()
 
@@ -45,7 +44,6 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         :param event:
         """
         print("Watchdog received an event at - % s." % event.src_path)
-        self.spin(5)
         for camera in self.camera_widget_list:
             camera.facial_recognition.check_encodings()
 
@@ -55,14 +53,5 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         :param event:
         """
         print("Watchdog received an event at - % s." % event.src_path)
-        self.spin(5)
         for camera in self.camera_widget_list:
             camera.facial_recognition.check_encodings()
-
-    @staticmethod
-    def spin(seconds):
-        """Pause for set amount of seconds, replaces time.sleep() so program doesn't stall"""
-
-        time_end = time.time() + seconds
-        while time.time() < time_end:
-            QtWidgets.QApplication.processEvents()

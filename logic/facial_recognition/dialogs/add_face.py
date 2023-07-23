@@ -3,7 +3,7 @@ from PySide6 import QtCore, QtWidgets
 from PySide6.QtWidgets import QDialog
 
 from shared import constants
-from shared.message_prompts import show_critical_messagebox, show_info_messagebox
+from shared.message_prompts import show_info_messagebox
 
 
 class AddFaceUI(object):
