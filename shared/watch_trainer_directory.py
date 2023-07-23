@@ -1,6 +1,8 @@
+import os
 import time
 import watchdog.events
 import watchdog.observers
+from shared import constants
 from PySide6 import QtWidgets
 
 

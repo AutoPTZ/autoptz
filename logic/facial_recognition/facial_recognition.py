@@ -29,8 +29,11 @@ def face_confidence(face_distance, face_match_threshold=0.6):
 
 class FacialRecognition:
     def __init__(self, shared_data):
-        self.check_encodings()
+        # self.manager = Manager()
+        # self.known_face_encodings = self.manager.dict(
+        #     {'encodings': [], 'names': []})
         self.shared_data = shared_data
+        self.check_encodings()
 
     def set_add_face_name(self, name):
         self.shared_data['add_face_name'] = name
@@ -39,11 +42,15 @@ class FacialRecognition:
         """
         Refresh encodings_data to use the latest models data. If there is any.
         """
+        # Always reset the known_face_encodings first
         self.known_face_encodings = {'encodings': [], 'names': []}
+
+        # Then load the encodings if the file exists
         if os.path.exists(constants.ENCODINGS_PATH):
-            print("loading encodinged model")
-            self.known_face_encodings = pickle.loads(
+            print("loading encoded model")
+            encodings = pickle.loads(
                 open(constants.ENCODINGS_PATH, "rb").read())
+            self.known_face_encodings = encodings
 
     def add_face(self, face_encodings, add_face_name):
         # If a face was found in the frame, add it to the known faces
@@ -84,7 +91,7 @@ class FacialRecognition:
 
         # Find all the faces and face encodings in the current frame of video
         face_locations = face_recognition.face_locations(
-            rgb_frame, number_of_times_to_upsample=0)
+            rgb_frame, number_of_times_to_upsample=1)
         face_encodings = face_recognition.face_encodings(
             rgb_frame, face_locations)
 
@@ -100,6 +107,7 @@ class FacialRecognition:
                 return face_locations, [add_face_name], [100]
             return [], [], []
 
+        print(self.known_face_encodings)
         if self.known_face_encodings == {'encodings': [], 'names': []}:
             return [], [], []
 

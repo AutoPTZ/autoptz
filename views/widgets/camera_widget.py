@@ -1,16 +1,18 @@
+import os
 from PySide6 import QtGui
 from PySide6.QtWidgets import QLabel
 from PySide6.QtGui import QPixmap
-from PySide6.QtCore import Qt
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 import cv2
 import time
 import dlib
 import NDIlib as ndi
+import numpy as np
+from logic.camera_search.search_ndi import get_ndi_sources
 from logic.facial_recognition.facial_recognition import FacialRecognition
 import shared.constants as constants
-from views.widgets.video_thread import VideoThread
-from multiprocessing import Process, Manager, Queue, Value
+from multiprocessing import Lock, Process, Manager, Queue, Value, shared_memory
+import imutils
 
 
 def run_facial_recognition(frame_queue, shared_data, facial_recognition, stop_signal):
@@ -27,6 +29,46 @@ def run_facial_recognition(frame_queue, shared_data, facial_recognition, stop_si
             # Update the facial recognition results for this camera
             shared_data['facial_recognition_results'] = (
                 face_locations, face_names, confidence_list)
+
+
+def run_camera_feed(frame_queue, source, width, isNDI=False):
+
+    _run_flag = True
+    resize_width = width
+    if type(source) == int:
+        cap = cv2.VideoCapture(source)
+        if os.name == 'nt':  # fixes Windows OpenCV resolution
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 5000)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 5000)
+    else:
+        souces = get_ndi_sources()
+        source = next(
+            (src for src in souces if src.ndi_name == source), None)
+        # Create the NDIlib.NDIlib.Source object here using the shared information
+        ndi_recv_create = ndi.RecvCreateV3()
+        ndi_recv_create.color_format = ndi.RECV_COLOR_FORMAT_BGRX_BGRA
+        ndi_recv_create.bandwidth = ndi.RECV_BANDWIDTH_LOWEST
+        ndi_recv = ndi.recv_create_v3(ndi_recv_create)
+        ndi.recv_connect(ndi_recv, source)
+
+    while _run_flag:
+        if type(source) == int:
+            ret, img = cap.read()
+            if ret:
+                cv_img = imutils.resize(img, width=resize_width)
+                frame_queue.put(cv_img)
+        else:
+            ret, v, _, _ = ndi.recv_capture_v2(ndi_recv, 1000)
+            if ret == ndi.FRAME_TYPE_VIDEO:
+                cv_img = np.copy(v.data)
+                ndi.recv_free_video_v2(ndi_recv, v)
+                cv_img = imutils.resize(cv_img, width=resize_width)
+                frame_queue.put(cv_img)
+    if isNDI:
+        ndi.recv_destroy(ndi_recv)
+        ndi.destroy()
+    else:
+        cap.release()
 
 
 class CameraWidget(QLabel):
@@ -60,54 +102,56 @@ class CameraWidget(QLabel):
         self.isNDI = isNDI
         self._is_stopped = True
         self.setProperty('active', False)
-        if self.isNDI:
-            self.setObjectName(f"Camera Source: {source.ndi_name}")
-        else:
-            self.setObjectName(f"Camera Source: {source}")
+        self.setObjectName(f"Camera Source: {source}")
         self.setStyleSheet(constants.CAMERA_STYLESHEET)
         self.setText(f"Camera Source: {source}")
         self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(
             event, widget)
 
-        # Create a Queue to hold the latest frame
-        self.frame_queue = Queue(maxsize=1)
-        self.stop_signal = Value('b', False)
-
-        # Create Video Capture Thread
-        self.stream_thread = VideoThread(src=source, width=width, isNDI=isNDI)
-        # Connect it's Signal to the update_image Slot Method
-        self.stream_thread.change_pixmap_signal.connect(
-            self.update_image_and_queue)
-
-        # Start the Thread
-        self.stream_thread.start()
+        # # Create a Queue to hold the latest frame
+        # self.frame_queue = Queue(maxsize=1)
+        # self.stop_signal = Value('b', False)
 
         self.manager = Manager()
         self.shared_data = self.manager.dict()
         self.shared_data['facial_recognition_results'] = ([], [], [])
         self.shared_data['add_face_name'] = None
 
-        self.facial_recognition = FacialRecognition(
-            self.shared_data)
+        # Create a Queue to hold the latest frame
+        self.frame_queue = Queue()
 
-        # Create and start a facial recognition process for this camera
-        self.facial_recognition_process = Process(
-            target=run_facial_recognition,
-            args=(self.frame_queue, self.shared_data, self.facial_recognition,
-                  self.stop_signal)
-        )
-        self.facial_recognition_process.start()
+        # Create and start the process
+        self.process = Process(target=run_camera_feed, args=(
+            self.frame_queue, source, width, isNDI))
+
+        self.process.start()
+
+        # Start the QTimer to update the QLabel
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_image_and_queue)
+        self.timer.start(1000/120)  # 120 fps
+
+        # self.facial_recognition = FacialRecognition(
+        #     self.shared_data)
+
+        # # Create and start a facial recognition process for this camera
+        # self.facial_recognition_process = Process(
+        #     target=run_facial_recognition,
+        #     args=(self.frame_queue, self.shared_data, self.facial_recognition,
+        #           self.stop_signal)
+        # )
+        # self.facial_recognition_process.start()
 
         # PTZ Movement Thread
-        self.last_request = None
-        if isNDI and ndi.recv_ptz_is_supported(instance=self.stream_thread.ndi_recv):
-            print(f"This NDI Source {source.ndi_name} Supports PTZ Movement")
-            self.ptz_controller = self.stream_thread.ndi_recv
-        else:
-            if isNDI:
-                print(
-                    f"This NDI Source {source.ndi_name} Does NOT Supports PTZ Movement")
-            self.ptz_controller = None
+        # self.last_request = None
+        # if isNDI and ndi.recv_ptz_is_supported(instance=self.stream_thread.ndi_recv):
+        #     print(f"This NDI Source {source.ndi_name} Supports PTZ Movement")
+        #     self.ptz_controller = self.stream_thread.ndi_recv
+        # else:
+        #     if isNDI:
+        #         print(
+        #             f"This NDI Source {source.ndi_name} Does NOT Supports PTZ Movement")
+        #     self.ptz_controller = None
         self.ptz_is_usb = None
 
         self.track_started = False
@@ -178,14 +222,13 @@ class CameraWidget(QLabel):
                     instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
             self.last_request = None
 
-    def update_image_and_queue(self, cv_img):
+    def update_image_and_queue(self):
         """Updates the QLabel with the latest OpenCV/NDI frame and draws it"""
-        cv_img = self.draw_on_frame(frame=cv_img)
-        qt_img = self.convert_cv_qt(cv_img)
-        self.setPixmap(qt_img)
-        """Add latest frame to queue when possible"""
-        if not self.frame_queue.full():
-            self.frame_queue.put(cv_img)
+        if not self.frame_queue.empty():
+            cv_img = self.frame_queue.get()
+            cv_img = self.draw_on_frame(frame=cv_img)
+            qt_img = self.convert_cv_qt(cv_img)
+            self.setPixmap(qt_img)
 
     def convert_cv_qt(self, cv_img):
         """Convert from an opencv image to QPixmap"""
