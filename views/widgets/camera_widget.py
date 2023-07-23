@@ -111,20 +111,23 @@ class CameraWidget(QLabel):
         # # Create a Queue to hold the latest frame
         # self.frame_queue = Queue(maxsize=1)
         # self.stop_signal = Value('b', False)
-
-        self.manager = Manager()
-        self.shared_data = self.manager.dict()
-        self.shared_data['facial_recognition_results'] = ([], [], [])
-        self.shared_data['add_face_name'] = None
+        print("testing speed")
+        # self.manager = Manager()
+        # self.shared_data = self.manager.dict()
+        # self.shared_data['facial_recognition_results'] = ([], [], [])
+        # self.shared_data['add_face_name'] = None
+        # print("created Manager for Shared Data")
 
         # Create a Queue to hold the latest frame
         self.frame_queue = Queue()
+        print("crated Queue")
 
         # Create and start the process
         self.process = Process(target=run_camera_feed, args=(
             self.frame_queue, source, width, isNDI))
-
+        print("creating Process")
         self.process.start()
+        print("started Process")
 
         # Start the QTimer to update the QLabel
         self.timer = QTimer()
@@ -226,7 +229,7 @@ class CameraWidget(QLabel):
         """Updates the QLabel with the latest OpenCV/NDI frame and draws it"""
         if not self.frame_queue.empty():
             cv_img = self.frame_queue.get()
-            cv_img = self.draw_on_frame(frame=cv_img)
+            # cv_img = self.draw_on_frame(frame=cv_img)
             qt_img = self.convert_cv_qt(cv_img)
             self.setPixmap(qt_img)
 

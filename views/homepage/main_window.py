@@ -14,6 +14,7 @@ from logic.camera_search.get_serial_cameras import COMPorts
 from shared.message_prompts import show_info_messagebox
 from views.functions.show_dialogs_ui import ShowDialog
 from views.functions.assign_network_ptz_ui import AssignNetworkPTZDlg
+from views.homepage.camera_setup_thread import CameraSetupThread
 from views.homepage.flow_layout import FlowLayout
 from shared.watch_trainer_directory import WatchTrainer
 from views.widgets.camera_widget import CameraWidget
@@ -31,6 +32,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.threadpool = QtCore.QThreadPool()
         self.threadpool.maxThreadCount()
         self.lock = Lock()
+        self.setup_threads = []
 
         # setting up main window
         self.setObjectName("AutoPTZ")
@@ -492,19 +494,56 @@ class AutoPTZ_MainWindow(QMainWindow):
         """
         return lambda: self.addCameraWidget(source=src, menu_item=menu_item, isNDI=isNDI)
 
+    # def addCameraWidget(self, source, menu_item, isNDI=False):
+    #     """Add NDI/Serial camera source from the menu to the FlowLayout"""
+    #     print(f'creating camera setup thread for Source {source}')
+    #     setup_thread = CameraSetupThread(
+    #         source, self.screen_width // 3, self.screen_height // 3, isNDI, self.lock)
+    #     setup_thread.setup_finished.connect(
+    #         self.onCameraSetupFinished)
+    #     print(f'starting camera setup thread for Source {source}')
+    #     setup_thread.start()
+    #     # Add the thread to a list so it doesn't get garbage collected
+    #     self.setup_threads.append(setup_thread)
+
+    # def onCameraSetupFinished(self, camera_widget):
+    #     """Slot to be called when a camera setup thread finishes"""
+    #     print(f'camera widget setup')
+    #     camera_widget = CameraWidget(source=self.source, width=self.width, height=self.height,
+    #                                  isNDI=self.isNDI, lock=self.lock)
+    #     if camera_widget.isNDI is False:
+    #         constants.RUNNING_HARDWARE_CAMERA_WIDGETS.append(camera_widget)
+    #     # menu_item.triggered.disconnect()
+    #     # menu_item.triggered.connect(
+    #     #     lambda index=source, item=menu_item: self.deleteCameraWidget(source=index, menu_item=item,
+    #     #                                                                  camera_widget=camera_widget))
+    #     camera_widget.change_selection_signal.connect(self.updateElements)
+    #     print(f'camera widget set selection signal')
+    #     self.watch_trainer.add_camera(camera_widget=camera_widget)
+    #     print(f'camera widget added to trainer')
+    #     self.flowLayout.addWidget(camera_widget)
+    #     print(f'camera widget added to ui and shown')
+    #     camera_widget.show()
+
     def addCameraWidget(self, source, menu_item, isNDI=False):
         """Add NDI/Serial camera source from the menu to the FlowLayout"""
+        print(f"creating CameraWidget for Source {source}")
         camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3,
                                      isNDI=isNDI, lock=self.lock)
+        print(f"created CameraWidget for Source {source}")
         if isNDI is False:
             constants.RUNNING_HARDWARE_CAMERA_WIDGETS.append(camera_widget)
         camera_widget.change_selection_signal.connect(self.updateElements)
+        print(f"set selection signal CameraWidget for Source {source}")
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
             lambda index=source, item=menu_item: self.deleteCameraWidget(source=index, menu_item=item,
                                                                          camera_widget=camera_widget))
+        print(f"refreshed menu CameraWidget for Source {source}")
         self.watch_trainer.add_camera(camera_widget=camera_widget)
+        print(f"added to watch trainer CameraWidget for Source {source}")
         self.flowLayout.addWidget(camera_widget)
+        print(f"added to flowlayout CameraWidget for Source {source}")
         camera_widget.show()
 
     def deleteCameraWidget(self, source, menu_item, camera_widget):
