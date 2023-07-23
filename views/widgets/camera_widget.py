@@ -9,16 +9,11 @@ import dlib
 import NDIlib as ndi
 from logic.facial_recognition.facial_recognition import FacialRecognition
 import shared.constants as constants
-from logic.facial_recognition.dialogs.train_face import TrainerDlg
-from logic.facial_recognition.image_processor import ImageProcessor
 from views.widgets.video_thread import VideoThread
 from multiprocessing import Process, Manager, Queue, Value
 
-# Define run_facial_recognition as a standalone function
 
-
-def run_facial_recognition(frame_queue, facial_recognition_results, object_name, stop_signal):
-    facial_recognition = FacialRecognition()
+def run_facial_recognition(frame_queue, shared_data, facial_recognition, stop_signal):
 
     while not stop_signal.value:
         # Get the latest frame from the queue
@@ -30,7 +25,7 @@ def run_facial_recognition(frame_queue, facial_recognition_results, object_name,
                 frame)
 
             # Update the facial recognition results for this camera
-            facial_recognition_results[object_name] = (
+            shared_data['facial_recognition_results'] = (
                 face_locations, face_names, confidence_list)
 
 
@@ -38,8 +33,8 @@ class CameraWidget(QLabel):
     """
     Create and handle all Cameras that are added to the UI.
     It creates a QLabel as OpenCV and NDI video can be converted to QPixmap for display.
-    Combines both VideoThread and ImageProcessor threads for asynchronous computation for smoother looking video.
-    With the latest frame, Dlib Object Tracking is in use and works alongside with FaceRecognition to fix any inconsistencies when tracking.
+    Combines both VideoThread and Facial Recognition Processes for asynchronous computation for smoother looking video.
+    With the latest frame, Dlib Object Tracking is in use and works alongside with Face Recognition to fix any inconsistencies when tracking.
     """
     change_selection_signal = Signal()
     start_time = time.time()
@@ -47,7 +42,6 @@ class CameraWidget(QLabel):
     fc = 0
     FPS = 0
     stream_thread = None
-    processor_thread = None
     track_started = None
     temp_tracked_name = None
     track_x = None
@@ -88,16 +82,19 @@ class CameraWidget(QLabel):
         # Start the Thread
         self.stream_thread.start()
 
-        # Create a Manager object to manage a dictionary that will be shared between processes
         self.manager = Manager()
-        self.facial_recognition_results = self.manager.dict()
+        self.shared_data = self.manager.dict()
+        self.shared_data['facial_recognition_results'] = ([], [], [])
+        self.shared_data['add_face_name'] = None
+
+        self.facial_recognition = FacialRecognition(
+            self.shared_data)
 
         # Create and start a facial recognition process for this camera
-        self.facial_recognition = FacialRecognition()
         self.facial_recognition_process = Process(
             target=run_facial_recognition,
-            args=(self.frame_queue, self.facial_recognition_results,
-                  self.objectName(), self.stop_signal)
+            args=(self.frame_queue, self.shared_data, self.facial_recognition,
+                  self.stop_signal)
         )
         self.facial_recognition_process.start()
 
@@ -133,9 +130,9 @@ class CameraWidget(QLabel):
             else:
                 ndi.recv_ptz_pan_tilt_speed(
                     instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
-        # self.processor_thread.stop()
         self.stop_signal.value = True
         self.facial_recognition_process.join()
+        self.facial_recognition_process.kill()
         self.stream_thread.stop()
         self.deleteLater()
         self.destroy()
@@ -156,39 +153,15 @@ class CameraWidget(QLabel):
         self.ptz_controller = control
         self.ptz_is_usb = isUSB
 
-    def set_add_name(self, name):
+    def set_tracked_name(self, name):
         """
-        Run when the user wants to register a new face for recognition.
-        If the Processor thread is already alive then just set the name to start taking images
-        If the Processor thread is not alive then start up the thread, then add the face.
+        Sets the name to track, used to start tracking based on face recognition data
         :param name:
         """
-        if self.processor_thread is not None:
-            print("is running")
-            self.processor_thread.add_name = name
-        else:
-            print(f"starting ImageProcessor Thread for {self.objectName()}")
-            # Create and Run Image Processor Thread
-            self.processor_thread = ImageProcessor(
-                stream_thread=self.stream_thread, lock=self.lock)
-            self.processor_thread.add_name = name
-            self.processor_thread.start()
+        self.track_started = False
+        self.tracked_name = name
 
-    def check_encodings(self):
-        """
-        Run when the user resets database or train a model.
-        If the Processor thread is already alive then tell the thread to check encodings again.
-        If the Processor thread is not alive then start up the thread, the thread will automatically check encodings.
-        """
-        if self.facial_recognition is not None:
-            self.facial_recognition.check_encodings()
-        # else:
-        #     print(f"starting ImageProcessor Thread for {self.objectName()}")
-        #     self.facial_recognition = ImageProcessor(
-        #         stream_thread=self.stream_thread, lock=self.lock)
-        #     self.processor_thread.start()
-
-    def set_tracking(self):
+    def reset_tracking(self):
         """
         Resets tracking variables when user toggles the checkbox
         """
@@ -205,37 +178,12 @@ class CameraWidget(QLabel):
                     instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
             self.last_request = None
 
-    def set_tracked_name(self, name):
-        """
-        Sets the name to track, used to start tracking based on face recognition data
-        :param name:
-        """
-        self.track_started = False
-        self.tracked_name = name
-
-    def get_tracking(self):
-        """
-        Returns if tracking is enabled
-        :return:
-        """
-        return self.is_tracking
-
-    def get_tracked_name(self):
-        """
-        Returns current tracked name
-        :return:
-        """
-        return self.tracked_name
-
-    def update_image(self, cv_img):
+    def update_image_and_queue(self, cv_img):
         """Updates the QLabel with the latest OpenCV/NDI frame and draws it"""
         cv_img = self.draw_on_frame(frame=cv_img)
         qt_img = self.convert_cv_qt(cv_img)
         self.setPixmap(qt_img)
-
-    def update_image_and_queue(self, cv_img):
-        # Update the image as before
-        self.update_image(cv_img)
+        """Add latest frame to queue when possible"""
         if not self.frame_queue.full():
             self.frame_queue.put(cv_img)
 
@@ -286,9 +234,12 @@ class CameraWidget(QLabel):
         :param frame:
         :return:
         """
-        if self.objectName() in self.facial_recognition_results:
-            face_locations, face_names, confidence_list = self.facial_recognition_results[self.objectName(
-            )]
+        print(
+            self.shared_data['facial_recognition_results'])
+        if self.shared_data['facial_recognition_results'] != ([], [], []):
+            face_locations, face_names, confidence_list = self.shared_data[
+                'facial_recognition_results']
+
             for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
                 if name == self.tracked_name:
                     self.temp_tracked_name = name
@@ -451,26 +402,3 @@ class CameraWidget(QLabel):
                 self.last_request = "right"
 
         return frame
-
-    @staticmethod
-    def run_trainer():
-        """
-        Runs Trainer on Main Thread
-        """
-        TrainerDlg().show()
-
-    def closeEvent(self, event):
-        """
-        On event call, stop all the related threads.
-        :param event:
-        """
-        if self.ptz_controller is not None:
-            if self.ptz_is_usb:
-                self.ptz_controller.move_stop()
-            else:
-                self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
-                self.ptz_controller.close_connection()
-        self.processor_thread.stop()
-        self.stream_thread.stop()
-        self.deleteLater()
-        event.accept()

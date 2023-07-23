@@ -4,7 +4,6 @@ import shutil
 from logic.facial_recognition.dialogs.add_face import AddFaceDlg
 from logic.facial_recognition.dialogs.remove_face import RemoveFaceDlg
 from logic.facial_recognition.dialogs.reset_database import ResetDatabaseDlg
-from logic.facial_recognition.dialogs.train_face import TrainerDlg
 from shared.message_prompts import show_info_messagebox
 import shared.constants as constants
 
@@ -44,18 +43,6 @@ class ShowDialog:
                     shutil.rmtree(constants.IMAGE_PATH)
                 if os.path.exists(constants.ENCODINGS_PATH):
                     os.remove(constants.ENCODINGS_PATH)
-            elif current_len is not len(os.listdir(constants.IMAGE_PATH)):
-                dlg = TrainerDlg()
-                dlg.show()
-
-    @staticmethod
-    def retrain_face():
-        """ Launch the Retrain Model dialog. """
-        if not os.path.isdir(constants.IMAGE_PATH) or not os.listdir(constants.IMAGE_PATH):
-            show_info_messagebox("No Faces to train.")
-        else:
-            dlg = TrainerDlg()
-            dlg.show()
 
     @staticmethod
     def reset_database(update_face_selection):

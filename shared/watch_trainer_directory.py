@@ -11,7 +11,8 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
 
     def __init__(self):
         # Set the patterns for PatternMatchingEventHandler
-        watchdog.events.PatternMatchingEventHandler.__init__(self, patterns=['*.pickle'], ignore_directories=True)
+        watchdog.events.PatternMatchingEventHandler.__init__(
+            self, patterns=['*.pickle'], ignore_directories=True)
         self.camera_widget_list = []
 
     def add_camera(self, camera_widget):
@@ -36,7 +37,7 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         print("Watchdog received an event at - % s." % event.src_path)
         self.spin(5)
         for camera in self.camera_widget_list:
-            camera.check_encodings()
+            camera.facial_recognition.check_encodings()
 
     def on_deleted(self, event):
         """
@@ -46,7 +47,7 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         print("Watchdog received an event at - % s." % event.src_path)
         self.spin(5)
         for camera in self.camera_widget_list:
-            camera.check_encodings()
+            camera.facial_recognition.check_encodings()
 
     def on_modified(self, event):
         """
@@ -56,7 +57,7 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         print("Watchdog received an event at - % s." % event.src_path)
         self.spin(5)
         for camera in self.camera_widget_list:
-            camera.check_encodings()
+            camera.facial_recognition.check_encodings()
 
     @staticmethod
     def spin(seconds):

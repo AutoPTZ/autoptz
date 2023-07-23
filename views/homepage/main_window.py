@@ -45,7 +45,8 @@ class AutoPTZ_MainWindow(QMainWindow):
                                             QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
-        size_policy.setHeightForWidth(self.central_widget.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.central_widget.sizePolicy().hasHeightForWidth())
         self.central_widget.setSizePolicy(size_policy)
         self.central_widget.setObjectName("central_widget")
         self.gridLayout = QtWidgets.QGridLayout(self.central_widget)
@@ -56,7 +57,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.formTabWidget = QtWidgets.QTabWidget(self.central_widget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum,
                                             QtWidgets.QSizePolicy.Policy.Preferred)
-        size_policy.setHeightForWidth(self.formTabWidget.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.formTabWidget.sizePolicy().hasHeightForWidth())
         self.formTabWidget.setSizePolicy(size_policy)
         self.formTabWidget.setObjectName("formTabWidget")
 
@@ -64,7 +66,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.selectedCamPage = QtWidgets.QWidget(self)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum,
                                             QtWidgets.QSizePolicy.Policy.Preferred)
-        size_policy.setHeightForWidth(self.selectedCamPage.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.selectedCamPage.sizePolicy().hasHeightForWidth())
         self.selectedCamPage.setSizePolicy(size_policy)
         self.selectedCamPage.setMinimumSize(QtCore.QSize(163, 0))
         self.selectedCamPage.setMaximumSize(QtCore.QSize(16777215, 428))
@@ -78,33 +81,42 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.select_face_dropdown = QtWidgets.QComboBox(self.selectedCamPage)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding,
                                             QtWidgets.QSizePolicy.Policy.Fixed)
-        size_policy.setHeightForWidth(self.select_face_dropdown.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.select_face_dropdown.sizePolicy().hasHeightForWidth())
         self.select_face_dropdown.setSizePolicy(size_policy)
         self.select_face_dropdown.setObjectName("select_face_dropdown")
         self.select_face_dropdown.setEnabled(False)
-        self.select_face_dropdown.currentTextChanged.connect(self.selected_face_change)
+        self.select_face_dropdown.currentTextChanged.connect(
+            self.selected_face_change)
         self.select_face_dropdown.addItem('')
         if os.path.isdir(constants.IMAGE_PATH):
             for folder in os.listdir(constants.IMAGE_PATH):
                 self.select_face_dropdown.addItem(folder)
 
         # assign usb PTZ to Serial Camera Source
-        self.assign_network_ptz_btn = QtWidgets.QPushButton(self.selectedCamPage)
+        self.assign_network_ptz_btn = QtWidgets.QPushButton(
+            self.selectedCamPage)
         self.assign_network_ptz_btn.setGeometry(QtCore.QRect(10, 380, 150, 32))
         self.assign_network_ptz_btn.setObjectName("assign_network_ptz_btn")
         self.assign_network_ptz_btn.hide()
-        self.unassign_network_ptz_btn = QtWidgets.QPushButton(self.selectedCamPage)
-        self.unassign_network_ptz_btn.setGeometry(QtCore.QRect(0, 380, 162, 32))
+        self.unassign_network_ptz_btn = QtWidgets.QPushButton(
+            self.selectedCamPage)
+        self.unassign_network_ptz_btn.setGeometry(
+            QtCore.QRect(0, 380, 162, 32))
         self.unassign_network_ptz_btn.setObjectName("unassign_usb_ptz_btn")
         self.unassign_network_ptz_btn.hide()
-        self.assign_network_ptz_btn.clicked.connect(self.assign_network_ptz_dlg)
-        self.unassign_network_ptz_btn.clicked.connect(self.unassign_network_ptz)
+        self.assign_network_ptz_btn.clicked.connect(
+            self.assign_network_ptz_dlg)
+        self.unassign_network_ptz_btn.clicked.connect(
+            self.unassign_network_ptz)
 
-        self.formLayout.setWidget(2, QtWidgets.QFormLayout.ItemRole.SpanningRole, self.select_face_dropdown)
+        self.formLayout.setWidget(
+            2, QtWidgets.QFormLayout.ItemRole.SpanningRole, self.select_face_dropdown)
         self.enable_track = QtWidgets.QCheckBox(self.selectedCamPage)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding,
                                             QtWidgets.QSizePolicy.Policy.Fixed)
-        size_policy.setHeightForWidth(self.enable_track.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.enable_track.sizePolicy().hasHeightForWidth())
         self.enable_track.setSizePolicy(size_policy)
         self.enable_track.setChecked(False)
         self.enable_track.setEnabled(False)
@@ -112,21 +124,25 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.enable_track.setAutoExclusive(False)
         self.enable_track.stateChanged.connect(self.enable_track_change)
         self.enable_track.setObjectName("enable_track")
-        self.formLayout.setWidget(3, QtWidgets.QFormLayout.ItemRole.LabelRole, self.enable_track)
+        self.formLayout.setWidget(
+            3, QtWidgets.QFormLayout.ItemRole.LabelRole, self.enable_track)
         self.select_face_label = QtWidgets.QLabel(self.selectedCamPage)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum,
                                             QtWidgets.QSizePolicy.Policy.Preferred)
-        size_policy.setHeightForWidth(self.select_face_label.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.select_face_label.sizePolicy().hasHeightForWidth())
         self.select_face_label.setSizePolicy(size_policy)
         self.select_face_label.setObjectName("select_face_label")
-        self.formLayout.setWidget(1, QtWidgets.QFormLayout.ItemRole.LabelRole, self.select_face_label)
+        self.formLayout.setWidget(
+            1, QtWidgets.QFormLayout.ItemRole.LabelRole, self.select_face_label)
         self.formTabWidget.addTab(self.selectedCamPage, "")
 
         # manual control tab menu
         self.manualControlPage = QtWidgets.QWidget()
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum,
                                             QtWidgets.QSizePolicy.Policy.MinimumExpanding)
-        size_policy.setHeightForWidth(self.manualControlPage.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.manualControlPage.sizePolicy().hasHeightForWidth())
         self.manualControlPage.setSizePolicy(size_policy)
         self.manualControlPage.setMinimumSize(QtCore.QSize(163, 0))
         self.manualControlPage.setMaximumSize(QtCore.QSize(16777215, 428))
@@ -135,14 +151,17 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.select_camera_label.setGeometry(QtCore.QRect(10, 30, 101, 21))
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum,
                                             QtWidgets.QSizePolicy.Policy.Preferred)
-        size_policy.setHeightForWidth(self.select_camera_label.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.select_camera_label.sizePolicy().hasHeightForWidth())
         self.select_camera_label.setSizePolicy(size_policy)
         self.select_camera_label.setObjectName("select_camera_label")
-        self.select_camera_dropdown = QtWidgets.QComboBox(self.manualControlPage)
+        self.select_camera_dropdown = QtWidgets.QComboBox(
+            self.manualControlPage)
         self.select_camera_dropdown.setGeometry(QtCore.QRect(9, 51, 151, 26))
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding,
                                             QtWidgets.QSizePolicy.Policy.Fixed)
-        size_policy.setHeightForWidth(self.select_camera_dropdown.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.select_camera_dropdown.sizePolicy().hasHeightForWidth())
         self.select_camera_dropdown.setSizePolicy(size_policy)
         self.select_camera_dropdown.setObjectName("select_camera_dropdown")
         self.select_camera_dropdown.addItem("")
@@ -154,7 +173,8 @@ class AutoPTZ_MainWindow(QMainWindow):
                 print(port.device, port.description, data_list.index(port))
                 self.select_camera_dropdown.addItem(port.device)
 
-        self.select_camera_dropdown.currentTextChanged.connect(self.set_manual_control)
+        self.select_camera_dropdown.currentTextChanged.connect(
+            self.set_manual_control)
 
         # manual control buttons
         self.gridLayoutWidget = QtWidgets.QWidget(self.manualControlPage)
@@ -167,7 +187,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.down_right_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Maximum)
-        size_policy.setHeightForWidth(self.down_right_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.down_right_btn.sizePolicy().hasHeightForWidth())
         self.down_right_btn.setSizePolicy(size_policy)
         self.down_right_btn.setIconSize(QtCore.QSize(10, 10))
         self.down_right_btn.setFlat(False)
@@ -176,7 +197,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.up_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Maximum)
-        size_policy.setHeightForWidth(self.up_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.up_btn.sizePolicy().hasHeightForWidth())
         self.up_btn.setSizePolicy(size_policy)
         self.up_btn.setIconSize(QtCore.QSize(10, 10))
         self.up_btn.setObjectName("up_btn")
@@ -184,7 +206,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.up_left_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Maximum)
-        size_policy.setHeightForWidth(self.up_left_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.up_left_btn.sizePolicy().hasHeightForWidth())
         self.up_left_btn.setSizePolicy(size_policy)
         self.up_left_btn.setIconSize(QtCore.QSize(10, 10))
         self.up_left_btn.setObjectName("up_left_btn")
@@ -192,7 +215,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.left_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Maximum)
-        size_policy.setHeightForWidth(self.left_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.left_btn.sizePolicy().hasHeightForWidth())
         self.left_btn.setSizePolicy(size_policy)
         self.left_btn.setIconSize(QtCore.QSize(10, 10))
         self.left_btn.setObjectName("left_btn")
@@ -200,7 +224,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.down_left_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Maximum)
-        size_policy.setHeightForWidth(self.down_left_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.down_left_btn.sizePolicy().hasHeightForWidth())
         self.down_left_btn.setSizePolicy(size_policy)
         self.down_left_btn.setIconSize(QtCore.QSize(10, 10))
         self.down_left_btn.setObjectName("down_left_btn")
@@ -208,7 +233,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.up_right_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Maximum)
-        size_policy.setHeightForWidth(self.up_right_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.up_right_btn.sizePolicy().hasHeightForWidth())
         self.up_right_btn.setSizePolicy(size_policy)
         self.up_right_btn.setIconSize(QtCore.QSize(10, 10))
         self.up_right_btn.setObjectName("up_right_btn")
@@ -216,7 +242,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.right_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Maximum)
-        size_policy.setHeightForWidth(self.right_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.right_btn.sizePolicy().hasHeightForWidth())
         self.right_btn.setSizePolicy(size_policy)
         self.right_btn.setIconSize(QtCore.QSize(10, 10))
         self.right_btn.setObjectName("right_btn")
@@ -224,7 +251,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.down_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Maximum)
-        size_policy.setHeightForWidth(self.down_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.down_btn.sizePolicy().hasHeightForWidth())
         self.down_btn.setSizePolicy(size_policy)
         self.down_btn.setIconSize(QtCore.QSize(10, 10))
         self.down_btn.setObjectName("down_btn")
@@ -232,7 +260,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.home_btn = QtWidgets.QPushButton(self.gridLayoutWidget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Maximum)
-        size_policy.setHeightForWidth(self.home_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.home_btn.sizePolicy().hasHeightForWidth())
         self.home_btn.setSizePolicy(size_policy)
         self.home_btn.setIconSize(QtCore.QSize(10, 10))
         self.home_btn.setObjectName("home_btn")
@@ -246,43 +275,54 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.zoom_in_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Preferred)
-        size_policy.setHeightForWidth(self.zoom_in_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.zoom_in_btn.sizePolicy().hasHeightForWidth())
         self.zoom_in_btn.setSizePolicy(size_policy)
         self.zoom_in_btn.setObjectName("zoom_in_btn")
         self.zoom_layout.addWidget(self.zoom_in_btn)
         self.zoom_out_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Preferred)
-        size_policy.setHeightForWidth(self.zoom_out_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.zoom_out_btn.sizePolicy().hasHeightForWidth())
         self.zoom_out_btn.setSizePolicy(size_policy)
         self.zoom_out_btn.setObjectName("zoom_out_btn")
         self.zoom_layout.addWidget(self.zoom_out_btn)
-        self.horizontalLayoutWidget_2 = QtWidgets.QWidget(self.manualControlPage)
-        self.horizontalLayoutWidget_2.setGeometry(QtCore.QRect(0, 280, 161, 32))
+        self.horizontalLayoutWidget_2 = QtWidgets.QWidget(
+            self.manualControlPage)
+        self.horizontalLayoutWidget_2.setGeometry(
+            QtCore.QRect(0, 280, 161, 32))
         self.horizontalLayoutWidget_2.setObjectName("horizontalLayoutWidget_2")
-        self.focus_layout = QtWidgets.QHBoxLayout(self.horizontalLayoutWidget_2)
+        self.focus_layout = QtWidgets.QHBoxLayout(
+            self.horizontalLayoutWidget_2)
         self.focus_layout.setContentsMargins(0, 0, 0, 0)
         self.focus_layout.setObjectName("focus_layout")
-        self.focus_plus_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget_2)
+        self.focus_plus_btn = QtWidgets.QPushButton(
+            self.horizontalLayoutWidget_2)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
-        size_policy.setHeightForWidth(self.focus_plus_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.focus_plus_btn.sizePolicy().hasHeightForWidth())
         self.focus_plus_btn.setSizePolicy(size_policy)
         self.focus_plus_btn.setObjectName("focus_plus_btn")
         self.focus_layout.addWidget(self.focus_plus_btn)
-        self.focus_minus_btn = QtWidgets.QPushButton(self.horizontalLayoutWidget_2)
+        self.focus_minus_btn = QtWidgets.QPushButton(
+            self.horizontalLayoutWidget_2)
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
                                             QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
-        size_policy.setHeightForWidth(self.focus_minus_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.focus_minus_btn.sizePolicy().hasHeightForWidth())
         self.focus_minus_btn.setSizePolicy(size_policy)
         self.focus_minus_btn.setObjectName("focus_minus_btn")
         self.focus_layout.addWidget(self.focus_minus_btn)
-        self.horizontalLayoutWidget_3 = QtWidgets.QWidget(self.manualControlPage)
-        self.horizontalLayoutWidget_3.setGeometry(QtCore.QRect(0, 320, 161, 32))
+        self.horizontalLayoutWidget_3 = QtWidgets.QWidget(
+            self.manualControlPage)
+        self.horizontalLayoutWidget_3.setGeometry(
+            QtCore.QRect(0, 320, 161, 32))
         self.horizontalLayoutWidget_3.setObjectName("horizontalLayoutWidget_3")
         self.menu_layout = QtWidgets.QHBoxLayout(self.horizontalLayoutWidget_3)
         self.menu_layout.setContentsMargins(0, 0, 0, 0)
@@ -292,7 +332,8 @@ class AutoPTZ_MainWindow(QMainWindow):
                                             QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
-        size_policy.setHeightForWidth(self.menu_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.menu_btn.sizePolicy().hasHeightForWidth())
         self.menu_btn.setSizePolicy(size_policy)
         self.menu_btn.setObjectName("menu_btn")
         self.menu_layout.addWidget(self.menu_btn)
@@ -301,7 +342,8 @@ class AutoPTZ_MainWindow(QMainWindow):
                                             QtWidgets.QSizePolicy.Policy.Preferred)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
-        size_policy.setHeightForWidth(self.reset_btn.sizePolicy().hasHeightForWidth())
+        size_policy.setHeightForWidth(
+            self.reset_btn.sizePolicy().hasHeightForWidth())
         self.reset_btn.setSizePolicy(size_policy)
         self.reset_btn.setObjectName("reset_btn")
         self.menu_layout.addWidget(self.reset_btn)
@@ -311,7 +353,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.assign_usb_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
         self.assign_usb_ptz_btn.setObjectName("assign_usb_ptz_btn")
         self.assign_usb_ptz_btn.hide()
-        self.unassign_usb_ptz_btn = QtWidgets.QPushButton(self.manualControlPage)
+        self.unassign_usb_ptz_btn = QtWidgets.QPushButton(
+            self.manualControlPage)
         self.unassign_usb_ptz_btn.setGeometry(QtCore.QRect(10, 380, 141, 32))
         self.unassign_usb_ptz_btn.setObjectName("unassign_usb_ptz_btn")
         self.unassign_usb_ptz_btn.hide()
@@ -370,16 +413,17 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionAbout.setObjectName("actionAbout")
         self.actionAdd_Face = QtWidgets.QWidgetAction(self)
         self.actionAdd_Face.setObjectName("actionAdd_Face")
-        self.actionAdd_Face.triggered.connect(partial(self.dialogs.add_face, self.update_face_dropdown))
-        self.actionTrain_Model = QtWidgets.QWidgetAction(self)
-        self.actionTrain_Model.setObjectName("actionTrain_Model")
-        self.actionTrain_Model.triggered.connect(partial(self.dialogs.retrain_face))
+        self.actionAdd_Face.triggered.connect(
+            partial(self.dialogs.add_face, self.update_face_dropdown))
+
         self.actionRemove_Face = QtWidgets.QWidgetAction(self)
         self.actionRemove_Face.setObjectName("actionRemove_Face")
-        self.actionRemove_Face.triggered.connect(partial(self.dialogs.remove_face, self.update_face_dropdown))
+        self.actionRemove_Face.triggered.connect(
+            partial(self.dialogs.remove_face, self.update_face_dropdown))
         self.actionReset_Database = QtWidgets.QWidgetAction(self)
         self.actionReset_Database.setObjectName("actionReset_Database")
-        self.actionReset_Database.triggered.connect(partial(self.dialogs.reset_database, self.update_face_dropdown))
+        self.actionReset_Database.triggered.connect(
+            partial(self.dialogs.reset_database, self.update_face_dropdown))
         self.menuFile.addAction(self.actionOpen)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionSave)
@@ -392,7 +436,6 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.menuSource.addSeparator()
         self.menuSource.addAction(self.actionEdit)
         self.menuFacial_Recognition.addAction(self.actionAdd_Face)
-        self.menuFacial_Recognition.addAction(self.actionTrain_Model)
         self.menuFacial_Recognition.addAction(self.actionRemove_Face)
         self.menuFacial_Recognition.addSeparator()
         self.menuFacial_Recognition.addAction(self.actionReset_Database)
@@ -410,7 +453,8 @@ class AutoPTZ_MainWindow(QMainWindow):
             os.mkdir(constants.TRAINER_PATH)
         self.watch_trainer = WatchTrainer()
         observer = watchdog.observers.Observer()
-        observer.schedule(self.watch_trainer, path=constants.TRAINER_PATH, recursive=True)
+        observer.schedule(self.watch_trainer,
+                          path=constants.TRAINER_PATH, recursive=True)
         observer.start()
         self.translateUi(self)
         QtCore.QMetaObject.connectSlotsByName(self)
@@ -423,7 +467,8 @@ class AutoPTZ_MainWindow(QMainWindow):
             menu_item = QtWidgets.QWidgetAction(self)
             menu_item.setText(cam.description())
             menu_item.setCheckable(True)
-            menu_item.triggered.connect(self.create_lambda(src=index, menu_item=menu_item, isNDI=False))
+            menu_item.triggered.connect(self.create_lambda(
+                src=index, menu_item=menu_item, isNDI=False))
             self.menuAdd_Hardware.addAction(menu_item)
 
     def findNDISources(self):
@@ -433,7 +478,8 @@ class AutoPTZ_MainWindow(QMainWindow):
             menu_item = QtWidgets.QWidgetAction(self)
             menu_item.setText(cam.ndi_name)
             menu_item.setCheckable(True)
-            menu_item.triggered.connect(self.create_lambda(src=cam, menu_item=menu_item, isNDI=True))
+            menu_item.triggered.connect(self.create_lambda(
+                src=cam, menu_item=menu_item, isNDI=True))
             self.menuAdd_NDI.addAction(menu_item)
 
     def create_lambda(self, src, menu_item, isNDI):
@@ -469,7 +515,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.watch_trainer.remove_camera(camera_widget=camera_widget)
         if camera_widget in constants.RUNNING_HARDWARE_CAMERA_WIDGETS:
             if camera_widget.ptz_controller is not None:
-                constants.IN_USE_USB_PTZ_DEVICES.remove(camera_widget.ptz_controller)
+                constants.IN_USE_USB_PTZ_DEVICES.remove(
+                    camera_widget.ptz_controller)
             constants.RUNNING_HARDWARE_CAMERA_WIDGETS.remove(camera_widget)
         if constants.CURRENT_ACTIVE_CAM_WIDGET == camera_widget:
             constants.CURRENT_ACTIVE_CAM_WIDGET = None
@@ -494,38 +541,31 @@ class AutoPTZ_MainWindow(QMainWindow):
         else:
             print(f"{constants.CURRENT_ACTIVE_CAM_WIDGET.objectName()} is active")
             self.select_face_dropdown.setEnabled(True)
-            if constants.CURRENT_ACTIVE_CAM_WIDGET.processor_thread is not None:
-                print("Processor Thread is running")
-                if constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name() is None:
-                    print("no tracked name")
-                    self.select_face_dropdown.setCurrentText('')
+            if constants.CURRENT_ACTIVE_CAM_WIDGET.tracked_name is None:
+                print("no tracked name")
+                self.select_face_dropdown.setCurrentText('')
+                self.enable_track.blockSignals(True)
+                self.enable_track.setEnabled(False)
+                self.enable_track.setChecked(False)
+                self.enable_track.blockSignals(False)
+            else:
+                self.select_face_dropdown.setCurrentText(
+                    constants.CURRENT_ACTIVE_CAM_WIDGET.tracked_name)
+                self.enable_track.blockSignals(True)
+                self.enable_track.setChecked(True)
+                self.enable_track.blockSignals(False)
+                if constants.CURRENT_ACTIVE_CAM_WIDGET.is_tracking is False:
                     self.enable_track.blockSignals(True)
-                    self.enable_track.setEnabled(False)
                     self.enable_track.setChecked(False)
                     self.enable_track.blockSignals(False)
+                    print(
+                        f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.tracked_name} but tracking is disabled")
                 else:
-                    self.select_face_dropdown.setCurrentText(constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name())
                     self.enable_track.blockSignals(True)
                     self.enable_track.setChecked(True)
                     self.enable_track.blockSignals(False)
-                    if constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracking() is False:
-                        self.enable_track.blockSignals(True)
-                        self.enable_track.setChecked(False)
-                        self.enable_track.blockSignals(False)
-                        print(
-                            f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name()} but tracking is disabled")
-                    else:
-                        self.enable_track.blockSignals(True)
-                        self.enable_track.setChecked(True)
-                        self.enable_track.blockSignals(False)
-                        print(
-                            f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.get_tracked_name()} and tracking is enabled")
-            else:
-                print("Processor Thread is not running")
-                self.select_face_dropdown.setEnabled(True)
-                self.select_face_dropdown.setCurrentText('')
-                self.enable_track.setEnabled(False)
-                self.enable_track.setChecked(False)
+                    print(
+                        f"a tracked name is {constants.CURRENT_ACTIVE_CAM_WIDGET.tracked_name} and tracking is enabled")
             if constants.CURRENT_ACTIVE_CAM_WIDGET.isNDI and constants.CURRENT_ACTIVE_CAM_WIDGET.ptz_controller is None:
                 self.unassign_network_ptz_btn.hide()
                 self.assign_network_ptz_btn.show()
@@ -548,7 +588,8 @@ class AutoPTZ_MainWindow(QMainWindow):
                 self.enable_track.setEnabled(False)
                 self.enable_track.setChecked(False)
             else:
-                constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracked_name(self.select_face_dropdown.currentText())
+                constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracked_name(
+                    self.select_face_dropdown.currentText())
                 self.enable_track.setEnabled(True)
 
     def enable_track_change(self):
@@ -585,19 +626,32 @@ class AutoPTZ_MainWindow(QMainWindow):
         # shows button depending on if device has already been assigned to a camera source
         if device != "":
             # Enable Button Commands
-            self.up_left_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_left_up)
-            self.up_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_up)
-            self.up_right_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_right_up)
-            self.left_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_left)
-            self.right_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_right)
-            self.down_left_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_left_down)
-            self.down_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_down)
-            self.down_right_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_right_down)
-            self.home_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.move_home)
-            self.zoom_in_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.zoom_in)
-            self.zoom_out_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.zoom_out)
-            self.menu_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.menu)
-            self.reset_btn.clicked.connect(constants.CURRENT_ACTIVE_PTZ_DEVICE.reset)
+            self.up_left_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.move_left_up)
+            self.up_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.move_up)
+            self.up_right_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.move_right_up)
+            self.left_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.move_left)
+            self.right_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.move_right)
+            self.down_left_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.move_left_down)
+            self.down_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.move_down)
+            self.down_right_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.move_right_down)
+            self.home_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.move_home)
+            self.zoom_in_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.zoom_in)
+            self.zoom_out_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.zoom_out)
+            self.menu_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.menu)
+            self.reset_btn.clicked.connect(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE.reset)
         else:
             # Disable Button Commands
             constants.CURRENT_ACTIVE_PTZ_DEVICE = None
@@ -623,24 +677,32 @@ class AutoPTZ_MainWindow(QMainWindow):
     def assign_usb_ptz_dlg(self):
         """Launch the Assign USB PTZ to Camera Source dialog."""
         if not constants.RUNNING_HARDWARE_CAMERA_WIDGETS:
-            show_info_messagebox(info_message="Please add a Hardware Camera Source")
+            show_info_messagebox(
+                info_message="Please add a Hardware Camera Source")
         elif constants.CURRENT_ACTIVE_CAM_WIDGET is None:
-            show_info_messagebox(info_message="Please select a Hardware Camera Source")
+            show_info_messagebox(
+                info_message="Please select a Hardware Camera Source")
         else:
-            constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=constants.CURRENT_ACTIVE_PTZ_DEVICE, isUSB=True)
-            constants.IN_USE_USB_PTZ_DEVICES.append(constants.CURRENT_ACTIVE_PTZ_DEVICE)
-            constants.ASSIGNED_USB_PTZ_CAMERA_WIDGETS.append(constants.CURRENT_ACTIVE_CAM_WIDGET)
+            constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(
+                control=constants.CURRENT_ACTIVE_PTZ_DEVICE, isUSB=True)
+            constants.IN_USE_USB_PTZ_DEVICES.append(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE)
+            constants.ASSIGNED_USB_PTZ_CAMERA_WIDGETS.append(
+                constants.CURRENT_ACTIVE_CAM_WIDGET)
             self.assign_usb_ptz_btn.hide()
             self.unassign_usb_ptz_btn.show()
 
     def unassign_usb_ptz(self):
         """Allow User to Unassign current USB PTZ device from Camera Source"""
         if constants.CURRENT_ACTIVE_CAM_WIDGET is None:
-            show_info_messagebox(info_message="Please select the Hardware Camera Source")
+            show_info_messagebox(
+                info_message="Please select the Hardware Camera Source")
         else:
             constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=None)
-            constants.IN_USE_USB_PTZ_DEVICES.remove(constants.CURRENT_ACTIVE_PTZ_DEVICE)
-            constants.ASSIGNED_USB_PTZ_CAMERA_WIDGETS.remove(constants.CURRENT_ACTIVE_CAM_WIDGET)
+            constants.IN_USE_USB_PTZ_DEVICES.remove(
+                constants.CURRENT_ACTIVE_PTZ_DEVICE)
+            constants.ASSIGNED_USB_PTZ_CAMERA_WIDGETS.remove(
+                constants.CURRENT_ACTIVE_CAM_WIDGET)
             self.unassign_usb_ptz_btn.hide()
             self.assign_usb_ptz_btn.show()
 
@@ -649,7 +711,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         if constants.CURRENT_ACTIVE_CAM_WIDGET is None:
             print("Need to select or add a camera")
         else:
-            dlg = AssignNetworkPTZDlg(self, camera=constants.CURRENT_ACTIVE_CAM_WIDGET)
+            dlg = AssignNetworkPTZDlg(
+                self, camera=constants.CURRENT_ACTIVE_CAM_WIDGET)
             dlg.closeEvent = self.refreshNetworkBtn
             dlg.exec()
 
@@ -690,10 +753,14 @@ class AutoPTZ_MainWindow(QMainWindow):
         AutoPTZ.setWindowTitle(_translate("AutoPTZ", "AutoPTZ"))
         self.enable_track.setText(_translate("AutoPTZ", "Enable Tracking"))
         self.select_face_label.setText(_translate("AutoPTZ", "Select Face"))
-        self.assign_network_ptz_btn.setText(_translate("AutoPTZ", "Assign Network PTZ"))
-        self.unassign_network_ptz_btn.setText(_translate("AutoPTZ", "Unassign Network PTZ"))
-        self.formTabWidget.setTabText(self.formTabWidget.indexOf(self.selectedCamPage), _translate("AutoPTZ", "Auto"))
-        self.select_camera_label.setText(_translate("AutoPTZ", "Select Camera"))
+        self.assign_network_ptz_btn.setText(
+            _translate("AutoPTZ", "Assign Network PTZ"))
+        self.unassign_network_ptz_btn.setText(
+            _translate("AutoPTZ", "Unassign Network PTZ"))
+        self.formTabWidget.setTabText(self.formTabWidget.indexOf(
+            self.selectedCamPage), _translate("AutoPTZ", "Auto"))
+        self.select_camera_label.setText(
+            _translate("AutoPTZ", "Select Camera"))
         self.down_right_btn.setText(_translate("AutoPTZ", "↘"))
         self.up_btn.setText(_translate("AutoPTZ", "↑"))
         self.up_left_btn.setText(_translate("AutoPTZ", "↖"))
@@ -709,13 +776,16 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.focus_minus_btn.setText(_translate("AutoPTZ", "Focus -"))
         self.menu_btn.setText(_translate("AutoPTZ", "Menu"))
         self.reset_btn.setText(_translate("AutoPTZ", "Reset"))
-        self.assign_usb_ptz_btn.setText(_translate("AutoPTZ", "Assign USB PTZ"))
-        self.unassign_usb_ptz_btn.setText(_translate("AutoPTZ", "Unassign USB PTZ"))
+        self.assign_usb_ptz_btn.setText(
+            _translate("AutoPTZ", "Assign USB PTZ"))
+        self.unassign_usb_ptz_btn.setText(
+            _translate("AutoPTZ", "Unassign USB PTZ"))
         self.formTabWidget.setTabText(self.formTabWidget.indexOf(self.manualControlPage),
                                       _translate("AutoPTZ", "Manual"))
         self.menuFile.setTitle(_translate("AutoPTZ", "File"))
         self.menuSource.setTitle(_translate("AutoPTZ", "Sources"))
-        self.menuFacial_Recognition.setTitle(_translate("AutoPTZ", "Facial Recognition"))
+        self.menuFacial_Recognition.setTitle(
+            _translate("AutoPTZ", "Facial Recognition"))
         self.menuHelp.setTitle(_translate("AutoPTZ", "Help"))
         self.actionOpen.setText(_translate("AutoPTZ", "Open"))
         self.actionSave.setText(_translate("AutoPTZ", "Save"))
@@ -728,6 +798,6 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionContact.setText(_translate("AutoPTZ", "Contact"))
         self.actionAbout.setText(_translate("AutoPTZ", "About"))
         self.actionAdd_Face.setText(_translate("AutoPTZ", "Add Face"))
-        self.actionTrain_Model.setText(_translate("AutoPTZ", "Retrain Model"))
         self.actionRemove_Face.setText(_translate("AutoPTZ", "Remove Face"))
-        self.actionReset_Database.setText(_translate("AutoPTZ", "Reset Database"))
+        self.actionReset_Database.setText(
+            _translate("AutoPTZ", "Reset Database"))

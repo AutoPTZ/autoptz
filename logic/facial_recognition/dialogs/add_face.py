@@ -10,6 +10,7 @@ class AddFaceUI(object):
     """
     Creation for Add Face UI
     """
+
     def __init__(self):
         self.name_line = None
         self.horizontalLayout = None
@@ -74,16 +75,18 @@ class AddFaceUI(object):
             if os.path.exists(path):
                 print(path)
                 print("\n [INFO] Name Already Taken")
-                show_critical_messagebox(window_title="Add Face Process",
-                                         critical_message="User's Face Already Exists.\nPlease add a different user.")
-                return
+                show_info_messagebox(
+                    "User's Face Already Exists.\nAdding new look to existing user.")
             else:
                 os.makedirs(path)
-                print("\n [INFO] New Path Created")
-                show_info_messagebox("Initializing face capture. \nLook at the select camera and wait...")
-                print("\n [INFO] Initializing face capture. Look at the select camera and wait...")
-                self.camera.set_add_name(name=self.name_line.text().strip())
-                self.window.close()
+                # print("\n [INFO] New Path Created")
+                show_info_messagebox(
+                    "Initializing face capture. \nLook at the select camera and wait...")
+                print(
+                    "\n [INFO] Initializing face capture. Look at the select camera and wait...")
+            self.camera.facial_recognition.set_add_face_name(
+                name=self.name_line.text().strip())
+            self.window.close()
 
     def translate_ui(self, add_face):
         """
@@ -92,7 +95,8 @@ class AddFaceUI(object):
         """
         _translate = QtCore.QCoreApplication.translate
         add_face.setWindowTitle(_translate("add_face", "Add Face"))
-        self.add_face_title_label.setText(_translate("add_face_title", "Enter Name:"))
+        self.add_face_title_label.setText(
+            _translate("add_face_title", "Enter Name:"))
         self.enter_name_btn.setText(_translate("enter_name_btn", "Submit"))
         self.cancel_btn.setText(_translate("cancel_btn", "Cancel"))
 

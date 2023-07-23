@@ -2,8 +2,6 @@ import os
 import shutil
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtWidgets import QDialog
-
-from logic.facial_recognition.dialogs.train_face import TrainerDlg
 from shared import constants
 from shared.message_prompts import show_info_messagebox
 
@@ -71,8 +69,7 @@ class RemoveFaceUI(object):
         selected_face = constants.IMAGE_PATH + self.name_list.currentItem().text()
         shutil.rmtree(selected_face)
         show_info_messagebox(
-            "Face Removed. \nRetraining model,  please wait...")
-        TrainerDlg().show()
+            "Face Removed.")
         self.window.close()
 
     def translate_ui(self, remove_face):

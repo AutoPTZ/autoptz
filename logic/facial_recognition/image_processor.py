@@ -6,7 +6,6 @@ import pickle
 import math
 import numpy as np
 import time
-from libraries.face_recognition import FaceRec
 
 
 def face_confidence(face_distance, face_match_threshold=0.6):
