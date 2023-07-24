@@ -1,4 +1,5 @@
 import os
+import queue
 from PySide6 import QtGui
 from PySide6.QtWidgets import QLabel
 from PySide6.QtGui import QPixmap
@@ -11,30 +12,22 @@ import numpy as np
 from logic.camera_search.search_ndi import get_ndi_sources
 from logic.facial_recognition.facial_recognition import FacialRecognition
 import shared.constants as constants
-from multiprocessing import Lock, Process, Manager, Queue, Value, shared_memory
+from multiprocessing import Process, Queue, Value
 import imutils
 
 
-def run_facial_recognition(frame_queue, shared_data, facial_recognition, stop_signal):
-
+def run_facial_recognition(frame_queue, facial_recognition, stop_signal):
     while not stop_signal.value:
-        # Get the latest frame from the queue
-        if not frame_queue.empty():
-            frame = frame_queue.get()
-
-            # Run the facial recognition on the frame
-            face_locations, face_names, confidence_list = facial_recognition.recognize(
-                frame)
-
-            # Update the facial recognition results for this camera
-            shared_data['facial_recognition_results'] = (
-                face_locations, face_names, confidence_list)
+        try:
+            #  Run the facial recognition on the frame
+            facial_recognition.recognize(
+                frame_queue.get_nowait())
+            time.sleep(5)  # hack prevent process from stealing all frames
+        except queue.Empty:
+            continue  # Skip this frame if no frame is available
 
 
-def run_camera_feed(frame_queue, source, width, isNDI=False):
-
-    _run_flag = True
-    resize_width = width
+def run_camera_stream(frame_queue, source, width, stop_signal, isNDI=False):
     if type(source) == int:
         cap = cv2.VideoCapture(source)
         if os.name == 'nt':  # fixes Windows OpenCV resolution
@@ -51,18 +44,18 @@ def run_camera_feed(frame_queue, source, width, isNDI=False):
         ndi_recv = ndi.recv_create_v3(ndi_recv_create)
         ndi.recv_connect(ndi_recv, source)
 
-    while _run_flag:
+    while not stop_signal.value:
         if type(source) == int:
             ret, img = cap.read()
             if ret:
-                cv_img = imutils.resize(img, width=resize_width)
+                cv_img = imutils.resize(img, width)
                 frame_queue.put(cv_img)
         else:
             ret, v, _, _ = ndi.recv_capture_v2(ndi_recv, 1000)
             if ret == ndi.FRAME_TYPE_VIDEO:
                 cv_img = np.copy(v.data)
                 ndi.recv_free_video_v2(ndi_recv, v)
-                cv_img = imutils.resize(cv_img, width=resize_width)
+                cv_img = imutils.resize(cv_img, width)
                 frame_queue.put(cv_img)
     if isNDI:
         ndi.recv_destroy(ndi_recv)
@@ -83,7 +76,6 @@ class CameraWidget(QLabel):
     display_time = 2
     fc = 0
     FPS = 0
-    stream_thread = None
     track_started = None
     temp_tracked_name = None
     track_x = None
@@ -94,11 +86,10 @@ class CameraWidget(QLabel):
     tracked_name = None
     is_moving = False
 
-    def __init__(self, source, width, height, lock, isNDI=False):
+    def __init__(self, source, width, height, shared_data, isNDI=False):
         super().__init__()
         self.width = width
         self.height = height
-        self.lock = lock
         self.isNDI = isNDI
         self._is_stopped = True
         self.setProperty('active', False)
@@ -107,46 +98,40 @@ class CameraWidget(QLabel):
         self.setText(f"Camera Source: {source}")
         self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(
             event, widget)
+        self.shared_data = shared_data
 
-        # # Create a Queue to hold the latest frame
-        # self.frame_queue = Queue(maxsize=1)
-        # self.stop_signal = Value('b', False)
-        print("testing speed")
-        # self.manager = Manager()
-        # self.shared_data = self.manager.dict()
-        # self.shared_data['facial_recognition_results'] = ([], [], [])
-        # self.shared_data['add_face_name'] = None
-        # print("created Manager for Shared Data")
+        self.shared_data[f'{self.objectName()}_facial_recognition_results'] = ([], [
+        ], [])
+        self.shared_data[f'{self.objectName()}_add_face_name'] = None
 
         # Create a Queue to hold the latest frame
-        self.frame_queue = Queue()
-        print("crated Queue")
+        self.stop_signal = Value('b', False)
+        # self.frame_queue = Queue(maxsize=1)
+        self.frame_queue = Queue(maxsize=10)
 
         # Create and start the process
-        self.process = Process(target=run_camera_feed, args=(
-            self.frame_queue, source, width, isNDI))
-        print("creating Process")
-        self.process.start()
-        print("started Process")
+        self.camera_stream_process = Process(target=run_camera_stream, args=(
+            self.frame_queue, source, width, self.stop_signal, isNDI))
+        self.camera_stream_process.start()
+
+        self.facial_recognition = FacialRecognition(
+            self.shared_data, self.objectName())
+
+        # Create and start a facial recognition process for this camera
+        self.facial_recognition_process = Process(
+            target=run_facial_recognition,
+            args=(self.frame_queue, self.facial_recognition,
+                  self.stop_signal)
+        )
+        self.facial_recognition_process.start()
 
         # Start the QTimer to update the QLabel
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_image_and_queue)
         self.timer.start(1000/120)  # 120 fps
 
-        # self.facial_recognition = FacialRecognition(
-        #     self.shared_data)
-
-        # # Create and start a facial recognition process for this camera
-        # self.facial_recognition_process = Process(
-        #     target=run_facial_recognition,
-        #     args=(self.frame_queue, self.shared_data, self.facial_recognition,
-        #           self.stop_signal)
-        # )
-        # self.facial_recognition_process.start()
-
-        # PTZ Movement Thread
-        # self.last_request = None
+        # PTZ Movement BROKE DUE TO MULTIPROCESSINGx
+        self.last_request = None
         # if isNDI and ndi.recv_ptz_is_supported(instance=self.stream_thread.ndi_recv):
         #     print(f"This NDI Source {source.ndi_name} Supports PTZ Movement")
         #     self.ptz_controller = self.stream_thread.ndi_recv
@@ -155,6 +140,7 @@ class CameraWidget(QLabel):
         #         print(
         #             f"This NDI Source {source.ndi_name} Does NOT Supports PTZ Movement")
         #     self.ptz_controller = None
+        self.ptz_controller = None
         self.ptz_is_usb = None
 
         self.track_started = False
@@ -178,9 +164,6 @@ class CameraWidget(QLabel):
                 ndi.recv_ptz_pan_tilt_speed(
                     instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
         self.stop_signal.value = True
-        self.facial_recognition_process.join()
-        self.facial_recognition_process.kill()
-        self.stream_thread.stop()
         self.deleteLater()
         self.destroy()
 
@@ -229,7 +212,7 @@ class CameraWidget(QLabel):
         """Updates the QLabel with the latest OpenCV/NDI frame and draws it"""
         if not self.frame_queue.empty():
             cv_img = self.frame_queue.get()
-            # cv_img = self.draw_on_frame(frame=cv_img)
+            cv_img = self.draw_on_frame(frame=cv_img)
             qt_img = self.convert_cv_qt(cv_img)
             self.setPixmap(qt_img)
 
@@ -280,9 +263,9 @@ class CameraWidget(QLabel):
         :param frame:
         :return:
         """
-        if self.shared_data['facial_recognition_results'] != ([], [], []):
+        if self.shared_data[f'{self.objectName()}_facial_recognition_results'] != ([], [], []):
             face_locations, face_names, confidence_list = self.shared_data[
-                'facial_recognition_results']
+                f'{self.objectName()}_facial_recognition_results']
 
             for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
                 if name == self.tracked_name:
@@ -299,7 +282,8 @@ class CameraWidget(QLabel):
                             constants.FONT, 0.5, (255, 255, 255), 1)
                 cv2.putText(frame, confidence, (right - 52, bottom - 5),
                             constants.FONT, 0.45, (255, 255, 0), 1)
-
+            self.shared_data[f'{self.objectName()}_facial_recognition_results'] = (
+                [], [], [])
         if self.is_tracking and self.track_x is not None and self.track_y is not None and self.track_w is not None and self.track_h is not None:
             frame = self.track_face(
                 frame, self.track_x, self.track_y, self.track_w, self.track_h)

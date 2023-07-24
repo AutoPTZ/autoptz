@@ -1,6 +1,5 @@
 import os
 import pickle
-import time
 import math
 import numpy as np
 import face_recognition
@@ -28,11 +27,9 @@ def face_confidence(face_distance, face_match_threshold=0.6):
 
 
 class FacialRecognition:
-    def __init__(self, shared_data):
-        # self.manager = Manager()
-        # self.known_face_encodings = self.manager.dict(
-        #     {'encodings': [], 'names': []})
+    def __init__(self, shared_data, objectName):
         self.shared_data = shared_data
+        self.objectName = objectName
         self.check_encodings()
 
     def set_add_face_name(self, name):
@@ -88,28 +85,34 @@ class FacialRecognition:
     def recognize(self, frame):
         # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
         # Find all the faces and face encodings in the current frame of video
         face_locations = face_recognition.face_locations(
-            rgb_frame, number_of_times_to_upsample=1)
+            rgb_frame, number_of_times_to_upsample=0, model="hog")
         face_encodings = face_recognition.face_encodings(
-            rgb_frame, face_locations)
+            rgb_frame, face_locations, num_jitters=1, model="small")
 
         # If no faces were found in the frame, return empty results
         if not face_encodings:
-            return [], [], []
-
+            self.shared_data[f'{self.objectName}_facial_recognition_results'] = [
+            ], [], []
+            return
         add_face_name = self.shared_data.get('add_face_name')
         if add_face_name is not None:
             result = self.add_face(face_encodings, add_face_name)
             if result:
                 self.shared_data['add_face_name'] = None
-                return face_locations, [add_face_name], [100]
-            return [], [], []
+                self.shared_data[f'{self.objectName}_facial_recognition_results'] = [
+                    face_locations], [add_face_name], [100]
+                return
 
-        print(self.known_face_encodings)
+            self.shared_data[f'{self.objectName}_facial_recognition_results'] = [
+            ], [], []
+            return
+
         if self.known_face_encodings == {'encodings': [], 'names': []}:
-            return [], [], []
+            self.shared_data[f'{self.objectName}_facial_recognition_results'] = [
+            ], [], []
+            return
 
         face_names = []
         confidence_list = []
@@ -131,4 +134,4 @@ class FacialRecognition:
                 face_names.append(name)
                 confidence_list.append(confidence)
 
-        return face_locations, face_names, confidence_list
+        self.shared_data[f'{self.objectName}_facial_recognition_results'] = face_locations, face_names, confidence_list
