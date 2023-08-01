@@ -1,4 +1,5 @@
 import os
+import pickle
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtWidgets import QDialog
 
@@ -62,24 +63,26 @@ class AddFaceUI(object):
     def add_face_prompt(self):
         """
         Methods that checks what the user inputs in the dialog.
-        If the name/folder already exists then tell the user to try again with a different name.
-        Otherwise, set the current active CameraWidget's add_name variable to start detecting and saving images with a person.
+        If the name already exists then add face to the existing database.
+        Set the current active CameraWidget's add_name variable to start detecting and saving images with a person.
         :return:
         """
         if self.name_line.text().strip() == "":
             return
         else:
             print("Adding Face with " + self.camera.objectName())
-            # check if path exists, if not create path for images to be stored
-            path = constants.IMAGE_PATH + self.name_line.text().strip()
-            if os.path.exists(path):
-                print(path)
-                print("\n [INFO] Name Already Taken")
-                show_info_messagebox(
-                    "User's Face Already Exists.\nAdding new look to existing user.")
+            # check if encodings file and face exists, if not add to encodings file
+            if os.path.exists(constants.ENCODINGS_PATH):
+                print("loading encoded model")
+                encodings = pickle.loads(
+                    open(constants.ENCODINGS_PATH, "rb").read())
+                known_face_encodings = encodings
+
+                if self.name_line.text().strip() in set(known_face_encodings['names']):
+                    print("\n [INFO] Name in Database")
+                    show_info_messagebox(
+                        "User's Face Already Exists.\nAdding new look to existing user.")
             else:
-                os.makedirs(path)
-                # print("\n [INFO] New Path Created")
                 show_info_messagebox(
                     "Initializing face capture. \nLook at the select camera and wait...")
                 print(

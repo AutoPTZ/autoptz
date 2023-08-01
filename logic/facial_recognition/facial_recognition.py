@@ -28,9 +28,11 @@ def face_confidence(face_distance, face_match_threshold=0.6):
 
 class FacialRecognition:
     def __init__(self, shared_data, objectName):
+        self.known_face_encodings = None
         self.shared_data = shared_data
         self.objectName = objectName
         self.check_encodings()
+        print("Facial Recognition starting")
 
     def set_add_face_name(self, name):
         self.shared_data['add_face_name'] = name
@@ -66,22 +68,6 @@ class FacialRecognition:
             return True
         return False
 
-    def remove_face(self, name):
-        # Get the indices of the encodings for the given name
-        indices = [i for i, n in enumerate(
-            self.known_face_encodings['names']) if n == name]
-
-        # Remove the encodings and names at these indices
-        for index in sorted(indices, reverse=True):
-            del self.known_face_encodings['encodings'][index]
-            del self.known_face_encodings['names'][index]
-
-        # Save the updated known faces back to the file
-        with open(constants.ENCODINGS_PATH, "wb") as f:
-            f.write(pickle.dumps(self.known_face_encodings))
-
-        print(f"Removed all faces for {name}")
-
     def recognize(self, frame):
         # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -89,7 +75,7 @@ class FacialRecognition:
         face_locations = face_recognition.face_locations(
             rgb_frame, number_of_times_to_upsample=0, model="hog")
         face_encodings = face_recognition.face_encodings(
-            rgb_frame, face_locations, num_jitters=1, model="small")
+            rgb_frame, face_locations, num_jitters=5, model="large")
 
         # If no faces were found in the frame, return empty results
         if not face_encodings:
@@ -101,8 +87,8 @@ class FacialRecognition:
             result = self.add_face(face_encodings, add_face_name)
             if result:
                 self.shared_data['add_face_name'] = None
-                self.shared_data[f'{self.objectName}_facial_recognition_results'] = [
-                    face_locations], [add_face_name], [100]
+                self.shared_data[f'{self.objectName}_facial_recognition_results'] = face_locations, [
+                    add_face_name], [100]
                 return
 
             self.shared_data[f'{self.objectName}_facial_recognition_results'] = [

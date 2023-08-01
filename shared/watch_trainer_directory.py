@@ -38,7 +38,7 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         """
         print("Watchdog received an event at - % s." % event.src_path)
         for camera in self.camera_widget_list:
-            camera.facial_recognition.check_encodings()
+            camera.restart_facial_recogntion()
 
     def on_deleted(self, event):
         """
@@ -47,7 +47,7 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         """
         print("Watchdog received an event at - % s." % event.src_path)
         for camera in self.camera_widget_list:
-            camera.facial_recognition.check_encodings()
+            camera.restart_facial_recogntion()
 
     def on_modified(self, event):
         """
@@ -56,4 +56,4 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         """
         print("Watchdog received an event at - % s." % event.src_path)
         for camera in self.camera_widget_list:
-            camera.facial_recognition.check_encodings()
+            camera.restart_facial_recogntion()

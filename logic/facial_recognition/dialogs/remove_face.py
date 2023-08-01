@@ -1,5 +1,5 @@
 import os
-import shutil
+import pickle
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtWidgets import QDialog
 from shared import constants
@@ -12,6 +12,7 @@ class RemoveFaceUI(object):
     """
 
     def __init__(self):
+        self.known_face_encodings = None
         self.path = None
         self.name_list = None
         self.horizontalLayout = None
@@ -39,9 +40,19 @@ class RemoveFaceUI(object):
         self.name_list = QtWidgets.QListWidget(remove_face)
         self.name_list.setObjectName("name_list")
 
-        # Path for face image database
-        for folder in os.listdir(constants.IMAGE_PATH):
-            self.name_list.addItem(folder)
+        # Always reset the known_face_encodings first
+        self.known_face_encodings = {'encodings': [], 'names': []}
+
+        # Then load the encodings if the file exists
+        if os.path.exists(constants.ENCODINGS_PATH):
+            print("loading encoded model")
+            encodings = pickle.loads(
+                open(constants.ENCODINGS_PATH, "rb").read())
+            self.known_face_encodings = encodings
+
+        # Load names from the known face encodings
+        for name in set(self.known_face_encodings['names']):
+            self.name_list.addItem(name)
 
         self.verticalLayout.addWidget(self.name_list)
         self.horizontalLayout = QtWidgets.QHBoxLayout()
@@ -64,10 +75,23 @@ class RemoveFaceUI(object):
     def remove_face_prompt(self):
         """
         Method runs when user selects face in the list to delete.
-        Removes the folder and all images inside.
+        Removes the face encodings from the pickle file.
         """
-        selected_face = constants.IMAGE_PATH + self.name_list.currentItem().text()
-        shutil.rmtree(selected_face)
+        selected_name = self.name_list.currentItem().text()
+
+        # Get the indices of the encodings for the selected name
+        indices = [i for i, n in enumerate(
+            self.known_face_encodings['names']) if n == selected_name]
+
+        # Remove the encodings and names at these indices
+        for index in sorted(indices, reverse=True):
+            del self.known_face_encodings['encodings'][index]
+            del self.known_face_encodings['names'][index]
+
+        # Save the updated known faces back to the file
+        with open(constants.ENCODINGS_PATH, "wb") as f:
+            pickle.dump(self.known_face_encodings, f)
+
         show_info_messagebox(
             "Face Removed.")
         self.window.close()

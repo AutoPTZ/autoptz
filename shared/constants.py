@@ -2,7 +2,6 @@ import cv2
 import os
 
 ROOT_DIR = os.path.abspath(os.curdir)
-IMAGE_PATH = ROOT_DIR + '/logic/facial_recognition/images/'
 TRAINER_PATH = ROOT_DIR + "/logic/facial_recognition/models/"
 ENCODINGS_PATH = ROOT_DIR + '/logic/facial_recognition/models/encodings.pickle'
 FACE_CASCADE = cv2.CascadeClassifier(

@@ -1,3 +1,4 @@
+import pickle
 from multiprocessing import Manager
 import os
 from threading import Lock
@@ -91,9 +92,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.select_face_dropdown.currentTextChanged.connect(
             self.selected_face_change)
         self.select_face_dropdown.addItem('')
-        if os.path.isdir(constants.IMAGE_PATH):
-            for folder in os.listdir(constants.IMAGE_PATH):
-                self.select_face_dropdown.addItem(folder)
+        self.update_face_dropdown(event="")
 
         # assign usb PTZ to Serial Camera Source
         self.assign_network_ptz_btn = QtWidgets.QPushButton(
@@ -454,6 +453,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         if os.path.exists(constants.TRAINER_PATH) is False:
             os.mkdir(constants.TRAINER_PATH)
         self.watch_trainer = WatchTrainer()
+
         observer = watchdog.observers.Observer()
         observer.schedule(self.watch_trainer,
                           path=constants.TRAINER_PATH, recursive=True)
@@ -514,7 +514,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         """Remove NDI/Serial camera source from camera FlowLayout"""
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
-            lambda index=source, item=menu_item: self.addCameraWidget(source=index, menu_item=item))
+            lambda index=source, item=menu_item: self.addCameraWidget(source=index, menu_item=item, shared_data=self.shared_camera_data))
         self.watch_trainer.remove_camera(camera_widget=camera_widget)
         if camera_widget in constants.RUNNING_HARDWARE_CAMERA_WIDGETS:
             if camera_widget.ptz_controller is not None:
@@ -610,11 +610,20 @@ class AutoPTZ_MainWindow(QMainWindow):
         current_text_temp = self.select_face_dropdown.currentText()
         self.select_face_dropdown.clear()
         self.select_face_dropdown.addItem('')
-        if os.path.exists(constants.IMAGE_PATH):
-            for folder in os.listdir(constants.IMAGE_PATH):
-                self.select_face_dropdown.addItem(folder)
-            if self.select_face_dropdown.findText(current_text_temp) != -1:
-                self.select_face_dropdown.setCurrentText(current_text_temp)
+
+        known_face_encodings = {'encodings': [], 'names': []}
+
+        # Load the known face encodings
+        if os.path.exists(constants.ENCODINGS_PATH):
+            with open(constants.ENCODINGS_PATH, "rb") as f:
+                known_face_encodings = pickle.load(f)
+
+        # Add the names to the dropdown
+        for name in set(known_face_encodings['names']):
+            self.select_face_dropdown.addItem(name)
+
+        if self.select_face_dropdown.findText(current_text_temp) != -1:
+            self.select_face_dropdown.setCurrentText(current_text_temp)
 
     def set_manual_control(self, device):
         """Initializing manual camera control. ONLY USB devices for now."""

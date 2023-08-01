@@ -1,6 +1,4 @@
 import os
-import shutil
-
 from logic.facial_recognition.dialogs.add_face import AddFaceDlg
 from logic.facial_recognition.dialogs.remove_face import RemoveFaceDlg
 from logic.facial_recognition.dialogs.reset_database import ResetDatabaseDlg
@@ -30,19 +28,13 @@ class ShowDialog:
     @staticmethod
     def remove_face(update_face_selection):
         """Launch the Remove Face dialog based on the currently selected camera."""
-        if not os.path.isdir(constants.IMAGE_PATH) or not os.listdir(constants.IMAGE_PATH):
+        if not os.path.exists(constants.ENCODINGS_PATH):
             show_info_messagebox("No Faces to remove.")
         else:
-            current_len = len(os.listdir(constants.IMAGE_PATH))
             print("Opening Face Dialog")
             dlg = RemoveFaceDlg()
             dlg.closeEvent = update_face_selection
             dlg.show()
-            if not os.listdir(constants.IMAGE_PATH):
-                if os.path.exists(constants.IMAGE_PATH):
-                    shutil.rmtree(constants.IMAGE_PATH)
-                if os.path.exists(constants.ENCODINGS_PATH):
-                    os.remove(constants.ENCODINGS_PATH)
 
     @staticmethod
     def reset_database(update_face_selection):

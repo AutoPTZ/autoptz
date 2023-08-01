@@ -123,7 +123,7 @@ class CameraWidget(QLabel):
             args=(self.frame_queue, self.facial_recognition,
                   self.stop_signal)
         )
-        self.facial_recognition_process.start()
+        self.restart_facial_recogntion()
 
         # Start the QTimer to update the QLabel
         self.timer = QTimer()
@@ -208,6 +208,17 @@ class CameraWidget(QLabel):
                     instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
             self.last_request = None
 
+    def restart_facial_recogntion(self):
+        if self.facial_recognition_process.is_alive():
+            self.facial_recognition_process.terminate()
+            self.facial_recognition.check_encodings()
+            self.facial_recognition_process = Process(
+                target=run_facial_recognition,
+                args=(self.frame_queue, self.facial_recognition,
+                      self.stop_signal)
+            )
+        self.facial_recognition_process.start()
+
     def update_image_and_queue(self):
         """Updates the QLabel with the latest OpenCV/NDI frame and draws it"""
         if not self.frame_queue.empty():
@@ -267,20 +278,22 @@ class CameraWidget(QLabel):
             face_locations, face_names, confidence_list = self.shared_data[
                 f'{self.objectName()}_facial_recognition_results']
 
-            for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
+            for location, name, confidence in zip(face_locations, face_names, confidence_list):
+                top, right, bottom, left = location
                 if name == self.tracked_name:
                     self.temp_tracked_name = name
                     self.track_x = left
                     self.track_y = top
                     self.track_w = right
                     self.track_h = bottom
+
                 # Draw a box around the face
                 cv2.rectangle(frame, (left, top),
                               (right, bottom), (0, 255, 0), 2)
                 # Draw a label with name and confidence for the face
                 cv2.putText(frame, name, (left + 5, top - 5),
                             constants.FONT, 0.5, (255, 255, 255), 1)
-                cv2.putText(frame, confidence, (right - 52, bottom - 5),
+                cv2.putText(frame, str(confidence), (right - 52, bottom - 5),
                             constants.FONT, 0.45, (255, 255, 0), 1)
             self.shared_data[f'{self.objectName()}_facial_recognition_results'] = (
                 [], [], [])
