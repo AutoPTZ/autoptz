@@ -1,7 +1,6 @@
 import pickle
 from multiprocessing import Manager
 import os
-from threading import Lock
 from functools import partial
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtMultimedia import QMediaDevices

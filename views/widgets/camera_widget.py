@@ -22,7 +22,7 @@ def run_facial_recognition(frame_queue, facial_recognition, stop_signal):
             #  Run the facial recognition on the frame
             facial_recognition.recognize(
                 frame_queue.get_nowait())
-            time.sleep(5)  # hack prevent process from stealing all frames
+            time.sleep(4)  # hack prevent process from stealing all frames
         except queue.Empty:
             continue  # Skip this frame if no frame is available
 
@@ -104,9 +104,9 @@ class CameraWidget(QLabel):
         ], [])
         self.shared_data[f'{self.objectName()}_add_face_name'] = None
 
-        # Create a Queue to hold the latest frame
+        # Signal to stop camera stream and facial recognition processes
         self.stop_signal = Value('b', False)
-        # self.frame_queue = Queue(maxsize=1)
+        # Create a Queue to hold the latest frame
         self.frame_queue = Queue(maxsize=10)
 
         # Create and start the process
@@ -190,7 +190,6 @@ class CameraWidget(QLabel):
         """
         self.track_started = False
         self.tracked_name = name
-        print(f'tracked name {self.tracked_name}')
 
     def reset_tracking(self):
         """

@@ -1,5 +1,4 @@
 import time
-
 import NDIlib as ndi
 
 
@@ -18,9 +17,7 @@ def get_ndi_sources():
     ndi.find_wait_for_sources(ndi_find, 8000)
     sources = []
 
-    time.sleep(2)
-    # if not ndi.find_wait_for_sources(ndi_find, 5000):
-    #     print('No change to the sources found.')
+    # time.sleep(2)
 
     sources = ndi.find_get_current_sources(ndi_find)
     print('Network sources (%s found).' % len(sources))

@@ -5,7 +5,6 @@ import numpy as np
 import face_recognition
 import cv2
 import shared.constants as constants
-from multiprocessing import Manager
 
 
 def face_confidence(face_distance, face_match_threshold=0.6):

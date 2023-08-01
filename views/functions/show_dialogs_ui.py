@@ -22,7 +22,7 @@ class ShowDialog:
         else:
             print("Opening Face Dialog")
             dlg = AddFaceDlg(camera=constants.CURRENT_ACTIVE_CAM_WIDGET)
-            dlg.show()
+            dlg.exec()
 
     @staticmethod
     def remove_face():
@@ -32,7 +32,7 @@ class ShowDialog:
         else:
             print("Opening Face Dialog")
             dlg = RemoveFaceDlg()
-            dlg.show()
+            dlg.exec()
 
     @staticmethod
     def reset_database():
