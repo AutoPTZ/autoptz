@@ -11,11 +11,12 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
     WatchTrainer is used to tell all currently active Cameras to reload the encoded faces file, if any.
     """
 
-    def __init__(self):
+    def __init__(self, callback=None):
         # Set the patterns for PatternMatchingEventHandler
         watchdog.events.PatternMatchingEventHandler.__init__(
             self, patterns=['*.pickle'], ignore_directories=True)
         self.camera_widget_list = []
+        self.callback = callback
 
     def add_camera(self, camera_widget):
         """
@@ -39,6 +40,8 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         print("Watchdog received an event at - % s." % event.src_path)
         for camera in self.camera_widget_list:
             camera.restart_facial_recogntion()
+        if self.callback:
+            self.callback(event)
 
     def on_deleted(self, event):
         """
@@ -48,6 +51,8 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         print("Watchdog received an event at - % s." % event.src_path)
         for camera in self.camera_widget_list:
             camera.restart_facial_recogntion()
+        if self.callback:
+            self.callback(event)
 
     def on_modified(self, event):
         """
@@ -57,3 +62,5 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         print("Watchdog received an event at - % s." % event.src_path)
         for camera in self.camera_widget_list:
             camera.restart_facial_recogntion()
+        if self.callback:
+            self.callback(event)

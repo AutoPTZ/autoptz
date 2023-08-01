@@ -15,31 +15,28 @@ class ShowDialog:
         super(ShowDialog, self).__init__()
 
     @staticmethod
-    def add_face(update_face_selection):
+    def add_face():
         """Launch the Add Face dialog based on the currently selected camera."""
         if constants.CURRENT_ACTIVE_CAM_WIDGET is None:
             show_info_messagebox("Please add and select a camera.")
         else:
             print("Opening Face Dialog")
             dlg = AddFaceDlg(camera=constants.CURRENT_ACTIVE_CAM_WIDGET)
-            dlg.closeEvent = update_face_selection
             dlg.show()
 
     @staticmethod
-    def remove_face(update_face_selection):
+    def remove_face():
         """Launch the Remove Face dialog based on the currently selected camera."""
         if not os.path.exists(constants.ENCODINGS_PATH):
             show_info_messagebox("No Faces to remove.")
         else:
             print("Opening Face Dialog")
             dlg = RemoveFaceDlg()
-            dlg.closeEvent = update_face_selection
             dlg.show()
 
     @staticmethod
-    def reset_database(update_face_selection):
+    def reset_database():
         """Launch the Remove Face dialog based on the currently selected camera."""
         print("Opening Face Dialog")
         dlg = ResetDatabaseDlg()
-        dlg.closeEvent = update_face_selection
         dlg.exec()

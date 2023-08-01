@@ -415,16 +415,16 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionAdd_Face = QtWidgets.QWidgetAction(self)
         self.actionAdd_Face.setObjectName("actionAdd_Face")
         self.actionAdd_Face.triggered.connect(
-            partial(self.dialogs.add_face, self.update_face_dropdown))
+            partial(self.dialogs.add_face))
 
         self.actionRemove_Face = QtWidgets.QWidgetAction(self)
         self.actionRemove_Face.setObjectName("actionRemove_Face")
         self.actionRemove_Face.triggered.connect(
-            partial(self.dialogs.remove_face, self.update_face_dropdown))
+            partial(self.dialogs.remove_face))
         self.actionReset_Database = QtWidgets.QWidgetAction(self)
         self.actionReset_Database.setObjectName("actionReset_Database")
         self.actionReset_Database.triggered.connect(
-            partial(self.dialogs.reset_database, self.update_face_dropdown))
+            partial(self.dialogs.reset_database))
         self.menuFile.addAction(self.actionOpen)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionSave)
@@ -452,7 +452,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.findHardwareSources()
         if os.path.exists(constants.TRAINER_PATH) is False:
             os.mkdir(constants.TRAINER_PATH)
-        self.watch_trainer = WatchTrainer()
+        self.watch_trainer = WatchTrainer(self.update_face_dropdown)
 
         observer = watchdog.observers.Observer()
         observer.schedule(self.watch_trainer,
