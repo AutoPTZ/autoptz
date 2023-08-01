@@ -601,7 +601,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         """
         if constants.CURRENT_ACTIVE_CAM_WIDGET is not None:
             print(f'setting track button for {self.enable_track.isChecked()}')
-            constants.CURRENT_ACTIVE_CAM_WIDGET.set_tracking()
+            constants.CURRENT_ACTIVE_CAM_WIDGET.reset_tracking()
 
     def update_face_dropdown(self, event):
         """

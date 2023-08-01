@@ -128,7 +128,7 @@ class CameraWidget(QLabel):
         # Start the QTimer to update the QLabel
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_image_and_queue)
-        self.timer.start(1000/120)  # 120 fps
+        self.timer.start(1000/120)  # up to 120 fps
 
         # PTZ Movement BROKE DUE TO MULTIPROCESSINGx
         self.last_request = None
@@ -190,6 +190,7 @@ class CameraWidget(QLabel):
         """
         self.track_started = False
         self.tracked_name = name
+        print(f'tracked name {self.tracked_name}')
 
     def reset_tracking(self):
         """
