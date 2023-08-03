@@ -480,7 +480,7 @@ class AutoPTZ_MainWindow(QMainWindow):
             menu_item.setText(cam.ndi_name)
             menu_item.setCheckable(True)
             menu_item.triggered.connect(self.create_lambda(
-                src=cam.ndi_name, menu_item=menu_item, isNDI=True))
+                src=cam, menu_item=menu_item, isNDI=True))
             self.menuAdd_NDI.addAction(menu_item)
 
     def create_lambda(self, src, menu_item, isNDI):

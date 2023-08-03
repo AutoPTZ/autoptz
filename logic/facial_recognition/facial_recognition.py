@@ -74,7 +74,7 @@ class FacialRecognition:
         face_locations = face_recognition.face_locations(
             rgb_frame, number_of_times_to_upsample=0, model="hog")
         face_encodings = face_recognition.face_encodings(
-            rgb_frame, face_locations, num_jitters=5, model="large")
+            rgb_frame, face_locations, num_jitters=1, model="small")
 
         # If no faces were found in the frame, return empty results
         if not face_encodings:

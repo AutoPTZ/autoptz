@@ -17,8 +17,6 @@ def get_ndi_sources():
     ndi.find_wait_for_sources(ndi_find, 8000)
     sources = []
 
-    # time.sleep(2)
-
     sources = ndi.find_get_current_sources(ndi_find)
     print('Network sources (%s found).' % len(sources))
     for i, s in enumerate(sources):

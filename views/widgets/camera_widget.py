@@ -22,7 +22,7 @@ def run_facial_recognition(frame_queue, facial_recognition, stop_signal):
             #  Run the facial recognition on the frame
             facial_recognition.recognize(
                 frame_queue.get_nowait())
-            time.sleep(4)  # hack prevent process from stealing all frames
+            time.sleep(5)  # hack prevent process from stealing all frames
         except queue.Empty:
             continue  # Skip this frame if no frame is available
 
@@ -93,9 +93,9 @@ class CameraWidget(QLabel):
         self.isNDI = isNDI
         self._is_stopped = True
         self.setProperty('active', False)
-        self.setObjectName(f"Camera Source: {source}")
+        self.setObjectName(f"Camera Source: {source.ndi_name}")
         self.setStyleSheet(constants.CAMERA_STYLESHEET)
-        self.setText(f"Camera Source: {source}")
+        self.setText(f"Camera Source: {source.ndi_name}")
         self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(
             event, widget)
         self.shared_data = shared_data
@@ -104,6 +104,29 @@ class CameraWidget(QLabel):
         ], [])
         self.shared_data[f'{self.objectName()}_add_face_name'] = None
 
+        # PTZ Movement BROKE DUE TO MULTIPROCESSINGx
+        self.last_request = None
+        self.ptz_controller = None
+
+        if isNDI:
+            ndi_recv_create = ndi.RecvCreateV3()
+            ndi_recv_create.bandwidth = ndi.RECV_BANDWIDTH_METADATA_ONLY
+            # ndi_recv_create.color_format = ndi.RECV_COLOR_FORMAT_BGRX_BGRA
+            ndi_recv = ndi.recv_create_v3(ndi_recv_create)
+            ndi.recv_connect(ndi_recv, source)
+            for i in range(2):
+                ret, v, _, _ = ndi.recv_capture_v2(ndi_recv, 5000)
+                if ndi.recv_ptz_is_supported(instance=ndi_recv):
+                    print(
+                        f"This NDI Source {source.ndi_name} Supports PTZ Movement")
+                    self.ptz_controller = ndi_recv
+        else:
+            if isNDI:
+                print(
+                    f"This NDI Source {source.ndi_name} Does NOT Supports PTZ Movement")
+            self.ptz_controller = None
+        self.ptz_is_usb = None
+
         # Signal to stop camera stream and facial recognition processes
         self.stop_signal = Value('b', False)
         # Create a Queue to hold the latest frame
@@ -111,7 +134,7 @@ class CameraWidget(QLabel):
 
         # Create and start the process
         self.camera_stream_process = Process(target=run_camera_stream, args=(
-            self.frame_queue, source, width, self.stop_signal, isNDI))
+            self.frame_queue, source.ndi_name, width, self.stop_signal, isNDI))
         self.camera_stream_process.start()
 
         self.facial_recognition = FacialRecognition(
@@ -129,19 +152,6 @@ class CameraWidget(QLabel):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_image_and_queue)
         self.timer.start(1000/120)  # up to 120 fps
-
-        # PTZ Movement BROKE DUE TO MULTIPROCESSINGx
-        self.last_request = None
-        # if isNDI and ndi.recv_ptz_is_supported(instance=self.stream_thread.ndi_recv):
-        #     print(f"This NDI Source {source.ndi_name} Supports PTZ Movement")
-        #     self.ptz_controller = self.stream_thread.ndi_recv
-        # else:
-        #     if isNDI:
-        #         print(
-        #             f"This NDI Source {source.ndi_name} Does NOT Supports PTZ Movement")
-        #     self.ptz_controller = None
-        self.ptz_controller = None
-        self.ptz_is_usb = None
 
         self.track_started = False
         self.temp_tracked_name = None
