@@ -2,10 +2,8 @@ import cv2
 import os
 
 ROOT_DIR = os.path.abspath(os.curdir)
-IMAGE_PATH = ROOT_DIR + '/logic/facial_tracking/images/'
-TRAINER_PATH = ROOT_DIR + "/logic/facial_tracking/models/"
-ENCODINGS_PATH = ROOT_DIR + '/logic/facial_tracking/models/encodings.pickle'
-FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml")
+TRAINER_PATH = ROOT_DIR + "/logic/facial_recognition/models/"
+ENCODINGS_PATH = ROOT_DIR + '/logic/facial_recognition/models/encodings.pickle'
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 CAMERA_STYLESHEET = """
                     QLabel[active="false"]{
@@ -26,3 +24,4 @@ IN_USE_USB_PTZ_DEVICES = []
 ASSIGNED_USB_PTZ_CAMERA_WIDGETS = []
 RUNNING_HARDWARE_CAMERA_WIDGETS = []
 ICON_PNG = ROOT_DIR + '/shared/AutoPTZLogo.png'
+NDI_SOURCE_LIST = []

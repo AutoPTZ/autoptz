@@ -2,7 +2,6 @@ import os
 import shutil
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtWidgets import QDialog
-
 from shared import constants
 from shared.message_prompts import show_critical_messagebox
 
@@ -11,6 +10,7 @@ class ResetDatabaseUI(object):
     """
     Creation for Reset Database UI
     """
+
     def __init__(self):
         self.confirm_line = None
         self.horizontalLayout = None
@@ -67,8 +67,6 @@ class ResetDatabaseUI(object):
         else:
             # check if phrase is correct, if so delete all images + models.yml
             if self.confirm_line.text().strip() == 'RESET ALL':
-                if os.path.exists(constants.IMAGE_PATH):
-                    shutil.rmtree(constants.IMAGE_PATH)
                 if os.path.exists(constants.ENCODINGS_PATH):
                     os.remove(constants.ENCODINGS_PATH)
                 show_critical_messagebox(window_title="Reset Database",
@@ -85,8 +83,10 @@ class ResetDatabaseUI(object):
         :param reset_database:
         """
         _translate = QtCore.QCoreApplication.translate
-        reset_database.setWindowTitle(_translate("reset_database", "Reset Database"))
-        self.reset_database_title_label.setText(_translate("reset_database_title", "Type 'RESET ALL' to confirm"))
+        reset_database.setWindowTitle(
+            _translate("reset_database", "Reset Database"))
+        self.reset_database_title_label.setText(_translate(
+            "reset_database_title", "Type 'RESET ALL' to confirm"))
         self.confirm_btn.setText(_translate("confirm_btn", "Confirm"))
         self.cancel_btn.setText(_translate("cancel_btn", "Cancel"))
 

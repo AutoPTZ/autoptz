@@ -1,3 +1,0 @@
-Download trainer.zip and place the folder inside of facial_tracking
-
-https://drive.google.com/file/d/1gWlCA5JTp03xp79yNTZ3pVyJyyaJhYFS/view?usp=share_link

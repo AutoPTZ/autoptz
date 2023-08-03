@@ -1,6 +1,8 @@
+import os
 import time
 import watchdog.events
 import watchdog.observers
+from shared import constants
 from PySide6 import QtWidgets
 
 
@@ -9,10 +11,12 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
     WatchTrainer is used to tell all currently active Cameras to reload the encoded faces file, if any.
     """
 
-    def __init__(self):
+    def __init__(self, callback=None):
         # Set the patterns for PatternMatchingEventHandler
-        watchdog.events.PatternMatchingEventHandler.__init__(self, patterns=['*.pickle'], ignore_directories=True)
+        watchdog.events.PatternMatchingEventHandler.__init__(
+            self, patterns=['*.pickle'], ignore_directories=True)
         self.camera_widget_list = []
+        self.callback = callback
 
     def add_camera(self, camera_widget):
         """
@@ -34,9 +38,10 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         :param event:
         """
         print("Watchdog received an event at - % s." % event.src_path)
-        self.spin(5)
         for camera in self.camera_widget_list:
-            camera.check_encodings()
+            camera.restart_facial_recogntion()
+        if self.callback:
+            self.callback(event)
 
     def on_deleted(self, event):
         """
@@ -44,9 +49,10 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         :param event:
         """
         print("Watchdog received an event at - % s." % event.src_path)
-        self.spin(5)
         for camera in self.camera_widget_list:
-            camera.check_encodings()
+            camera.restart_facial_recogntion()
+        if self.callback:
+            self.callback(event)
 
     def on_modified(self, event):
         """
@@ -54,14 +60,7 @@ class WatchTrainer(watchdog.events.PatternMatchingEventHandler):
         :param event:
         """
         print("Watchdog received an event at - % s." % event.src_path)
-        self.spin(5)
         for camera in self.camera_widget_list:
-            camera.check_encodings()
-
-    @staticmethod
-    def spin(seconds):
-        """Pause for set amount of seconds, replaces time.sleep() so program doesn't stall"""
-
-        time_end = time.time() + seconds
-        while time.time() < time_end:
-            QtWidgets.QApplication.processEvents()
+            camera.restart_facial_recogntion()
+        if self.callback:
+            self.callback(event)
