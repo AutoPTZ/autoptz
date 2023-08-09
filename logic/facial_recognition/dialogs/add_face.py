@@ -1,15 +1,16 @@
 import os
+import pickle
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtWidgets import QDialog
-
 from shared import constants
-from shared.message_prompts import show_critical_messagebox, show_info_messagebox
+from shared.message_prompts import show_info_messagebox
 
 
 class AddFaceUI(object):
     """
     Creation for Add Face UI
     """
+
     def __init__(self):
         self.name_line = None
         self.horizontalLayout = None
@@ -61,29 +62,33 @@ class AddFaceUI(object):
     def add_face_prompt(self):
         """
         Methods that checks what the user inputs in the dialog.
-        If the name/folder already exists then tell the user to try again with a different name.
-        Otherwise, set the current active CameraWidget's add_name variable to start detecting and saving images with a person.
+        If the name already exists then add face to the existing database.
+        Set the current active CameraWidget's add_name variable to start detecting and saving images with a person.
         :return:
         """
         if self.name_line.text().strip() == "":
             return
         else:
             print("Adding Face with " + self.camera.objectName())
-            # check if path exists, if not create path for images to be stored
-            path = constants.IMAGE_PATH + self.name_line.text().strip()
-            if os.path.exists(path):
-                print(path)
-                print("\n [INFO] Name Already Taken")
-                show_critical_messagebox(window_title="Add Face Process",
-                                         critical_message="User's Face Already Exists.\nPlease add a different user.")
-                return
+            # check if encodings file and face exists, if not add to encodings file
+            if os.path.exists(constants.ENCODINGS_PATH):
+                print("loading encoded model")
+                encodings = pickle.loads(
+                    open(constants.ENCODINGS_PATH, "rb").read())
+                known_face_encodings = encodings
+
+                if self.name_line.text().strip() in set(known_face_encodings['names']):
+                    print("\n [INFO] Name in Database")
+                    show_info_messagebox(
+                        "User's Face Already Exists.\nAdding new look to existing user.")
             else:
-                os.makedirs(path)
-                print("\n [INFO] New Path Created")
-                show_info_messagebox("Initializing face capture. \nLook at the select camera and wait...")
-                print("\n [INFO] Initializing face capture. Look at the select camera and wait...")
-                self.camera.set_add_name(name=self.name_line.text().strip())
-                self.window.close()
+                show_info_messagebox(
+                    "Initializing face capture. \nLook at the select camera and wait...")
+                print(
+                    "\n [INFO] Initializing face capture. Look at the select camera and wait...")
+            self.camera.facial_recognition.set_add_face_name(
+                name=self.name_line.text().strip())
+            self.window.close()
 
     def translate_ui(self, add_face):
         """
@@ -92,7 +97,8 @@ class AddFaceUI(object):
         """
         _translate = QtCore.QCoreApplication.translate
         add_face.setWindowTitle(_translate("add_face", "Add Face"))
-        self.add_face_title_label.setText(_translate("add_face_title", "Enter Name:"))
+        self.add_face_title_label.setText(
+            _translate("add_face_title", "Enter Name:"))
         self.enter_name_btn.setText(_translate("enter_name_btn", "Submit"))
         self.cancel_btn.setText(_translate("cancel_btn", "Cancel"))
 
