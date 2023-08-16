@@ -1,5 +1,4 @@
 import os
-import queue
 from PySide6 import QtGui
 from PySide6.QtWidgets import QLabel
 from PySide6.QtGui import QPixmap
@@ -9,27 +8,26 @@ import time
 import dlib
 import NDIlib as ndi
 import numpy as np
+import mediapipe as mp
+
 from logic.camera_search.search_ndi import get_ndi_sources
-from logic.facial_recognition.facial_recognition import FacialRecognition
+from logic.image_processing.facial_recognition import FacialRecognition
 import shared.constants as constants
-from multiprocessing import Process, Queue, Value
+from multiprocessing import Process, Value
 import imutils
 
 
-def run_facial_recognition(frame_queue, facial_recognition, stop_signal):
-    facial_recognition.model = cv2.dnn.readNetFromCaffe(
-        constants.PROTOTXT_PATH, constants.CAFFEMODEL_PATH)
+def run_facial_recognition(shared_frames, facial_recognition, stop_signal):
+    # facial_recognition.model = cv2.dnn.readNetFromCaffe(
+    #     constants.PROTOTXT_PATH, constants.CAFFEMODEL_PATH)
+    facial_recognition.pose_estimator = mp.solutions.pose.Pose(static_image_mode=False, model_complexity=1,
+                                                                        smooth_landmarks=True)
     while not stop_signal.value:
-        try:
-            #  Run the facial recognition on the frame
-            facial_recognition.recognize(
-                frame_queue.get_nowait())
-            time.sleep(0.8)  # hack to prevent process from stealing all frames
-        except queue.Empty:
-            continue  # Skip this frame if no frame is available
+        if shared_frames:
+            facial_recognition.recognize_and_estimate_pose(shared_frames[0])
 
 
-def run_camera_stream(frame_queue, source, width, stop_signal, isNDI=False):
+def run_camera_stream(shared_frames, source, width, stop_signal, isNDI=False):
     if type(source) == int:
         cap = cv2.VideoCapture(source)
         if os.name == 'nt':  # fixes Windows OpenCV resolution
@@ -51,14 +49,18 @@ def run_camera_stream(frame_queue, source, width, stop_signal, isNDI=False):
             ret, img = cap.read()
             if ret:
                 cv_img = imutils.resize(img, width)
-                frame_queue.put(cv_img)
+                if len(shared_frames) >= 10:
+                    shared_frames.pop(0)  # Remove the oldest frame
+                shared_frames.append(cv_img)
         else:
             ret, v, _, _ = ndi.recv_capture_v2(ndi_recv, 1000)
             if ret == ndi.FRAME_TYPE_VIDEO:
                 cv_img = np.copy(v.data)
                 ndi.recv_free_video_v2(ndi_recv, v)
                 cv_img = imutils.resize(cv_img, width)
-                frame_queue.put(cv_img)
+                if len(shared_frames) >= 10:
+                    shared_frames.pop(0)  # Remove the oldest frame
+                shared_frames.append(cv_img)
     if isNDI:
         ndi.recv_destroy(ndi_recv)
         ndi.destroy()
@@ -91,7 +93,7 @@ class CameraWidget(QLabel):
     face_center_y = None
     model = None
 
-    def __init__(self, source, width, height, shared_data, isNDI=False):
+    def __init__(self, source, width, height, manager, isNDI=False):
         super().__init__()
         self.width = width
         self.height = height
@@ -107,11 +109,6 @@ class CameraWidget(QLabel):
             self.setObjectName(f"Camera Source: {source}")
         self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(
             event, widget)
-        self.shared_data = shared_data
-
-        self.shared_data[f'{self.objectName()}_facial_recognition_results'] = ([], [
-        ], [])
-        self.shared_data[f'{self.objectName()}_body_detection_results'] = []
 
         # PTZ Movement
         self.last_request = None
@@ -136,35 +133,40 @@ class CameraWidget(QLabel):
             self.ptz_controller = None
         self.ptz_is_usb = None
 
+        self.shared_camera_frames = manager.list()
+
+        self.shared_camera_data = manager.dict()
+        self.shared_camera_data[f'{self.objectName()}_facial_recognition_results'] = ([], [
+        ], [])
+
+        self.shared_camera_data[f'{self.objectName()}_body_detection_results'] = []
+
         # Signal to stop camera stream and facial recognition processes
         self.stop_signal = Value('b', False)
-        # Create a Queue to hold the latest frame
-        self.frame_queue = Queue(maxsize=10)
 
         # Create and start the process
         if isNDI:
             self.camera_stream_process = Process(target=run_camera_stream, args=(
-                self.frame_queue, source.ndi_name, width, self.stop_signal, isNDI))
+                self.shared_camera_frames, source.ndi_name, width, self.stop_signal, isNDI))
         else:
             self.camera_stream_process = Process(target=run_camera_stream, args=(
-                self.frame_queue, source, width, self.stop_signal, isNDI))
+                self.shared_camera_frames, source, width, self.stop_signal, isNDI))
         self.camera_stream_process.start()
 
-        self.facial_recognition = FacialRecognition(
-            self.shared_data, self.objectName())
+        self.facial_recognition = FacialRecognition(self.shared_camera_data, self.objectName())
 
         # Create and start a facial recognition process for this camera
         self.facial_recognition_process = Process(
             target=run_facial_recognition,
-            args=(self.frame_queue, self.facial_recognition,
-                  self.stop_signal)
+            args=(self.shared_camera_frames, self.facial_recognition,  self.stop_signal)
         )
+
         self.restart_facial_recogntion()
 
         # Start the QTimer to update the QLabel
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_image_and_queue)
-        self.timer.start(1000 / 120)  # up to 120 fps
+        self.timer.start(1000 / 30)  # up to 30 fps
 
         self.track_started = False
         self.temp_tracked_name = None
@@ -177,6 +179,7 @@ class CameraWidget(QLabel):
         self.face_center_x = None
         self.face_center_y = None
         self.tracker = dlib.correlation_tracker()
+        # self.tracker = cv2.TrackerKCF_create()
 
     def stop(self):
         """
@@ -227,6 +230,7 @@ class CameraWidget(QLabel):
         self.is_tracking = not self.is_tracking
         self.tracker = None
         self.tracker = dlib.correlation_tracker()
+        # self.tracker = cv2.TrackerKCF_create()
         self.track_started = False
         if self.ptz_controller is not None:
             if self.ptz_is_usb:
@@ -237,20 +241,23 @@ class CameraWidget(QLabel):
             self.last_request = None
 
     def restart_facial_recogntion(self):
+        self.shared_camera_data[f'{self.objectName}_facial_recognition_results'] = [
+                                                                                   ], [], []
+        self.shared_camera_data[f'{self.objectName}_pose_landmarks'] = None
         if self.facial_recognition_process.is_alive():
             self.facial_recognition_process.terminate()
             self.facial_recognition.check_encodings()
             self.facial_recognition_process = Process(
                 target=run_facial_recognition,
-                args=(self.frame_queue, self.facial_recognition,
-                      self.stop_signal)
+                args=(self.shared_camera_frames, self.facial_recognition, self.stop_signal)
             )
         self.facial_recognition_process.start()
 
     def update_image_and_queue(self):
         """Updates the QLabel with the latest OpenCV/NDI frame and draws it"""
-        if not self.frame_queue.empty():
-            cv_img = self.frame_queue.get()
+        if self.shared_camera_frames:
+            # Get the latest frame without removing it
+            cv_img = self.shared_camera_frames[-1]
             cv_img = self.draw_on_frame(frame=cv_img)
             qt_img = self.convert_cv_qt(cv_img)
             self.setPixmap(qt_img)
@@ -302,29 +309,50 @@ class CameraWidget(QLabel):
         :param frame:
         :return:
         """
+        # Pose Estimation
+        pose_landmarks = self.shared_camera_data.get(f'{self.objectName()}_pose_landmarks', None)
+        if pose_landmarks:
+            # Define landmarks for the head to shoulders
+            nose = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.NOSE.value]
+            left_shoulder = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
+            right_shoulder = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
+            left_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EAR.value]
+            right_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EAR.value]
+            left_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EYE.value]
+            right_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EYE.value]
+
+            # Calculate the bounding box for the head to shoulders
+            startX = int(min(left_ear.x, right_ear.x, left_shoulder.x, right_shoulder.x) * frame.shape[1])
+            startY = int(min(nose.y, left_ear.y, right_ear.y, left_eye.y, right_eye.y) * frame.shape[0])
+            endX = int(max(left_ear.x, right_ear.x, left_shoulder.x, right_shoulder.x) * frame.shape[1])
+            endY = int(max(left_shoulder.y, right_shoulder.y) * frame.shape[0])
+
+            # Calculate the center of the bounding box (around the neck area)
+            centerX = (startX + endX) // 2
+            centerY = (startY + endY) // 2
+
+            # Draw the bounding box
+            cv2.rectangle(frame, (startX, startY), (endX, endY), (0, 255, 0), 2)
+
+            # Draw the center (around the neck area)
+            cv2.circle(frame, (centerX, centerY), 5, (0, 0, 255), -1)
+
         # Recognition Drawing
-        if self.shared_data[f'{self.objectName()}_facial_recognition_results'] != ([], [], []):
-            face_locations, face_names, confidence_list = self.shared_data[
-                f'{self.objectName()}_facial_recognition_results']
+        facial_recognition_results = self.shared_camera_data.get(f'{self.objectName()}_facial_recognition_results')
+        if facial_recognition_results and facial_recognition_results != ([], [], []):
+            face_locations, face_names, confidence_list = facial_recognition_results
 
             for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
-                for box in self.shared_data[f'{self.objectName()}_body_detection_results']:
-                    (startX, startY, endX, endY) = box.astype("int")
-                    print((startX, startY, endX, endY))
-                    cv2.rectangle(frame, (startX, startY),
-                                  (endX, endY), (0, 255, 0), 2)
-                    if name == self.tracked_name and left >= startX and top >= startY and right <= endX and bottom <= endY:
-                        self.temp_tracked_name = name
-                        self.track_x = startX
-                        self.track_y = startY
-                        self.track_w = endX
-                        self.track_h = endY
+                if name == self.tracked_name:
+                    self.temp_tracked_name = name
+                    self.track_x = startX
+                    self.track_y = startY
+                    self.track_w = endX
+                    self.track_h = endY
 
-                        # Calculate the center of the face
-                        self.face_center_x = (left + right) // 2
-                        self.face_center_y = (top + bottom) // 2
-                        self.shared_data[f'{self.objectName()}_body_detection_results'] = [
-                        ]
+                    # Calculate the center of the face
+                    self.face_center_x = (left + right) // 2
+                    self.face_center_y = (top + bottom) // 2
 
                 # Draw a box around the face
                 cv2.rectangle(frame, (left, top),
@@ -334,13 +362,10 @@ class CameraWidget(QLabel):
                             constants.FONT, 0.5, (255, 255, 255), 1)
                 cv2.putText(frame, str(confidence), (right - 52, bottom - 5),
                             constants.FONT, 0.45, (255, 255, 0), 1)
-            self.shared_data[f'{self.objectName()}_facial_recognition_results'] = (
-                [], [], [])
+
         # Track Drawing + PTZ Movement
         if self.is_tracking:
-            frame = self.track_face(
-                frame)
-            # frame = self.track_face(frame, self.track_x - 2, self.track_y - 5, self.track_w + 8, self.track_h + +15)
+            frame = self.track_face(frame)
 
         # FPS Counter
         self.fc += 1
@@ -366,15 +391,12 @@ class CameraWidget(QLabel):
         :return:
         """
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}",
-                    (20, 52), constants.FONT, 0.7, (0, 0, 255), 2)
 
         if self.temp_tracked_name == self.tracked_name and self.track_x is not None:
-            print(self.track_x, self.track_y,
-                  self.track_w, self.track_h)
             rect = dlib.rectangle(self.track_x, self.track_y,
                                   self.track_w, self.track_h)
             self.tracker.start_track(rgb_frame, rect)
+            # self.tracker.init(rgb_frame, rect)
             self.temp_tracked_name = None
             self.track_started = True
         elif self.track_started:
@@ -388,6 +410,8 @@ class CameraWidget(QLabel):
             self.track_h = int(pos.bottom())
 
         if self.track_started:
+            cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}",
+                        (20, 52), constants.FONT, 0.7, (0, 0, 255), 2)
             frame_center_x = frame.shape[1] // 2
             frame_center_y = frame.shape[0] // 2
 
@@ -423,9 +447,6 @@ class CameraWidget(QLabel):
             # Draw the center of the frame
             cv2.circle(frame, (frame_center_x, frame_center_y),
                        5, (255, 0, 0), -1)
-
-            # Draw the center of the tracked object
-            cv2.circle(frame, (centerX, int(centerY)), 5, (0, 0, 255), -1)
 
             # Calculate the distance from the center
             distance_x = abs(centerX - frame_center_x)
