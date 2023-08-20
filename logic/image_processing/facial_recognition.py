@@ -8,7 +8,7 @@ import shared.constants as constants
 
 
 class FacialRecognition:
-    def __init__(self, shared_data, objectName, recognition_interval=5):
+    def __init__(self, shared_data, objectName, recognition_interval=30):
         self.known_face_encodings = None
         self.shared_data = shared_data
         self.objectName = objectName
@@ -26,10 +26,16 @@ class FacialRecognition:
         # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
+        self.shared_data[f'{self.objectName}_pose_landmarks'] = None
+        self.shared_data[f'{self.objectName}_facial_recognition_results'] = [
+        ], [], []
+
         # Periodically recognize face
         if self.frame_count % self.recognition_interval == 0:
-            face_locations = face_recognition.face_locations(rgb_frame, number_of_times_to_upsample=1, model="hog")
-            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations, num_jitters=3, model="small")
+            face_locations = face_recognition.face_locations(
+                rgb_frame, number_of_times_to_upsample=1, model="hog")
+            face_encodings = face_recognition.face_encodings(
+                rgb_frame, face_locations, num_jitters=3, model="small")
             face_names = []
             confidence_list = []
 
@@ -43,39 +49,38 @@ class FacialRecognition:
                     return
 
                 self.shared_data[f'{self.objectName}_facial_recognition_results'] = [
-                                                                                    ], [], []
+                ], [], []
                 return
 
             for face_encoding in face_encodings:
-                matches = face_recognition.compare_faces(self.known_face_encodings['encodings'], face_encoding)
+                matches = face_recognition.compare_faces(
+                    self.known_face_encodings['encodings'], face_encoding)
                 name = "Unknown"
                 confidence = ''
 
-                face_distances = face_recognition.face_distance(self.known_face_encodings['encodings'], face_encoding)
+                face_distances = face_recognition.face_distance(
+                    self.known_face_encodings['encodings'], face_encoding)
                 best_match_index = np.argmin(face_distances)
                 if matches[best_match_index]:
                     name = self.known_face_encodings['names'][best_match_index]
-                    confidence = self.face_confidence(face_distances[best_match_index])
+                    confidence = self.face_confidence(
+                        face_distances[best_match_index])
                 face_names.append(name)
                 confidence_list.append(confidence)
+
             self.shared_data[
                 f'{self.objectName}_facial_recognition_results'] = face_locations, face_names, confidence_list
 
+            # Estimate Pose
+            results = self.pose_estimator.process(rgb_frame)
+            if results.pose_landmarks:
+                self.shared_data[f'{self.objectName}_pose_landmarks'] = results.pose_landmarks
+            else:
+                self.shared_data[f'{self.objectName}_pose_landmarks'] = None
 
         # # Body Detection
         # self.shared_data[f'{self.objectName}_body_detection_results'] = self.body_detection(
         #     frame)
-
-        # Estimate Pose
-        results = self.pose_estimator.process(rgb_frame)
-        if results.pose_landmarks:
-            self.shared_data[f'{self.objectName}_pose_landmarks'] = results.pose_landmarks
-        else:
-            self.shared_data[f'{self.objectName}_pose_landmarks'] = None
-
-
-
-
 
     def body_detection(self, frame):
         if frame.shape[2] != 3:
@@ -125,11 +130,16 @@ class FacialRecognition:
         if face_distance > face_match_threshold:
             return str(round(linear_val * 100, 2)) + '%'
         else:
-            value = (linear_val + ((1.0 - linear_val) * (linear_val - 0.5) * 2) ** 0.2) * 100
+            value = (linear_val + ((1.0 - linear_val) *
+                     (linear_val - 0.5) * 2) ** 0.2) * 100
             return str(round(value, 2)) + '%'
 
     def check_encodings(self):
+        self.shared_data[f'{self.objectName}_pose_landmarks'] = None
+        self.shared_data[f'{self.objectName}_facial_recognition_results'] = [
+        ], [], []
         self.known_face_encodings = {'encodings': [], 'names': []}
         if os.path.exists(constants.ENCODINGS_PATH):
-            encodings = pickle.loads(open(constants.ENCODINGS_PATH, "rb").read())
+            encodings = pickle.loads(
+                open(constants.ENCODINGS_PATH, "rb").read())
             self.known_face_encodings = encodings

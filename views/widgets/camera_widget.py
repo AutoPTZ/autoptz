@@ -21,7 +21,7 @@ def run_facial_recognition(shared_frames, facial_recognition, stop_signal):
     # facial_recognition.model = cv2.dnn.readNetFromCaffe(
     #     constants.PROTOTXT_PATH, constants.CAFFEMODEL_PATH)
     facial_recognition.pose_estimator = mp.solutions.pose.Pose(static_image_mode=False, model_complexity=1,
-                                                                        smooth_landmarks=True)
+                                                               smooth_landmarks=True)
     while not stop_signal.value:
         if shared_frames:
             facial_recognition.recognize_and_estimate_pose(shared_frames[0])
@@ -139,7 +139,8 @@ class CameraWidget(QLabel):
         self.shared_camera_data[f'{self.objectName()}_facial_recognition_results'] = ([], [
         ], [])
 
-        self.shared_camera_data[f'{self.objectName()}_body_detection_results'] = []
+        self.shared_camera_data[f'{self.objectName()}_body_detection_results'] = [
+        ]
 
         # Signal to stop camera stream and facial recognition processes
         self.stop_signal = Value('b', False)
@@ -153,12 +154,14 @@ class CameraWidget(QLabel):
                 self.shared_camera_frames, source, width, self.stop_signal, isNDI))
         self.camera_stream_process.start()
 
-        self.facial_recognition = FacialRecognition(self.shared_camera_data, self.objectName())
+        self.facial_recognition = FacialRecognition(
+            self.shared_camera_data, self.objectName())
 
         # Create and start a facial recognition process for this camera
         self.facial_recognition_process = Process(
             target=run_facial_recognition,
-            args=(self.shared_camera_frames, self.facial_recognition,  self.stop_signal)
+            args=(self.shared_camera_frames,
+                  self.facial_recognition,  self.stop_signal)
         )
 
         self.restart_facial_recogntion()
@@ -242,14 +245,15 @@ class CameraWidget(QLabel):
 
     def restart_facial_recogntion(self):
         self.shared_camera_data[f'{self.objectName}_facial_recognition_results'] = [
-                                                                                   ], [], []
+        ], [], []
         self.shared_camera_data[f'{self.objectName}_pose_landmarks'] = None
         if self.facial_recognition_process.is_alive():
             self.facial_recognition_process.terminate()
             self.facial_recognition.check_encodings()
             self.facial_recognition_process = Process(
                 target=run_facial_recognition,
-                args=(self.shared_camera_frames, self.facial_recognition, self.stop_signal)
+                args=(self.shared_camera_frames,
+                      self.facial_recognition, self.stop_signal)
             )
         self.facial_recognition_process.start()
 
@@ -309,50 +313,60 @@ class CameraWidget(QLabel):
         :param frame:
         :return:
         """
-        # Pose Estimation
-        pose_landmarks = self.shared_camera_data.get(f'{self.objectName()}_pose_landmarks', None)
-        if pose_landmarks:
-            # Define landmarks for the head to shoulders
-            nose = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.NOSE.value]
-            left_shoulder = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
-            right_shoulder = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
-            left_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EAR.value]
-            right_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EAR.value]
-            left_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EYE.value]
-            right_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EYE.value]
-
-            # Calculate the bounding box for the head to shoulders
-            startX = int(min(left_ear.x, right_ear.x, left_shoulder.x, right_shoulder.x) * frame.shape[1])
-            startY = int(min(nose.y, left_ear.y, right_ear.y, left_eye.y, right_eye.y) * frame.shape[0])
-            endX = int(max(left_ear.x, right_ear.x, left_shoulder.x, right_shoulder.x) * frame.shape[1])
-            endY = int(max(left_shoulder.y, right_shoulder.y) * frame.shape[0])
-
-            # Calculate the center of the bounding box (around the neck area)
-            centerX = (startX + endX) // 2
-            centerY = (startY + endY) // 2
-
-            # Draw the bounding box
-            cv2.rectangle(frame, (startX, startY), (endX, endY), (0, 255, 0), 2)
-
-            # Draw the center (around the neck area)
-            cv2.circle(frame, (centerX, centerY), 5, (0, 0, 255), -1)
-
         # Recognition Drawing
-        facial_recognition_results = self.shared_camera_data.get(f'{self.objectName()}_facial_recognition_results')
+        self.track_x = None
+        self.track_y = None
+        self.track_w = None
+        self.track_h = None
+        facial_recognition_results = self.shared_camera_data.get(
+            f'{self.objectName()}_facial_recognition_results')
         if facial_recognition_results and facial_recognition_results != ([], [], []):
             face_locations, face_names, confidence_list = facial_recognition_results
 
             for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
                 if name == self.tracked_name:
                     self.temp_tracked_name = name
-                    self.track_x = startX
-                    self.track_y = startY
-                    self.track_w = endX
-                    self.track_h = endY
 
-                    # Calculate the center of the face
-                    self.face_center_x = (left + right) // 2
-                    self.face_center_y = (top + bottom) // 2
+                    # Pose Estimation
+                    pose_landmarks = self.shared_camera_data.get(
+                        f'{self.objectName()}_pose_landmarks', None)
+                    if pose_landmarks:
+                        # Define landmarks for the head to hips
+                        nose = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.NOSE.value]
+                        left_shoulder = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
+                        right_shoulder = pose_landmarks.landmark[
+                            mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
+                        left_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EAR.value]
+                        right_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EAR.value]
+                        left_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EYE.value]
+                        right_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EYE.value]
+                        left_hip = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_HIP.value]
+                        right_hip = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_HIP.value]
+
+                        # Calculate the bounding box for the head to hips
+                        startX = int(min(left_ear.x, right_ear.x, left_shoulder.x,
+                                     right_shoulder.x, left_hip.x, right_hip.x) * frame.shape[1])
+                        startY = int(
+                            min(nose.y, left_ear.y, right_ear.y, left_eye.y, right_eye.y) * frame.shape[0])
+                        endX = int(max(left_ear.x, right_ear.x, left_shoulder.x,
+                                   right_shoulder.x, left_hip.x, right_hip.x) * frame.shape[1])
+                        endY = int(max(left_shoulder.y, right_shoulder.y,
+                                   left_hip.y, right_hip.y) * frame.shape[0])
+
+                        # Draw the bounding box
+                        cv2.rectangle(frame, (startX, startY),
+                                      (endX, endY), (0, 255, 0), 2)
+
+                        self.track_x = startX
+                        self.track_y = startY
+                        self.track_w = endX
+                        self.track_h = endY
+
+                        # Calculate the center biased towards the chest
+                        chest_x = (left_shoulder.x + right_shoulder.x) / 2
+                        chest_y = (left_shoulder.y + right_shoulder.y) / 2
+                        self.face_center_x = int(chest_x * frame.shape[1])
+                        self.face_center_y = int(chest_y * frame.shape[0])
 
                 # Draw a box around the face
                 cv2.rectangle(frame, (left, top),
@@ -366,6 +380,10 @@ class CameraWidget(QLabel):
         # Track Drawing + PTZ Movement
         if self.is_tracking:
             frame = self.track_face(frame)
+
+        self.shared_camera_data[f'{self.objectName}_facial_recognition_results'] = [
+        ], [], []
+        self.shared_camera_data[f'{self.objectName}_pose_landmarks'] = None
 
         # FPS Counter
         self.fc += 1
@@ -487,13 +505,13 @@ class CameraWidget(QLabel):
 
     def ptz_control(self, centerX, centerY, speed_x, speed_y, frame_center_x, frame_center_y, delta_x, delta_y):
         # Define the directions
-        directions = [("up_left", centerX < frame_center_x and centerY < frame_center_y),
-                      ("down_left", centerX <
+        directions = [("left_up", centerX < frame_center_x and centerY < frame_center_y),
+                      ("left_down", centerX <
                        frame_center_x and centerY > frame_center_y),
                       ("left", centerX < frame_center_x),
-                      ("up_right", centerX >
+                      ("right_up", centerX >
                        frame_center_x and centerY < frame_center_y),
-                      ("down_right", centerX >
+                      ("right_down", centerX >
                        frame_center_x and centerY > frame_center_y),
                       ("right", centerX > frame_center_x),
                       ("up", centerY < frame_center_y),
@@ -503,7 +521,11 @@ class CameraWidget(QLabel):
         for direction, condition in directions:
             if condition and self.last_request != direction:
                 if self.ptz_is_usb:
-                    getattr(self.ptz_controller, f"move_{direction}_track")()
+                    if direction == "stop":
+                        getattr(self.ptz_controller, f"move_{direction}")()
+                    else:
+                        getattr(self.ptz_controller,
+                                f"move_{direction}_track")()
                 else:
                     ndi.recv_ptz_pan_tilt_speed(
                         instance=self.ptz_controller, pan_speed=speed_x, tilt_speed=speed_y)
