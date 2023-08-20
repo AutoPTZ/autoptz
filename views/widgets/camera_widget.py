@@ -505,24 +505,28 @@ class CameraWidget(QLabel):
 
     def ptz_control(self, centerX, centerY, speed_x, speed_y, frame_center_x, frame_center_y, delta_x, delta_y):
         # Define the directions
-        directions = [("left_up", centerX < frame_center_x and centerY < frame_center_y),
-                      ("left_down", centerX <
-                       frame_center_x and centerY > frame_center_y),
-                      ("left", centerX < frame_center_x),
-                      ("right_up", centerX >
-                       frame_center_x and centerY < frame_center_y),
-                      ("right_down", centerX >
-                       frame_center_x and centerY > frame_center_y),
-                      ("right", centerX > frame_center_x),
-                      ("up", centerY < frame_center_y),
-                      ("down", centerY > frame_center_y),
-                      ("stop", True)]
+        directions = [
+            ("left_up", centerX < frame_center_x -
+             delta_x and centerY < frame_center_y - delta_y),
+            ("left_down", centerX < frame_center_x -
+             delta_x and centerY > frame_center_y + delta_y),
+            ("left", centerX < frame_center_x - delta_x),
+            ("right_up", centerX > frame_center_x +
+             delta_x and centerY < frame_center_y - delta_y),
+            ("right_down", centerX > frame_center_x +
+             delta_x and centerY > frame_center_y + delta_y),
+            ("right", centerX > frame_center_x + delta_x),
+            ("up", centerY < frame_center_y - delta_y),
+            ("down", centerY > frame_center_y + delta_y),
+            ("stop", abs(centerX - frame_center_x) <=
+             delta_x and abs(centerY - frame_center_y) <= delta_y)
+        ]
 
         for direction, condition in directions:
-            if condition and self.last_request != direction:
+            if condition:
                 if self.ptz_is_usb:
                     if direction == "stop":
-                        getattr(self.ptz_controller, f"move_{direction}")()
+                        self.ptz_controller.move_stop()
                     else:
                         getattr(self.ptz_controller,
                                 f"move_{direction}_track")()
