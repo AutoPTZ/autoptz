@@ -20,8 +20,12 @@ import imutils
 def run_facial_recognition(shared_frames, facial_recognition, stop_signal):
     # facial_recognition.model = cv2.dnn.readNetFromCaffe(
     #     constants.PROTOTXT_PATH, constants.CAFFEMODEL_PATH)
-    facial_recognition.pose_estimator = mp.solutions.pose.Pose(static_image_mode=False, model_complexity=1,
-                                                               smooth_landmarks=True)
+
+    # facial_recognition.pose_estimator = mp.solutions.pose.Pose(static_image_mode=False, model_complexity=1,
+    #                                                            smooth_landmarks=True)
+
+    facial_recognition.pose_estimator = mp.solutions.pose.Pose(
+        static_image_mode=False, model_complexity=1, min_detection_confidence=0.5)
     while not stop_signal.value:
         if shared_frames:
             facial_recognition.recognize_and_estimate_pose(shared_frames[0])
@@ -161,7 +165,7 @@ class CameraWidget(QLabel):
         self.facial_recognition_process = Process(
             target=run_facial_recognition,
             args=(self.shared_camera_frames,
-                  self.facial_recognition,  self.stop_signal)
+                  self.facial_recognition, self.stop_signal)
         )
 
         self.restart_facial_recogntion()
@@ -245,7 +249,7 @@ class CameraWidget(QLabel):
 
     def restart_facial_recogntion(self):
         self.shared_camera_data[f'{self.objectName}_facial_recognition_results'] = [
-        ], [], []
+                                                                                   ], [], []
         self.shared_camera_data[f'{self.objectName}_pose_landmarks'] = None
         if self.facial_recognition_process.is_alive():
             self.facial_recognition_process.terminate()
@@ -307,82 +311,112 @@ class CameraWidget(QLabel):
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
         self.change_selection_signal.emit()
 
+    def intersect(self, boxA, boxB):
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2])
+        yB = min(boxA[3], boxB[3])
+        return (xA < xB) and (yA < yB)
+
     def draw_on_frame(self, frame):
-        """
-        Is called by update_image and returns the latest frame with FPS + face box drawings if there are any.
-        :param frame:
-        :return:
-        """
-        # Recognition Drawing
-        self.track_x = None
-        self.track_y = None
-        self.track_w = None
-        self.track_h = None
-        facial_recognition_results = self.shared_camera_data.get(
-            f'{self.objectName()}_facial_recognition_results')
-        if facial_recognition_results and facial_recognition_results != ([], [], []):
+        # Get shared data
+        facial_recognition_results = self.shared_camera_data.get(f'{self.objectName()}_facial_recognition_results',
+                                                                 ([], [], []))
+        pose_landmarks = self.shared_camera_data.get(f'{self.objectName()}_pose_landmarks', None)
+
+        # Number of recognized faces
+        num_faces = len(facial_recognition_results[0])
+
+        if pose_landmarks:
+            # Define landmarks for the head to hips
+            nose = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.NOSE.value]
+            left_shoulder = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
+            right_shoulder = pose_landmarks.landmark[
+                mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
+            left_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EAR.value]
+            right_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EAR.value]
+            left_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EYE.value]
+            right_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EYE.value]
+            left_hip = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_HIP.value]
+            right_hip = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_HIP.value]
+
+            # Calculate the bounding box for the head to hips
+            startX = int(min(left_ear.x, right_ear.x, left_shoulder.x,
+                             right_shoulder.x, left_hip.x, right_hip.x) * frame.shape[1])
+            startY = int(
+                min(nose.y, left_ear.y, right_ear.y, left_eye.y, right_eye.y) * frame.shape[0])
+            endX = int(max(left_ear.x, right_ear.x, left_shoulder.x,
+                           right_shoulder.x, left_hip.x, right_hip.x) * frame.shape[1])
+            endY = int(max(left_shoulder.y, right_shoulder.y,
+                           left_hip.y, right_hip.y) * frame.shape[0])
+
+            # Add padding
+            padding_percent = 0.05  # 5% padding, adjust as needed
+            width = endX - startX
+            height = endY - startY
+
+            paddingX = int(padding_percent * width)
+            paddingY = int(padding_percent * height)
+
+            startX = max(0, startX - paddingX)
+            startY = max(0, startY - paddingY)
+            endX = min(frame.shape[1], endX + paddingX)
+            endY = min(frame.shape[0], endY + paddingY)
+
+            # Draw the bounding box
+            cv2.rectangle(frame, (startX, startY),
+                          (endX, endY), (0, 255, 0), 2)
+
+            # Calculate the center biased towards the chest
+            chest_x = (left_shoulder.x + right_shoulder.x) / 2
+            chest_y = (left_shoulder.y + right_shoulder.y) / 2
+
+            new_center_x = int(chest_x * frame.shape[1])
+            new_center_y = int(chest_y * frame.shape[0])
+
+            # Conditional to check similarity in position and if only one person is recognized
+            print(f"face_center_x: {self.face_center_x}, face_center_y: {self.face_center_y}")
+            print(f"num_faces: {num_faces}")
+
+            distance = float('inf')
+            if self.face_center_x is not None and self.face_center_y is not None:
+                distance = ((self.face_center_x - new_center_x) ** 2 + (self.face_center_y - new_center_y) ** 2) ** 0.5
+                print(f"Distance: {distance}")
+
+            if num_faces == 1 or distance < 30:
+                print("Reinitializing the tracker...")
+                self.track_x = startX
+                self.track_y = startY
+                self.track_w = endX
+                self.track_h = endY
+                self.face_center_x = new_center_x
+                self.face_center_y = new_center_y
+
+        # If there are facial recognition results
+        if facial_recognition_results != ([], [], []):
             face_locations, face_names, confidence_list = facial_recognition_results
 
             for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
+
+                # If this is the tracked face
                 if name == self.tracked_name:
                     self.temp_tracked_name = name
 
-                    # Pose Estimation
-                    pose_landmarks = self.shared_camera_data.get(
-                        f'{self.objectName()}_pose_landmarks', None)
-                    if pose_landmarks:
-                        # Define landmarks for the head to hips
-                        nose = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.NOSE.value]
-                        left_shoulder = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
-                        right_shoulder = pose_landmarks.landmark[
-                            mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
-                        left_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EAR.value]
-                        right_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EAR.value]
-                        left_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EYE.value]
-                        right_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EYE.value]
-                        left_hip = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_HIP.value]
-                        right_hip = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_HIP.value]
-
-                        # Calculate the bounding box for the head to hips
-                        startX = int(min(left_ear.x, right_ear.x, left_shoulder.x,
-                                     right_shoulder.x, left_hip.x, right_hip.x) * frame.shape[1])
-                        startY = int(
-                            min(nose.y, left_ear.y, right_ear.y, left_eye.y, right_eye.y) * frame.shape[0])
-                        endX = int(max(left_ear.x, right_ear.x, left_shoulder.x,
-                                   right_shoulder.x, left_hip.x, right_hip.x) * frame.shape[1])
-                        endY = int(max(left_shoulder.y, right_shoulder.y,
-                                   left_hip.y, right_hip.y) * frame.shape[0])
-
-                        # Draw the bounding box
-                        cv2.rectangle(frame, (startX, startY),
-                                      (endX, endY), (0, 255, 0), 2)
-
-                        self.track_x = startX
-                        self.track_y = startY
-                        self.track_w = endX
-                        self.track_h = endY
-
-                        # Calculate the center biased towards the chest
-                        chest_x = (left_shoulder.x + right_shoulder.x) / 2
-                        chest_y = (left_shoulder.y + right_shoulder.y) / 2
-                        self.face_center_x = int(chest_x * frame.shape[1])
-                        self.face_center_y = int(chest_y * frame.shape[0])
-
-                # Draw a box around the face
+                # Draw face rectangle and labels
                 cv2.rectangle(frame, (left, top),
                               (right, bottom), (0, 255, 0), 2)
-                # Draw a label with name and confidence for the face
                 cv2.putText(frame, name, (left + 5, top - 5),
                             constants.FONT, 0.5, (255, 255, 255), 1)
-                cv2.putText(frame, str(confidence), (right - 52, bottom - 5),
-                            constants.FONT, 0.45, (255, 255, 0), 1)
+                cv2.putText(frame, str(confidence), (right - 52,
+                                                     bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
 
         # Track Drawing + PTZ Movement
         if self.is_tracking:
             frame = self.track_face(frame)
 
+        # Clear shared data
         self.shared_camera_data[f'{self.objectName}_facial_recognition_results'] = [
-        ], [], []
+                                                                                   ], [], []
         self.shared_camera_data[f'{self.objectName}_pose_landmarks'] = None
 
         # FPS Counter
@@ -397,6 +431,11 @@ class CameraWidget(QLabel):
         cv2.putText(frame, fps, (20, 30), constants.FONT, 0.7, (0, 0, 255), 2)
         return frame
 
+    def resize_frame(self, frame, scale_percent=50):  # default is 50% of the original size
+        width = int(frame.shape[1] * scale_percent / 100)
+        height = int(frame.shape[0] * scale_percent / 100)
+        return cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+
     def track_face(self, frame):
         """
         Uses Dlib Object Tracking to set and update the currently tracked person
@@ -409,12 +448,19 @@ class CameraWidget(QLabel):
         :return:
         """
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # small_frame = self.resize_frame(rgb_frame, 50)
 
         if self.temp_tracked_name == self.tracked_name and self.track_x is not None:
             rect = dlib.rectangle(self.track_x, self.track_y,
                                   self.track_w, self.track_h)
             self.tracker.start_track(rgb_frame, rect)
-            # self.tracker.init(rgb_frame, rect)
+            # bbox = (
+            #     int(self.track_x / 2),
+            #     int(self.track_y / 2),
+            #     int(abs((self.track_w - self.track_x) / 2)),
+            #     int(abs((self.track_h - self.track_y) / 2))
+            # )
+            # self.tracker.init(small_frame, bbox)
             self.temp_tracked_name = None
             self.track_started = True
         elif self.track_started:
@@ -426,6 +472,26 @@ class CameraWidget(QLabel):
             self.track_y = int(pos.top())
             self.track_w = int(pos.right())
             self.track_h = int(pos.bottom())
+            # success, bbox = self.tracker.update(small_frame)
+            # if success:
+            #     self.track_x, self.track_y, w, h = int(bbox[0]) * 2, int(bbox[1]) * 2, int(bbox[2]) * 2, int(bbox[3]) * 2
+            #     self.track_w = self.track_x + w
+            #     self.track_h = self.track_y + h
+            #
+            #     # Check if the object is out of the frame
+            #     if (self.track_x < 0 or self.track_y < 0 or
+            #             self.track_w > frame.shape[1] or self.track_h > frame.shape[0]):
+            #         success = False
+            #
+            #     # Check if the object becomes too small or too large
+            #     min_dim, max_dim = 20, frame.shape[1] * 0.75  # just an example, adjust as necessary
+            #     if w < min_dim or h < min_dim or w > max_dim or h > max_dim:
+            #         success = False
+            #
+            # if not success:
+            #     # Reinitialize the tracker
+            #     self.tracker = cv2.TrackerKCF_create()
+            #     self.track_started = False
 
         if self.track_started:
             cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}",

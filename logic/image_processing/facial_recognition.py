@@ -35,7 +35,7 @@ class FacialRecognition:
             face_locations = face_recognition.face_locations(
                 rgb_frame, number_of_times_to_upsample=2, model="hog")
             face_encodings = face_recognition.face_encodings(
-                rgb_frame, face_locations, num_jitters=0, model="small")
+                rgb_frame, face_locations, num_jitters=1, model="small")
             face_names = []
             confidence_list = []
 
@@ -67,16 +67,16 @@ class FacialRecognition:
                         face_distances[best_match_index])
                 face_names.append(name)
                 confidence_list.append(confidence)
-
-                # Estimate Pose
-            results = self.pose_estimator.process(rgb_frame)
-            if results.pose_landmarks:
-                self.shared_data[f'{self.objectName}_pose_landmarks'] = results.pose_landmarks
-            else:
-                self.shared_data[f'{self.objectName}_pose_landmarks'] = None
-
             self.shared_data[
                 f'{self.objectName}_facial_recognition_results'] = face_locations, face_names, confidence_list
+
+        # Estimate Pose
+        results = self.pose_estimator.process(rgb_frame)
+        if results.pose_landmarks:
+            self.shared_data[f'{self.objectName}_pose_landmarks'] = results.pose_landmarks
+        else:
+            self.shared_data[f'{self.objectName}_pose_landmarks'] = None
+
 
         # # Body Detection
         # self.shared_data[f'{self.objectName}_body_detection_results'] = self.body_detection(
