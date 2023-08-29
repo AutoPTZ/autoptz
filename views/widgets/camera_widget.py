@@ -19,7 +19,7 @@ import imutils
 
 def run_body_pose_estimation(shared_frames, body_pose_queue, objectName, stop_signal):
     print(f"Body Pose Estimation service is starting for {objectName}")
-    pose_estimator = mp.solutions.pose.Pose(static_image_mode=False, model_complexity=2, min_detection_confidence=0.6,
+    pose_estimator = mp.solutions.pose.Pose(static_image_mode=False, model_complexity=2, min_detection_confidence=0.75,
                                             smooth_landmarks=True, min_tracking_confidence=0.6)
     while not stop_signal.value:
         if shared_frames:
@@ -94,7 +94,6 @@ class CameraWidget(QLabel):
     display_time = 2
     fc = 0
     FPS = 0
-    track_started = None
     temp_tracked_name = None
     track_x = None
     track_y = None
@@ -184,13 +183,8 @@ class CameraWidget(QLabel):
         self.timer.timeout.connect(self.update_image_and_queue)
         self.timer.start(1000 / 30)  # up to 30 fps
 
-        self.track_started = False
         self.temp_tracked_name = None
         self.tracker = None
-        self.track_x = None
-        self.track_y = None
-        self.track_w = None
-        self.track_h = None
         self.is_tracking = False  # If Track Checkbox is checked
         self.tracked_name = None  # Face that needs to be tracked
 
@@ -229,7 +223,6 @@ class CameraWidget(QLabel):
         Sets the name to track, used to start tracking based on face recognition data
         :param name:
         """
-        self.track_started = False
         self.tracked_name = name
 
     def reset_tracking(self):
@@ -238,7 +231,6 @@ class CameraWidget(QLabel):
         """
         self.is_tracking = not self.is_tracking
         self.tracker = None
-        self.track_started = False
         if self.ptz_controller is not None:
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
@@ -248,7 +240,8 @@ class CameraWidget(QLabel):
             self.last_request = None
 
     def restart_facial_recogntion(self):
-        print(f"Facial Recognition service is restarting for {self.objectName()}")
+        print(
+            f"Facial Recognition service is restarting for {self.objectName()}")
         if self.facial_recognition_process.is_alive():
             self.facial_recognition_process.terminate()
             self.facial_recognition.check_encodings()
@@ -400,7 +393,8 @@ class CameraWidget(QLabel):
         # Get body rectangle
         if body_pose:
             frame_height, frame_width, _ = frame.shape
-            body_rectangle = self.get_body_rectangle(body_pose, frame_width, frame_height)
+            body_rectangle = self.get_body_rectangle(
+                body_pose, frame_width, frame_height)
 
             # Draw body rectangle
             cv2.rectangle(frame, (body_rectangle[0], body_rectangle[1]),
@@ -410,7 +404,8 @@ class CameraWidget(QLabel):
             if face_rectangle and self.rectangles_overlap(body_rectangle, face_rectangle) and self.is_tracking:
                 # Reinitialize the dlib tracker with the new body pose data
                 self.tracker = dlib.correlation_tracker()
-                self.tracker.start_track(frame, dlib.rectangle(*body_rectangle))
+                self.tracker.start_track(
+                    frame, dlib.rectangle(*body_rectangle))
             elif self.tracker and self.is_tracking:
                 # Get the current tracker position
                 tracker_rect = self.tracker.get_position()
@@ -420,7 +415,8 @@ class CameraWidget(QLabel):
                 # Check if the tracker rectangle is inside the body rectangle or if they intersect significantly
                 if self.rectangles_overlap(tracker_rect, body_rectangle):
                     self.tracker = dlib.correlation_tracker()
-                    self.tracker.start_track(frame, dlib.rectangle(*body_rectangle))
+                    self.tracker.start_track(
+                        frame, dlib.rectangle(*body_rectangle))
                 else:
                     # Continue to update the tracker
                     self.tracker.update(frame)
@@ -437,10 +433,11 @@ class CameraWidget(QLabel):
 
                 centroid_x = (tracker_rect.left() + tracker_rect.right()) / 2
                 centroid_y = (tracker_rect.top() + tracker_rect.bottom()) / 2 - (
-                        tracker_rect.bottom() - tracker_rect.top()) / 4
+                    tracker_rect.bottom() - tracker_rect.top()) / 4
 
                 # Draw the centroid
-                cv2.circle(frame, (int(centroid_x), int(centroid_y)), 5, (0, 0, 255), -1)
+                cv2.circle(frame, (int(centroid_x), int(
+                    centroid_y)), 5, (0, 0, 255), -1)
 
             frame_center_x = frame.shape[1] // 2
             frame_center_y = frame.shape[0] // 2
@@ -456,12 +453,9 @@ class CameraWidget(QLabel):
             cv2.circle(frame, (frame_center_x, frame_center_y),
                        5, (255, 0, 0), -1)
 
-            # # Calculate the maximum possible distance (from center to edge)
-            # max_distance_x = frame.shape[1] / 2
-            # max_distance_y = frame.shape[0] / 2
-
             if self.ptz_controller is not None and centroid_x is not None:
-                self.move_ptz(centroid_x, centroid_y, frame_center_x, frame_center_y, delta_x, delta_y, frame.shape[1], frame.shape[0])
+                self.move_ptz(centroid_x, centroid_y, frame_center_x, frame_center_y,
+                              delta_x, delta_y, frame.shape[1], frame.shape[0])
 
         # FPS Counter
         self.fc += 1
@@ -475,8 +469,6 @@ class CameraWidget(QLabel):
         cv2.putText(frame, fps, (20, 30), constants.FONT, 0.7, (0, 0, 255), 2)
         return frame
 
-    # def move_ptz(self, centroid_x, centroid_y, frame_center_x, frame_center_y, delta_x, delta_y, max_distance_x,
-    #              max_distance_y):
     def move_ptz(self, centroid_x, centroid_y, frame_center_x, frame_center_y, delta_x, delta_y, frame_width, frame_height):
         """
         Uses Dlib Object Tracking to set and update the currently tracked person
@@ -510,10 +502,12 @@ class CameraWidget(QLabel):
         #     speed_y = -speed_y
 
         # Calculate the distance of the centroid from the center
-        distance = math.sqrt((centroid_x - frame_center_x) ** 2 + (centroid_y - frame_center_y) ** 2)
+        distance = math.sqrt((centroid_x - frame_center_x)
+                             ** 2 + (centroid_y - frame_center_y) ** 2)
 
         # Calculate the maximum possible distance from the center to a corner
-        max_distance = math.sqrt((frame_width / 2) ** 2 + (frame_height / 2) ** 2)
+        max_distance = math.sqrt(
+            (frame_width / 2) ** 2 + (frame_height / 2) ** 2)
 
         # Calculate the speed
         speed = self.calculate_speed(distance, max_distance)
@@ -529,7 +523,8 @@ class CameraWidget(QLabel):
 
         # Apply easing function
         # This is a simple quadratic easing function (ease in and out)
-        eased_distance = normalized_distance * normalized_distance * (3 - 2 * normalized_distance)
+        eased_distance = normalized_distance * \
+            normalized_distance * (3 - 2 * normalized_distance)
 
         # Scale to desired range of speeds
         speed = 2 + eased_distance * (7 - 2)
