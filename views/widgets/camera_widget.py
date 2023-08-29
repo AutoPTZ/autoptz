@@ -1,3 +1,4 @@
+import math
 import os
 
 import dlib
@@ -455,13 +456,12 @@ class CameraWidget(QLabel):
             cv2.circle(frame, (frame_center_x, frame_center_y),
                        5, (255, 0, 0), -1)
 
-            # Calculate the maximum possible distance (from center to edge)
-            max_distance_x = frame.shape[1] / 2
-            max_distance_y = frame.shape[0] / 2
+            # # Calculate the maximum possible distance (from center to edge)
+            # max_distance_x = frame.shape[1] / 2
+            # max_distance_y = frame.shape[0] / 2
 
             if self.ptz_controller is not None and centroid_x is not None:
-                self.move_ptz(centroid_x, centroid_y, frame_center_x, frame_center_y, delta_x, delta_y, max_distance_x,
-                              max_distance_y)
+                self.move_ptz(centroid_x, centroid_y, frame_center_x, frame_center_y, delta_x, delta_y, frame.shape[1], frame.shape[0])
 
         # FPS Counter
         self.fc += 1
@@ -475,43 +475,66 @@ class CameraWidget(QLabel):
         cv2.putText(frame, fps, (20, 30), constants.FONT, 0.7, (0, 0, 255), 2)
         return frame
 
-    def move_ptz(self, centerX, centerY, frame_center_x, frame_center_y, delta_x, delta_y, max_distance_x,
-                 max_distance_y):
+    # def move_ptz(self, centroid_x, centroid_y, frame_center_x, frame_center_y, delta_x, delta_y, max_distance_x,
+    #              max_distance_y):
+    def move_ptz(self, centroid_x, centroid_y, frame_center_x, frame_center_y, delta_x, delta_y, frame_width, frame_height):
         """
         Uses Dlib Object Tracking to set and update the currently tracked person
         Then if a PTZ camera is associated, it should move the camera in any direction automatically
         :return:
         """
-        # Calculate the distance from the center
-        distance_x = abs(centerX - frame_center_x)
-        distance_y = abs(centerY - frame_center_y)
+        # # Calculate the distance from the center
+        # distance_x = abs(centerX - frame_center_x)
+        # distance_y = abs(centerY - frame_center_y)
+        #
+        # # Normalize the distance (make it a value between 0 and 1)
+        # normalized_distance_x = distance_x / max_distance_x
+        # normalized_distance_y = distance_y / max_distance_y
+        #
+        # # Calculate the speed based on the normalized distance
+        # # The speed will be a value between 0.05 (for normalized_distance = 0) and 0.18 (for normalized_distance = 1)
+        # # Use a power function to make the speed increase more rapidly as the distance increases
+        # speed_x = 0.05 + (normalized_distance_x ** 3) * (0.2 - 0.05)
+        # speed_y = 0.05 + (normalized_distance_y ** 3) * (0.13 - 0.05)
+        #
+        # # If the object is within the delta range, set the speed to 0
+        # if abs(centerX - frame_center_x) <= delta_x:
+        #     speed_x = 0
+        # if abs(centerY - frame_center_y) <= delta_y:
+        #     speed_y = 0
+        #
+        # # Apply the direction to the speed
+        # if centerX > frame_center_x:
+        #     speed_x = -speed_x
+        # if centerY > frame_center_y:
+        #     speed_y = -speed_y
 
-        # Normalize the distance (make it a value between 0 and 1)
-        normalized_distance_x = distance_x / max_distance_x
-        normalized_distance_y = distance_y / max_distance_y
+        # Calculate the distance of the centroid from the center
+        distance = math.sqrt((centroid_x - frame_center_x) ** 2 + (centroid_y - frame_center_y) ** 2)
 
-        # Calculate the speed based on the normalized distance
-        # The speed will be a value between 0.05 (for normalized_distance = 0) and 0.18 (for normalized_distance = 1)
-        # Use a power function to make the speed increase more rapidly as the distance increases
-        speed_x = 0.05 + (normalized_distance_x ** 3) * (0.2 - 0.05)
-        speed_y = 0.05 + (normalized_distance_y ** 3) * (0.13 - 0.05)
+        # Calculate the maximum possible distance from the center to a corner
+        max_distance = math.sqrt((frame_width / 2) ** 2 + (frame_height / 2) ** 2)
 
-        # If the object is within the delta range, set the speed to 0
-        if abs(centerX - frame_center_x) <= delta_x:
-            speed_x = 0
-        if abs(centerY - frame_center_y) <= delta_y:
-            speed_y = 0
+        # Calculate the speed
+        speed = self.calculate_speed(distance, max_distance)
 
-        # Apply the direction to the speed
-        if centerX > frame_center_x:
-            speed_x = -speed_x
-        if centerY > frame_center_y:
-            speed_y = -speed_y
-
-        self.ptz_control(centerX, centerY, speed_x, speed_y,
+        self.ptz_control(centroid_x, centroid_y, speed, speed,
                          frame_center_x, frame_center_y, delta_x, delta_y)
 
         return
+
+    def calculate_speed(self, distance, max_distance):
+        # Normalize the distance
+        normalized_distance = distance / max_distance
+
+        # Apply easing function
+        # This is a simple quadratic easing function (ease in and out)
+        eased_distance = normalized_distance * normalized_distance * (3 - 2 * normalized_distance)
+
+        # Scale to desired range of speeds
+        speed = 2 + eased_distance * (7 - 2)
+
+        return round(speed)
 
     def ptz_control(self, centerX, centerY, speed_x, speed_y, frame_center_x, frame_center_y, delta_x, delta_y):
         # Define the directions
@@ -539,7 +562,7 @@ class CameraWidget(QLabel):
                         self.ptz_controller.move_stop()
                     else:
                         getattr(self.ptz_controller,
-                                f"move_{direction}_track")()
+                                f"move_{direction}_track")(speed_x)
                 else:
                     ndi.recv_ptz_pan_tilt_speed(
                         instance=self.ptz_controller, pan_speed=speed_x, tilt_speed=speed_y)

@@ -13,75 +13,75 @@ class ViscaPTZ:
             self.visca_ptz.init()
             print("Camera Initialized")
 
-    def move_left_track(self):
+    def move_left_track(self, speed=7):
         """
         Continuous Movement to the left without stopping
         """
         try:
-            self.visca_ptz.left(7)
+            self.visca_ptz.left(speed)
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
-    def move_right_track(self):
+    def move_right_track(self, speed=7):
         """
         Continuous Movement to the right without stopping
         """
         try:
-            self.visca_ptz.right(7)
+            self.visca_ptz.right(speed)
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
-    def move_up_track(self):
+    def move_up_track(self, speed=7):
         """
         Continuous Movement to the up without stopping
         """
         try:
-            self.visca_ptz.up(7)
+            self.visca_ptz.up(speed)
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
-    def move_down_track(self):
+    def move_down_track(self, speed=7):
         """
         Continuous Movement to the down without stopping
         """
         try:
-            self.visca_ptz.down(7)
+            self.visca_ptz.down(speed)
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
-    def move_left_up_track(self):
+    def move_left_up_track(self, speed=5):
         """
         Continuous Movement to the left and up without stopping
         """
         try:
-            self.visca_ptz.left_up(5, 5)
+            self.visca_ptz.left_up(speed, speed)
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
-    def move_right_up_track(self):
+    def move_right_up_track(self, speed=5):
         """
         Continuous Movement to the right and up without stopping
         """
         try:
-            self.visca_ptz.right_up(5, 5)
+            self.visca_ptz.right_up(speed, speed)
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
-    def move_left_down_track(self):
+    def move_left_down_track(self, speed=5):
         """
         Continuous Movement to the left and down without stopping
         """
         try:
-            self.visca_ptz.left_down(5, 5)
+            self.visca_ptz.left_down(speed, speed)
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
-    def move_right_down_track(self):
+    def move_right_down_track(self, speed=5):
         """
         Continuous Movement to the right and down without stopping
         """
         try:
-            self.visca_ptz.right_down(5, 5)
+            self.visca_ptz.right_down(speed, speed)
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
