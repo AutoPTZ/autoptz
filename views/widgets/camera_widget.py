@@ -1,38 +1,47 @@
 import os
+
+import dlib
 from PySide6 import QtGui
 from PySide6.QtWidgets import QLabel
 from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Qt, Signal, QTimer
 import cv2
 import time
-import dlib
 import NDIlib as ndi
 import numpy as np
 import mediapipe as mp
-
 from logic.camera_search.search_ndi import get_ndi_sources
 from logic.image_processing.facial_recognition import FacialRecognition
 import shared.constants as constants
-from multiprocessing import Process, Value
+from multiprocessing import Process, Value, Queue
 import imutils
 
 
-def run_facial_recognition(shared_frames, facial_recognition, stop_signal):
-    # facial_recognition.model = cv2.dnn.readNetFromCaffe(
-    #     constants.PROTOTXT_PATH, constants.CAFFEMODEL_PATH)
-
-    # facial_recognition.pose_estimator = mp.solutions.pose.Pose(static_image_mode=False, model_complexity=1,
-    #                                                            smooth_landmarks=True)
-
-    facial_recognition.pose_estimator = mp.solutions.pose.Pose(
-        static_image_mode=False, model_complexity=1, min_detection_confidence=0.5)
+def run_body_pose_estimation(shared_frames, body_pose_queue, objectName, stop_signal):
+    print(f"Body Pose Estimation service is starting for {objectName}")
+    pose_estimator = mp.solutions.pose.Pose(static_image_mode=False, model_complexity=2, min_detection_confidence=0.6,
+                                            smooth_landmarks=True, min_tracking_confidence=0.6)
     while not stop_signal.value:
         if shared_frames:
-            facial_recognition.recognize_and_estimate_pose(shared_frames[0])
+            # Estimate Pose
+            results = pose_estimator.process(shared_frames[-1])
+            if results.pose_landmarks:
+                body_pose_queue.put(results.pose_landmarks)
+
+
+def run_facial_recognition(shared_frames, facial_recognition, objectName, stop_signal):
+    print(f"Facial Recognition service is starting for {objectName}")
+    frame_count = 0
+    while not stop_signal.value:
+        frame_count += 1
+        if frame_count % 240 == 0:
+            if shared_frames:
+                facial_recognition.recognize(shared_frames[-1])
 
 
 def run_camera_stream(shared_frames, source, width, stop_signal, isNDI=False):
     if type(source) == int:
+        print(f"Camera Stream service is starting for {source}")
         cap = cv2.VideoCapture(source)
         if os.name == 'nt':  # fixes Windows OpenCV resolution
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 5000)
@@ -42,6 +51,7 @@ def run_camera_stream(shared_frames, source, width, stop_signal, isNDI=False):
         source = next(
             (src for src in sources if src.ndi_name == source), None)
         # Create the NDIlib.NDIlib.Source object here using the shared information
+        print(f"Camera Stream service is starting for {source.ndi_name}")
         ndi_recv_create = ndi.RecvCreateV3(source_to_connect_to=source)
         ndi_recv_create.color_format = ndi.RECV_COLOR_FORMAT_BGRX_BGRA
         ndi_recv_create.bandwidth = ndi.RECV_BANDWIDTH_LOWEST
@@ -53,7 +63,7 @@ def run_camera_stream(shared_frames, source, width, stop_signal, isNDI=False):
             ret, img = cap.read()
             if ret:
                 cv_img = imutils.resize(img, width)
-                if len(shared_frames) >= 10:
+                if len(shared_frames) >= 120:
                     shared_frames.pop(0)  # Remove the oldest frame
                 shared_frames.append(cv_img)
         else:
@@ -119,9 +129,8 @@ class CameraWidget(QLabel):
         self.ptz_controller = None
 
         if isNDI:
-            ndi_recv_create = ndi.RecvCreateV3()
+            ndi_recv_create = ndi.RecvCreateV3(source_to_connect_to=source)
             ndi_recv_create.bandwidth = ndi.RECV_BANDWIDTH_METADATA_ONLY
-            # ndi_recv_create.color_format = ndi.RECV_COLOR_FORMAT_BGRX_BGRA
             ndi_recv = ndi.recv_create_v3(ndi_recv_create)
             ndi.recv_connect(ndi_recv, source)
             for i in range(2):
@@ -139,14 +148,11 @@ class CameraWidget(QLabel):
 
         self.shared_camera_frames = manager.list()
 
-        self.shared_camera_data = manager.dict()
-        self.shared_camera_data[f'{self.objectName()}_facial_recognition_results'] = ([], [
-        ], [])
+        # Create a Queue objects
+        self.facial_recognition_queue = Queue()
+        self.body_pose_queue = Queue()
 
-        self.shared_camera_data[f'{self.objectName()}_body_detection_results'] = [
-        ]
-
-        # Signal to stop camera stream and facial recognition processes
+        # Signal to stop camera stream, facial recognition, and body pose processes
         self.stop_signal = Value('b', False)
 
         # Create and start the process
@@ -158,17 +164,20 @@ class CameraWidget(QLabel):
                 self.shared_camera_frames, source, width, self.stop_signal, isNDI))
         self.camera_stream_process.start()
 
+        # Create and start a Facial Recognition process
         self.facial_recognition = FacialRecognition(
-            self.shared_camera_data, self.objectName())
-
-        # Create and start a facial recognition process for this camera
+            self.facial_recognition_queue, self.objectName())
         self.facial_recognition_process = Process(
             target=run_facial_recognition,
             args=(self.shared_camera_frames,
-                  self.facial_recognition, self.stop_signal)
+                  self.facial_recognition, self.objectName(), self.stop_signal)
         )
-
         self.restart_facial_recogntion()
+
+        # Create and start the Body Pose Estimation process
+        self.body_pose_estimation_process = Process(target=run_body_pose_estimation, args=(
+            self.shared_camera_frames, self.body_pose_queue, self.objectName(), self.stop_signal))
+        self.body_pose_estimation_process.start()
 
         # Start the QTimer to update the QLabel
         self.timer = QTimer()
@@ -177,16 +186,13 @@ class CameraWidget(QLabel):
 
         self.track_started = False
         self.temp_tracked_name = None
+        self.tracker = None
         self.track_x = None
         self.track_y = None
         self.track_w = None
         self.track_h = None
         self.is_tracking = False  # If Track Checkbox is checked
         self.tracked_name = None  # Face that needs to be tracked
-        self.face_center_x = None
-        self.face_center_y = None
-        self.tracker = dlib.correlation_tracker()
-        # self.tracker = cv2.TrackerKCF_create()
 
     def stop(self):
         """
@@ -230,14 +236,8 @@ class CameraWidget(QLabel):
         """
         Resets tracking variables when user toggles the checkbox
         """
-        self.track_x = None
-        self.track_y = None
-        self.track_w = None
-        self.track_h = None
         self.is_tracking = not self.is_tracking
         self.tracker = None
-        self.tracker = dlib.correlation_tracker()
-        # self.tracker = cv2.TrackerKCF_create()
         self.track_started = False
         if self.ptz_controller is not None:
             if self.ptz_is_usb:
@@ -248,9 +248,6 @@ class CameraWidget(QLabel):
             self.last_request = None
 
     def restart_facial_recogntion(self):
-        self.shared_camera_data[f'{self.objectName}_facial_recognition_results'] = [
-                                                                                   ], [], []
-        self.shared_camera_data[f'{self.objectName}_pose_landmarks'] = None
         if self.facial_recognition_process.is_alive():
             self.facial_recognition_process.terminate()
             self.facial_recognition.check_encodings()
@@ -311,113 +308,160 @@ class CameraWidget(QLabel):
             constants.CURRENT_ACTIVE_CAM_WIDGET.update()
         self.change_selection_signal.emit()
 
-    def intersect(self, boxA, boxB):
-        xA = max(boxA[0], boxB[0])
-        yA = max(boxA[1], boxB[1])
-        xB = min(boxA[2], boxB[2])
-        yB = min(boxA[3], boxB[3])
-        return (xA < xB) and (yA < yB)
+    def get_body_rectangle(self, body_pose, frame_width, frame_height):
+        """
+        Returns the bounding box of the head, shoulders, and waist.
+
+        :param body_pose: The body pose landmarks.
+        :return: A tuple of 4 integers representing the bounding box of the head, shoulders, and waist.
+        """
+        # Extract the landmarks from the body_pose
+        landmarks = body_pose.landmark
+
+        # Get the min and max x and y values of the landmarks
+        min_x = min(landmarks[i].x for i in list(range(11)) + [23, 24])
+        max_x = max(landmarks[i].x for i in list(range(11)) + [23, 24])
+        min_y = min(landmarks[i].y for i in list(range(11)) + [23, 24])
+        max_y = max(landmarks[i].y for i in list(range(11)) + [23, 24])
+
+        # Convert the min and max values to pixel coordinates
+        left = min_x * frame_width
+        right = max_x * frame_width
+        top = min_y * frame_height
+        bottom = max_y * frame_height
+
+        return int(left), int(top), int(right), int(bottom)
+
+    def rectangles_overlap(self, rect1, rect2):
+        # Calculate the intersection rectangle
+        x1 = max(rect1[0], rect2[0])
+        y1 = max(rect1[1], rect2[1])
+        x2 = min(rect1[2], rect2[2])
+        y2 = min(rect1[3], rect2[3])
+
+        # Check if there is an intersection
+        if x1 < x2 and y1 < y2:
+            intersection_area = (x2 - x1) * (y2 - y1)
+            rect1_area = (rect1[2] - rect1[0]) * (rect1[3] - rect1[1])
+            rect2_area = (rect2[2] - rect2[0]) * (rect2[3] - rect2[1])
+            min_area = min(rect1_area, rect2_area)
+            # Check if one rectangle is entirely inside the other or if the intersection area is above a certain threshold
+            if intersection_area >= 0.5 * min_area:
+                return True
+
+        return False
 
     def draw_on_frame(self, frame):
-        # Get shared data
-        facial_recognition_results = self.shared_camera_data.get(f'{self.objectName()}_facial_recognition_results',
-                                                                 ([], [], []))
-        pose_landmarks = self.shared_camera_data.get(f'{self.objectName()}_pose_landmarks', None)
+        centroid_x = None
+        centroid_y = None
 
-        # Number of recognized faces
-        num_faces = len(facial_recognition_results[0])
+        # Get the facial recognition results
+        face_details = ([], [], [])
+        if not self.facial_recognition_queue.empty():
+            face_details = self.facial_recognition_queue.get_nowait()
 
-        if pose_landmarks:
-            # Define landmarks for the head to hips
-            nose = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.NOSE.value]
-            left_shoulder = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
-            right_shoulder = pose_landmarks.landmark[
-                mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
-            left_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EAR.value]
-            right_ear = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EAR.value]
-            left_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_EYE.value]
-            right_eye = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_EYE.value]
-            left_hip = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_HIP.value]
-            right_hip = pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_HIP.value]
+        # Get body pose results
+        body_pose = None
+        face_rectangle = None
+        if not self.body_pose_queue.empty():
+            body_pose = self.body_pose_queue.get_nowait()
 
-            # Calculate the bounding box for the head to hips
-            startX = int(min(left_ear.x, right_ear.x, left_shoulder.x,
-                             right_shoulder.x, left_hip.x, right_hip.x) * frame.shape[1])
-            startY = int(
-                min(nose.y, left_ear.y, right_ear.y, left_eye.y, right_eye.y) * frame.shape[0])
-            endX = int(max(left_ear.x, right_ear.x, left_shoulder.x,
-                           right_shoulder.x, left_hip.x, right_hip.x) * frame.shape[1])
-            endY = int(max(left_shoulder.y, right_shoulder.y,
-                           left_hip.y, right_hip.y) * frame.shape[0])
+        # Update the tracker
+        if self.tracker and self.is_tracking:
+            self.tracker.update(frame)
 
-            # Add padding
-            padding_percent = 0.05  # 5% padding, adjust as needed
-            width = endX - startX
-            height = endY - startY
+        # Get face rectangle
+        if face_details != ([], [], []):
+            face_locations, face_names, confidences = face_details
+            for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidences):
+                top *= 2
+                right *= 2
+                bottom *= 2
+                left *= 2
 
-            paddingX = int(padding_percent * width)
-            paddingY = int(padding_percent * height)
-
-            startX = max(0, startX - paddingX)
-            startY = max(0, startY - paddingY)
-            endX = min(frame.shape[1], endX + paddingX)
-            endY = min(frame.shape[0], endY + paddingY)
-
-            # Draw the bounding box
-            cv2.rectangle(frame, (startX, startY),
-                          (endX, endY), (0, 255, 0), 2)
-
-            # Calculate the center biased towards the chest
-            chest_x = (left_shoulder.x + right_shoulder.x) / 2
-            chest_y = (left_shoulder.y + right_shoulder.y) / 2
-
-            new_center_x = int(chest_x * frame.shape[1])
-            new_center_y = int(chest_y * frame.shape[0])
-
-            # Conditional to check similarity in position and if only one person is recognized
-            print(f"face_center_x: {self.face_center_x}, face_center_y: {self.face_center_y}")
-            print(f"num_faces: {num_faces}")
-
-            distance = float('inf')
-            if self.face_center_x is not None and self.face_center_y is not None:
-                distance = ((self.face_center_x - new_center_x) ** 2 + (self.face_center_y - new_center_y) ** 2) ** 0.5
-                print(f"Distance: {distance}")
-
-            if num_faces == 1 or distance < 30:
-                print("Reinitializing the tracker...")
-                self.track_x = startX
-                self.track_y = startY
-                self.track_w = endX
-                self.track_h = endY
-                self.face_center_x = new_center_x
-                self.face_center_y = new_center_y
-
-        # If there are facial recognition results
-        if facial_recognition_results != ([], [], []):
-            face_locations, face_names, confidence_list = facial_recognition_results
-
-            for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidence_list):
+                # Draw face rectangle and labels
+                cv2.rectangle(frame, (left, top),
+                              (right, bottom), (0, 255, 0), 2)
 
                 # If this is the tracked face
                 if name == self.tracked_name:
                     self.temp_tracked_name = name
+                    face_rectangle = (left, top, right, bottom)
 
                 # Draw face rectangle and labels
                 cv2.rectangle(frame, (left, top),
                               (right, bottom), (0, 255, 0), 2)
                 cv2.putText(frame, name, (left + 5, top - 5),
                             constants.FONT, 0.5, (255, 255, 255), 1)
-                cv2.putText(frame, str(confidence), (right - 52,
-                                                     bottom - 5), constants.FONT, 0.45, (255, 255, 0), 1)
+                cv2.putText(frame, str(confidence), (right - 52, bottom - 5),
+                            constants.FONT, 0.45, (255, 255, 0), 1)
 
-        # Track Drawing + PTZ Movement
-        if self.is_tracking:
-            frame = self.track_face(frame)
+        # Get body rectangle
+        if body_pose:
+            frame_height, frame_width, _ = frame.shape
+            body_rectangle = self.get_body_rectangle(body_pose, frame_width, frame_height)
 
-        # Clear shared data
-        self.shared_camera_data[f'{self.objectName}_facial_recognition_results'] = [
-                                                                                   ], [], []
-        self.shared_camera_data[f'{self.objectName}_pose_landmarks'] = None
+            # Draw body rectangle
+            cv2.rectangle(frame, (body_rectangle[0], body_rectangle[1]),
+                          (body_rectangle[2], body_rectangle[3]), (0, 255, 0), 2)
+
+            # Check if the body pose intersects or is near the face
+            if face_rectangle and self.rectangles_overlap(body_rectangle, face_rectangle) and self.is_tracking:
+                # Reinitialize the dlib tracker with the new body pose data
+                self.tracker = dlib.correlation_tracker()
+                self.tracker.start_track(frame, dlib.rectangle(*body_rectangle))
+            elif self.tracker and self.is_tracking:
+                # Get the current tracker position
+                tracker_rect = self.tracker.get_position()
+                tracker_rect = (int(tracker_rect.left()), int(tracker_rect.top()),
+                                int(tracker_rect.right()), int(tracker_rect.bottom()))
+
+                # Check if the tracker rectangle is inside the body rectangle or if they intersect significantly
+                if self.rectangles_overlap(tracker_rect, body_rectangle):
+                    self.tracker = dlib.correlation_tracker()
+                    self.tracker.start_track(frame, dlib.rectangle(*body_rectangle))
+                else:
+                    # Continue to update the tracker
+                    self.tracker.update(frame)
+
+        if self.is_tracking and self.tracked_name:
+            cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}",
+                        (20, 52), constants.FONT, 0.7, (0, 0, 255), 2)
+
+            # Draw the dlib tracker rectangle in pink
+            if self.tracker:
+                tracker_rect = self.tracker.get_position()
+                cv2.rectangle(frame, (int(tracker_rect.left()), int(tracker_rect.top())),
+                              (int(tracker_rect.right()), int(tracker_rect.bottom())), (255, 0, 255), 2)
+
+                centroid_x = (tracker_rect.left() + tracker_rect.right()) / 2
+                centroid_y = (tracker_rect.top() + tracker_rect.bottom()) / 2 - (
+                        tracker_rect.bottom() - tracker_rect.top()) / 4
+
+                # Draw the centroid
+                cv2.circle(frame, (int(centroid_x), int(centroid_y)), 5, (0, 0, 255), -1)
+
+            frame_center_x = frame.shape[1] // 2
+            frame_center_y = frame.shape[0] // 2
+
+            delta_x = 95  # Delta for left and right
+            delta_y = 60  # Delta for up and down
+
+            # Safe Zone
+            cv2.ellipse(frame, (frame_center_x, frame_center_y), (delta_x, delta_y),
+                        0, 0, 360, (0, 255, 0), 1)
+
+            # Draw the center of the frame
+            cv2.circle(frame, (frame_center_x, frame_center_y),
+                       5, (255, 0, 0), -1)
+
+            # Calculate the maximum possible distance (from center to edge)
+            max_distance_x = frame.shape[1] / 2
+            max_distance_y = frame.shape[0] / 2
+
+            if self.ptz_controller is not None and centroid_x is not None:
+                self.move_ptz(centroid_x, centroid_y, frame_center_x, frame_center_y, delta_x, delta_y, max_distance_x,
+                              max_distance_y)
 
         # FPS Counter
         self.fc += 1
@@ -431,143 +475,43 @@ class CameraWidget(QLabel):
         cv2.putText(frame, fps, (20, 30), constants.FONT, 0.7, (0, 0, 255), 2)
         return frame
 
-    def resize_frame(self, frame, scale_percent=50):  # default is 50% of the original size
-        width = int(frame.shape[1] * scale_percent / 100)
-        height = int(frame.shape[0] * scale_percent / 100)
-        return cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
-
-    def track_face(self, frame):
+    def move_ptz(self, centerX, centerY, frame_center_x, frame_center_y, delta_x, delta_y, max_distance_x,
+                 max_distance_y):
         """
         Uses Dlib Object Tracking to set and update the currently tracked person
         Then if a PTZ camera is associated, it should move the camera in any direction automatically
-        :param frame:
-        :param x:
-        :param y:
-        :param w:
-        :param h:
         :return:
         """
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # small_frame = self.resize_frame(rgb_frame, 50)
+        # Calculate the distance from the center
+        distance_x = abs(centerX - frame_center_x)
+        distance_y = abs(centerY - frame_center_y)
 
-        if self.temp_tracked_name == self.tracked_name and self.track_x is not None:
-            rect = dlib.rectangle(self.track_x, self.track_y,
-                                  self.track_w, self.track_h)
-            self.tracker.start_track(rgb_frame, rect)
-            # bbox = (
-            #     int(self.track_x / 2),
-            #     int(self.track_y / 2),
-            #     int(abs((self.track_w - self.track_x) / 2)),
-            #     int(abs((self.track_h - self.track_y) / 2))
-            # )
-            # self.tracker.init(small_frame, bbox)
-            self.temp_tracked_name = None
-            self.track_started = True
-        elif self.track_started:
-            self.tracker.update(rgb_frame)
-            pos = self.tracker.get_position()
+        # Normalize the distance (make it a value between 0 and 1)
+        normalized_distance_x = distance_x / max_distance_x
+        normalized_distance_y = distance_y / max_distance_y
 
-            # unpack the position object
-            self.track_x = int(pos.left())
-            self.track_y = int(pos.top())
-            self.track_w = int(pos.right())
-            self.track_h = int(pos.bottom())
-            # success, bbox = self.tracker.update(small_frame)
-            # if success:
-            #     self.track_x, self.track_y, w, h = int(bbox[0]) * 2, int(bbox[1]) * 2, int(bbox[2]) * 2, int(bbox[3]) * 2
-            #     self.track_w = self.track_x + w
-            #     self.track_h = self.track_y + h
-            #
-            #     # Check if the object is out of the frame
-            #     if (self.track_x < 0 or self.track_y < 0 or
-            #             self.track_w > frame.shape[1] or self.track_h > frame.shape[0]):
-            #         success = False
-            #
-            #     # Check if the object becomes too small or too large
-            #     min_dim, max_dim = 20, frame.shape[1] * 0.75  # just an example, adjust as necessary
-            #     if w < min_dim or h < min_dim or w > max_dim or h > max_dim:
-            #         success = False
-            #
-            # if not success:
-            #     # Reinitialize the tracker
-            #     self.tracker = cv2.TrackerKCF_create()
-            #     self.track_started = False
+        # Calculate the speed based on the normalized distance
+        # The speed will be a value between 0.05 (for normalized_distance = 0) and 0.18 (for normalized_distance = 1)
+        # Use a power function to make the speed increase more rapidly as the distance increases
+        speed_x = 0.05 + (normalized_distance_x ** 3) * (0.2 - 0.05)
+        speed_y = 0.05 + (normalized_distance_y ** 3) * (0.13 - 0.05)
 
-        if self.track_started:
-            cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}",
-                        (20, 52), constants.FONT, 0.7, (0, 0, 255), 2)
-            frame_center_x = frame.shape[1] // 2
-            frame_center_y = frame.shape[0] // 2
+        # If the object is within the delta range, set the speed to 0
+        if abs(centerX - frame_center_x) <= delta_x:
+            speed_x = 0
+        if abs(centerY - frame_center_y) <= delta_y:
+            speed_y = 0
 
-            delta_x = 90  # Delta for left and right
-            delta_y = 35  # Delta for up and down
+        # Apply the direction to the speed
+        if centerX > frame_center_x:
+            speed_x = -speed_x
+        if centerY > frame_center_y:
+            speed_y = -speed_y
 
-            # Safe Zone
-            cv2.ellipse(frame, (frame_center_x, frame_center_y), (delta_x, delta_y),
-                        0, 0, 360, (0, 255, 0), 1)
-            # Calculate the center of the bounding box
-            body_center_x = (self.track_x + self.track_w) // 2
-            body_center_y = (self.track_y + self.track_h) // 2
+        self.ptz_control(centerX, centerY, speed_x, speed_y,
+                         frame_center_x, frame_center_y, delta_x, delta_y)
 
-            # If face is detected, calculate the center of the object as the average of the body center and face center
-            if self.face_center_x is not None or self.face_center_y is not None:
-                centerX = (body_center_x + self.face_center_x) // 2
-                centerY = (body_center_y + self.face_center_y) // 1.75
-                self.face_center_x = None
-                self.face_center_y = None
-            # If face is not detected, use the body center as the center of the object
-            else:
-                centerX = body_center_x
-                centerY = body_center_y
-
-            # Draw the center of the tracked object
-            cv2.circle(frame, (centerX, int(centerY)), 5, (0, 0, 255), -1)
-
-            cv2.putText(frame, "tracking", (self.track_x, self.track_h + 15),
-                        constants.FONT, 0.45, (0, 255, 0), 1)
-            cv2.rectangle(frame, (self.track_x, self.track_y),
-                          (self.track_w, self.track_h), (255, 0, 255), 3, 1)
-
-            # Draw the center of the frame
-            cv2.circle(frame, (frame_center_x, frame_center_y),
-                       5, (255, 0, 0), -1)
-
-            # Calculate the distance from the center
-            distance_x = abs(centerX - frame_center_x)
-            distance_y = abs(centerY - frame_center_y)
-
-            # Calculate the maximum possible distance (from center to edge)
-            max_distance_x = frame.shape[1] / 2
-            max_distance_y = frame.shape[0] / 2
-
-            # Normalize the distance (make it a value between 0 and 1)
-            normalized_distance_x = distance_x / max_distance_x
-            normalized_distance_y = distance_y / max_distance_y
-
-            # Calculate the speed based on the normalized distance
-            # The speed will be a value between 0.05 (for normalized_distance = 0) and 0.18 (for normalized_distance = 1)
-            # Use a power function to make the speed increase more rapidly as the distance increases
-            speed_x = 0.05 + (normalized_distance_x ** 3) * (0.2 - 0.05)
-            speed_y = 0.05 + (normalized_distance_y ** 3) * (0.13 - 0.05)
-
-            # If the object is within the delta range, set the speed to 0
-            if abs(centerX - frame_center_x) <= delta_x:
-                speed_x = 0
-            if abs(centerY - frame_center_y) <= delta_y:
-                speed_y = 0
-
-            # Apply the direction to the speed
-            if centerX > frame_center_x:
-                speed_x = -speed_x
-            if centerY > frame_center_y:
-                speed_y = -speed_y
-
-            if self.ptz_controller is not None:
-                # Use centerX and centerY for PTZ control
-                self.ptz_control(centerX, centerY, speed_x, speed_y,
-                                 frame_center_x, frame_center_y, delta_x, delta_y)
-
-        return frame
+        return
 
     def ptz_control(self, centerX, centerY, speed_x, speed_y, frame_center_x, frame_center_y, delta_x, delta_y):
         # Define the directions

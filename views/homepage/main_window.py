@@ -1,5 +1,6 @@
 import pickle
 from multiprocessing import Manager
+# from multiprocess import managers
 import os
 from functools import partial
 from PySide6 import QtCore, QtWidgets
@@ -28,11 +29,10 @@ class AutoPTZ_MainWindow(QMainWindow):
 
         # setting up the UI and QT Threading
         super(AutoPTZ_MainWindow, self).__init__(*args, **kwargs)
-        self.threadpool = QtCore.QThreadPool()
-        self.threadpool.maxThreadCount()
-        self.setup_threads = []
         self.manager = Manager()
-        # self.shared_camera_data = self.manager.dict()
+
+        # self.manager = managers.SharedMemoryManager()
+        # self.manager.ShareableList(sequence=[])
 
         # setting up main window
         self.setObjectName("AutoPTZ")
