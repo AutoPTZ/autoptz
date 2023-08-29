@@ -1,6 +1,5 @@
 import math
 import os
-
 import dlib
 from PySide6 import QtGui
 from PySide6.QtWidgets import QLabel
@@ -42,7 +41,7 @@ def run_facial_recognition(shared_frames, facial_recognition, objectName, stop_s
 
 def run_camera_stream(shared_frames, source, width, stop_signal, isNDI=False):
     if type(source) == int:
-        print(f"Camera Stream service is starting for {source}")
+        print(f"Camera Stream service is starting for Camera Source: {source}")
         cap = cv2.VideoCapture(source)
         if os.name == 'nt':  # fixes Windows OpenCV resolution
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 5000)
@@ -249,13 +248,14 @@ class CameraWidget(QLabel):
             self.last_request = None
 
     def restart_facial_recogntion(self):
+        print(f"Facial Recognition service is restarting for {self.objectName()}")
         if self.facial_recognition_process.is_alive():
             self.facial_recognition_process.terminate()
             self.facial_recognition.check_encodings()
             self.facial_recognition_process = Process(
                 target=run_facial_recognition,
                 args=(self.shared_camera_frames,
-                      self.facial_recognition, self.stop_signal)
+                      self.facial_recognition, self.objectName(), self.stop_signal)
             )
         self.facial_recognition_process.start()
 
