@@ -23,8 +23,12 @@ def run_body_pose_estimation(shared_frames, body_pose_queue, objectName, stop_si
                                             smooth_landmarks=True, min_tracking_confidence=0.6)
     while not stop_signal.value:
         if shared_frames:
+            frame = shared_frames[-1]
             # Estimate Pose
-            results = pose_estimator.process(shared_frames[-1])
+            if frame.shape[2] == 4:
+                # Convert from BGR or BGRA to RGB
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
+            results = pose_estimator.process(frame)
             if results.pose_landmarks:
                 body_pose_queue.put(results.pose_landmarks)
 
@@ -111,7 +115,6 @@ class CameraWidget(QLabel):
         self.width = width
         self.height = height
         self.isNDI = isNDI
-        self._is_stopped = True
         self.setProperty('active', False)
         self.setStyleSheet(constants.CAMERA_STYLESHEET)
         if self.isNDI:
@@ -213,7 +216,7 @@ class CameraWidget(QLabel):
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
             else:
-                self.ptz_controller.pantilt(pan_speed=0, tilt_speed=0)
+                ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
                 self.ptz_controller.close_connection()
         self.ptz_controller = control
         self.ptz_is_usb = isUSB
@@ -360,9 +363,11 @@ class CameraWidget(QLabel):
         if not self.body_pose_queue.empty():
             body_pose = self.body_pose_queue.get_nowait()
 
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
+
         # Update the tracker
         if self.tracker and self.is_tracking:
-            self.tracker.update(frame)
+            self.tracker.update(rgb_frame)
 
         # Get face rectangle
         if face_details != ([], [], []):
@@ -405,7 +410,7 @@ class CameraWidget(QLabel):
                 # Reinitialize the dlib tracker with the new body pose data
                 self.tracker = dlib.correlation_tracker()
                 self.tracker.start_track(
-                    frame, dlib.rectangle(*body_rectangle))
+                    rgb_frame, dlib.rectangle(*body_rectangle))
             elif self.tracker and self.is_tracking:
                 # Get the current tracker position
                 tracker_rect = self.tracker.get_position()
@@ -416,10 +421,10 @@ class CameraWidget(QLabel):
                 if self.rectangles_overlap(tracker_rect, body_rectangle):
                     self.tracker = dlib.correlation_tracker()
                     self.tracker.start_track(
-                        frame, dlib.rectangle(*body_rectangle))
+                        rgb_frame, dlib.rectangle(*body_rectangle))
                 else:
                     # Continue to update the tracker
-                    self.tracker.update(frame)
+                    self.tracker.update(rgb_frame)
 
         if self.is_tracking and self.tracked_name:
             cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}",
@@ -469,67 +474,56 @@ class CameraWidget(QLabel):
         cv2.putText(frame, fps, (20, 30), constants.FONT, 0.7, (0, 0, 255), 2)
         return frame
 
-    def move_ptz(self, centroid_x, centroid_y, frame_center_x, frame_center_y, delta_x, delta_y, frame_width, frame_height):
+    def move_ptz(self, centroid_x, centroid_y, frame_center_x, frame_center_y, delta_x, delta_y, frame_width,
+                 frame_height):
         """
         Uses Dlib Object Tracking to set and update the currently tracked person
         Then if a PTZ camera is associated, it should move the camera in any direction automatically
         :return:
         """
-        # # Calculate the distance from the center
-        # distance_x = abs(centerX - frame_center_x)
-        # distance_y = abs(centerY - frame_center_y)
-        #
-        # # Normalize the distance (make it a value between 0 and 1)
-        # normalized_distance_x = distance_x / max_distance_x
-        # normalized_distance_y = distance_y / max_distance_y
-        #
-        # # Calculate the speed based on the normalized distance
-        # # The speed will be a value between 0.05 (for normalized_distance = 0) and 0.18 (for normalized_distance = 1)
-        # # Use a power function to make the speed increase more rapidly as the distance increases
-        # speed_x = 0.05 + (normalized_distance_x ** 3) * (0.2 - 0.05)
-        # speed_y = 0.05 + (normalized_distance_y ** 3) * (0.13 - 0.05)
-        #
-        # # If the object is within the delta range, set the speed to 0
-        # if abs(centerX - frame_center_x) <= delta_x:
-        #     speed_x = 0
-        # if abs(centerY - frame_center_y) <= delta_y:
-        #     speed_y = 0
-        #
-        # # Apply the direction to the speed
-        # if centerX > frame_center_x:
-        #     speed_x = -speed_x
-        # if centerY > frame_center_y:
-        #     speed_y = -speed_y
 
-        # Calculate the distance of the centroid from the center
-        distance = math.sqrt((centroid_x - frame_center_x)
-                             ** 2 + (centroid_y - frame_center_y) ** 2)
+        # Calculate the distance of the centroid from the center along X and Y axes
+        distance_x = abs(centroid_x - frame_center_x)
+        distance_y = abs(centroid_y - frame_center_y)
 
         # Calculate the maximum possible distance from the center to a corner
         max_distance = math.sqrt(
             (frame_width / 2) ** 2 + (frame_height / 2) ** 2)
 
         # Calculate the speed
-        speed = self.calculate_speed(distance, max_distance)
+        speed_x, speed_y = self.calculate_speed(distance_x, distance_y, max_distance)
 
-        self.ptz_control(centroid_x, centroid_y, speed, speed,
+        # Set speed to 0 if the object is within the delta range
+        if abs(centroid_x - frame_center_x) <= delta_x:
+            speed_x = 0
+        if abs(centroid_y - frame_center_y) <= delta_y:
+            speed_y = 0
+
+        self.ptz_control(centroid_x, centroid_y, speed_x, speed_y,
                          frame_center_x, frame_center_y, delta_x, delta_y)
 
         return
 
-    def calculate_speed(self, distance, max_distance):
-        # Normalize the distance
-        normalized_distance = distance / max_distance
+    def calculate_speed(self, distance_x, distance_y, max_distance):
+        # Normalize the distances
+        normalized_distance_x = distance_x / max_distance
+        normalized_distance_y = distance_y / max_distance
 
         # Apply easing function
         # This is a simple quadratic easing function (ease in and out)
-        eased_distance = normalized_distance * \
-            normalized_distance * (3 - 2 * normalized_distance)
+        eased_distance_x = normalized_distance_x * normalized_distance_x * (3 - 2 * normalized_distance_x)
+        eased_distance_y = normalized_distance_y * normalized_distance_y * (3 - 2 * normalized_distance_y)
 
         # Scale to desired range of speeds
-        speed = 2 + eased_distance * (7 - 2)
+        if self.ptz_is_usb:
+            speed_x = 2 + eased_distance_x * (7 - 2)
+            speed_y = 2 + eased_distance_y * (7 - 2)
+        else:
+            # Adjust the speed calculation for NDI camera
+            speed_x = 0.03 + eased_distance_x * (0.2 - 0.03)
+            speed_y = 0.03 + eased_distance_y * (0.13 - 0.03)
 
-        return round(speed)
+        return round(speed_x, 2), round(speed_y, 2)
 
     def ptz_control(self, centerX, centerY, speed_x, speed_y, frame_center_x, frame_center_y, delta_x, delta_y):
         # Define the directions
@@ -559,8 +553,15 @@ class CameraWidget(QLabel):
                         getattr(self.ptz_controller,
                                 f"move_{direction}_track")(speed_x)
                 else:
-                    ndi.recv_ptz_pan_tilt_speed(
-                        instance=self.ptz_controller, pan_speed=speed_x, tilt_speed=speed_y)
+                    if direction == "stop":
+                        ndi.recv_ptz_pan_tilt_speed(
+                            instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
+                    else:
+                        # Determine the direction of movement for NDI camera
+                        pan_speed = speed_x if "left" in direction else -speed_x
+                        tilt_speed = speed_y if "up" in direction else -speed_y
+                        ndi.recv_ptz_pan_tilt_speed(
+                            instance=self.ptz_controller, pan_speed=pan_speed, tilt_speed=tilt_speed)
                 self.last_request = direction
                 break
 
