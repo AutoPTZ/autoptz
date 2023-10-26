@@ -2,8 +2,12 @@ import cv2
 import os
 
 ROOT_DIR = os.path.abspath(os.curdir)
-TRAINER_PATH = ROOT_DIR + "/logic/facial_recognition/models/"
-ENCODINGS_PATH = ROOT_DIR + '/logic/facial_recognition/models/encodings.pickle'
+TRAINER_PATH = ROOT_DIR + "/logic/image_processing/models/"
+ENCODINGS_PATH = ROOT_DIR + '/logic/image_processing/models/encodings.pickle'
+CAFFEMODEL_PATH = ROOT_DIR + \
+    '/logic/image_processing/models/MobileNetSSD_deploy.caffemodel'
+PROTOTXT_PATH = ROOT_DIR + \
+    '/logic/image_processing/models/MobileNetSSD_deploy.prototxt'
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 CAMERA_STYLESHEET = """
                     QLabel[active="false"]{

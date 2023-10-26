@@ -1,7 +1,7 @@
 import os
-from logic.facial_recognition.dialogs.add_face import AddFaceDlg
-from logic.facial_recognition.dialogs.remove_face import RemoveFaceDlg
-from logic.facial_recognition.dialogs.reset_database import ResetDatabaseDlg
+from logic.image_processing.dialogs.add_face import AddFaceDlg
+from logic.image_processing.dialogs.remove_face import RemoveFaceDlg
+from logic.image_processing.dialogs.reset_database import ResetDatabaseDlg
 from shared.message_prompts import show_info_messagebox
 import shared.constants as constants
 

@@ -8,5 +8,10 @@ scipy
 watchdog
 pyserial
 ndi-python
-visca-over-ip
-git+https://github.com/ageitgey/face_recognition_models
+tensorflow
+mediapipe
+visca_over_ip
+face_recognition
+torch
+torchvision
+# conda install -c conda-forge dlib

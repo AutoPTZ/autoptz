@@ -1,5 +1,6 @@
 import pickle
 from multiprocessing import Manager
+# from multiprocess import managers
 import os
 from functools import partial
 from PySide6 import QtCore, QtWidgets
@@ -28,11 +29,10 @@ class AutoPTZ_MainWindow(QMainWindow):
 
         # setting up the UI and QT Threading
         super(AutoPTZ_MainWindow, self).__init__(*args, **kwargs)
-        self.threadpool = QtCore.QThreadPool()
-        self.threadpool.maxThreadCount()
-        self.setup_threads = []
         self.manager = Manager()
-        self.shared_camera_data = self.manager.dict()
+
+        # self.manager = managers.SharedMemoryManager()
+        # self.manager.ShareableList(sequence=[])
 
         # setting up main window
         self.setObjectName("AutoPTZ")
@@ -491,13 +491,13 @@ class AutoPTZ_MainWindow(QMainWindow):
         :param isNDI:
         :return:
         """
-        return lambda: self.addCameraWidget(source=src, menu_item=menu_item, isNDI=isNDI, shared_data=self.shared_camera_data)
+        return lambda: self.addCameraWidget(source=src, menu_item=menu_item, isNDI=isNDI, manager=self.manager)
 
-    def addCameraWidget(self, source, menu_item, shared_data, isNDI=False):
+    def addCameraWidget(self, source, menu_item, manager, isNDI=False):
         """Add NDI/Serial camera source from the menu to the FlowLayout"""
 
         camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3,
-                                     isNDI=isNDI, shared_data=shared_data)
+                                     isNDI=isNDI, manager=self.manager)
         if isNDI is False:
             constants.RUNNING_HARDWARE_CAMERA_WIDGETS.append(camera_widget)
         camera_widget.change_selection_signal.connect(self.updateElements)
@@ -513,7 +513,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         """Remove NDI/Serial camera source from camera FlowLayout"""
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
-            lambda index=source, item=menu_item: self.addCameraWidget(source=index, menu_item=item, shared_data=self.shared_camera_data))
+            lambda index=source, item=menu_item: self.addCameraWidget(source=index, menu_item=item, manager=self.manager))
         self.watch_trainer.remove_camera(camera_widget=camera_widget)
         if camera_widget in constants.RUNNING_HARDWARE_CAMERA_WIDGETS:
             if camera_widget.ptz_controller is not None:

@@ -15,6 +15,7 @@ def get_ndi_sources():
     if ndi_find is None:
         return 0
     ndi.find_wait_for_sources(ndi_find, 8000)
+    time.sleep(5)
     sources = []
 
     sources = ndi.find_get_current_sources(ndi_find)
