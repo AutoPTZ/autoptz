@@ -18,7 +18,7 @@ class ViscaPTZ:
         Continuous Movement to the left without stopping
         """
         try:
-            self.visca_ptz.left(speed)
+            self.visca_ptz.left(int(speed))
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
@@ -27,7 +27,7 @@ class ViscaPTZ:
         Continuous Movement to the right without stopping
         """
         try:
-            self.visca_ptz.right(speed)
+            self.visca_ptz.right(int(speed))
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
@@ -54,7 +54,7 @@ class ViscaPTZ:
         Continuous Movement to the left and up without stopping
         """
         try:
-            self.visca_ptz.left_up(speed, speed)
+            self.visca_ptz.left_up(int(abs(speed)), int((abs(speed))))
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
@@ -63,7 +63,7 @@ class ViscaPTZ:
         Continuous Movement to the right and up without stopping
         """
         try:
-            self.visca_ptz.right_up(speed, speed)
+            self.visca_ptz.right_up(int(abs(speed)), int((abs(speed))))
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
@@ -72,7 +72,7 @@ class ViscaPTZ:
         Continuous Movement to the left and down without stopping
         """
         try:
-            self.visca_ptz.left_down(speed, speed)
+            self.visca_ptz.left_down(int(abs(speed)), int((abs(speed))))
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
@@ -81,7 +81,7 @@ class ViscaPTZ:
         Continuous Movement to the right and down without stopping
         """
         try:
-            self.visca_ptz.right_down(speed, speed)
+            self.visca_ptz.right_down(int(abs(speed)), int((abs(speed))))
         except Exception as e:
             print(f"Please initialize a camera {e}")
 
