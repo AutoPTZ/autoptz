@@ -13,6 +13,7 @@ from logic.camera_search.search_ndi import get_ndi_sources
 from libraries.visca.move_visca_ptz import ViscaPTZ
 from logic.camera_search.get_serial_cameras import COMPorts
 from shared.message_prompts import show_info_messagebox
+from views.functions.add_ip_camera_ui import AddIPSourceDlg
 from views.functions.show_dialogs_ui import ShowDialog
 from views.functions.assign_network_ptz_ui import AssignNetworkPTZDlg
 from views.homepage.flow_layout import FlowLayout
@@ -401,6 +402,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionClose.setObjectName("actionClose")
         self.actionAdd_IP = QtWidgets.QWidgetAction(self)
         self.actionAdd_IP.setObjectName("actionAdd_IP")
+        self.actionAdd_IP.triggered.connect(self.addIPSource)
         self.menuAdd_NDI = QtWidgets.QMenu(self)
         self.menuAdd_NDI.setObjectName("menuAdd_NDI")
         self.menuAdd_Hardware = QtWidgets.QMenu(self)
@@ -459,6 +461,10 @@ class AutoPTZ_MainWindow(QMainWindow):
         observer.start()
         self.translateUi(self)
         QtCore.QMetaObject.connectSlotsByName(self)
+
+    def addIPSource(self):
+        dlg = AddIPSourceDlg(self)
+        dlg.exec()
 
     def findHardwareSources(self):
         """Adds camera sources to the Hardware source list"""

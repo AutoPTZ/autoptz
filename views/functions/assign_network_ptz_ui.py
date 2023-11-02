@@ -82,13 +82,13 @@ class AssignNetworkPTZIU(object):
                                                       "is enabled in your camera settings.")
         self.window.close()
 
-    def translate_ui(self, add_face):
+    def translate_ui(self, assign_net_ptz):
         """
         Automatic Translation Locale
         :param add_face:
         """
         _translate = QtCore.QCoreApplication.translate
-        add_face.setWindowTitle(_translate("assign_net_ptz", "Assign Network PTZ"))
+        assign_net_ptz.setWindowTitle(_translate("assign_net_ptz", "Assign Network PTZ"))
         self.allow_network_control.setText(
             _translate("allow_network_control", "VISCA Login for " + self.camera_widget.objectName() + ":"))
         self.port_line.setPlaceholderText(_translate("port_line", "Enter Port (Default=52381)"))
