@@ -11,6 +11,7 @@
 #   python -c "import onnxruntime; print(onnxruntime.get_available_providers())"
 #   # Should include 'CoreMLExecutionProvider'
 
-# NDI SDK runtime must be installed separately from ndi.video before cyndilib:
-# https://ndi.video/tools/ndi-downloads/
-# cyndilib>=0.0.10  # enable once NDI SDK is installed
+# ── NDI ingest + discovery (Phase 2) ─────────────────────────────────────────
+# NDI SDK runtime must be installed first from https://ndi.video/tools/ndi-downloads/
+# Then install cyndilib (Cython NDI bindings with frame-sync and PTZ support):
+# cyndilib==0.0.11  # uncomment once NDI SDK runtime is installed

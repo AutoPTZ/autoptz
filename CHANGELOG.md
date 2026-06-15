@@ -7,6 +7,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — v2.0.0a0
 
+### Added — Phase 2: Ingest adapters + continuous discovery
+
+- **`autoptz/engine/pipeline/ingest.py`** — `SourceAdapter` ABC with
+  target-fps pacing, stall detection (configurable timeout), and exponential
+  reconnect backoff (1 s → 2 → 4 … 30 s).  Concrete adapters:
+  - `USBAdapter` — OpenCV `VideoCapture` with platform backend
+    (AVFoundation / MSMF / V4L2).
+  - `RTSPAdapter` — PyAV (FFmpeg) with HW decode hints (VideoToolbox on
+    macOS, D3D11VA on Windows, NVDEC/CUVID on Linux); falls back to
+    `cv2.VideoCapture` if PyAV is not installed.
+  - `NDIAdapter` — cyndilib `FrameSyncReceiver`; gracefully absent if
+    cyndilib / NDI SDK runtime are not installed.
+  All adapters write BGR frames into an injected `ShmWriter` (resizing to
+  fit), expose a thread-safe `status` property, and run their capture loop
+  in a daemon thread.
+- **`autoptz/engine/discovery/ndi.py`** — `NDIDiscovery`: cyndilib
+  `Finder` polled at a configurable interval; fires `on_change` callbacks
+  with `("added"|"removed", NDISource)`.  No-ops gracefully without NDI.
+- **`autoptz/engine/discovery/usb.py`** — `USBDiscovery`: cross-platform
+  polling via `cv2.VideoCapture` index probing; on Linux also hooks
+  `pyudev` for sub-second hot-plug events.
+- **`autoptz/engine/discovery/onvif.py`** — `ONVIFDiscovery`: WS-Discovery
+  multicast using `wsdiscovery`; device removal detected after a miss
+  threshold (3 consecutive absent scans). No-ops without `wsdiscovery`.
+- **`autoptz/engine/pipeline/go2rtc.py`** — optional `Go2RTCGateway`:
+  launches a `go2rtc` subprocess, writes a config, health-checks the API,
+  and exposes stable `rtsp://localhost:{port}/{name}` URLs.
+- **`tools/ingest_probe.py`** — CLI tool to probe a single USB/RTSP/NDI
+  source or run all discovery services for a fixed duration; useful for
+  manual acceptance testing.
+- **`tests/test_ingest.py`** — unit tests for all three adapters with
+  mocked cv2 / PyAV / cyndilib; includes stall → reconnect timing test
+  and ShmWriter delivery / resize tests.
+- **`tests/test_discovery.py`** — unit tests for USB add/remove, NDI
+  add/remove, ONVIF add + miss-threshold removal, and graceful degradation
+  when optional packages are absent.
+- `requirements/base.txt`: added `av==14.4.0` (PyAV) and
+  `wsdiscovery==3.1.0`; cyndilib is noted in `requirements/macos.txt`
+  pending NDI SDK installation.
+
 ### Added — Phase 0: Foundations & scaffolding
 
 - **`autoptz/` package skeleton** matching the target architecture from

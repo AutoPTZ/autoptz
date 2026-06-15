@@ -27,6 +27,19 @@ visca-over-ip==0.5.1
 # ── UI (Phase 7+) ─────────────────────────────────────────────────────────────
 PySide6==6.8.3
 
+# ── video ingest (Phase 2) ────────────────────────────────────────────────────
+# PyAV: FFmpeg Python bindings for RTSP with HW decode (VideoToolbox/NVDEC/D3D11VA).
+# Optional — RTSPAdapter falls back to cv2.VideoCapture if not installed.
+av==14.4.0
+
+# ONVIF WS-Discovery for continuous IP camera detection.
+# Optional — ONVIFDiscovery logs a warning and no-ops if not installed.
+wsdiscovery==3.1.0
+
+# cyndilib (NDI) — added in requirements/macos.txt and requirements/gpu-nvidia.txt
+# where the NDI SDK runtime is expected; not listed here to avoid install failure
+# on machines without the NDI runtime.
+
 # ── utilities ─────────────────────────────────────────────────────────────────
 imutils==0.5.4
 scipy==1.15.3
