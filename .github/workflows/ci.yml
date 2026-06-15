@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: ["dev/v2-architecture-rework", "phase-*/**", "main"]
+  pull_request:
+    branches: ["dev/v2-architecture-rework", "main"]
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14          # Apple Silicon (arm64)
+            python-version: "3.12"
+          - os: windows-latest    # x64
+            python-version: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install base dependencies
+        run: pip install -r requirements/base.txt
+
+      - name: Install dev dependencies
+        run: pip install -r requirements/dev.txt
+
+      - name: Install autoptz package (editable)
+        run: pip install -e . --no-deps
+
+      - name: Lint (ruff)
+        run: ruff check autoptz/ tests/ tools/
+
+      - name: Type check (mypy)
+        run: mypy autoptz/engine/runtime/ tests/
+
+      - name: Run unit tests
+        run: pytest tests/ -v --timeout=60
+
+      - name: Selftest
+        # Run with spawn-safe multiprocessing; timeout guard
+        run: python -m autoptz --selftest --log-level INFO
+        timeout-minutes: 2

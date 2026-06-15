@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoptz"
+version = "2.0.0a0"
+description = "AutoPTZ v2 — AI-driven PTZ camera tracking"
+requires-python = ">=3.12"
+readme = "autoptz/README.md"
+license = {file = "LICENSE.md"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["autoptz*", "tools*"]
+
+# ── ruff ──────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "C4"]
+ignore = [
+  "E501",   # line length enforced by formatter, not linter
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["autoptz", "tools"]
+
+# ── mypy ──────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+# Placeholder modules have no real content yet; skip them
+exclude = [
+  "autoptz/engine/supervisor\\.py",
+  "autoptz/engine/camera_worker\\.py",
+  "autoptz/engine/pipeline/(?!__init__)",
+  "autoptz/engine/ptz/(?!base\\.py|__init__)",
+  "autoptz/engine/discovery/",
+  "autoptz/engine/identity/",
+  "autoptz/config/",
+  "autoptz/ui/",
+  "tools/",
+]
+
+# ── pytest ─────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 60
