@@ -37,9 +37,9 @@ ignore_missing_imports = true
 exclude = [
   "autoptz/engine/supervisor\\.py",
   "autoptz/engine/camera_worker\\.py",
-  # Phase 2 implemented: ingest.py, go2rtc.py — keep only stub pipeline files excluded
-  "autoptz/engine/pipeline/(?!__init__|ingest|go2rtc)",
-  "autoptz/engine/ptz/(?!base\\.py|__init__)",
+  # Phase 2+3 implemented: ingest, go2rtc, detect, track — exclude remaining stubs
+  "autoptz/engine/pipeline/(framing|identify|pose|reid)\\.py",
+  # Phase 5 implemented: all ptz/ files — no longer excluded
   # Phase 2 implemented: ndi.py, usb.py, onvif.py — no longer excluded
   "autoptz/engine/identity/",
   # Phase 1 implemented: config/ no longer excluded

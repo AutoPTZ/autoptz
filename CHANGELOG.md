@@ -35,6 +35,71 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   invalid-row quarantine), and event logging.
 - SQLite is stdlib; no new runtime dependency. `pydantic` already listed.
 
+### Added — Phase 5: PTZ backends + closed-loop controller
+
+- **`autoptz/engine/ptz/base.py`** — Full rewrite:
+  - `PTZCaps` dataclass: capability flags (continuous pan/tilt/zoom, absolute moves,
+    native presets, position query, per-axis speed ceilings).
+  - `PTZState` dataclass: normalized position snapshot (pan/tilt [-1,1], zoom [0,1]).
+  - `PTZBackend` ABC: `move_velocity`, `move_absolute` (optional), `stop`, `get_position`,
+    `goto_preset`, `save_preset`, `close`; context-manager support.
+  - Shared VISCA byte helpers used by both serial and IP backends:
+    `visca_pantilt_cmd`, `visca_zoom_cmd`, `visca_stop_cmd`, `visca_zoom_stop_cmd`,
+    `visca_preset_set_cmd`, `visca_preset_recall_cmd`.
+- **`autoptz/engine/ptz/visca_usb.py`** — `ViscaUSBBackend`: pyserial VISCA/serial
+  backend.  Normalized [-1,1] → VISCA speed bytes (0x01–0x18 pan, 0x01–0x14 tilt,
+  0x01–0x07 zoom).  Drains pending ACK bytes before each write to prevent buffer
+  stall.  Native preset memory commands (81 01 04 3F 01/02 MM FF).
+- **`autoptz/engine/ptz/visca_ip.py`** — `ViscaIPBackend`: VISCA-over-TCP backend
+  with two wire formats: ``"sony"`` (8-byte header per Sony VISCA-over-IP spec) and
+  ``"raw"`` (plain bytes over TCP; default; compatible with PTZOptics/BirdDog/Lumens).
+  Implements `get_position()` via `PanTiltPosInq` + `ZoomPosInq` inquiries; returns
+  `None` on cameras that don't answer.
+- **`autoptz/engine/ptz/ndi_ptz.py`** — `NDIPTZBackend`: cyndilib NDI PTZ receiver
+  backend (`recv_ptz_pan_tilt_speed`, `recv_ptz_zoom_speed`, `recv_ptz_preset_store`,
+  `recv_ptz_preset_recall`).  Optional — raises `ImportError` with install instructions
+  if cyndilib is absent.  Caller owns the receiver lifetime.
+- **`autoptz/engine/ptz/onvif_ptz.py`** — `ONVIFPTZBackend`: ONVIF PTZ via
+  `onvif-zeep`.  Implements `ContinuousMove`, `AbsoluteMove`, `Stop`, `GetStatus`,
+  `GotoPreset`, `SetPreset`.  Auto-selects first media profile; capability flags
+  probed from `GetConfigurationOptions`.  Optional — raises `ImportError` if package
+  is absent.
+- **`autoptz/engine/ptz/controller.py`** — `PTZController`: rate-limited closed-loop
+  controller (default 20 Hz PTZ thread):
+  - `OneEuroFilter`: adaptive low-pass filter (Casiez et al. 2012); per-axis for pan
+    and tilt error.  Low lag on fast motion, low jitter on slow motion.
+  - Control pipeline per tick: error → dead-zone (elliptical, per-axis) → one-euro
+    filter → PD + velocity feed-forward (`Kp·e + Kd·ė + Kv·v`) → per-camera speed
+    ceiling → clamp [-1,1] → ease-in response curve (|x|^1.5) → `move_velocity()`.
+  - Zoom controller: proportional error on `subject_height` vs framing target
+    (tight=0.65, medium=0.45, wide=0.25) with ±5 % hysteresis band.
+  - Coast-on-loss: when `track_active` goes False, holds last velocity for
+    `coast_window_ms`, then `backend.stop()` and enters `SEARCHING` state.
+  - Filters reset on target re-acquisition to avoid derivative spikes.
+  - Rate-limit suppression: skips `move_velocity()` if command unchanged within ±1e-4.
+  - Reliable `stop()` on all exit paths: thread join + `backend.stop()` in
+    `try/finally`; background thread also calls `backend.stop()` on clean exit.
+  - `step()` method for synchronous use in tests (injected timestamps, no thread).
+  - `update()` method for inference-thread → PTZ-thread handoff (lock-protected).
+  - Context manager: `__enter__` starts thread, `__exit__` calls `close()`.
+- **`tests/test_ptz.py`** — 68 unit tests covering:
+  - `PTZCaps` / `PTZState` dataclass defaults.
+  - All VISCA byte helpers (stop, zoom stop, pan/tilt command encoding, preset cmds).
+  - `OneEuroFilter`: pass-through init, convergence to constant, low-lag on step,
+    reset, timestamp-free mode.
+  - Helper `_clamp` and `_shape` (ease-in, sign preservation, unity).
+  - Controller math: zero error, positive/negative error direction, feed-forward
+    increases command, dead-zone suppression, dead-zone pass-through, invert pan/tilt,
+    max-speed scaling, clamp to ±1, response curve, commands sent to backend.
+  - Controller state machine: IDLE → TRACKING → COASTING → SEARCHING; re-acquisition;
+    coast sends last velocity; coast expiry calls `backend.stop()`.
+  - Zoom controller: auto_zoom off, tall/short subject, in-band no-zoom, speed clamp.
+  - Presets: `goto_preset` / `save_preset` dispatch; multiple slots.
+  - Thread lifecycle: start/stop, `close()` closes backend, context manager,
+    stop-without-start, double-start idempotency, thread delivers commands.
+  - Rate-limit and smoothing behaviour.
+- `requirements/base.txt`: added `onvif-zeep==0.2.12` (optional ONVIF dep).
+
 ### Added — Phase 3: Detection + tracking core
 
 - **`autoptz/engine/pipeline/detect.py`** — `PersonDetector` wrapping an ONNX

@@ -23,6 +23,8 @@ msgpack==1.1.0
 # ── PTZ control ───────────────────────────────────────────────────────────────
 pyserial==3.5
 visca-over-ip==0.5.1
+# ONVIF PTZ (optional — ONVIFPTZBackend degrades with ImportError if absent)
+onvif-zeep==0.2.12
 
 # ── UI (Phase 7+) ─────────────────────────────────────────────────────────────
 PySide6==6.8.3
