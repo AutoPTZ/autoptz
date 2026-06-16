@@ -40,6 +40,10 @@ wsdiscovery==3.1.0
 # where the NDI SDK runtime is expected; not listed here to avoid install failure
 # on machines without the NDI runtime.
 
+# ── config & persistence (Phase 1) ──────────────────────────────────────────
+# SQLite is stdlib; no extra dep needed.
+# pydantic already listed above; models.py and store.py use only stdlib + pydantic.
+
 # ── detection + tracking (Phase 3) ───────────────────────────────────────────
 # onnx is used to build synthetic test models (also needed by boxmot).
 onnx==1.17.0

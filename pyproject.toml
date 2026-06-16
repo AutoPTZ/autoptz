@@ -42,7 +42,7 @@ exclude = [
   "autoptz/engine/ptz/(?!base\\.py|__init__)",
   # Phase 2 implemented: ndi.py, usb.py, onvif.py — no longer excluded
   "autoptz/engine/identity/",
-  "autoptz/config/",
+  # Phase 1 implemented: config/ no longer excluded
   "autoptz/ui/",
   "tools/",
 ]

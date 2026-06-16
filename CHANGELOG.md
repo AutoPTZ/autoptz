@@ -7,6 +7,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — v2.0.0a0
 
+### Added — Phase 1: Config & persistence
+
+- **`autoptz/config/models.py`** — Frozen pydantic models for the full config
+  hierarchy: `AppConfig`, `CameraConfig`, `SourceConfig`, `TrackingConfig`,
+  `PTZConfig`, `PanTiltZoomLimits`, `PTZPreset`, `TargetConfig`,
+  `ReconnectConfig`, `HardwarePrefs`, `ThemeConfig`, `TilePlacement`,
+  `Layout`, `IdentityRecord`.  All models are immutable (frozen) and
+  UUID-addressed — never by list position or global state.
+- **`autoptz/config/store.py`** — `ConfigStore`: SQLite-backed persistence
+  with WAL mode and FK enforcement.  Key features:
+  - Schema from §6.3: `app_settings`, `cameras`, `ptz_presets`, `identities`,
+    `identity_embeddings`, `layouts`, `events` tables.
+  - `schema_version` migration runner: numbered upgrade functions applied in
+    order, each in its own transaction.  A DB with `schema_version=0` is
+    automatically migrated to the current version on first open.
+  - Platform config-dir resolution: `~/Library/Application Support/AutoPTZ/`
+    on macOS, `%APPDATA%\AutoPTZ\` on Windows, `~/.config/AutoPTZ/` on Linux.
+  - Debounced writes (`save_camera_debounced`): coalesces rapid slider-drag
+    saves; `flush()` on clean shutdown.
+  - JSON export/import (`export_show` / `import_show`): self-contained "show
+    file" portable across machines; `merge=True` preserves existing rows.
+  - Invalid rows quarantined to `store.quarantine`, not fatal.
+- **`tests/test_config.py`** — 44 unit tests covering model validation,
+  bootstrap/migration, camera CRUD (simulated restart), debounced writes,
+  AppConfig round-trip, JSON export/import (equality, merge, identity blobs,
+  invalid-row quarantine), and event logging.
+- SQLite is stdlib; no new runtime dependency. `pydantic` already listed.
+
 ### Added — Phase 3: Detection + tracking core
 
 - **`autoptz/engine/pipeline/detect.py`** — `PersonDetector` wrapping an ONNX
