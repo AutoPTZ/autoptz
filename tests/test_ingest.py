@@ -9,21 +9,15 @@ import sys
 import threading
 import time
 import types
-from typing import Iterator
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from autoptz.engine.pipeline.ingest import (
     AdapterState,
-    AdapterStatus,
     NDIAdapter,
     RTSPAdapter,
-    SourceAdapter,
     USBAdapter,
-    _probe_av,
-    _probe_ndi,
 )
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -98,8 +92,6 @@ class TestUSBAdapterReconnect:
         """After stall_timeout without a frame, _open() should be called again."""
         open_calls: list[float] = []
         frame_count = 0
-
-        original_open = USBAdapter._open
 
         def fake_open(self: USBAdapter) -> bool:
             open_calls.append(time.monotonic())
@@ -293,7 +285,7 @@ class TestRTSPAdapterPyAV:
 
     def test_open_and_read_with_pyav(self) -> None:
         frame = np.full((_H, _W, 3), 7, dtype=np.uint8)
-        av_mod = self._make_mock_av_module([frame])
+        self._make_mock_av_module([frame])
 
         import autoptz.engine.pipeline.ingest as ingest_mod
         ingest_mod._AV_AVAILABLE = True  # force probe to True

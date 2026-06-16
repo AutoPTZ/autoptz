@@ -6,17 +6,13 @@ NDI SDK, or ONVIF-capable devices.
 from __future__ import annotations
 
 import sys
-import threading
 import time
 import types
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from autoptz.engine.discovery.ndi import NDIDiscovery, NDISource
 from autoptz.engine.discovery.onvif import ONVIFDevice, ONVIFDiscovery
 from autoptz.engine.discovery.usb import USBDevice, USBDiscovery
-
 
 # ── USBDiscovery ───────────────────────────────────────────────────────────────
 
@@ -184,7 +180,7 @@ def _remove_mock_cyndilib_for_discovery() -> None:
         sys.modules.pop(mod, None)
     import autoptz.engine.discovery.ndi as ndi_mod  # re-import to clear state
     # Reset any cached state
-    ndi_mod.NDIDiscovery  # just reference to confirm importable
+    assert ndi_mod.NDIDiscovery is not None  # confirm importable
 
 
 class TestNDIDiscovery:

@@ -100,6 +100,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Rate-limit and smoothing behaviour.
 - `requirements/base.txt`: added `onvif-zeep==0.2.12` (optional ONVIF dep).
 
+### Added — Phase 7: UI — camera wall + live preview
+
+- **`autoptz/ui/engine_client.py`** — Typed QObject wrapper over the engine
+  command/telemetry contract.  In-process today; swappable for WebSocket later
+  without touching QML.
+  - `CameraRecord` dataclass: per-camera mutable state (tracking flag, target
+    ID, last telemetry, SHM geometry).  `shm_name` derived automatically from
+    `camera_id`.  Properties: `fps`, `health`, `tracks_as_list()`,
+    `ptz_as_dict()`.
+  - `CameraListModel(QAbstractListModel)`: 11 roles (`CameraIdRole` through
+    `ShmHeightRole`).  `add_camera`, `remove_camera`, `update_telemetry`.
+    `@Slot swapCameras(id_a, id_b)` and `moveCamera(id, idx)` for drag-reorder
+    via `layoutAboutToBeChanged/layoutChanged`.
+  - `EngineClient(QObject)`: signals `cameraAdded`, `cameraRemoved`,
+    `telemetryUpdated`, `errorOccurred`; slots `addCamera`, `removeCamera`,
+    `enableTracking`, `setTarget`, `clearTarget`, `ptzNudge`, `ptzGoToPreset`.
+    `push_telemetry()` thread-safe (called from engine thread).
+    `drain_commands()` returns and clears the pending command deque.
+- **`autoptz/ui/providers/__init__.py`** — `ShmFrameProvider(QQuickImageProvider)`:
+  bridges SHM frames to QML `Image` sources.  `attach/detach/detach_all` manage
+  per-camera `ShmReader` instances.  `requestImage` strips the `?r=N` cache-
+  buster suffix before looking up the reader; returns a placeholder QImage when
+  no frame is available.
+- **`autoptz/ui/app.py`** — `run()` entry point: constructs `QGuiApplication`,
+  `EngineClient`, and `ShmFrameProvider`; registers the image provider as
+  `"frame"`; exposes `engineClient` to QML; loads `CameraWall.qml`.
+- **`autoptz/ui/qml/CameraWall.qml`** — `ApplicationWindow` with dark palette,
+  header toolbar (camera count + Add Camera button), collapsible left rail, and
+  a `GridView` camera wall.  Auto-column count (`⌈√count⌉`), 16:9 cell aspect
+  ratio.  Drag-reorder via `DragHandler` + `DropArea` → `swapCameras()`.
+  Add Camera dialog with URI + display name fields.
+- **`autoptz/ui/qml/CameraTile.qml`** — Per-camera tile with:
+  - Live video preview via `image://frame/<id>?r=<tick>` (10 Hz cache-bust timer).
+  - Person bounding-box `Repeater` (normalized [0,1] coords).  Target box
+    highlighted in green; click any box to `setTarget`.
+  - Centre reticle crosshair + dead-zone ellipse (Canvas, visible when tracking).
+  - FPS/health chip (color-coded: green ≥20 fps, yellow ≥10, red otherwise).
+  - State banner (`RECONNECTING`, `ERROR`, `STOPPED`, `SEARCHING`).
+  - Bottom bar: status label + tracking toggle `Switch`.
+  - Arrow-key PTZ nudge + Space-key tracking toggle (keyboard shortcuts when
+    tile is selected).
+- **`tests/test_ui.py`** — 53 tests (all passing without a display):
+  - `CameraRecord`: `shm_name` derivation, `fps`/`health`/`tracks_as_list()`
+    defaults and with telemetry.
+  - `CameraListModel`: CRUD, duplicate guard, role data, telemetry update,
+    swap/move operations, invalid-index safety.
+  - `EngineClient`: `addCamera`/`removeCamera`, `enableTracking`, `setTarget`,
+    `clearTarget`, `ptzNudge`, `ptzGoToPreset`, `push_telemetry` updates model,
+    `drain_commands` returns and clears queue, command ordering, thread-safe
+    telemetry, concurrent push.
+  - `ShmFrameProvider` tests gated by `AUTOPTZ_GUI_TESTS=1` (needs display).
+- Total tests: **302**.
+
 ### Added — Phase 3: Detection + tracking core
 
 - **`autoptz/engine/pipeline/detect.py`** — `PersonDetector` wrapping an ONNX

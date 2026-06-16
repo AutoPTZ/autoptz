@@ -43,7 +43,7 @@ exclude = [
   # Phase 2 implemented: ndi.py, usb.py, onvif.py — no longer excluded
   "autoptz/engine/identity/",
   # Phase 1 implemented: config/ no longer excluded
-  "autoptz/ui/",
+  # Phase 7 implemented: ui/ no longer excluded
   "tools/",
 ]
 
