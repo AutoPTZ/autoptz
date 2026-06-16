@@ -16,3 +16,12 @@
 /.idea
 /dlib/
 /logic/image_processing/models/
+
+# AutoPTZ v2
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.pytest_cache/
+dist/
+build/
