@@ -22,8 +22,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QProgressBar,
     QTabBar,
     QTabWidget,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -63,6 +65,7 @@ class MainWindow(QMainWindow):
         self._theme = theme
         self._docks: dict[str, QDockWidget] = {}
         self._selected_camera: str = ""
+        self._shown_optional_setup_prompt = False
 
         self.setWindowTitle("AutoPTZ")
         self.setDockNestingEnabled(True)
@@ -74,6 +77,7 @@ class MainWindow(QMainWindow):
         self._build_status_bar()
 
         _connect(client, "engineStateChanged", self._refresh_engine_state)
+        _connect(client, "startupProgressChanged", self._refresh_startup_progress)
         _connect(client, "errorOccurred", self._on_error)
         # Segmented section tabs bake in literal palette colors, so restyle them
         # whenever the appearance flips.
@@ -106,11 +110,22 @@ class MainWindow(QMainWindow):
     # ── central ──────────────────────────────────────────────────────────────────
 
     def _build_central(self) -> None:
-        self._wall = CameraWall(self._client, self._frames, self)
+        holder = QWidget(self)
+        col = QVBoxLayout(holder)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        self._startup_bar = QProgressBar(holder)
+        self._startup_bar.setTextVisible(True)
+        self._startup_bar.setFixedHeight(5 + self.fontMetrics().height())
+        self._startup_bar.setRange(0, 0)
+        self._startup_bar.setVisible(False)
+        col.addWidget(self._startup_bar)
+        self._wall = CameraWall(self._client, self._frames, holder)
         self._wall.cameraSelected.connect(self._on_camera_selected)
         self._wall.cameraInfoRequested.connect(self._on_camera_info_requested)
         self._wall.addCameraRequested.connect(self._open_cameras_menu)
-        self.setCentralWidget(self._wall)
+        col.addWidget(self._wall, 1)
+        self.setCentralWidget(holder)
 
     # ── docks ──────────────────────────────────────────────────────────────────
 
@@ -585,6 +600,38 @@ class MainWindow(QMainWindow):
         # "Stop All Tracking" only makes sense with a live engine and ≥1 camera.
         cams = _safe(lambda: len(self._client.cameraModel.camera_ids()), 0) or 0
         self._act_stop_tracking.setEnabled(running and cams > 0)
+        self._refresh_startup_progress()
+
+    def _refresh_startup_progress(self) -> None:
+        bar = getattr(self, "_startup_bar", None)
+        if bar is None:
+            return
+        active = bool(_safe(lambda: self._client.startupActive, False))
+        phase = str(_safe(lambda: self._client.startupPhase, "") or "")
+        started = int(_safe(lambda: self._client.startupStartedCameras, 0) or 0)
+        total = int(_safe(lambda: self._client.startupTotalCameras, 0) or 0)
+        missing = list(_safe(lambda: self._client.startupMissingComponents, []) or [])
+        if active:
+            if total > 0:
+                bar.setRange(0, total)
+                bar.setValue(max(0, min(total, started)))
+                bar.setFormat(f"{phase} · {started}/{total}")
+            else:
+                bar.setRange(0, 0)
+                bar.setFormat(phase or "Starting engine")
+            bar.setVisible(True)
+            if missing and not self._shown_optional_setup_prompt:
+                self._shown_optional_setup_prompt = True
+                dock = self._docks.get("services")
+                if dock is not None:
+                    dock.show()
+                    dock.raise_()
+                self.statusBar().showMessage(
+                    "Optional tracking components are missing. Review Services setup.",
+                    8000,
+                )
+        else:
+            bar.setVisible(False)
 
     def _on_error(self, message: str) -> None:
         self.statusBar().showMessage(message, 6000)

@@ -62,6 +62,19 @@ class TestLatencyTelemetryField:
         assert restored.latency_ms == pytest.approx(12.5)
 
 
+class TestOptionalComponentDiagnostics:
+    def test_optional_components_include_setup_details(self) -> None:
+        from autoptz.engine.runtime.diagnostics import optional_components
+
+        rows = optional_components()
+        keys = {r["key"] for r in rows}
+        assert {"reid", "pose", "face"}.issubset(keys)
+        for row in rows:
+            assert row["source"]
+            assert row["path"]
+            assert row["network"]
+
+
 class _FakeSource:
     """Deterministic frame source yielding solid-colour frames."""
 

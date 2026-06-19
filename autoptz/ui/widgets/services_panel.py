@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QFrame,
     QVBoxLayout,
     QWidget,
 )
@@ -100,6 +101,13 @@ class ServicesPanel(QWidget):
         # Live on/off switches for the heavy ML stages; each saves CPU when off.
         root.addWidget(hline())
         root.addWidget(section_label("Subsystems"))
+        perf = QPushButton("Performance Mode")
+        perf.setToolTip(
+            "Disable Face recognition and Pose while keeping preview, detection, "
+            "and tracking on."
+        )
+        perf.clicked.connect(self._enable_performance_mode)
+        root.addWidget(perf)
         for key, label, tip in _FEATURE_TOGGLES:
             row = QHBoxLayout()
             row.setSpacing(6)
@@ -114,7 +122,13 @@ class ServicesPanel(QWidget):
         _connect(client, "featuresChanged", self._refresh_features)
 
         root.addWidget(hline())
+        root.addWidget(section_label("Optional Setup"))
+        self._setup_list = QVBoxLayout()
+        self._setup_list.setSpacing(6)
+        root.addLayout(self._setup_list)
+        _connect(client, "optionalComponentsChanged", self._refresh_optional_components)
 
+        root.addWidget(hline())
         self._list = QVBoxLayout()
         self._list.setSpacing(0)
         root.addLayout(self._list)
@@ -127,6 +141,7 @@ class ServicesPanel(QWidget):
         self._timer.timeout.connect(self.refresh)
         self._timer.start(1500)
         self._refresh_features()
+        self._refresh_optional_components()
         self.refresh()
 
     def _restyle(self) -> None:
@@ -184,6 +199,64 @@ class ServicesPanel(QWidget):
                 box.blockSignals(True)
                 box.setChecked(on)
                 box.blockSignals(False)
+
+    def _enable_performance_mode(self) -> None:
+        _safe(lambda: self._client.setFeatureEnabled("face_recognition", False), None)
+        _safe(lambda: self._client.setFeatureEnabled("pose", False), None)
+        _safe(lambda: self._client.setFeatureEnabled("detection", True), None)
+        _safe(lambda: self._client.setFeatureEnabled("tracking", True), None)
+        self._refresh_features()
+
+    def _refresh_optional_components(self) -> None:
+        while self._setup_list.count():
+            item = self._setup_list.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        rows = _safe(lambda: self._client.optionalComponents(), []) or []
+        visible = [r for r in rows if r.get("state") != "ok"]
+        if not visible:
+            lab = QLabel("All optional components are available.")
+            lab.setStyleSheet(f"color: {T.CURRENT.subtext};")
+            self._setup_list.addWidget(lab)
+            return
+        for row in visible:
+            self._setup_list.addWidget(self._setup_row(row))
+
+    def _setup_row(self, row: dict[str, Any]) -> QWidget:
+        key = str(row.get("key", ""))
+        box = QFrame()
+        box.setFrameShape(QFrame.Shape.NoFrame)
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(5)
+        box.setStyleSheet(
+            f"QFrame {{ background: {T.CURRENT.surface_hov};"
+            f" border: 1px solid {T.CURRENT.border}; border-radius: {T.RADIUS}px; }}"
+        )
+        title = QLabel(f"<b>{row.get('name', key)}</b>")
+        title.setTextFormat(Qt.TextFormat.RichText)
+        detail = QLabel(
+            f"{row.get('detail', '')}<br>"
+            f"<span style='color:{T.CURRENT.subtext}'>"
+            f"Source: {row.get('source', '—')} · Size: {row.get('size', '—')}<br>"
+            f"Path: {row.get('path', '—')}<br>{row.get('network', '')}</span>"
+        )
+        detail.setTextFormat(Qt.TextFormat.RichText)
+        detail.setWordWrap(True)
+        lay.addWidget(title)
+        lay.addWidget(detail)
+        actions = QHBoxLayout()
+        retry = QPushButton("Retry setup")
+        retry.clicked.connect(lambda _=False, k=key: self._client.retryOptionalComponent(k))
+        ignore = QPushButton("Ignore forever")
+        ignore.setEnabled(not bool(row.get("ignored")))
+        ignore.clicked.connect(lambda _=False, k=key: self._client.setOptionalComponentIgnored(k, True))
+        actions.addWidget(retry)
+        actions.addWidget(ignore)
+        actions.addStretch(1)
+        lay.addLayout(actions)
+        return box
 
     def _ensure_row(self, key: str) -> None:
         if key in self._rows:

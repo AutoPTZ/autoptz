@@ -30,6 +30,7 @@ from PySide6.QtCore import (
     QObject,
     QPersistentModelIndex,
     Qt,
+    QThread,
     Signal,
     Slot,
 )
@@ -628,6 +629,8 @@ class EngineClient(QObject):
     themeChanged     = Signal(str)     # "dark"|"light"|"system"
     featuresChanged  = Signal()        # global subsystem switches changed
     overlaysChanged  = Signal()        # which on-video overlays are shown changed
+    startupProgressChanged = Signal()  # startup active/phase/counts changed
+    optionalComponentsChanged = Signal()  # optional model/dependency prompt state
     targetChanged    = Signal(str)     # camera_id — the tracked target changed
     trackingChanged  = Signal(str)     # camera_id — tracking on/off changed
     errorOccurred    = Signal(str)     # human-readable message
@@ -645,6 +648,7 @@ class EngineClient(QObject):
     _telemetryArrived = Signal(object)  # TelemetryMsg
     # ── internal: marshals a worker-thread harvested identity onto the GUI thread
     _identityArrived = Signal(object)   # IdentityRecord
+    _startupProgressArrived = Signal(object)  # dict payload
 
     def __init__(
         self,
@@ -671,6 +675,11 @@ class EngineClient(QObject):
         self._supervisor_factory: Callable[[EngineClient], Any] | None = None
         self._engine_running: bool = False
         self._engine_ep: str = ""
+        self._startup_active: bool = False
+        self._startup_phase: str = ""
+        self._startup_started_cameras: int = 0
+        self._startup_total_cameras: int = 0
+        self._startup_missing_components: list[str] = []
 
         # Shared identity gallery (set by the supervisor when the engine starts).
         # When present, identity CRUD delegates to it so the running engine
@@ -692,6 +701,9 @@ class EngineClient(QObject):
         # Same pattern for worker-thread identity harvests.
         self._identityArrived.connect(
             self._on_identity_main, Qt.ConnectionType.QueuedConnection,
+        )
+        self._startupProgressArrived.connect(
+            self._on_startup_progress_main, Qt.ConnectionType.QueuedConnection,
         )
 
         # Periodically forget auto-harvested "Person N" identities that haven't
@@ -782,6 +794,28 @@ class EngineClient(QObject):
         """Active inference EP label (e.g. ``"CoreML"``, ``"CPU"``, or ``""``)."""
         return self._engine_ep
 
+    @Property(bool, notify=startupProgressChanged)
+    def startupActive(self) -> bool:
+        """True while staged engine/camera/model startup is in progress."""
+        return self._startup_active
+
+    @Property(str, notify=startupProgressChanged)
+    def startupPhase(self) -> str:
+        """Short user-facing startup phase shown by the top loading bar."""
+        return self._startup_phase
+
+    @Property(int, notify=startupProgressChanged)
+    def startupStartedCameras(self) -> int:
+        return self._startup_started_cameras
+
+    @Property(int, notify=startupProgressChanged)
+    def startupTotalCameras(self) -> int:
+        return self._startup_total_cameras
+
+    @Property("QVariantList", notify=startupProgressChanged)
+    def startupMissingComponents(self) -> list[str]:
+        return list(self._startup_missing_components)
+
     def set_supervisor(self, supervisor: Any | None) -> None:
         """Inject the supervisor instance the lifecycle slots will drive."""
         self._supervisor = supervisor
@@ -821,10 +855,31 @@ class EngineClient(QObject):
             log.warning("startEngine: no supervisor injected")
             self.errorOccurred.emit("Engine not available (no supervisor configured)")
             return
+        self._set_startup_progress(
+            active=True,
+            phase="Starting engine",
+            started=0,
+            total=len(self._model.camera_ids()),
+            missing=self._missing_optional_components(promptable_only=True),
+        )
         try:
-            self._supervisor.start()
+            try:
+                self._supervisor.start(
+                    staged=True,
+                    progress=self._set_startup_progress,
+                )
+            except TypeError:
+                # Test fakes and older supervisors keep the no-arg contract.
+                self._supervisor.start()
+                self._set_startup_progress(
+                    active=False,
+                    phase="Ready",
+                    started=len(self._model.camera_ids()),
+                    total=len(self._model.camera_ids()),
+                )
         except Exception as exc:  # noqa: BLE001
             log.exception("Supervisor start failed")
+            self._set_startup_progress(active=False, phase="Startup failed")
             self.errorOccurred.emit(f"Engine failed to start: {exc}")
             return
 
@@ -854,10 +909,59 @@ class EngineClient(QObject):
                 log.exception("Supervisor stop failed")
         self._engine_running = False
         self._engine_ep = ""
+        self._set_startup_progress(active=False, phase="")
         # Detach the (now-stopped) engine's gallery; CRUD reverts to store-only.
         self._identity_service = None
         self.engineStateChanged.emit()
         log.info("Engine stopped")
+
+    def _set_startup_progress(
+        self,
+        *,
+        active: bool | None = None,
+        phase: str | None = None,
+        started: int | None = None,
+        total: int | None = None,
+        missing: list[str] | None = None,
+    ) -> None:
+        """Update startup progress from the GUI thread or supervisor thread.
+
+        The supervisor calls this from its staged startup thread; marshal back to
+        the QObject owner thread before mutating Qt-facing properties.
+        """
+        payload = {
+            "active": active,
+            "phase": phase,
+            "started": started,
+            "total": total,
+            "missing": missing,
+        }
+        if self.thread() is not QThread.currentThread():
+            self._startupProgressArrived.emit(payload)
+            return
+        self._apply_startup_progress(payload)
+
+    @Slot(object)
+    def _on_startup_progress_main(self, payload: dict[str, Any]) -> None:
+        self._apply_startup_progress(payload)
+
+    def _apply_startup_progress(self, payload: dict[str, Any]) -> None:
+        active = payload.get("active")
+        phase = payload.get("phase")
+        started = payload.get("started")
+        total = payload.get("total")
+        missing = payload.get("missing")
+        if active is not None:
+            self._startup_active = bool(active)
+        if phase is not None:
+            self._startup_phase = str(phase)
+        if started is not None:
+            self._startup_started_cameras = max(0, int(started))
+        if total is not None:
+            self._startup_total_cameras = max(0, int(total))
+        if missing is not None:
+            self._startup_missing_components = list(missing)
+        self.startupProgressChanged.emit()
 
     @Slot()
     def restartEngine(self) -> None:
@@ -1333,6 +1437,77 @@ class EngineClient(QObject):
         self.setSetting("features", feats)
         self._enqueue(SetFeaturesCmd(camera_id=None, features=feats))
         self.featuresChanged.emit()
+
+    # ── optional component setup / ignore state ─────────────────────────────
+
+    _OPTIONAL_COMPONENTS = ("reid", "pose", "face")
+
+    @Slot(result="QVariantList")
+    def optionalComponents(self) -> list[dict[str, Any]]:
+        """Return optional model/dependency setup rows for the Services panel.
+
+        ``ignored`` is persisted per component so "ignore forever" hides future
+        launch prompts without hiding health rows or the manual Retry action.
+        """
+        ignored = self.getSetting("optional_components_ignored", {}) or {}
+        out = []
+        try:
+            from autoptz.engine.runtime.diagnostics import optional_components
+
+            rows = optional_components()
+        except Exception:  # noqa: BLE001
+            rows = []
+        for row in rows:
+            key = str(row.get("key", ""))
+            if key not in self._OPTIONAL_COMPONENTS:
+                continue
+            item = dict(row)
+            item["ignored"] = bool(ignored.get(key, False))
+            item["prompt"] = item.get("state") != "ok" and not item["ignored"]
+            out.append(item)
+        return out
+
+    @Slot(str, bool)
+    def setOptionalComponentIgnored(self, key: str, ignored: bool) -> None:
+        if key not in self._OPTIONAL_COMPONENTS:
+            return
+        cur = self.getSetting("optional_components_ignored", {}) or {}
+        if not isinstance(cur, dict):
+            cur = {}
+        cur[key] = bool(ignored)
+        self.setSetting("optional_components_ignored", cur)
+        self._startup_missing_components = self._missing_optional_components(
+            promptable_only=True,
+        )
+        self.optionalComponentsChanged.emit()
+        self.startupProgressChanged.emit()
+
+    @Slot(str)
+    def retryOptionalComponent(self, key: str) -> None:
+        """Offer a retry hook without mutating the Python environment.
+
+        In-app setup intentionally downloads/prepares model assets only; Python
+        packages still come from requirements/installer.  The concrete download
+        command stays in ``tools/fetch_models.py`` until packaged model bundles
+        are wired.
+        """
+        if key not in self._OPTIONAL_COMPONENTS:
+            return
+        self.setOptionalComponentIgnored(key, False)
+        self.errorOccurred.emit(
+            "Optional setup is available via tools/fetch_models.py; "
+            "packaged model-bundle download will use this retry hook."
+        )
+
+    def _missing_optional_components(self, *, promptable_only: bool) -> list[str]:
+        missing: list[str] = []
+        for row in self.optionalComponents():
+            if row.get("state") == "ok":
+                continue
+            if promptable_only and row.get("ignored"):
+                continue
+            missing.append(str(row.get("key", "")))
+        return [m for m in missing if m]
 
     # ── layout management ─────────────────────────────────────────────────────
 

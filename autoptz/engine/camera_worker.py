@@ -68,7 +68,7 @@ _MANUAL_OVERRIDE_WINDOW_S = 1.5
 # Face stack run-rate: detect/embed faces a few times a second on the target
 # region (per docs/03 §3.8), not every frame.  Period in seconds.
 _FACE_INTERVAL_S = 0.25
-_FACE_TTL_S = 0.45
+_FACE_TTL_S = 0.18
 
 # ── auto-harvest quality gates ───────────────────────────────────────────────────
 # Auto-harvesting a NEW "Person N" is deliberately strict so the user rarely has
@@ -112,6 +112,7 @@ _DROP_LOG_INTERVAL_S = 10.0
 # the last keypoints (the bbox still tracks the person each frame, so a slightly
 # stale torso point is fine and far cheaper than per-frame pose inference).
 _POSE_INTERVAL_S = 0.2
+_POSE_TTL_S = 0.25
 
 # How often (seconds) to run OSNet appearance ReID: refresh the target's template
 # while it's visible, or attempt recovery while it's lost.  Throttled because the
@@ -677,6 +678,7 @@ class CameraWorker:
         self._pose_keypoints: list[Any] | None = None  # last keypoints (reused)
         self._pose_kp_track_id: int | None = None       # track they belong to
         self._last_pose_t = 0.0
+        self._last_pose_overlay_t = 0.0
         self._aim_smoother: Any | None = None  # framing.AimSmoother (lazy)
 
         # ── appearance ReID recovery (lazy, gated on tracking.reid_enabled) ───────
@@ -687,6 +689,7 @@ class CameraWorker:
         self._reid: Any | None = None
         self._reid_probed = False
         self._last_reid_t = 0.0
+        self._reid_recover_candidate: tuple[int, int] | None = None
 
         # Aim-error velocity estimate (normalized error units / second), fed to the
         # PTZ controller so its feed-forward + motion prediction actually engage —
@@ -739,6 +742,8 @@ class CameraWorker:
         self._source: FrameSource | None = None
         self._shm: ShmWriter | None = None
         self._detect: _DetectStack | None = None
+        self._pooled_detector = False
+        self._detect_frame_index = 0
 
         self._seq = 0
         self._fps = 0.0
@@ -1235,6 +1240,7 @@ class CameraWorker:
 
     def _reset_reid(self) -> None:
         """Drop the appearance template (target changed / cleared)."""
+        self._reid_recover_candidate = None
         if self._reid is not None:
             try:
                 self._reid.reset()
@@ -1281,10 +1287,21 @@ class CameraWorker:
         if result.matched and 0 <= result.best_index < len(tracks):
             new_id = tracks[result.best_index].track_id
             if new_id != self._target_track_id:
+                if not self._reid_recovery_confirmed(new_id):
+                    return
                 log.info("camera_id=%s ReID recovered target → track=%d score=%.2f",
                          self.camera_id, new_id, result.best_score)
                 self._target_track_id = new_id
                 self._reset_pose_aim()
+
+    def _reid_recovery_confirmed(self, track_id: int) -> bool:
+        """Return True when the active tracking mode allows rebinding now."""
+        mode = getattr(self.config.tracking, "tracking_mode", "stable")
+        required = 2 if mode == "stable" else 1
+        prev_id, count = self._reid_recover_candidate or (None, 0)
+        count = count + 1 if prev_id == track_id else 1
+        self._reid_recover_candidate = (track_id, count)
+        return count >= required
 
     def _track_error(
         self, track: TrackInfo, frame: NDArray[np.uint8], now: float | None = None,
@@ -1427,9 +1444,11 @@ class CameraWorker:
             if kps is not None:
                 self._pose_keypoints = kps
                 self._pose_kp_track_id = track.track_id
+                self._last_pose_overlay_t = now
             else:
                 self._pose_keypoints = None
                 self._pose_kp_track_id = None
+                self._last_pose_overlay_t = 0.0
 
         kps = self._pose_keypoints
         if not kps:
@@ -1444,6 +1463,13 @@ class CameraWorker:
 
         if self._aim_smoother is None:
             self._aim_smoother = framing.AimSmoother(alpha=_POSE_AIM_ALPHA)
+        try:
+            vx = float(getattr(track, "vx", 0.0) or 0.0)
+            vy = float(getattr(track, "vy", 0.0) or 0.0)
+            speed = (vx * vx + vy * vy) ** 0.5
+            self._aim_smoother._alpha = 0.25 if speed < 3.0 else 0.65
+        except Exception:  # noqa: BLE001
+            pass
         aim = self._aim_smoother.update(raw_aim)
 
         span = framing.subject_height_from_pose(kps)
@@ -1466,6 +1492,7 @@ class CameraWorker:
         if frame is None or not self._feature("pose"):
             self._pose_keypoints = None
             self._pose_kp_track_id = None
+            self._last_pose_overlay_t = 0.0
             return
         target = self._resolve_target_track(tracks)
         if target is None or target.lost:
@@ -1512,6 +1539,7 @@ class CameraWorker:
         """Clear the pose aim smoother + cached keypoints (on target change)."""
         self._pose_keypoints = None
         self._pose_kp_track_id = None
+        self._last_pose_overlay_t = 0.0
         self._prev_aim_err = None
         self._aim_vel = (0.0, 0.0)
         if self._aim_smoother is not None:
@@ -1742,6 +1770,7 @@ class CameraWorker:
         # builds its own detector) when no pool was injected (tests/fakes).
         detect = self._build_detect_stack_pooled()
         if detect is None:
+            self._pooled_detector = False
             detect = _build_detect_stack(self.config)
         if detect is not None:
             self._ep = detect.ep
@@ -1785,6 +1814,7 @@ class CameraWorker:
                 tracker_type=self.config.tracking.tracker,
                 coast_window=self.config.tracking.coast_window_ms / 1000.0,
             )
+            self._pooled_detector = True
             ep = getattr(detector, "ep", "") or getattr(pool, "detector_ep", "")
             _log_detector_ready_once(
                 "<shared pool>",
@@ -2035,7 +2065,13 @@ class CameraWorker:
             return []
         try:
             _t0 = time.perf_counter()
-            detections = self._detect.detector.detect(frame)
+            self._detect_frame_index += 1
+            interval = max(1, int(getattr(self.config.tracking, "detect_interval", 1) or 1))
+            should_detect = (
+                not self._pooled_detector
+                or (self._detect_frame_index - 1) % interval == 0
+            )
+            detections = self._detect.detector.detect(frame) if should_detect else []
             detections = self._filter_small_detections(detections, frame)
             _t1 = time.perf_counter()
             tracks = self._detect.tracker.update(detections, frame, fps=max(1.0, self._fps))
@@ -2488,6 +2524,8 @@ class CameraWorker:
         if not kps:
             return []
         if self._target_track_id is not None and self._pose_kp_track_id != self._target_track_id:
+            return []
+        if time.monotonic() - self._last_pose_overlay_t > _POSE_TTL_S:
             return []
         return [PoseKeypoint(x=float(k.x), y=float(k.y), conf=float(k.conf))
                 for k in kps]

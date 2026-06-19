@@ -42,6 +42,14 @@ def _make_telemetry(camera_id: str, fps: float = 25.0):
     return TelemetryMsg(camera_id=camera_id, seq=1, fps=fps)
 
 
+class TestAboutLinks:
+    def test_public_profile_links(self, qapp) -> None:
+        from autoptz.ui.widgets.dialogs.about import GITHUB_URL, LINKEDIN_URL
+
+        assert GITHUB_URL == "https://github.com/AutoPTZ/autoptz"
+        assert LINKEDIN_URL == "https://www.linkedin.com/in/stevenson-chittumuri/"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CameraRecord
 # ─────────────────────────────────────────────────────────────────────────────

@@ -91,9 +91,10 @@ def tracker_status() -> dict[str, str]:
 def reid_status() -> dict[str, str]:
     """Appearance ReID (OSNet) recovery after occlusion — provided by boxmot."""
     if _module_present("boxmot"):
-        return _entry("reid", "ReID (re-acquire)", "ok", "OSNet (boxmot)")
+        return _entry("reid", "ReID (re-acquire)", "ok",
+                      "OSNet (boxmot) · required for Stable tracking")
     return _entry("reid", "ReID (re-acquire)", "off",
-                  "needs boxmot — re-acquisition disabled")
+                  "needs boxmot / OSNet — Stable tracking unavailable")
 
 
 def face_status() -> dict[str, str]:
@@ -103,6 +104,69 @@ def face_status() -> dict[str, str]:
                       "insightface SCRFD + ArcFace")
     return _entry("face", "Face recognition", "off",
                   "insightface not installed · manual click-to-track still works")
+
+
+def pose_status() -> dict[str, str]:
+    """Pose model/dependency availability for skeleton + torso-stable aim."""
+    try:
+        from autoptz.engine.runtime.models import default_manager  # noqa: PLC0415
+
+        onnx = default_manager().cache_dir / "yolo11n-pose.onnx"
+        if onnx.is_file():
+            size_mb = onnx.stat().st_size / (1 << 20)
+            return _entry("pose", "Pose model", "ok",
+                          f"{onnx.name} · {size_mb:.1f} MB")
+        if _module_present("ultralytics"):
+            return _entry("pose", "Pose model", "warn",
+                          f"not cached · can export to {onnx}")
+        return _entry("pose", "Pose model", "off",
+                      f"not cached · needs bundled model or ultralytics export to {onnx}")
+    except Exception:  # noqa: BLE001
+        return _entry("pose", "Pose model", "off", "lookup failed")
+
+
+def optional_components() -> list[dict[str, str]]:
+    """Detailed optional setup rows for ServicesPanel setup actions.
+
+    These rows intentionally describe model/download details without performing
+    downloads or package installs; the app stays usable and the retry action can
+    later be backed by packaged model bundles.
+    """
+    rows = []
+    try:
+        from autoptz.engine.runtime.models import default_manager  # noqa: PLC0415
+
+        cache = default_manager().cache_dir
+    except Exception:  # noqa: BLE001
+        cache = Path("AutoPTZ/models")
+
+    reid = reid_status()
+    rows.append({
+        **reid,
+        "source": "boxmot OSNet weights",
+        "size": "varies by tracker package",
+        "path": str(cache / "reid"),
+        "network": "May contact package/model hosts when prepared.",
+    })
+
+    pose = pose_status()
+    rows.append({
+        **pose,
+        "source": "YOLO11n-pose ONNX",
+        "size": "small model bundle",
+        "path": str(cache / "yolo11n-pose.onnx"),
+        "network": "Can be bundled offline or exported from ultralytics.",
+    })
+
+    face = face_status()
+    rows.append({
+        **face,
+        "source": "insightface buffalo_l (SCRFD + ArcFace)",
+        "size": "face model pack",
+        "path": str(Path.home() / ".insightface" / "models"),
+        "network": "insightface may download its model pack on first prepare.",
+    })
+    return rows
 
 
 def engine_status(running: bool, ep: str) -> dict[str, str]:
@@ -120,6 +184,7 @@ def collect_services(*, engine_running: bool, engine_ep: str) -> list[dict[str, 
         detector_model_status(),
         tracker_status(),
         reid_status(),
+        pose_status(),
         face_status(),
     ]
 

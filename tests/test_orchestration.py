@@ -887,6 +887,103 @@ class TestSupervisorRouting:
         finally:
             sup.stop()
 
+    def test_adaptive_startup_concurrency_rules(self, monkeypatch) -> None:
+        from autoptz.engine import supervisor as sup_mod
+        from autoptz.engine.runtime import diagnostics
+        from autoptz.engine.supervisor import Supervisor
+
+        monkeypatch.setattr(sup_mod.os, "cpu_count", lambda: 10)
+        monkeypatch.setattr(
+            diagnostics, "system_metrics",
+            lambda: {"available": True, "cpu_percent": 20.0, "mem_percent": 40.0},
+        )
+        assert Supervisor._adaptive_startup_concurrency() == 4
+
+        monkeypatch.setattr(sup_mod.os, "cpu_count", lambda: 6)
+        monkeypatch.setattr(
+            diagnostics, "system_metrics",
+            lambda: {"available": True, "cpu_percent": 60.0, "mem_percent": 80.0},
+        )
+        assert Supervisor._adaptive_startup_concurrency() == 2
+
+        monkeypatch.setattr(
+            diagnostics, "system_metrics",
+            lambda: {"available": False},
+        )
+        assert Supervisor._adaptive_startup_concurrency() == 1
+
+    def test_staged_start_reports_progress_and_spawns(self, qapp, monkeypatch) -> None:
+        client = _make_client(qapp)
+        client.addCamera("usb://0", "A")
+        client.addCamera("usb://1", "B")
+        client.drain_commands()
+        sup = _make_supervisor(client, factory=FakeWorker)
+        monkeypatch.setattr(sup, "_ensure_inference_pool", lambda: None)
+        monkeypatch.setattr(sup, "_adaptive_startup_concurrency", lambda: 2)
+        events = []
+
+        sup.start(staged=True, progress=lambda **kw: events.append(kw))
+        try:
+            deadline = time.monotonic() + 2.0
+            while sup.worker_count < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert sup.worker_count == 2
+            phases = [e.get("phase") for e in events]
+            assert "Opening cameras" in phases
+            assert "Ready" in phases
+        finally:
+            sup.stop()
+
+
+class TestTrackingStability:
+    def test_pooled_detector_respects_worker_detect_interval(self, qapp) -> None:
+        from autoptz.config.models import TrackingConfig
+        from autoptz.engine import camera_worker as cw
+        from autoptz.engine.camera_worker import CameraWorker
+
+        cfg = _camera_config("pooled123456").model_copy(
+            update={"tracking": TrackingConfig(detect_interval=3)},
+        )
+        worker = CameraWorker("pooled123456", cfg, lambda _m: None)
+        det = FakeDetector()
+        worker._detect = cw._DetectStack(detector=det, tracker=FakeTracker(), ep=det.ep)
+        worker._pooled_detector = True
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        for _ in range(4):
+            worker._maybe_track(frame)
+
+        assert det.calls == 2  # frames 1 and 4; frames 2/3 skipped by worker
+
+    def test_pose_overlay_expires_when_stale(self, qapp) -> None:
+        from autoptz.engine.camera_worker import CameraWorker
+        from autoptz.engine.pipeline.framing import Keypoint
+
+        worker = CameraWorker("pose12345678", _camera_config("pose12345678"), lambda _m: None)
+        worker._target_track_id = 1
+        worker._pose_kp_track_id = 1
+        worker._pose_keypoints = [Keypoint(1.0, 2.0, 0.9)] * 17
+        worker._last_pose_overlay_t = 0.0
+
+        assert worker._pose_overlay() == []
+
+    def test_stable_mode_requires_repeated_reid_confirmation(self, qapp) -> None:
+        from autoptz.config.models import TrackingConfig
+        from autoptz.engine.camera_worker import CameraWorker
+
+        stable_cfg = _camera_config("stable123456").model_copy(
+            update={"tracking": TrackingConfig(tracking_mode="stable")},
+        )
+        stable = CameraWorker("stable123456", stable_cfg, lambda _m: None)
+        assert stable._reid_recovery_confirmed(2) is False
+        assert stable._reid_recovery_confirmed(2) is True
+
+        resp_cfg = _camera_config("resp12345678").model_copy(
+            update={"tracking": TrackingConfig(tracking_mode="responsive")},
+        )
+        responsive = CameraWorker("resp12345678", resp_cfg, lambda _m: None)
+        assert responsive._reid_recovery_confirmed(2) is True
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EngineClient — engine lifecycle (FROZEN contract)

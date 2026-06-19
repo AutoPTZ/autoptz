@@ -59,6 +59,11 @@ _FRAMING_CHOICES = [
     ("full_body", "Full body"),
 ]
 
+_TRACKING_MODE_CHOICES = [
+    ("stable", "Stable target"),
+    ("responsive", "Responsive"),
+]
+
 _TRACKER_HELP = {
     "botsort": "BoT-SORT: best default for people. Uses motion plus optional appearance cues; steady but medium cost.",
     "deepocsort": "DeepOCSORT: stronger through occlusion and crossing people; usually heavier than BoT-SORT.",
@@ -420,6 +425,19 @@ class PropertiesPanel(QWidget):
             "Lock tracking to a registered person — the camera follows them "
             "whenever they're recognized. Choose “— Anyone —” to follow whoever "
             "is detected. Register people in the Identities panel."
+        )))
+        self._tracking_mode = QComboBox()
+        for value, caption in _TRACKING_MODE_CHOICES:
+            self._tracking_mode.addItem(caption, value)
+        self._tracking_mode.setToolTip(
+            "Stable holds the selected person through crossings using ReID when "
+            "available. Responsive follows fresher detections with less delay."
+        )
+        self._tracking_mode.currentIndexChanged.connect(self._schedule)
+        tf.addRow("Mode", _with_chip(self._tracking_mode, HelpBadge(
+            "Stable is best for crowded scenes and requires ReID for full "
+            "person-level recovery. Responsive is lower latency and better for "
+            "solo scenes, but can switch bodies more easily."
         )))
         self._tracker = QComboBox(); self._tracker.addItems(["botsort", "deepocsort", "bytetrack"])
         self._tracker.setToolTip(_COST_HELP["tracker"])
@@ -1024,6 +1042,7 @@ class PropertiesPanel(QWidget):
             self._update_measured_fps()
             _set_combo(self._quality, tr.get("quality_floor", "auto"))
             self._detect_interval.setValue(int(tr.get("detect_interval", 1) or 1))
+            _set_combo_data(self._tracking_mode, tr.get("tracking_mode", "stable"))
             _set_combo(self._tracker, tr.get("tracker", "botsort"))
             # Unified Framing: prefer ``tracking.framing``; fall back to the legacy
             # ``aim_region`` so an un-migrated config still selects sensibly.
@@ -1161,6 +1180,7 @@ class PropertiesPanel(QWidget):
         cfg["source"]["fps"] = float(self._fps.value())
         cfg["tracking"]["quality_floor"] = self._quality.currentText()
         cfg["tracking"]["detect_interval"] = self._detect_interval.value()
+        cfg["tracking"]["tracking_mode"] = self._tracking_mode.currentData() or "stable"
         cfg["tracking"]["tracker"] = self._tracker.currentText()
         # The single Framing control drives both aim and zoom: store it as the new
         # unified ``tracking.framing`` and ALSO mirror it into the existing

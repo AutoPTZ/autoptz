@@ -82,6 +82,13 @@ class TestModels:
     def test_tracking_coast_window_defaults_short(self) -> None:
         assert TrackingConfig().coast_window_ms == 300
 
+    def test_tracking_mode_defaults_to_stable(self) -> None:
+        assert TrackingConfig().tracking_mode == "stable"
+
+    def test_tracking_mode_rejects_unknown(self) -> None:
+        with pytest.raises(ValidationError):
+            TrackingConfig(tracking_mode="sticky")
+
     def test_tracking_aim_body_mode_defaults_to_torso(self) -> None:
         assert TrackingConfig().aim_body_mode == "torso"
 

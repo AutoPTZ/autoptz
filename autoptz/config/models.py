@@ -64,6 +64,10 @@ class ReconnectConfig(BaseModel, frozen=True):
 
 class TrackingConfig(BaseModel, frozen=True):
     tracker: Literal["botsort", "deepocsort", "bytetrack"] = "botsort"
+    # User-facing target-retention policy. ``stable`` prefers identity/appearance
+    # evidence before rebinding a selected target after occlusion/crossing;
+    # ``responsive`` follows the freshest track with less hysteresis.
+    tracking_mode: Literal["stable", "responsive"] = "stable"
     detect_interval: int = Field(default=1, ge=1, le=30)
     reid_enabled: bool = False
     # Appearance (OSNet) re-acquisition thresholds.  ``hi`` enters a recovery

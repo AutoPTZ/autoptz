@@ -30,6 +30,7 @@ The command pump can either be driven externally (``tick()`` from a GUI-thread
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import TYPE_CHECKING, Any
@@ -138,15 +139,27 @@ class Supervisor:
         # internal pump thread (only when start(run_pump=True))
         self._pump_thread: threading.Thread | None = None
         self._pump_stop = threading.Event()
+        self._startup_thread: threading.Thread | None = None
 
     # ── lifecycle ───────────────────────────────────────────────────────────────
 
-    def start(self, *, run_pump: bool = False) -> None:
+    def start(
+        self,
+        *,
+        run_pump: bool = False,
+        staged: bool = False,
+        progress: Any | None = None,
+    ) -> None:
         """Spawn a worker for every camera in the model.  Idempotent.
 
         If *run_pump* is True, also starts an internal daemon thread that drives
         :meth:`tick`.  When the UI owns a GUI-thread ``QTimer`` it leaves this
         False and calls :meth:`tick` itself.
+
+        ``staged=True`` preserves the public "running" state immediately but
+        opens cameras on a background startup thread in small adaptive batches.
+        The UI uses this path so camera opens/model warmup do not freeze the
+        main window; direct tests/headless callers keep the synchronous default.
         """
         with self._lock:
             if self._running:
@@ -157,15 +170,21 @@ class Supervisor:
             log.info("supervisor starting — %d camera(s), ep=%s",
                      len(camera_ids), self.active_ep)
             _log_macos_capture_path()
+            if staged:
+                self._start_pump_if_needed(run_pump)
+                self._startup_thread = threading.Thread(
+                    target=self._startup_loop,
+                    args=(camera_ids, progress),
+                    name="engine-startup",
+                    daemon=True,
+                )
+                self._startup_thread.start()
+                return
+
             for camera_id in camera_ids:
                 self._spawn_worker(camera_id)
 
-            if run_pump and self._pump_thread is None:
-                self._pump_stop.clear()
-                self._pump_thread = threading.Thread(
-                    target=self._pump_loop, name="engine-cmd-pump", daemon=True,
-                )
-                self._pump_thread.start()
+            self._start_pump_if_needed(run_pump)
 
     def stop(self) -> None:
         """Stop the pump and tear down all workers.  Idempotent."""
@@ -179,6 +198,8 @@ class Supervisor:
             self._pump_stop.set()
             pump = self._pump_thread
             self._pump_thread = None
+            startup = self._startup_thread
+            self._startup_thread = None
 
             workers = list(self._workers.items())
             self._workers.clear()
@@ -186,6 +207,8 @@ class Supervisor:
         # Join the pump outside the lock (it may call tick→lock).
         if pump is not None and pump is not threading.current_thread():
             pump.join(timeout=2.0)
+        if startup is not None and startup is not threading.current_thread():
+            startup.join(timeout=2.0)
 
         # Stop workers outside the lock so a worker thread calling back in
         # (telemetry) never deadlocks.
@@ -198,6 +221,86 @@ class Supervisor:
                 self._client.request_provider_detach(_cid)
             except Exception:  # noqa: BLE001
                 log.debug("provider detach request failed for %s", _cid, exc_info=True)
+
+    def _start_pump_if_needed(self, run_pump: bool) -> None:
+        if run_pump and self._pump_thread is None:
+            self._pump_stop.clear()
+            self._pump_thread = threading.Thread(
+                target=self._pump_loop, name="engine-cmd-pump", daemon=True,
+            )
+            self._pump_thread.start()
+
+    def _startup_loop(self, camera_ids: list[str], progress: Any | None) -> None:
+        """Preview-first staged camera start + model warmup."""
+        total = len(camera_ids)
+        concurrency = self._adaptive_startup_concurrency()
+        self._progress(progress, active=True, phase="Opening cameras",
+                       started=0, total=total)
+        started = 0
+        for camera_id in camera_ids:
+            with self._lock:
+                if not self._running:
+                    self._progress(progress, active=False, phase="")
+                    return
+                if camera_id not in self._workers:
+                    self._spawn_worker(camera_id)
+            started += 1
+            self._progress(progress, active=True, phase="Opening cameras",
+                           started=started, total=total)
+            if started % concurrency == 0 and started < total:
+                time.sleep(0.35)
+
+        self._progress(progress, active=True, phase="Warming detector",
+                       started=started, total=total)
+        pool = self._ensure_inference_pool()
+        if pool is not None:
+            try:
+                detector = getattr(pool, "detector", None)
+                if callable(detector):
+                    detector()
+            except Exception:  # noqa: BLE001
+                log.debug("startup detector warmup failed", exc_info=True)
+
+        self._progress(progress, active=True, phase="Warming ReID",
+                       started=started, total=total)
+        try:
+            from autoptz.engine.pipeline.track import boxmot_available
+
+            boxmot_available()
+        except Exception:  # noqa: BLE001
+            log.debug("startup ReID probe failed", exc_info=True)
+
+        self._progress(progress, active=False, phase="Ready",
+                       started=started, total=total)
+
+    @staticmethod
+    def _adaptive_startup_concurrency() -> int:
+        """Aggressive camera-open concurrency constrained by current headroom."""
+        cores = os.cpu_count() or 1
+        try:
+            from autoptz.engine.runtime.diagnostics import system_metrics
+
+            metrics = system_metrics()
+        except Exception:  # noqa: BLE001
+            metrics = {"available": False}
+        if not metrics.get("available"):
+            return 1
+        cpu = float(metrics.get("cpu_percent", 100.0) or 100.0)
+        mem = float(metrics.get("mem_percent", 100.0) or 100.0)
+        if cpu < 55.0 and mem < 75.0 and cores >= 8:
+            return 4
+        if cpu < 70.0 and mem < 85.0 and cores >= 4:
+            return 2
+        return 1
+
+    @staticmethod
+    def _progress(progress: Any | None, **payload: Any) -> None:
+        if progress is None:
+            return
+        try:
+            progress(**payload)
+        except Exception:  # noqa: BLE001
+            log.debug("startup progress callback failed", exc_info=True)
 
     @property
     def is_running(self) -> bool:

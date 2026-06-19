@@ -114,6 +114,25 @@ class TestSettingsRoundTrip:
         client.setSetting("k", 1)  # must not raise
 
 
+class TestOptionalComponentState:
+    def test_ignore_state_round_trips_per_component(self, qapp, store) -> None:
+        client = _client(store=store)
+        client.setOptionalComponentIgnored("reid", True)
+        ignored = {
+            row["key"]: row["ignored"]
+            for row in client.optionalComponents()
+        }
+        assert ignored["reid"] is True
+        assert ignored.get("pose", False) is False
+
+        client.setOptionalComponentIgnored("reid", False)
+        ignored = {
+            row["key"]: row["ignored"]
+            for row in client.optionalComponents()
+        }
+        assert ignored["reid"] is False
+
+
 # ── scanUSBCameras ────────────────────────────────────────────────────────────
 
 
