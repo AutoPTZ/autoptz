@@ -158,6 +158,10 @@ class Supervisor:
 
         ``staged=True`` preserves the public "running" state immediately but
         opens cameras on a background startup thread in small adaptive batches.
+        Workers are started with inference paused; preview shared memory and
+        capture come up first, then the shared models warm once before inference
+        is released. That keeps launch responsive while preserving all services
+        as logically enabled.
         The UI uses this path so camera opens/model warmup do not freeze the
         main window; direct tests/headless callers keep the synchronous default.
         """
@@ -233,9 +237,14 @@ class Supervisor:
     def _startup_loop(self, camera_ids: list[str], progress: Any | None) -> None:
         """Preview-first staged camera start + model warmup."""
         total = len(camera_ids)
-        concurrency = self._adaptive_startup_concurrency()
+        adaptive_concurrency = self._adaptive_startup_concurrency()
+        concurrency = 1
         self._progress(progress, active=True, phase="Opening cameras",
                        started=0, total=total)
+        if total == 0:
+            self._progress(progress, active=False, phase="Ready",
+                           started=0, total=0)
+            return
         started = 0
         for camera_id in camera_ids:
             with self._lock:
@@ -243,16 +252,19 @@ class Supervisor:
                     self._progress(progress, active=False, phase="")
                     return
                 if camera_id not in self._workers:
-                    self._spawn_worker(camera_id)
+                    self._spawn_worker(camera_id, defer_inference=True)
             started += 1
             self._progress(progress, active=True, phase="Opening cameras",
                            started=started, total=total)
+            if started == 1:
+                concurrency = adaptive_concurrency
+                time.sleep(0.25)
             if started % concurrency == 0 and started < total:
                 time.sleep(0.35)
 
+        pool = self._ensure_inference_pool()
         self._progress(progress, active=True, phase="Warming detector",
                        started=started, total=total)
-        pool = self._ensure_inference_pool()
         if pool is not None:
             try:
                 detector = getattr(pool, "detector", None)
@@ -263,13 +275,28 @@ class Supervisor:
 
         self._progress(progress, active=True, phase="Warming ReID",
                        started=started, total=total)
-        try:
-            from autoptz.engine.pipeline.track import boxmot_available
+        self._warm_reid()
 
-            boxmot_available()
-        except Exception:  # noqa: BLE001
-            log.debug("startup ReID probe failed", exc_info=True)
+        if pool is not None:
+            self._progress(progress, active=True, phase="Warming face",
+                           started=started, total=total)
+            try:
+                face = getattr(pool, "face", None)
+                if callable(face):
+                    face()
+            except Exception:  # noqa: BLE001
+                log.debug("startup face warmup failed", exc_info=True)
 
+            self._progress(progress, active=True, phase="Warming pose",
+                           started=started, total=total)
+            try:
+                pose = getattr(pool, "pose", None)
+                if callable(pose):
+                    pose()
+            except Exception:  # noqa: BLE001
+                log.debug("startup pose warmup failed", exc_info=True)
+
+        self._release_worker_inference()
         self._progress(progress, active=False, phase="Ready",
                        started=started, total=total)
 
@@ -292,6 +319,15 @@ class Supervisor:
         if cpu < 70.0 and mem < 85.0 and cores >= 4:
             return 2
         return 1
+
+    @staticmethod
+    def _warm_reid() -> None:
+        try:
+            from autoptz.engine.pipeline.track import boxmot_available
+
+            boxmot_available()
+        except Exception:  # noqa: BLE001
+            log.debug("startup ReID probe failed", exc_info=True)
 
     @staticmethod
     def _progress(progress: Any | None, **payload: Any) -> None:
@@ -525,14 +561,21 @@ class Supervisor:
         try:
             from autoptz.engine.pipeline.pool import build_inference_pool
 
-            self._inference_pool = build_inference_pool()
+            tier = "auto"
+            try:
+                getter = getattr(self._client, "getDetectorModelTier", None)
+                if callable(getter):
+                    tier = str(getter() or "auto")
+            except Exception:  # noqa: BLE001
+                tier = "auto"
+            self._inference_pool = build_inference_pool(detector_tier=tier)
         except Exception:  # noqa: BLE001 — pool is an optimisation, never load-bearing
             log.warning("inference pool init failed; using per-worker models.",
                         exc_info=True)
             self._inference_pool = None
         return self._inference_pool
 
-    def _spawn_worker(self, camera_id: str) -> None:
+    def _spawn_worker(self, camera_id: str, *, defer_inference: bool = False) -> None:
         config = self._resolve_config(camera_id)
         if config is None:
             log.warning("cannot spawn worker for %s: no config", camera_id)
@@ -560,6 +603,8 @@ class Supervisor:
             worker.set_inference_pool(pool)
         if self._features and hasattr(worker, "set_features"):
             worker.set_features(dict(self._features))
+        if defer_inference and hasattr(worker, "set_inference_start_paused"):
+            worker.set_inference_start_paused(True)
 
         shm_name = getattr(worker, "shm_name", f"cam_{camera_id[:8]}_preview")
         try:
@@ -579,6 +624,16 @@ class Supervisor:
         except Exception:  # noqa: BLE001
             log.debug("provider attach request failed for %s", camera_id,
                       exc_info=True)
+
+    def _release_worker_inference(self) -> None:
+        with self._lock:
+            workers = list(self._workers.values())
+        for worker in workers:
+            if hasattr(worker, "set_inference_start_paused"):
+                try:
+                    worker.set_inference_start_paused(False)
+                except Exception:  # noqa: BLE001
+                    log.debug("worker inference release failed", exc_info=True)
 
     def _get(self, camera_id: str | None) -> Any | None:
         if not camera_id:

@@ -95,7 +95,7 @@ def test_get_best_ep_force_ep_unavailable_falls_back() -> None:
 
 def test_make_session_cpu(tmp_path: Path) -> None:
     """Create a minimal ONNX model and verify make_session returns a session."""
-    onnx = pytest.importorskip("onnx")
+    import onnx
     from onnx import TensorProto, helper
 
     X = helper.make_tensor_value_info("X", TensorProto.FLOAT, [1, 4])

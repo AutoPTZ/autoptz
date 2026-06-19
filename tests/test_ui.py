@@ -1,18 +1,19 @@
 """Phase 7: UI engine-client and model tests.
 
 All tests use QCoreApplication (no display needed) so they run cleanly in CI.
-Tests that require QGuiApplication / real display are skipped unless the
-AUTOPTZ_GUI_TESTS env var is set.
+Widget smoke tests run in an offscreen subprocess so they do not conflict with
+the module-level QCoreApplication used by the headless model tests.
 """
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
-# Skip the whole module gracefully if PySide6 is not installed
-PySide6 = pytest.importorskip("PySide6")
+import PySide6  # noqa: F401
 
 # ── one QCoreApplication for the whole module ─────────────────────────────────
 
@@ -352,6 +353,31 @@ class TestEngineClient:
         c = _client(qapp)
         c.enableTracking("ghost", True)  # must not raise
 
+    def test_feature_overrides_are_session_only_and_reset_on_start(self, qapp) -> None:
+        c = _client(qapp)
+        c.setFeatureEnabled("pose", False)
+        assert c.features()["pose"] is False
+        c.resetFeatureOverrides()
+        assert all(c.features().values())
+
+    def test_detector_model_tier_persists(self, qapp, tmp_path) -> None:
+        from autoptz.config.store import ConfigStore
+        from autoptz.ui.engine_client import EngineClient
+
+        db = tmp_path / "cfg.db"
+        store = ConfigStore(db_path=db, debounce_s=0)
+        c = EngineClient(store=store)
+        c.setDetectorModelTier("balanced")
+        assert c.getDetectorModelTier() == "balanced"
+        store.close()
+
+        store2 = ConfigStore(db_path=db, debounce_s=0)
+        c2 = EngineClient(store=store2)
+        try:
+            assert c2.getDetectorModelTier() == "balanced"
+        finally:
+            store2.close()
+
     def test_set_target(self, qapp) -> None:
         c = _client(qapp)
         cid = c.addCamera("rtsp://x", "Cam")
@@ -567,13 +593,6 @@ class TestEngineClient:
 # ShmFrameSource — shm → QImage bridge for the Qt Widgets camera tiles
 # ─────────────────────────────────────────────────────────────────────────────
 
-_gui_tests = pytest.mark.skipif(
-    os.environ.get("AUTOPTZ_GUI_TESTS") != "1"
-    and not (sys.platform == "darwin"),
-    reason="requires display or AUTOPTZ_GUI_TESTS=1",
-)
-
-
 class TestShmFrameSource:
     def test_unknown_camera_returns_none(self) -> None:
         from autoptz.ui.frames import ShmFrameSource
@@ -713,40 +732,45 @@ class TestCameraTileHelpers:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@_gui_tests
 class TestWidgetsShell:
-    @pytest.fixture()
-    def qapp(self):
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-        from PySide6.QtWidgets import QApplication
-        app = QApplication.instance()
-        if app is None:
-            app = QApplication(sys.argv[:1])
-        elif not isinstance(app, QApplication):
-            pytest.skip("a non-GUI application already exists in this process")
-        yield app
-
-    def test_mainwindow_constructs_and_routes_selection(self, qapp, tmp_path) -> None:
-        from autoptz.config.store import ConfigStore
-        from autoptz.ui.engine_client import EngineClient
-        from autoptz.ui.frames import ShmFrameSource
-        from autoptz.ui.log_bridge import LogListModel
-        from autoptz.ui.widgets import MainWindow
-
-        client = EngineClient(store=ConfigStore(db_path=tmp_path / "cfg.db", debounce_s=0))
-        win = MainWindow(client, log_model=LogListModel(), frame_source=ShmFrameSource())
-        try:
-            assert set(win._docks) == {
-                "properties", "camera_info", "people", "services", "logs",
-            }
-            cid = client.addCamera("usb://0", "Cam")
-            win._on_camera_selected(cid)
-            assert win._properties._camera_id == cid
-            assert win._camera_info._camera_id == cid
-            win._wall._layout = "2x2"
-            win._wall.resize(800, 520)
-            win._wall._grid_host.resize(800, 450)
-            win._wall._reflow()
-            assert len(win._wall._empty_slots) >= 3
-        finally:
-            win.close()
+    def test_mainwindow_constructs_and_routes_selection(self, tmp_path) -> None:
+        code = f"""
+import os
+import sys
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
+from autoptz.ui.log_bridge import LogListModel
+from autoptz.ui.widgets import MainWindow
+app = QApplication(sys.argv[:1])
+client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+win = MainWindow(client, log_model=LogListModel(), frame_source=ShmFrameSource())
+try:
+    assert set(win._docks) == {{"properties", "camera_info", "people", "services", "logs"}}
+    cid = client.addCamera("usb://0", "Cam")
+    win._on_camera_selected(cid)
+    assert win._properties._camera_id == cid
+    assert win._camera_info._camera_id == cid
+    win._wall._layout = "2x2"
+    win._wall.resize(800, 520)
+    win._wall._grid_host.resize(800, 450)
+    win._wall._reflow()
+    assert len(win._wall._empty_slots) >= 3
+finally:
+    win.close()
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout

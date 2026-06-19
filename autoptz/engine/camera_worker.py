@@ -68,7 +68,7 @@ _MANUAL_OVERRIDE_WINDOW_S = 1.5
 # Face stack run-rate: detect/embed faces a few times a second on the target
 # region (per docs/03 §3.8), not every frame.  Period in seconds.
 _FACE_INTERVAL_S = 0.25
-_FACE_TTL_S = 0.18
+_FACE_TTL_S = 0.12
 
 # ── auto-harvest quality gates ───────────────────────────────────────────────────
 # Auto-harvesting a NEW "Person N" is deliberately strict so the user rarely has
@@ -112,7 +112,7 @@ _DROP_LOG_INTERVAL_S = 10.0
 # the last keypoints (the bbox still tracks the person each frame, so a slightly
 # stale torso point is fine and far cheaper than per-frame pose inference).
 _POSE_INTERVAL_S = 0.2
-_POSE_TTL_S = 0.25
+_POSE_TTL_S = 0.12
 
 # How often (seconds) to run OSNet appearance ReID: refresh the target's template
 # while it's visible, or attempt recovery while it's lost.  Throttled because the
@@ -630,6 +630,8 @@ class CameraWorker:
         self._last_faces: list[FaceBox] = []
         self._last_faces_t = 0.0
         self._last_face_track_ids: set[int] = set()
+        self._last_faces_frame_id = 0
+        self._last_faces_emitted_frame_id = -1
         # Identity the operator asked us to follow ("track when found"); single
         # target per camera — supersedes an explicit track id when its identity
         # is detected on a live track.
@@ -679,6 +681,8 @@ class CameraWorker:
         self._pose_kp_track_id: int | None = None       # track they belong to
         self._last_pose_t = 0.0
         self._last_pose_overlay_t = 0.0
+        self._last_pose_overlay_frame_id = 0
+        self._last_pose_emitted_frame_id = -1
         self._aim_smoother: Any | None = None  # framing.AimSmoother (lazy)
 
         # ── appearance ReID recovery (lazy, gated on tracking.reid_enabled) ───────
@@ -718,8 +722,12 @@ class CameraWorker:
         self._latest_frame: NDArray[np.uint8] | None = None
         self._latest_frame_id = 0
         self._frame_ready = threading.Event()
+        self._inference_start = threading.Event()
+        self._inference_start.set()
+        self._current_inference_frame_id = 0
         # Most recent inference output, read by the capture thread for telemetry.
         self._last_tracks: list[TrackInfo] = []
+        self._last_tracks_frame_id = 0
         # Serializes PTZ-backend access between the inference thread (which drives
         # motion) and the capture thread (which reads position for telemetry).
         self._ptz_lock = threading.Lock()
@@ -799,6 +807,7 @@ class CameraWorker:
     def stop(self, timeout: float = 5.0) -> None:
         """Signal stop and block until the thread exits; releases all resources."""
         self._stop_event.set()
+        self._inference_start.set()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=timeout)
@@ -867,6 +876,13 @@ class CameraWorker:
         ``None`` (tests/fakes) the worker keeps its per-worker build path.
         """
         self._pool = pool
+
+    def set_inference_start_paused(self, paused: bool) -> None:
+        """Pause/release heavy inference startup while preview/capture opens."""
+        if paused:
+            self._inference_start.clear()
+        else:
+            self._inference_start.set()
 
     def set_features(self, features: dict[str, bool] | None) -> None:
         """Update the global feature switches (thread-safe; merges over defaults).
@@ -1445,10 +1461,12 @@ class CameraWorker:
                 self._pose_keypoints = kps
                 self._pose_kp_track_id = track.track_id
                 self._last_pose_overlay_t = now
+                self._last_pose_overlay_frame_id = max(1, self._current_inference_frame_id)
             else:
                 self._pose_keypoints = None
                 self._pose_kp_track_id = None
                 self._last_pose_overlay_t = 0.0
+                self._last_pose_overlay_frame_id = 0
 
         kps = self._pose_keypoints
         if not kps:
@@ -1493,6 +1511,8 @@ class CameraWorker:
             self._pose_keypoints = None
             self._pose_kp_track_id = None
             self._last_pose_overlay_t = 0.0
+            self._last_pose_overlay_frame_id = 0
+            self._last_pose_emitted_frame_id = -1
             return
         target = self._resolve_target_track(tracks)
         if target is None or target.lost:
@@ -1540,6 +1560,8 @@ class CameraWorker:
         self._pose_keypoints = None
         self._pose_kp_track_id = None
         self._last_pose_overlay_t = 0.0
+        self._last_pose_overlay_frame_id = 0
+        self._last_pose_emitted_frame_id = -1
         self._prev_aim_err = None
         self._aim_vel = (0.0, 0.0)
         if self._aim_smoother is not None:
@@ -1662,6 +1684,10 @@ class CameraWorker:
         the capture critical path); then consumes the freshest frame each pass,
         dropping any intermediate frames the capture thread produced meanwhile.
         """
+        while not self._stop_event.is_set() and not self._inference_start.wait(0.05):
+            self._drain_commands()
+        if self._stop_event.is_set():
+            return
         self._build_inference_stacks()
         last_id = 0
         while not self._stop_event.is_set():
@@ -1679,6 +1705,7 @@ class CameraWorker:
             if frame is None or fid == last_id:
                 continue
             last_id = fid
+            self._current_inference_frame_id = fid
             now = time.monotonic()
 
             detect_t0 = time.perf_counter()
@@ -1710,6 +1737,7 @@ class CameraWorker:
                 self._drive_ptz_auto(tracks, frame, now)
 
             self._last_tracks = tracks
+            self._last_tracks_frame_id = fid
             if log.isEnabledFor(logging.DEBUG):
                 log.debug(
                     "camera_id=%s timings detect+track=%.1fms face=%.1fms tracks=%d "
@@ -2138,6 +2166,8 @@ class CameraWorker:
         self._last_faces = []
         self._last_faces_t = 0.0
         self._last_face_track_ids = set()
+        self._last_faces_frame_id = 0
+        self._last_faces_emitted_frame_id = -1
 
     def _expire_face_overlay(
         self, now: float, tracks: list[TrackInfo] | None = None,
@@ -2157,6 +2187,13 @@ class CameraWorker:
     def _fresh_faces_for_telemetry(self, tracks: list[TrackInfo]) -> list[FaceBox]:
         """Return only fresh face boxes for the current live tracks."""
         self._expire_face_overlay(time.monotonic(), tracks)
+        tracks_frame_id = self._last_tracks_frame_id or self._last_faces_frame_id
+        if self._last_faces_frame_id != tracks_frame_id:
+            self._clear_face_overlay()
+            return []
+        if self._last_faces_emitted_frame_id == self._last_faces_frame_id:
+            return []
+        self._last_faces_emitted_frame_id = self._last_faces_frame_id
         return list(self._last_faces)
 
     def _maybe_identify(
@@ -2324,6 +2361,7 @@ class CameraWorker:
         self._last_faces = faces_out
         self._last_faces_t = now if faces_out else 0.0
         self._last_face_track_ids = face_track_ids
+        self._last_faces_frame_id = max(1, self._current_inference_frame_id) if faces_out else 0
 
     @staticmethod
     def _track_for_face(
@@ -2525,8 +2563,14 @@ class CameraWorker:
             return []
         if self._target_track_id is not None and self._pose_kp_track_id != self._target_track_id:
             return []
+        tracks_frame_id = self._last_tracks_frame_id or self._last_pose_overlay_frame_id
+        if self._last_pose_overlay_frame_id != tracks_frame_id:
+            return []
+        if self._last_pose_emitted_frame_id == self._last_pose_overlay_frame_id:
+            return []
         if time.monotonic() - self._last_pose_overlay_t > _POSE_TTL_S:
             return []
+        self._last_pose_emitted_frame_id = self._last_pose_overlay_frame_id
         return [PoseKeypoint(x=float(k.x), y=float(k.y), conf=float(k.conf))
                 for k in kps]
 

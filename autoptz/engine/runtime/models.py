@@ -42,6 +42,19 @@ log = logging.getLogger(__name__)
 # Default detector: YOLO11 nano — smallest/fastest production-viable pick.
 # The exported/downloaded ONNX file name is derived from the stem ("yolo11n.onnx").
 _DEFAULT_DETECTOR_PT = "yolo11n.pt"
+_DETECTOR_TIER_TO_PT = {
+    "auto": _DEFAULT_DETECTOR_PT,
+    "fast": "yolo11n.pt",
+    "nano": "yolo11n.pt",
+    "balanced": "yolo11s.pt",
+    "small": "yolo11s.pt",
+}
+
+
+def detector_model_for_tier(tier: str | None) -> str:
+    """Return the detector weight name for a user-facing model tier."""
+    key = str(tier or "auto").strip().lower()
+    return _DETECTOR_TIER_TO_PT.get(key, _DEFAULT_DETECTOR_PT)
 
 # Optional prebuilt, torch-free YOLO11n ONNX URL.  No reliable public URL is
 # wired by default (HuggingFace `resolve` links for community exports returned
@@ -90,7 +103,12 @@ class ModelManager:
     def cache_dir(self) -> Path:
         return self._cache_dir
 
-    def ensure_detector(self, *, model_pt: str = _DEFAULT_DETECTOR_PT) -> str | None:
+    def ensure_detector(
+        self,
+        *,
+        model_pt: str | None = None,
+        tier: str | None = None,
+    ) -> str | None:
         """Return a path to a YOLO11 person/COCO detection ONNX, or ``None``.
 
         Resolution order (torch-free first):
@@ -117,6 +135,7 @@ class ModelManager:
                 env,
             )
 
+        model_pt = model_pt or detector_model_for_tier(tier)
         onnx_path = self._cache_dir / (Path(model_pt).stem + ".onnx")
 
         # 2. Already cached earlier → reuse.

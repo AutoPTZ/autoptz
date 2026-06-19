@@ -13,8 +13,7 @@ import time
 import numpy as np
 import pytest
 
-# Skip the whole module gracefully if PySide6 is not installed.
-pytest.importorskip("PySide6")
+import PySide6  # noqa: F401
 
 
 # ── one QCoreApplication for the whole module ─────────────────────────────────
@@ -139,6 +138,7 @@ class FakeWorker:
         self.target = "unset"
         self.nudges = []
         self.configs = []
+        self.inference_paused: list[bool] = []
 
     def start(self):
         self.started = True
@@ -161,6 +161,9 @@ class FakeWorker:
 
     def update_config(self, config):
         self.configs.append(config)
+
+    def set_inference_start_paused(self, paused: bool):
+        self.inference_paused.append(bool(paused))
 
 
 def _make_client(qapp):
@@ -920,6 +923,7 @@ class TestSupervisorRouting:
         sup = _make_supervisor(client, factory=FakeWorker)
         monkeypatch.setattr(sup, "_ensure_inference_pool", lambda: None)
         monkeypatch.setattr(sup, "_adaptive_startup_concurrency", lambda: 2)
+        monkeypatch.setattr(sup, "_warm_reid", lambda: None)
         events = []
 
         sup.start(staged=True, progress=lambda **kw: events.append(kw))
@@ -931,6 +935,59 @@ class TestSupervisorRouting:
             phases = [e.get("phase") for e in events]
             assert "Opening cameras" in phases
             assert "Ready" in phases
+        finally:
+            sup.stop()
+
+    def test_staged_start_spawns_preview_before_detector_warmup(self, qapp, monkeypatch) -> None:
+        client = _make_client(qapp)
+        client.addCamera("usb://0", "A")
+        client.addCamera("usb://1", "B")
+        client.drain_commands()
+        events: list[str] = []
+
+        class OrderedWorker(FakeWorker):
+            def start(self):
+                events.append(f"start:{self.camera_id}")
+                super().start()
+
+        class WarmPool:
+            detector_ep = "FakeEP"
+
+            def detector(self):
+                events.append("detector")
+                return None
+
+            def face(self):
+                events.append("face")
+                return None
+
+            def pose(self):
+                events.append("pose")
+                return None
+
+        sup = _make_supervisor(client, factory=OrderedWorker)
+        monkeypatch.setattr(sup, "_ensure_inference_pool", lambda: WarmPool())
+        monkeypatch.setattr(sup, "_adaptive_startup_concurrency", lambda: 2)
+        monkeypatch.setattr(sup, "_warm_reid", lambda: events.append("reid"))
+        monkeypatch.setattr("autoptz.engine.supervisor.time.sleep", lambda _s: None)
+
+        sup.start(staged=True, progress=lambda **_kw: None)
+        try:
+            deadline = time.monotonic() + 2.0
+            while "detector" not in events and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert events[:2] == [f"start:{client.cameraModel.camera_ids()[0]}",
+                                  f"start:{client.cameraModel.camera_ids()[1]}"]
+            assert events[2] == "detector"
+            workers = list(sup._workers.values())
+            assert workers and all(w.inference_paused[0] is True for w in workers)
+            deadline = time.monotonic() + 2.0
+            while (
+                not all(w.inference_paused and w.inference_paused[-1] is False for w in workers)
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
+            assert all(w.inference_paused[-1] is False for w in workers)
         finally:
             sup.stop()
 
@@ -965,6 +1022,21 @@ class TestTrackingStability:
         worker._pose_keypoints = [Keypoint(1.0, 2.0, 0.9)] * 17
         worker._last_pose_overlay_t = 0.0
 
+        assert worker._pose_overlay() == []
+
+    def test_pose_overlay_publishes_once_per_inference_frame(self, qapp) -> None:
+        from autoptz.engine.camera_worker import CameraWorker
+        from autoptz.engine.pipeline.framing import Keypoint
+
+        worker = CameraWorker("poseonce1234", _camera_config("poseonce1234"), lambda _m: None)
+        worker._target_track_id = 1
+        worker._pose_kp_track_id = 1
+        worker._pose_keypoints = [Keypoint(1.0, 2.0, 0.9)] * 17
+        worker._last_pose_overlay_t = time.monotonic()
+        worker._last_pose_overlay_frame_id = 9
+        worker._last_tracks_frame_id = 9
+
+        assert len(worker._pose_overlay()) == 17
         assert worker._pose_overlay() == []
 
     def test_stable_mode_requires_repeated_reid_confirmation(self, qapp) -> None:

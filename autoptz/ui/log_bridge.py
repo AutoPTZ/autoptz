@@ -34,6 +34,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPersistentModelIndex,
+    QThread,
     Qt,
     Signal,
     Slot,
@@ -179,6 +180,9 @@ class QtLogHandler(logging.Handler):
                 message = f"{message}\n{self.formatter.formatException(record.exc_info)}" \
                     if self.formatter else message
             ts = self.formatTime(record)
+            if QThread.currentThread() is self._model.thread():
+                self._model.appendRow(record.levelname, record.name, message, ts)
+                return
             self._emitter.recordReady.emit(
                 record.levelname,
                 record.name,

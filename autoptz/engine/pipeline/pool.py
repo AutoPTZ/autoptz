@@ -131,9 +131,10 @@ class InferencePool:
     and must stay per-worker.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, detector_tier: str = "auto") -> None:
         # Guards the lazy *build* of each model (not their per-call use).
         self._build_lock = threading.Lock()
+        self._detector_tier = str(detector_tier or "auto")
 
         self._detector: Any | None = None
         self._detector_built = False
@@ -189,7 +190,7 @@ class InferencePool:
         try:
             from autoptz.engine.runtime.models import default_manager
 
-            model_path = default_manager().ensure_detector()
+            model_path = default_manager().ensure_detector(tier=self._detector_tier)
         except Exception:  # noqa: BLE001 — model bootstrap must never break startup
             log.warning("inference pool: detector model resolution failed.",
                         exc_info=True)
@@ -283,7 +284,7 @@ class InferencePool:
 # ── factory ──────────────────────────────────────────────────────────────────────
 
 
-def build_inference_pool() -> InferencePool:
+def build_inference_pool(*, detector_tier: str = "auto") -> InferencePool:
     """Return a fresh :class:`InferencePool` (models built lazily on first use).
 
     The supervisor calls this once and injects the result into every worker via
@@ -291,4 +292,4 @@ def build_inference_pool() -> InferencePool:
     until the first ``detector()`` / ``face()`` / ``pose()`` call — so this never
     blocks startup and never raises.
     """
-    return InferencePool()
+    return InferencePool(detector_tier=detector_tier)

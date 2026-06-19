@@ -530,7 +530,7 @@ class CameraTile(QWidget):
             self._paint_fps_chip(p, rec)
             self._paint_banner(p, rec, streaming)
 
-        # Tracking-state border (edge) + selection glow (inside) — independent.
+        # Selection glow is separate from tracking; tracking is shown on the target marker.
         self._paint_border(p, rec)
         self._paint_selection(p)
         p.end()
@@ -548,33 +548,11 @@ class CameraTile(QWidget):
         p.restore()
 
     def _paint_border(self, p: QPainter, rec: Any) -> None:
-        """Edge border encodes TRACKING STATE only — selection is a separate glow.
-
-        Red while actively following the locked target, green when a target is
-        locked-but-idle or tracking is armed without one yet, nothing otherwise.
-        This matches the person-box colours, so a camera that's *tracking* always
-        reads red regardless of whether it happens to be the selected tile.
-        """
-        if rec is None:
-            return
-        has_target = any(t.get("is_target") for t in _tracks(rec))
-        tracking = bool(getattr(rec, "tracking_enabled", False))
-        if tracking and has_target:
-            color = QColor(T.ERROR)        # live-following the locked target
-        elif tracking or has_target:
-            color = QColor(T.TARGET)       # locked / armed but not live-following
-        else:
-            return
-        p.save()
-        p.setPen(QPen(color, 2))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(QRectF(1, 1, self.width() - 2, self.height() - 2))
-        p.restore()
+        """No tracking-state edge border; the target person marker is the signal."""
+        return
 
     def _paint_selection(self, p: QPainter) -> None:
-        """Selection = a bright accent glow + corner handles, drawn *inside* the
-        edge so it never competes with the tracking-state border (both can show
-        at once: a selected, live-tracking tile reads red edge + accent glow)."""
+        """Selection = a bright accent glow + corner handles."""
         if not self._selected:
             return
         accent = QColor(T.ACCENT)
@@ -1023,11 +1001,10 @@ class CameraTile(QWidget):
         # lock label — its pill matches the state; "searching" while coasting.
         conf = t.get("confidence")
         ident = t.get("identity") or f"ID {t.get('track_id', '?')}"
-        label = (f"⟳ {ident} — searching" if lost else f"🔒 {ident}")
+        label = (f"Searching: {ident}" if lost else f"Target: {ident}")
         if not lost and isinstance(conf, (int, float)) and conf > 0:
             label += f"  {round(conf * 100)}%"
-        self._draw_label(p, rect.x(), rect.y() - 20, label, QColor(T.VIDEO_TEXT),
-                         bg=accent)
+        self._draw_target_label(p, label, accent)
         p.restore()
 
     def _target_aim_point(self, t: dict[str, Any], rect: QRectF) -> QPointF:
@@ -1073,6 +1050,30 @@ class CameraTile(QWidget):
         p.setPen(fg)
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter,
                    fm.elidedText(text, Qt.TextElideMode.ElideRight, int(width - pad * 2)))
+
+    def _draw_target_label(self, p: QPainter, text: str, bg: QColor) -> None:
+        """Draw the active target label as a readable tile chip, not a bbox chip."""
+        f = QFont(self.font())
+        f.setPixelSize(12)
+        f.setBold(True)
+        p.setFont(f)
+        fm = QFontMetrics(f)
+        pad_x = 8
+        bounds = self._painted_rect if self._painted_rect.isValid() else QRectF(self.rect())
+        max_width = min(360.0, max(120.0, bounds.width() - 16.0))
+        min_width = min(max_width, 180.0)
+        width = min(max_width, max(min_width, float(fm.horizontalAdvance(text) + pad_x * 2)))
+        x = bounds.left() + 8.0
+        y = bounds.top() + 36.0
+        if y + 22.0 > bounds.bottom() - 4.0:
+            y = bounds.top() + 8.0
+        rect = QRectF(x, y, width, 22)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(bg)
+        p.drawRoundedRect(rect, 5, 5)
+        p.setPen(QColor(T.VIDEO_TEXT))
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter,
+                   fm.elidedText(text, Qt.TextElideMode.ElideRight, int(width - pad_x * 2)))
 
     def _paint_name_pill(self, p: QPainter, rec: Any) -> None:
         name = getattr(rec, "display_name", "") or self.camera_id

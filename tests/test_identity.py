@@ -506,7 +506,6 @@ class TestIdentityListModelRoles:
 
 def _make_client(tmp_path=None):
     from autoptz.ui.engine_client import EngineClient
-    pytest.importorskip("PySide6")
     if tmp_path:
         store = _make_store(tmp_path)
         return EngineClient(store=store), store
@@ -515,7 +514,6 @@ def _make_client(tmp_path=None):
 
 @pytest.fixture(scope="module")
 def qapp():
-    pytest.importorskip("PySide6")
     import sys
 
     from PySide6.QtCore import QCoreApplication
@@ -683,6 +681,21 @@ class TestWorkerAutoHarvest:
         w._maybe_identify(_gray(21), [track], now=211.0)
         assert len(w._last_faces) == 1
         w._last_faces_t = time.monotonic() - 1.0
+        assert w._fresh_faces_for_telemetry([track]) == []
+
+    def test_face_overlay_publishes_once_per_inference_frame(self):
+        service, _ = _make_service()
+        emb = _vec(613)
+        service.enroll("Alice", emb)
+        app = _FakeApp([_FakeFace((280, 180, 380, 320), emb)])
+        rec = FaceRecognizer(_app=app, match_threshold=0.4)
+        w = self._worker(service, rec, [])
+        track = _StubTrack(7, (250, 150, 400, 460))
+        w._current_inference_frame_id = 12
+        w._last_tracks_frame_id = 12
+        w._maybe_identify(_gray(22), [track], now=time.monotonic())
+
+        assert len(w._fresh_faces_for_telemetry([track])) == 1
         assert w._fresh_faces_for_telemetry([track]) == []
 
     def test_pending_enroll_uses_clicked_face_not_first_face(self):

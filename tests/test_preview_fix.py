@@ -18,12 +18,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-# Provider needs PySide6; skip the provider tests gracefully if absent.
-_HAVE_PYSIDE = True
-try:
-    import PySide6  # noqa: F401
-except Exception:  # noqa: BLE001
-    _HAVE_PYSIDE = False
+import PySide6  # noqa: F401
 
 
 def _cleanup_shm(name: str) -> None:
@@ -42,7 +37,6 @@ def _cleanup_shm(name: str) -> None:
 # ── The self-healing provider regression ──────────────────────────────────────
 
 
-@pytest.mark.skipif(not _HAVE_PYSIDE, reason="PySide6 not installed")
 class TestSelfHealingFrameSource:
     """The blank-preview regression, now guarding ``frames.ShmFrameSource``."""
 
@@ -128,7 +122,6 @@ class TestSelfHealingFrameSource:
 # ── CameraWorker creates the shm writer eagerly in start() ─────────────────────
 
 
-@pytest.mark.skipif(not _HAVE_PYSIDE, reason="PySide6 not installed")
 class TestWorkerEagerShm:
     def test_shm_segment_exists_right_after_start(self) -> None:
         """The writer's segment must be openable as soon as start() returns.

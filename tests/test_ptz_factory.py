@@ -422,9 +422,6 @@ class TestBackendHomeMenuDefaults:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-pytest.importorskip("PySide6")  # CameraWorker imports are light, but keep parity
-
-
 def _bbox(x1, y1, x2, y2):
     from autoptz.engine.runtime.messages import BBox
     return BBox(x1=x1, y1=y1, x2=x2, y2=y2)

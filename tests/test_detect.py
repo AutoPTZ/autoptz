@@ -21,7 +21,7 @@ from autoptz.engine.pipeline.detect import (
     make_synthetic_detector_session,
 )
 
-onnx = pytest.importorskip("onnx")
+import onnx  # noqa: F401
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────

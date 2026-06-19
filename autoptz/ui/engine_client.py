@@ -628,6 +628,7 @@ class EngineClient(QObject):
     layoutsChanged   = Signal()
     themeChanged     = Signal(str)     # "dark"|"light"|"system"
     featuresChanged  = Signal()        # global subsystem switches changed
+    detectorModelTierChanged = Signal() # persisted detector model tier changed
     overlaysChanged  = Signal()        # which on-video overlays are shown changed
     startupProgressChanged = Signal()  # startup active/phase/counts changed
     optionalComponentsChanged = Signal()  # optional model/dependency prompt state
@@ -680,6 +681,13 @@ class EngineClient(QObject):
         self._startup_started_cameras: int = 0
         self._startup_total_cameras: int = 0
         self._startup_missing_components: list[str] = []
+        self._features: dict[str, bool] = {
+            "detection": True,
+            "tracking": True,
+            "face_recognition": True,
+            "pose": True,
+        }
+        self._detector_model_tier: str = "auto"
 
         # Shared identity gallery (set by the supervisor when the engine starts).
         # When present, identity CRUD delegates to it so the running engine
@@ -761,6 +769,8 @@ class EngineClient(QObject):
             theme_data = self._store.get_setting("theme", {})
             if isinstance(theme_data, dict):
                 self._theme_mode = theme_data.get("name", "dark")
+            tier = self._store.get_setting("detector_model_tier", "auto")
+            self._detector_model_tier = self._normalize_detector_model_tier(tier)
         except Exception:
             log.exception("Failed to load config from store")
 
@@ -862,6 +872,7 @@ class EngineClient(QObject):
             total=len(self._model.camera_ids()),
             missing=self._missing_optional_components(promptable_only=True),
         )
+        self.resetFeatureOverrides()
         try:
             try:
                 self._supervisor.start(
@@ -888,8 +899,8 @@ class EngineClient(QObject):
             self._engine_ep = self._supervisor.active_ep
         except Exception:  # noqa: BLE001
             self._engine_ep = ""
-        # Push the persisted global feature switches to the freshly-started engine
-        # so disabled subsystems stay disabled across restarts.
+        # Push the session-only global feature switches. They intentionally reset
+        # to all-on at launch; Services-panel disables are testing overrides only.
         try:
             self._enqueue(SetFeaturesCmd(camera_id=None, features=self.features()))
         except Exception:  # noqa: BLE001
@@ -1408,35 +1419,67 @@ class EngineClient(QObject):
         """Toggle the camera's on-screen (OSD) menu (safe no-op when unsupported)."""
         self._enqueue(PtzMenuCmd(camera_id=camera_id))
 
-    # ── global feature switches (perf: disable heavy subsystems) ────────────────
+    # ── session-only feature switches + detector model tier ────────────────────
 
     _FEATURE_KEYS = ("detection", "tracking", "face_recognition", "pose")
 
     @Slot(result="QVariant")
     def features(self) -> dict[str, bool]:
-        """Return the global ML-subsystem switches (all default True).
+        """Return the session-only ML-subsystem switches (all default True).
 
         Keys: ``detection``, ``tracking``, ``face_recognition``, ``pose``.
-        Persisted under the ``features`` setting so they survive restarts.
+        These do not persist; they are testing overrides that reset each launch.
         """
-        stored = self.getSetting("features", {}) or {}
-        return {k: bool(stored.get(k, True)) for k in self._FEATURE_KEYS}
+        return {k: bool(self._features.get(k, True)) for k in self._FEATURE_KEYS}
 
     @Slot(str, bool)
     def setFeatureEnabled(self, name: str, enabled: bool) -> None:
-        """Enable/disable a global subsystem and apply it to the engine live.
+        """Enable/disable a global subsystem for this session.
 
         ``name`` is one of ``detection``/``tracking``/``face_recognition``/``pose``.
-        Persists the flag and broadcasts a :class:`SetFeaturesCmd` so every worker
-        turns the subsystem on/off without a restart.
+        Broadcasts a :class:`SetFeaturesCmd` so every worker turns the subsystem
+        on/off without a restart, but does not persist across app launches.
         """
         if name not in self._FEATURE_KEYS:
             return
         feats = self.features()
         feats[name] = bool(enabled)
-        self.setSetting("features", feats)
+        self._features = feats
         self._enqueue(SetFeaturesCmd(camera_id=None, features=feats))
         self.featuresChanged.emit()
+
+    @Slot()
+    def resetFeatureOverrides(self) -> None:
+        """Reset all session-only module testing overrides to enabled."""
+        feats = {k: True for k in self._FEATURE_KEYS}
+        changed = feats != self._features
+        self._features = feats
+        if self._engine_running:
+            self._enqueue(SetFeaturesCmd(camera_id=None, features=feats))
+        if changed:
+            self.featuresChanged.emit()
+
+    @Property(str, notify=detectorModelTierChanged)
+    def detectorModelTier(self) -> str:
+        return self._detector_model_tier
+
+    @Slot(result=str)
+    def getDetectorModelTier(self) -> str:
+        return self._detector_model_tier
+
+    @Slot(str)
+    def setDetectorModelTier(self, tier: str) -> None:
+        normalized = self._normalize_detector_model_tier(tier)
+        if normalized == self._detector_model_tier:
+            return
+        self._detector_model_tier = normalized
+        self.setSetting("detector_model_tier", normalized)
+        self.detectorModelTierChanged.emit()
+
+    @staticmethod
+    def _normalize_detector_model_tier(tier: Any) -> str:
+        value = str(tier or "auto").strip().lower()
+        return value if value in {"auto", "fast", "balanced"} else "auto"
 
     # ── optional component setup / ignore state ─────────────────────────────
 

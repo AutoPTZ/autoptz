@@ -20,7 +20,7 @@ import time
 import numpy as np
 import pytest
 
-PySide6 = pytest.importorskip("PySide6")
+import PySide6  # noqa: F401
 
 
 # ── one QCoreApplication for the whole module ─────────────────────────────────

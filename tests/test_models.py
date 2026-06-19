@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from autoptz.engine.runtime.models import ModelManager
+from autoptz.engine.runtime.models import ModelManager, detector_model_for_tier
 
 
 @pytest.fixture(autouse=True)
@@ -65,6 +65,13 @@ def test_cached_onnx_is_reused_without_export(tmp_path, monkeypatch) -> None:
 
     mgr = ModelManager(cache_dir=cache)
     assert mgr.ensure_detector() == str(onnx)
+
+
+def test_detector_tier_maps_to_expected_weights() -> None:
+    assert detector_model_for_tier("auto") == "yolo11n.pt"
+    assert detector_model_for_tier("fast") == "yolo11n.pt"
+    assert detector_model_for_tier("balanced") == "yolo11s.pt"
+    assert detector_model_for_tier("bogus") == "yolo11n.pt"
 
 
 # ── download + export path (mocked ultralytics) ───────────────────────────────
@@ -250,8 +257,6 @@ def test_prebuilt_download_loadable_by_person_detector(tmp_path, monkeypatch) ->
     synthetic NMS-free model and serve its bytes through the prebuilt path so
     the end-to-end "model present → boxes" wiring is exercised offline.
     """
-    pytest.importorskip("onnx")
-    pytest.importorskip("onnxruntime")
     import io
 
     import numpy as np

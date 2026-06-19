@@ -12,6 +12,7 @@ from typing import Any
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -35,21 +36,23 @@ _STATE_LABEL = {
     "stopped": "STOPPED", "off": "OFF",
 }
 
-# Global ML-subsystem switches: (feature key, label, help text).  The keys match
+# Session-only ML-subsystem testing overrides: (feature key, label, help text). The keys match
 # ``EngineClient.features()`` / ``setFeatureEnabled`` exactly.
 _FEATURE_TOGGLES = (
     ("detection", "Person detection",
-     "Find people in each frame. Turning this off stops all detection, "
-     "tracking, and aiming — and saves the most CPU."),
+     "Testing override: disable person detection for this session. It resets on launch."),
     ("tracking", "Tracking",
-     "Follow detected people across frames so PTZ aiming stays on the same "
-     "person. Off saves CPU but disables auto-follow."),
+     "Testing override: disable track association/PTZ follow for this session."),
     ("face_recognition", "Face recognition",
-     "Match faces to enrolled identities so tracking can prefer a named "
-     "person. Off saves CPU; tracking still works without names."),
+     "Testing override: disable face matching for this session."),
     ("pose", "Pose",
-     "Estimate body keypoints for smarter aim/framing. Off saves CPU and "
-     "falls back to bounding-box aiming."),
+     "Testing override: disable pose keypoints for this session."),
+)
+
+_DETECTOR_TIERS = (
+    ("auto", "Auto"),
+    ("fast", "Fast / Nano"),
+    ("balanced", "Balanced / Small"),
 )
 
 
@@ -72,6 +75,7 @@ class ServicesPanel(QWidget):
         self._client = client
         self._rows: dict[str, tuple[QLabel, QLabel, QLabel]] = {}
         self._feature_boxes: dict[str, QCheckBox] = {}
+        self._detector_tier: QComboBox | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -97,17 +101,30 @@ class ServicesPanel(QWidget):
             head.addWidget(b)
         root.addLayout(head)
 
-        # ── global subsystem toggles ──────────────────────────────────────────
-        # Live on/off switches for the heavy ML stages; each saves CPU when off.
+        # ── testing controls ──────────────────────────────────────────────────
         root.addWidget(hline())
-        root.addWidget(section_label("Subsystems"))
-        perf = QPushButton("Performance Mode")
-        perf.setToolTip(
-            "Disable Face recognition and Pose while keeping preview, detection, "
-            "and tracking on."
+        root.addWidget(section_label("Testing Overrides"))
+        hint = QLabel("Services start enabled every launch. Disable modules here only for testing.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {T.CURRENT.subtext};")
+        root.addWidget(hint)
+
+        tier_row = QHBoxLayout()
+        tier_row.setSpacing(6)
+        tier_label = QLabel("Detector model")
+        self._detector_tier = QComboBox()
+        for value, label in _DETECTOR_TIERS:
+            self._detector_tier.addItem(label, value)
+        self._detector_tier.setToolTip(
+            "Choose detector model tier for testing. Takes effect the next time "
+            "the shared detector is built."
         )
-        perf.clicked.connect(self._enable_performance_mode)
-        root.addWidget(perf)
+        self._detector_tier.currentIndexChanged.connect(self._on_detector_tier_changed)
+        tier_row.addWidget(tier_label)
+        tier_row.addWidget(self._detector_tier, 1)
+        tier_row.addWidget(HelpBadge(self._detector_tier.toolTip()))
+        root.addLayout(tier_row)
+
         for key, label, tip in _FEATURE_TOGGLES:
             row = QHBoxLayout()
             row.setSpacing(6)
@@ -120,6 +137,7 @@ class ServicesPanel(QWidget):
             row.addStretch(1)
             root.addLayout(row)
         _connect(client, "featuresChanged", self._refresh_features)
+        _connect(client, "detectorModelTierChanged", self._refresh_detector_tier)
 
         root.addWidget(hline())
         root.addWidget(section_label("Optional Setup"))
@@ -141,6 +159,7 @@ class ServicesPanel(QWidget):
         self._timer.timeout.connect(self.refresh)
         self._timer.start(1500)
         self._refresh_features()
+        self._refresh_detector_tier()
         self._refresh_optional_components()
         self.refresh()
 
@@ -180,10 +199,10 @@ class ServicesPanel(QWidget):
                 for w in (dot, name, pill):
                     w.deleteLater()
 
-    # ── subsystem toggles ────────────────────────────────────────────────────
+    # ── testing overrides ────────────────────────────────────────────────────
 
     def _on_feature_toggled(self, key: str, checked: bool) -> None:
-        """Apply a subsystem switch live via the client."""
+        """Apply a session-only subsystem switch live via the client."""
         _safe(lambda: self._client.setFeatureEnabled(key, checked), None)
 
     def _refresh_features(self) -> None:
@@ -200,12 +219,25 @@ class ServicesPanel(QWidget):
                 box.setChecked(on)
                 box.blockSignals(False)
 
-    def _enable_performance_mode(self) -> None:
-        _safe(lambda: self._client.setFeatureEnabled("face_recognition", False), None)
-        _safe(lambda: self._client.setFeatureEnabled("pose", False), None)
-        _safe(lambda: self._client.setFeatureEnabled("detection", True), None)
-        _safe(lambda: self._client.setFeatureEnabled("tracking", True), None)
-        self._refresh_features()
+    def _refresh_detector_tier(self) -> None:
+        combo = self._detector_tier
+        if combo is None:
+            return
+        tier = str(_safe(lambda: self._client.getDetectorModelTier(), "auto") or "auto")
+        idx = combo.findData(tier)
+        if idx < 0:
+            idx = combo.findData("auto")
+        if idx >= 0 and combo.currentIndex() != idx:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+    def _on_detector_tier_changed(self, _index: int) -> None:
+        combo = self._detector_tier
+        if combo is None:
+            return
+        tier = str(combo.currentData() or "auto")
+        _safe(lambda: self._client.setDetectorModelTier(tier), None)
 
     def _refresh_optional_components(self) -> None:
         while self._setup_list.count():

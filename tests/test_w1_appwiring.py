@@ -15,7 +15,7 @@ import sys
 
 import pytest
 
-PySide6 = pytest.importorskip("PySide6")
+import PySide6  # noqa: F401
 
 
 # ── one QCoreApplication for the whole module ─────────────────────────────────
@@ -270,8 +270,6 @@ class TestLogBridge:
     def test_handler_appends_row(self, qapp) -> None:
         import logging
 
-        from PySide6.QtCore import QCoreApplication
-
         from autoptz.ui.log_bridge import LogListModel, QtLogHandler
 
         model = LogListModel(capacity=10)
@@ -281,8 +279,6 @@ class TestLogBridge:
         logger.addHandler(handler)
         try:
             logger.warning("hello %s", "world")
-            # Drain queued connection so the marshalled append runs.
-            QCoreApplication.processEvents()
 
             rows = model.rows()
             assert len(rows) == 1
@@ -296,8 +292,6 @@ class TestLogBridge:
     def test_ring_buffer_caps_rows(self, qapp) -> None:
         import logging
 
-        from PySide6.QtCore import QCoreApplication
-
         from autoptz.ui.log_bridge import LogListModel, QtLogHandler
 
         model = LogListModel(capacity=3)
@@ -308,7 +302,6 @@ class TestLogBridge:
         try:
             for i in range(6):
                 logger.info("msg-%d", i)
-            QCoreApplication.processEvents()
             rows = model.rows()
             assert len(rows) == 3
             # Oldest evicted; newest retained.
