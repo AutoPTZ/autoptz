@@ -1,65 +1,148 @@
-<p align="center">
-<img src="shared/AutoPTZLogo.png" width="150">
-</p>
-</p>
-<h1 align="center">AutoPTZ - Automating Your Production</h3>
-<br/>
+# AutoPTZ v2
 
-Our application is to be used mainly with PTZ cameras and have them physically move automatically by tracking a face on screen. While it can be connected to non-PTZ cameras, it does not add much value for individuals to use. The only difference would be that a PTZ camera can move but a normal camera will not move because of its nature. We have implemented facial recognition techniques to specifically select a face to track if there are multiple people on screen. Our application works on any PTZ cameras and is designed to be compatible with any standardized video connections via USB, NewTek NDI®, or RTSP IP. 
+AI-driven PTZ camera tracking — multi-camera, stable IDs, no cross-camera state bugs.
 
+## Project layout
 
-
-## Disclaimer
-
-- ⚠️ The project is under active development.
-- ⚠️ Expect bugs and inaccuracies.
-- ⚠️ Do not use the app during your live productions yet!
-## Features
-
-- Sources for NewTek NDI® and USB are supported, IP (RTSP) is under development
-- Live camera feeds
-- Accurate Facial Recognition and Motion Tracking
-- Automated PTZ VISCA Movement for Network and USB
-- Cross platform
-
-
-## Technology  Stack
-
-1. **Python** - Backend of the application
-2. **Pyside6 (Qt)** - Frontend of the application
-3. **OpenCV** - Camera Video Feeds and Facial Detection
-4. **Dlib** - Facial Recognition and Motion Tracking
-5. **Facial Recognition** - Powered by Dlib, Provided by ageitgey (https://github.com/ageitgey/face_recognition)
-6. **NewTek NDI Wrapper**  - Provided by buresu (https://github.com/buresu/ndi-python)
-7. **IP VISCA Controller** - PTZ Movement Controller, Provided by misterhay (https://github.com/misterhay/VISCA-IP-Controller)
-
-
-## Installation
-
-### Requirements
-
-- Python 3.7+
-- Windows or macOS (Linux is not officially supported, but should work)
-
-### Installation Options:
-Clone the project
-```bash
-  git clone https://github.com/AutoPTZ/autoptz.git
+```
+autoptz/           Python package (all v2 code lives here)
+  config/          Pydantic models + SQLite config store
+  engine/          Inference pipeline, PTZ backends, discovery
+  ui/              PySide6 + QML user interface
+  ui/qml/          QML files (CameraWall, CameraTile, ConfigDrawer, …)
+requirements/      Dependency files split by purpose
+  ui.txt           Minimal deps to run the UI (no ML stack)
+  base.txt         Full deps including onnxruntime, boxmot, av
+  macos.txt        macOS / Apple Silicon extras
+  dev.txt          Test + lint tools
+tests/             pytest test suite (360 tests)
+docs/v2-rework/    Architecture design docs (01 – 11)
+tools/             Bench/profiling scripts
+pyproject.toml     Project metadata + tool config
 ```
 
-Then instal cmake to build a copy a dlib for your system.
+## Quick start (macOS / Apple Silicon)
+
 ```bash
-  pip install cmake
-  pip install dlib
+# 1. Clone
+git clone <repo-url>
+cd autoptz
+
+# 2. Create a venv at the PROJECT ROOT (important — not inside autoptz/)
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+# 3. Install UI dependencies (fast — no ML stack needed yet)
+pip install -r requirements/ui.txt
+pip install -e .
+
+# 4. Launch
+python -m autoptz
 ```
 
-After you successfully install cmake and dlib, you can install the rest of the required libraries.
+> **Important:** always activate the venv from the project root (`autoptz/`),
+> not from inside `autoptz/autoptz/`. Both directories happen to be named
+> `autoptz` which can be confusing. The one that contains `pyproject.toml` is
+> the project root.
+
+## Full ML stack install
+
+Only needed once you want live detection + tracking (requires onnxruntime, boxmot, PyAV):
+
 ```bash
-  pip install -r requirements.txt
+pip install -r requirements/base.txt -r requirements/macos.txt
+pip install -e .
 ```
 
-Then you can finally run the program.
+## Run
+
 ```bash
-  python startup.py
+# Launch the UI
+python -m autoptz
+
+# Same thing, explicit UI submodule
+python -m autoptz.ui
+
+# Foundation selftest (verifies ORT EP + shared-memory + messaging)
+python -m autoptz --selftest
 ```
-    
+
+## Test
+
+```bash
+pip install -r requirements/dev.txt
+pytest                       # all tests
+pytest tests/test_phase8.py  # Phase 8 (config/identity/layout)
+pytest -k "not detect and not track and not ingest"  # skip ML tests
+```
+
+## Development
+
+```bash
+# Lint
+ruff check autoptz tests
+
+# Type-check
+mypy autoptz
+
+# Format
+ruff format autoptz tests
+```
+
+## Config / data location
+
+AutoPTZ stores its database at the platform config dir — no config files to edit:
+
+| Platform | Path |
+|----------|------|
+| macOS | `~/Library/Application Support/AutoPTZ/autoptz.db` |
+| Windows | `%APPDATA%\AutoPTZ\autoptz.db` |
+
+All camera settings, presets, layouts, and identities are in this single SQLite file.
+Export/import via **File → Save Show / Open Show** (saves a portable JSON bundle).
+
+## Packaging (native apps)
+
+Build AutoPTZ into a native, correctly-named app via PyInstaller. The macOS
+build produces a real `.app` bundle whose `Info.plist` declares
+`CFBundleName=AutoPTZ` — **this is what makes the macOS app menu read "AutoPTZ"
+instead of "Python".** All build assets live under `packaging/`. Full details
+(model/NDI bundling, CI) are in `docs/v2-rework/11-packaging-and-distribution.md`.
+
+### macOS (Apple Silicon)
+
+```bash
+bash packaging/build_macos.sh          # → dist/AutoPTZ.app (unsigned)
+```
+
+The bundle is already named correctly. Sign + notarize **on your Mac** (needs
+your Apple **Developer ID Application** certificate + **Team ID** — find them
+with `security find-identity -v -p codesigning`):
+
+```bash
+codesign --deep --force --options runtime --timestamp \
+  --entitlements packaging/entitlements.plist \
+  --sign "Developer ID Application: <YOUR NAME> (<TEAM_ID>)" dist/AutoPTZ.app
+
+ditto -c -k --keepParent dist/AutoPTZ.app dist/AutoPTZ.zip
+xcrun notarytool store-credentials AUTOPTZ_NOTARY \
+  --apple-id "<you@example.com>" --team-id "<TEAM_ID>" \
+  --password "<app-specific-password>"
+xcrun notarytool submit dist/AutoPTZ.zip --keychain-profile AUTOPTZ_NOTARY --wait
+xcrun stapler staple dist/AutoPTZ.app
+```
+
+### Windows (x64)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+# → dist\AutoPTZ\AutoPTZ.exe  (DirectML EP by default; -OneFile for a single exe)
+```
+
+Sign with `signtool` (Windows SDK) + your code-signing certificate. For NVIDIA
+GPUs, install `requirements/gpu-nvidia.txt` (CUDA/TensorRT EPs) and rebuild.
+
+> The YOLO11 detector ONNX **auto-downloads on first run**; pre-bundle it offline
+> with `python -m tools.fetch_models --cache-dir autoptz/models` before building.
+> The NDI runtime is a system library (not pip) — drop it in `packaging/ndi/` to
+> bundle it.

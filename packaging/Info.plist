@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  AutoPTZ.app/Contents/Info.plist
+
+  This file is the DEFINITIVE fix for the macOS app menu (and Dock label)
+  reading "Python" instead of "AutoPTZ".  When AutoPTZ runs as an unbundled
+  `python -m autoptz`, macOS falls back to the executable's process name
+  ("Python") for the application menu.  A real .app bundle whose Info.plist
+  declares CFBundleName=AutoPTZ makes AppKit use that name everywhere.
+
+  PyInstaller's BUNDLE step (see packaging/autoptz.spec) merges these keys into
+  the generated bundle via its `info_plist` argument, so this file is the single
+  source of truth for the bundle metadata.  Keep it valid:
+      plutil -lint packaging/Info.plist
+-->
+<plist version="1.0">
+<dict>
+    <!-- ── Identity (the app-name fix) ─────────────────────────────────── -->
+    <key>CFBundleName</key>
+    <string>AutoPTZ</string>
+    <key>CFBundleDisplayName</key>
+    <string>AutoPTZ</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.autoptz.app</string>
+    <key>CFBundleExecutable</key>
+    <string>AutoPTZ</string>
+
+    <!-- ── Versioning ──────────────────────────────────────────────────── -->
+    <!-- CFBundleShortVersionString is the user-facing marketing version. -->
+    <key>CFBundleShortVersionString</key>
+    <string>2.0.0</string>
+    <!-- CFBundleVersion is the build number; bump per build for notarization. -->
+    <key>CFBundleVersion</key>
+    <string>2.0.0</string>
+
+    <!-- ── Bundle packaging ────────────────────────────────────────────── -->
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <!-- Icon (without .icns extension).  Provide packaging/AutoPTZ.icns and
+         reference it from the spec's BUNDLE icon= to populate this. -->
+    <key>CFBundleIconFile</key>
+    <string>AutoPTZ.icns</string>
+
+    <!-- ── System requirements ─────────────────────────────────────────── -->
+    <!-- onnxruntime CoreML EP + PySide6 6.8 are comfortable on Ventura+. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <!-- GUI app: show in the Dock and own a menu bar (not a background agent). -->
+    <key>LSUIElement</key>
+    <false/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!-- Single-arch builds set this; for a universal2 build PyInstaller writes
+         both. Left here documented; harmless if absent. -->
+    <key>LSArchitecturePriority</key>
+    <array>
+        <string>arm64</string>
+        <string>x86_64</string>
+    </array>
+
+    <!-- ── Privacy usage strings (REQUIRED for the features to work) ────── -->
+    <!-- macOS BLOCKS camera access (and crashes the app on first use) without
+         NSCameraUsageDescription present in the bundle's Info.plist. -->
+    <key>NSCameraUsageDescription</key>
+    <string>AutoPTZ uses connected cameras to detect and track people for automatic PTZ control.</string>
+    <!-- Required on modern macOS for iPhone Continuity Camera device types. -->
+    <key>NSCameraUseContinuityCameraDeviceType</key>
+    <true/>
+    <!-- NDI / IP-camera discovery and RTSP/ONVIF talk over the local network. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>AutoPTZ discovers and controls NDI, ONVIF, and RTSP cameras on your local network.</string>
+    <!-- Bonjour service types used for NDI + ONVIF/WS-Discovery on the LAN. -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_ndi._tcp</string>
+        <string>_http._tcp</string>
+    </array>
+
+    <!-- ── Document type: AutoPTZ "Show" JSON bundle (File ▸ Open Show) ─── -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>AutoPTZ Show</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.autoptz.show</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.autoptz.show</string>
+            <key>UTTypeDescription</key>
+            <string>AutoPTZ Show</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.json</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>autoptz</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>

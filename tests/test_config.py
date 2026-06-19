@@ -76,6 +76,40 @@ class TestModels:
         with pytest.raises(ValidationError):
             TrackingConfig(detect_interval=0)
 
+    def test_tracking_aim_region_defaults_to_upper_body(self) -> None:
+        assert TrackingConfig().aim_region == "upper_body"
+
+    def test_tracking_coast_window_defaults_short(self) -> None:
+        assert TrackingConfig().coast_window_ms == 300
+
+    def test_tracking_aim_body_mode_defaults_to_torso(self) -> None:
+        assert TrackingConfig().aim_body_mode == "torso"
+
+    def test_tracking_aim_body_mode_rejects_unknown(self) -> None:
+        with pytest.raises(ValidationError):
+            TrackingConfig(aim_body_mode="arms_only")
+
+    def test_tracking_aim_region_rejects_unknown(self) -> None:
+        with pytest.raises(ValidationError):
+            TrackingConfig(aim_region="elbow")
+
+    def test_aim_region_fraction_table_covers_all_choices(self) -> None:
+        from autoptz.config.models import AIM_REGION_FRACTION
+        for region in ("face", "head_shoulders", "upper_body", "full_body"):
+            assert region in AIM_REGION_FRACTION
+            assert 0.0 <= AIM_REGION_FRACTION[region] <= 1.0
+        # Aim point must rise (smaller fraction) as the region tightens toward the
+        # face, and full_body must be the geometric centre.
+        f = AIM_REGION_FRACTION
+        assert f["face"] < f["head_shoulders"] < f["upper_body"] < f["full_body"]
+        assert f["full_body"] == 0.5
+
+    def test_legacy_config_without_aim_region_loads_as_default(self) -> None:
+        """A config persisted before aim_region existed must still validate."""
+        data = CameraConfig(name="Legacy").model_dump()
+        del data["tracking"]["aim_region"]
+        assert CameraConfig.model_validate(data).tracking.aim_region == "upper_body"
+
     def test_ptz_preset_name_blank_raises(self) -> None:
         with pytest.raises(Exception, match="name"):
             PTZPreset(camera_id="x", idx=0, name="  ")
@@ -119,6 +153,41 @@ class TestModels:
         ptz = PTZConfig(soft_limits=limits)
         assert ptz.soft_limits is not None
         assert ptz.soft_limits.pan_min == -0.5
+
+    def test_framing_box_defaults_on(self) -> None:
+        """New cameras show the framing box so the dead-zone is visible/adjustable."""
+        ptz = PTZConfig()
+        assert ptz.safe_zone_enabled is True
+        assert ptz.safe_zone_x == 0.0
+        assert ptz.safe_zone_y == 0.0
+        assert ptz.safe_zone_w == 0.15
+        assert ptz.safe_zone_h == 0.22
+
+    def test_framing_box_center_is_configurable(self) -> None:
+        """The framing box can move away from dead centre."""
+        ptz = PTZConfig(safe_zone_x=0.25, safe_zone_y=-0.2)
+        assert ptz.safe_zone_x == 0.25
+        assert ptz.safe_zone_y == -0.2
+
+    def test_framing_box_migrates_from_legacy_radius(self) -> None:
+        """A pre-box config (radius only) seeds the box half-extents from radius."""
+        ptz = PTZConfig.model_validate({"safe_zone_radius": 0.2})
+        assert ptz.safe_zone_w == 0.2
+        assert ptz.safe_zone_h == 0.2
+
+    def test_framing_box_explicit_wins_over_radius(self) -> None:
+        """An explicit box keeps its own values even when radius is also present."""
+        ptz = PTZConfig.model_validate(
+            {"safe_zone_w": 0.1, "safe_zone_h": 0.3, "safe_zone_radius": 0.2}
+        )
+        assert ptz.safe_zone_w == 0.1
+        assert ptz.safe_zone_h == 0.3
+
+    def test_framing_roundness_defaults_to_oval(self) -> None:
+        """The framing region defaults to a full oval (roundness 1.0)."""
+        assert PTZConfig().safe_zone_roundness == 1.0
+        ptz = PTZConfig.model_validate({"safe_zone_roundness": 0.0})
+        assert ptz.safe_zone_roundness == 0.0
 
     def test_tile_placement_defaults(self) -> None:
         tile = TilePlacement(camera_id="abc")
@@ -164,6 +233,45 @@ class TestStoreBootstrap:
         assert store._get_schema_version() == CURRENT_SCHEMA_VERSION
         store.close()
 
+    def test_v3_migration_shortens_old_default_coast_window(self, tmp_path: Path) -> None:
+        p = tmp_path / "v3.db"
+        old_cam = CameraConfig(
+            name="Old Coast",
+            tracking=TrackingConfig(coast_window_ms=1500),
+        )
+        s1 = ConfigStore(db_path=p, debounce_s=0)
+        s1.save_camera(old_cam)
+        s1.set_setting("schema_version", 2)
+        s1.close()
+
+        s2 = ConfigStore(db_path=p, debounce_s=0)
+        loaded = s2.load_cameras()[0]
+        assert loaded.tracking.coast_window_ms == 300
+        assert s2._get_schema_version() == CURRENT_SCHEMA_VERSION
+        s2.close()
+
+    def test_v4_migration_adds_aim_body_mode(self, tmp_path: Path) -> None:
+        p = tmp_path / "v4.db"
+        old_cam = CameraConfig(name="Old Aim")
+        data = json.loads(old_cam.model_dump_json())
+        data["tracking"].pop("aim_body_mode", None)
+
+        s1 = ConfigStore(db_path=p, debounce_s=0)
+        with s1._tx() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO cameras(id, name, config, enabled, updated_at) "
+                "VALUES (?, ?, ?, 1, ?)",
+                (old_cam.id, old_cam.name, json.dumps(data), "2026-01-01T00:00:00"),
+            )
+        s1.set_setting("schema_version", 3)
+        s1.close()
+
+        s2 = ConfigStore(db_path=p, debounce_s=0)
+        loaded = s2.load_cameras()[0]
+        assert loaded.tracking.aim_body_mode == "torso"
+        assert s2._get_schema_version() == CURRENT_SCHEMA_VERSION
+        s2.close()
+
 
 # ── Store: camera CRUD ─────────────────────────────────────────────────────────
 
@@ -178,7 +286,14 @@ class TestCameraStore:
         assert reloaded.name == cam.name
         assert reloaded.source.address == cam.source.address
         assert reloaded.tracking.detect_interval == cam.tracking.detect_interval
+        assert reloaded.tracking.aim_region == cam.tracking.aim_region
         assert reloaded.ptz.backend == cam.ptz.backend
+
+    def test_aim_region_survives_store_round_trip(self, store: ConfigStore) -> None:
+        c = CameraConfig(name="Framed", tracking=TrackingConfig(aim_region="face"))
+        store.save_camera(c)
+        reloaded = store.load_cameras()[0]
+        assert reloaded.tracking.aim_region == "face"
 
     def test_simulated_restart(self, tmp_path: Path, cam: CameraConfig) -> None:
         """CameraConfig must survive a store close-and-reopen (simulated restart)."""

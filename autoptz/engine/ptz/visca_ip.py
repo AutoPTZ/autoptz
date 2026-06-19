@@ -19,6 +19,8 @@ from autoptz.engine.ptz.base import (
     PTZBackend,
     PTZCaps,
     PTZState,
+    visca_home_cmd,
+    visca_menu_cmd,
     visca_pantilt_cmd,
     visca_preset_recall_cmd,
     visca_preset_set_cmd,
@@ -148,6 +150,14 @@ class ViscaIPBackend(PTZBackend):
 
     def save_preset(self, idx: int) -> None:
         self._send(visca_preset_set_cmd(idx))
+
+    def home(self) -> None:
+        """Drive pan/tilt to the camera's optical home position."""
+        self._send(visca_home_cmd())
+
+    def osd_menu(self) -> None:
+        """Toggle the camera's on-screen-display menu (no-op if unsupported)."""
+        self._send(visca_menu_cmd())
 
     def close(self) -> None:
         try:

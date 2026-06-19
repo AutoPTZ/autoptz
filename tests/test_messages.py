@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from autoptz.engine.runtime.messages import (
     AddCameraCmd,
     BaseCommand,
@@ -10,8 +12,10 @@ from autoptz.engine.runtime.messages import (
     CmdKind,
     EnableTrackingCmd,
     EnrollIdentityCmd,
+    FaceBox,
     HealthInfo,
     HealthState,
+    PoseKeypoint,
     PtzGoToPresetCmd,
     PtzNudgeCmd,
     PtzSavePresetCmd,
@@ -84,6 +88,90 @@ class TestTelemetryMsg:
         assert restored.health.state == HealthState.ERROR
         assert restored.health.last_error == "Source stalled"
 
+    def test_camera_info_fields_default_zero(self) -> None:
+        msg = TelemetryMsg(camera_id="c", seq=0)
+        assert msg.width == 0
+        assert msg.height == 0
+        assert msg.dropped_frames == 0
+
+    def test_camera_info_fields_round_trip(self) -> None:
+        msg = TelemetryMsg(
+            camera_id="c", seq=1, width=1920, height=1080, dropped_frames=7,
+        )
+        restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+        assert restored.width == 1920
+        assert restored.height == 1080
+        assert restored.dropped_frames == 7
+
+    def test_stage_timings_default_zero(self) -> None:
+        msg = TelemetryMsg(camera_id="c", seq=0)
+        assert msg.face_ms == 0.0
+        assert msg.pose_ms == 0.0
+
+    def test_stage_timings_round_trip(self) -> None:
+        """Per-stage costs (incl. the new face/pose) survive msgpack — they feed
+        the tile "?" badge + Camera Info Performance section."""
+        msg = TelemetryMsg(
+            camera_id="c", seq=1, ingest_ms=2.0, detect_ms=8.5,
+            track_ms=1.2, face_ms=13.0, pose_ms=4.5,
+        )
+        restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+        assert restored.ingest_ms == 2.0
+        assert restored.detect_ms == 8.5
+        assert restored.face_ms == 13.0
+        assert restored.pose_ms == 4.5
+
+    def test_overlay_payloads_round_trip(self) -> None:
+        """Face boxes + target pose keypoints survive msgpack for the overlays."""
+        msg = TelemetryMsg(
+            camera_id="c", seq=1, width=1280, height=720,
+            faces=[FaceBox(bbox=BBox(x1=30, y1=25, x2=70, y2=65),
+                           identity="Alice", score=0.82)],
+            pose=[PoseKeypoint(x=50.0, y=60.0, conf=0.9) for _ in range(17)],
+        )
+        restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+        assert len(restored.faces) == 1
+        assert restored.faces[0].identity == "Alice"
+        assert abs(restored.faces[0].score - 0.82) < 1e-9
+        assert len(restored.pose) == 17
+        assert restored.pose[0].conf == 0.9
+
+    def test_overlay_payloads_default_empty(self) -> None:
+        """Overlays default to empty so a worker that never ran them sends nothing."""
+        msg = TelemetryMsg(camera_id="c", seq=0)
+        assert msg.faces == []
+        assert msg.pose == []
+
+    def test_track_lost_and_velocity_round_trip(self) -> None:
+        """The lost flag + velocity (for the prediction indicator) survive msgpack."""
+        msg = TelemetryMsg(
+            camera_id="c", seq=1,
+            tracks=[TrackInfo(track_id=3, bbox=BBox(x1=1, y1=2, x2=3, y2=4),
+                              lost=True, vx=5.5, vy=-2.0, is_target=True)],
+        )
+        restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+        t = restored.tracks[0]
+        assert t.lost is True
+        assert abs(t.vx - 5.5) < 1e-9 and abs(t.vy + 2.0) < 1e-9
+
+    def test_track_aim_round_trip(self) -> None:
+        msg = TelemetryMsg(
+            camera_id="c", seq=1, width=640, height=480,
+            tracks=[TrackInfo(
+                track_id=3, bbox=BBox(x1=10, y1=20, x2=110, y2=220),
+                is_target=True, aim_x=70.0, aim_y=90.0, aim_source="pose",
+            )],
+        )
+        restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+        t = restored.tracks[0]
+        assert t.aim_x == pytest.approx(70.0)
+        assert t.aim_y == pytest.approx(90.0)
+        assert t.aim_source == "pose"
+
+    def test_track_defaults_not_lost(self) -> None:
+        t = TrackInfo(track_id=1, bbox=BBox(x1=0, y1=0, x2=1, y2=1))
+        assert t.lost is False and t.vx == 0.0 and t.vy == 0.0
+
 
 class TestCommands:
     def _round_trip(self, cmd: BaseCommand) -> BaseCommand:
@@ -140,9 +228,14 @@ class TestCommands:
         assert restored.kind == CmdKind.PTZ_SAVE_PRESET
 
     def test_enroll_identity(self) -> None:
-        cmd = EnrollIdentityCmd(camera_id="cam-1", identity_name="Bob", track_id=3)
-        restored = self._round_trip(cmd)
+        cmd = EnrollIdentityCmd(
+            camera_id="cam-1", identity_name="Bob", track_id=3,
+            click_x=0.25, click_y=0.75,
+        )
+        restored = EnrollIdentityCmd.from_msgpack(cmd.to_msgpack())
         assert restored.kind == CmdKind.ENROLL_IDENTITY
+        assert restored.click_x == pytest.approx(0.25)
+        assert restored.click_y == pytest.approx(0.75)
 
     def test_set_layout(self) -> None:
         cmd = SetLayoutCmd(layout_name="2x2")

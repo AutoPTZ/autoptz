@@ -13,6 +13,8 @@ from autoptz.engine.ptz.base import (
     PTZBackend,
     PTZCaps,
     PTZState,
+    visca_home_cmd,
+    visca_menu_cmd,
     visca_pantilt_cmd,
     visca_preset_recall_cmd,
     visca_preset_set_cmd,
@@ -22,9 +24,6 @@ from autoptz.engine.ptz.base import (
 )
 
 log = logging.getLogger(__name__)
-
-# home command: 81 01 06 04 FF
-_VISCA_HOME = bytes([0x81, 0x01, 0x06, 0x04, 0xFF])
 
 
 class ViscaUSBBackend(PTZBackend):
@@ -81,6 +80,14 @@ class ViscaUSBBackend(PTZBackend):
     def save_preset(self, idx: int) -> None:
         self._send(visca_preset_set_cmd(idx))
 
+    def home(self) -> None:
+        """Drive camera to its optical home position."""
+        self._send(visca_home_cmd())
+
+    def osd_menu(self) -> None:
+        """Toggle the camera's on-screen-display menu (no-op if unsupported)."""
+        self._send(visca_menu_cmd())
+
     def close(self) -> None:
         try:
             self.stop()
@@ -91,7 +98,3 @@ class ViscaUSBBackend(PTZBackend):
         except Exception:
             pass
         log.info("ViscaUSB closed")
-
-    def home(self) -> None:
-        """Drive camera to optical home position."""
-        self._send(_VISCA_HOME)

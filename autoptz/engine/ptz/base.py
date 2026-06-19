@@ -78,6 +78,20 @@ class PTZBackend(ABC):
     def save_preset(self, idx: int) -> None:
         """Save current position to preset slot *idx* (0-based)."""
 
+    def home(self) -> None:
+        """Drive the camera to its optical home position.
+
+        Optional capability — the default is a safe no-op so backends/cameras
+        that cannot home simply ignore the request.
+        """
+
+    def osd_menu(self) -> None:
+        """Open (or toggle) the camera's on-screen-display menu.
+
+        Optional capability — the default is a safe no-op so backends/cameras
+        without an OSD menu silently ignore the request.
+        """
+
     @abstractmethod
     def close(self) -> None:
         """Release hardware resources.  No further calls allowed after this."""
@@ -146,3 +160,17 @@ def visca_preset_set_cmd(idx: int) -> bytes:
 def visca_preset_recall_cmd(idx: int) -> bytes:
     """81 01 04 3F 02 MM FF — recall preset MM."""
     return bytes([0x81, 0x01, 0x04, 0x3F, 0x02, idx & 0xFF, 0xFF])
+
+
+def visca_home_cmd() -> bytes:
+    """81 01 06 04 FF — drive pan/tilt to the optical home position."""
+    return bytes([0x81, 0x01, 0x06, 0x04, 0xFF])
+
+
+def visca_menu_cmd() -> bytes:
+    """81 01 06 06 10 FF — toggle the camera's on-screen-display (OSD) menu.
+
+    This is the common Sony/PTZOptics "Menu" key shortcut (Datascreen on).
+    Cameras without an OSD menu ignore the command, so it is safe to send.
+    """
+    return bytes([0x81, 0x01, 0x06, 0x06, 0x10, 0xFF])

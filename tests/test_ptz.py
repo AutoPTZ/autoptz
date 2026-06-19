@@ -288,6 +288,25 @@ class TestControllerMath:
         pan, _, _ = ctrl.step((0.3, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
         assert pan > 0.0
 
+    def test_shifted_safe_zone_suppresses_error_around_box_center(self) -> None:
+        ctrl = PTZController(
+            MockBackend(),
+            _cfg(safe_zone_enabled=True, safe_zone_x=0.3, safe_zone_y=-0.2,
+                 safe_zone_w=0.1, safe_zone_h=0.1),
+        )
+        pan, tilt, _ = ctrl.step((0.34, -0.24), (0.0, 0.0), 0.45, True, t=0.0)
+        assert pan == pytest.approx(0.0, abs=1e-6)
+        assert tilt == pytest.approx(0.0, abs=1e-6)
+
+    def test_shifted_safe_zone_tracks_relative_to_box_center(self) -> None:
+        ctrl = PTZController(
+            MockBackend(),
+            _cfg(safe_zone_enabled=True, safe_zone_x=0.3, safe_zone_y=0.0,
+                 safe_zone_w=0.05, safe_zone_h=0.05),
+        )
+        pan, _, _ = ctrl.step((0.6, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
+        assert pan > 0.0
+
     def test_invert_pan(self) -> None:
         ctrl = PTZController(MockBackend(), _cfg(kp=0.6, invert_pan=True))
         pan, _, _ = ctrl.step((0.5, 0.0), (0.0, 0.0), 0.45, True, t=0.0)

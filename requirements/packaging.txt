@@ -1,0 +1,35 @@
+# AutoPTZ v2 — packaging / native-app build tooling
+#
+# Install on the BUILD machine (in addition to base + the platform extras), e.g.:
+#   macOS:    pip install -r requirements/base.txt -r requirements/macos.txt \
+#                          -r requirements/packaging.txt -e .
+#   Windows:  pip install -r requirements/base.txt -r requirements/gpu-nvidia.txt \
+#                          -r requirements/packaging.txt -e .
+#
+# Produces a native, correctly-named app via PyInstaller using
+# packaging/autoptz.spec.  On macOS the spec's BUNDLE step writes
+# packaging/Info.plist into AutoPTZ.app/Contents/Info.plist — the
+# CFBundleName=AutoPTZ key there is the definitive fix for the app menu
+# showing "Python" instead of "AutoPTZ".
+#
+# These deps are needed ONLY to build the app, not to run it.
+
+# ── bundler ───────────────────────────────────────────────────────────────────
+# 6.x supports PySide6 6.8 + Python 3.12 and the macOS BUNDLE/codesign workflow.
+pyinstaller>=6.10
+
+# PyInstaller ships first-party hooks for PySide6; this package adds/maintains
+# community hooks for the wider ecosystem (cv2, onnxruntime, scipy, etc.) so
+# their data files and hidden imports are collected automatically.
+pyinstaller-hooks-contrib>=2024.8
+
+# ── notes (not pip-installable here) ──────────────────────────────────────────
+# macOS signing + notarization use Apple-provided command-line tools that come
+# with Xcode / the Command Line Tools — NOT pip:
+#   codesign, /usr/bin/codesign        (hardened-runtime signing)
+#   xcrun notarytool                   (submit to Apple notary service)
+#   xcrun stapler                      (staple the notarization ticket)
+# They require your Apple Developer ID Application certificate + Team ID.
+#
+# Windows code-signing uses signtool.exe (Windows SDK) with an EV/OV
+# code-signing certificate — also not pip-installable.

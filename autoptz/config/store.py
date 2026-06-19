@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS identities (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
     thumbnail  BLOB,
+    enabled    INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -103,6 +104,14 @@ CREATE TABLE IF NOT EXISTS identity_embeddings (
     identity_id TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
     vector      BLOB NOT NULL,
     source      TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS identity_photos (
+    id          TEXT PRIMARY KEY,
+    identity_id TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+    image       BLOB NOT NULL,
+    idx         INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL
 );
 
@@ -125,6 +134,7 @@ CREATE INDEX IF NOT EXISTS idx_events_ts         ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_camera_id  ON events(camera_id);
 CREATE INDEX IF NOT EXISTS idx_ptz_camera        ON ptz_presets(camera_id);
 CREATE INDEX IF NOT EXISTS idx_emb_identity      ON identity_embeddings(identity_id);
+CREATE INDEX IF NOT EXISTS idx_photo_identity    ON identity_photos(identity_id);
 """
 
 # ── Migration registry ────────────────────────────────────────────────────────
@@ -141,10 +151,68 @@ def _migrate_to_v1(conn: sqlite3.Connection) -> None:
     conn.executescript(_DDL_V1)
 
 
+def _migrate_to_v2(conn: sqlite3.Connection) -> None:
+    """Add the ``identities.enabled`` column (idempotent).
+
+    Fresh DBs already have the column from the updated v1 DDL; an older DB that
+    predates it gets it added here.  ``ADD COLUMN`` on an existing column raises
+    ``OperationalError`` which we swallow so the migration is safe to re-run.
+    """
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(identities)")}
+    if "enabled" not in cols:
+        conn.execute(
+            "ALTER TABLE identities ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"
+        )
+
+
+def _migrate_to_v3(conn: sqlite3.Connection) -> None:
+    """Shorten the stale-track coast default for existing camera configs.
+
+    Only configs still carrying the old default ``1500`` are migrated. A user
+    who intentionally changed the value keeps their setting.
+    """
+    rows = conn.execute("SELECT id, config FROM cameras").fetchall()
+    for row in rows:
+        try:
+            data = json.loads(row["config"])
+            tracking = data.setdefault("tracking", {})
+            if int(tracking.get("coast_window_ms", 1500)) != 1500:
+                continue
+            tracking["coast_window_ms"] = 300
+            conn.execute(
+                "UPDATE cameras SET config=? WHERE id=?",
+                (json.dumps(data), row["id"]),
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("v3 coast-window migration skipped camera %s", row["id"],
+                      exc_info=True)
+
+
+def _migrate_to_v4(conn: sqlite3.Connection) -> None:
+    """Add the tracking aim-body mode to existing camera configs."""
+    rows = conn.execute("SELECT id, config FROM cameras").fetchall()
+    for row in rows:
+        try:
+            data = json.loads(row["config"])
+            tracking = data.setdefault("tracking", {})
+            if "aim_body_mode" in tracking:
+                continue
+            tracking["aim_body_mode"] = "torso"
+            conn.execute(
+                "UPDATE cameras SET config=? WHERE id=?",
+                (json.dumps(data), row["id"]),
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("v4 aim-body-mode migration skipped camera %s", row["id"],
+                      exc_info=True)
+
+
 _MIGRATIONS: list[tuple[int, Any]] = [
     # (target_version, upgrade_fn(conn) -> None)
     (1, _migrate_to_v1),
-    # Future: (2, lambda conn: conn.execute("ALTER TABLE cameras ADD COLUMN ..."))
+    (2, _migrate_to_v2),
+    (3, _migrate_to_v3),
+    (4, _migrate_to_v4),
 ]
 
 
@@ -410,12 +478,13 @@ class ConfigStore:
         with self._tx() as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO identities(id, name, thumbnail, created_at, updated_at)
-                VALUES (?,?,?,?,?)
+                INSERT OR REPLACE INTO
+                    identities(id, name, thumbnail, enabled, created_at, updated_at)
+                VALUES (?,?,?,?,?,?)
                 """,
                 (
                     identity.id, identity.name, identity.thumbnail,
-                    identity.created_at.isoformat(), now,
+                    int(identity.enabled), identity.created_at.isoformat(), now,
                 ),
             )
             conn.execute(
@@ -431,6 +500,19 @@ class ConfigStore:
                     """,
                     (emb_id, identity.id, vec, "", now),
                 )
+            # Candidate profile photos (the recognition crops the user re-picks from).
+            conn.execute(
+                "DELETE FROM identity_photos WHERE identity_id=?", (identity.id,)
+            )
+            for i, img in enumerate(identity.thumbnails):
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO identity_photos
+                        (id, identity_id, image, idx, created_at)
+                    VALUES (?,?,?,?,?)
+                    """,
+                    (f"{identity.id}:p{i}", identity.id, img, i, now),
+                )
 
     def load_identities(self) -> list[IdentityRecord]:
         assert self._conn is not None
@@ -445,12 +527,22 @@ class ConfigStore:
                     (row["id"],),
                 ).fetchall()
                 embeddings = [bytes(r["vector"]) for r in emb_rows]
+                photo_rows = self._conn.execute(
+                    "SELECT image FROM identity_photos WHERE identity_id=? ORDER BY idx",
+                    (row["id"],),
+                ).fetchall()
+                thumbnails = [bytes(r["image"]) for r in photo_rows]
+                row_keys = row.keys()
+                enabled = bool(row["enabled"]) if "enabled" in row_keys else True
                 records.append(
                     IdentityRecord(
                         id=row["id"],
                         name=row["name"],
                         thumbnail=bytes(row["thumbnail"]) if row["thumbnail"] else None,
+                        thumbnails=thumbnails,
                         embeddings=embeddings,
+                        enabled=enabled,
+                        labeled=True,  # only labeled identities are ever persisted
                         created_at=datetime.fromisoformat(row["created_at"]),
                         updated_at=datetime.fromisoformat(row["updated_at"]),
                     )
@@ -466,6 +558,47 @@ class ConfigStore:
             conn.execute(
                 "DELETE FROM identity_embeddings WHERE identity_id=?", (identity_id,)
             )
+            conn.execute(
+                "DELETE FROM identity_photos WHERE identity_id=?", (identity_id,)
+            )
+
+    def delete_identity_photo(self, identity_id: str, index: int) -> bool:
+        """Delete a single candidate photo (``identity_photos`` row) by position.
+
+        Removes the row at ``idx == index`` for *identity_id*, then re-packs the
+        remaining photos' ``idx`` / row ids to stay contiguous (mirroring the
+        ``f"{id}:p{i}"`` id scheme :meth:`save_identity` writes).  Embeddings are
+        untouched — photos and embeddings are independent (see
+        :meth:`IdentityService.remove_thumbnail`).  Returns ``True`` when a photo
+        was removed, ``False`` when the index is out of range.
+
+        Note: the service already re-persists the whole record via
+        :meth:`save_identity` after a removal, so this is the explicit
+        single-photo store path (and keeps the store usable on its own).
+        """
+        now = datetime.now(UTC).replace(tzinfo=None).isoformat()
+        with self._tx() as conn:
+            rows = conn.execute(
+                "SELECT image FROM identity_photos WHERE identity_id=? ORDER BY idx",
+                (identity_id,),
+            ).fetchall()
+            if not (0 <= index < len(rows)):
+                return False
+            images = [bytes(r["image"]) for r in rows]
+            images.pop(index)
+            conn.execute(
+                "DELETE FROM identity_photos WHERE identity_id=?", (identity_id,)
+            )
+            for i, img in enumerate(images):
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO identity_photos
+                        (id, identity_id, image, idx, created_at)
+                    VALUES (?,?,?,?,?)
+                    """,
+                    (f"{identity_id}:p{i}", identity_id, img, i, now),
+                )
+            return True
 
     # ── Event log ─────────────────────────────────────────────────────────────
 
@@ -555,7 +688,9 @@ class ConfigStore:
                     "id": i.id,
                     "name": i.name,
                     "thumbnail": i.thumbnail.hex() if i.thumbnail else None,
+                    "thumbnails": [t.hex() for t in i.thumbnails],
                     "embeddings": [e.hex() for e in i.embeddings],
+                    "enabled": i.enabled,
                     "created_at": i.created_at.isoformat(),
                     "updated_at": i.updated_at.isoformat(),
                 }
@@ -609,11 +744,15 @@ class ConfigStore:
             try:
                 embeddings = [bytes.fromhex(e) for e in raw_id.get("embeddings", [])]
                 thumbnail = bytes.fromhex(raw_id["thumbnail"]) if raw_id.get("thumbnail") else None
+                thumbnails = [bytes.fromhex(t) for t in raw_id.get("thumbnails", [])]
                 identity = IdentityRecord(
                     id=raw_id["id"],
                     name=raw_id["name"],
                     embeddings=embeddings,
                     thumbnail=thumbnail,
+                    thumbnails=thumbnails,
+                    enabled=bool(raw_id.get("enabled", True)),
+                    labeled=True,
                     created_at=datetime.fromisoformat(raw_id.get("created_at", datetime.now(UTC).replace(tzinfo=None).isoformat())),
                     updated_at=datetime.fromisoformat(raw_id.get("updated_at", datetime.now(UTC).replace(tzinfo=None).isoformat())),
                 )

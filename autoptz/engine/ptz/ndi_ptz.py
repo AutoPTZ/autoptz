@@ -93,6 +93,23 @@ class NDIPTZBackend(PTZBackend):
         with self._lock:
             self._recv.recv_ptz_preset_store(idx)
 
+    def home(self) -> None:
+        """Best-effort NDI home.
+
+        NDI PTZ has no dedicated "home" command.  Many NDI cameras map preset 0
+        to the home/default view, so we recall preset 0 if the receiver exposes
+        the call; otherwise this is a safe no-op.
+        """
+        with self._lock:
+            try:
+                self._recv.recv_ptz_preset_recall(0, 1.0)
+            except Exception:
+                log.debug("NDI home (preset 0 recall) unsupported/failed", exc_info=True)
+
+    def osd_menu(self) -> None:
+        """NDI PTZ has no on-screen-display menu command — safe no-op."""
+        log.debug("NDI backend has no OSD-menu command; ignoring osd_menu()")
+
     def close(self) -> None:
         try:
             self.stop()

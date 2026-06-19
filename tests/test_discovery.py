@@ -12,7 +12,8 @@ from unittest.mock import MagicMock, patch
 
 from autoptz.engine.discovery.ndi import NDIDiscovery, NDISource
 from autoptz.engine.discovery.onvif import ONVIFDevice, ONVIFDiscovery
-from autoptz.engine.discovery.usb import USBDevice, USBDiscovery
+from autoptz.engine.discovery.usb import USBDevice, USBDiscovery, enumerate_cameras
+import autoptz.engine.discovery.usb as usb_mod
 
 # ── USBDiscovery ───────────────────────────────────────────────────────────────
 
@@ -137,6 +138,107 @@ class TestUSBDiscovery:
 
         assert len(events1) > 0
         assert len(events2) > 0
+
+
+# ── _probe_indices: confirm a real frame, not just isOpened() ──────────────────
+
+
+class _FakeCap:
+    """Fake cv2.VideoCapture: configurable open + first-frame behaviour."""
+
+    def __init__(self, *, opened: bool, has_frame: bool) -> None:
+        self._opened = opened
+        self._has_frame = has_frame
+        self.released = False
+
+    def isOpened(self) -> bool:  # noqa: N802 — mirrors cv2 API
+        return self._opened
+
+    def read(self):
+        import numpy as np
+        if self._has_frame:
+            return True, np.zeros((4, 4, 3), dtype=np.uint8)
+        return False, None
+
+    def release(self) -> None:
+        self.released = True
+
+
+class TestProbeIndices:
+    def test_only_indices_that_open_and_read_are_returned(self, monkeypatch) -> None:
+        # Index 0 opens + reads (real); 1 opens but no frame (phantom);
+        # 2 doesn't open; the rest don't open.
+        def fake_videocapture(i, backend):
+            if i == 0:
+                return _FakeCap(opened=True, has_frame=True)
+            if i == 1:
+                return _FakeCap(opened=True, has_frame=False)  # phantom
+            return _FakeCap(opened=False, has_frame=False)
+
+        monkeypatch.setattr(usb_mod.cv2, "VideoCapture", fake_videocapture)
+        found = usb_mod._probe_indices(max_index=4)
+        assert found == {0}
+
+    def test_a_bad_index_does_not_abort_scan(self, monkeypatch) -> None:
+        def fake_videocapture(i, backend):
+            if i == 0:
+                raise RuntimeError("driver explosion")
+            if i == 2:
+                return _FakeCap(opened=True, has_frame=True)
+            return _FakeCap(opened=False, has_frame=False)
+
+        monkeypatch.setattr(usb_mod.cv2, "VideoCapture", fake_videocapture)
+        found = usb_mod._probe_indices(max_index=4)
+        assert found == {2}
+
+
+# ── enumerate_cameras: real/openable devices only ──────────────────────────────
+
+
+class TestEnumerateCameras:
+    def test_macos_uses_avfoundation_real_names(self, monkeypatch) -> None:
+        """When AVFoundation enumerates, those real devices are returned verbatim."""
+        monkeypatch.setattr(usb_mod.platform, "system", lambda: "Darwin")
+        fake = [
+            {"name": "FaceTime HD Camera", "unique_id": "0x111",
+             "index": 0, "is_continuity": False},
+            {"name": "iPhone", "unique_id": "0x222",
+             "index": 1, "is_continuity": True},
+        ]
+        monkeypatch.setattr(usb_mod, "_enumerate_macos_cameras", lambda: fake)
+        # If AVFoundation succeeds we must NOT probe cv2 at all.
+        monkeypatch.setattr(usb_mod, "_probed_fallback_cameras",
+                            lambda: (_ for _ in ()).throw(AssertionError("probed!")))
+        cams = enumerate_cameras()
+        assert cams == fake
+        assert all(isinstance(c["name"], str) for c in cams)
+
+    def test_fallback_probes_openable_indices_only(self, monkeypatch) -> None:
+        """No AVFoundation → probe real openable indices, never blind 0-3."""
+        monkeypatch.setattr(usb_mod.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(usb_mod, "_enumerate_macos_cameras", lambda: None)
+        # Only index 0 is real and openable.
+        monkeypatch.setattr(usb_mod, "_probe_indices", lambda *a, **k: {0})
+        cams = enumerate_cameras()
+        assert [c["index"] for c in cams] == [0]
+        assert cams[0]["name"] == "Camera 0"
+        assert cams[0]["unique_id"] is None
+        assert cams[0]["is_continuity"] is False
+
+    def test_fallback_returns_empty_when_nothing_openable(self, monkeypatch) -> None:
+        """No real cameras → empty list, NOT phantom Camera 0-3."""
+        monkeypatch.setattr(usb_mod.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(usb_mod, "_probe_indices", lambda *a, **k: set())
+        assert enumerate_cameras() == []
+
+    def test_never_raises_on_probe_failure(self, monkeypatch) -> None:
+        monkeypatch.setattr(usb_mod.platform, "system", lambda: "Linux")
+
+        def boom(*a, **k):
+            raise RuntimeError("probe broke")
+
+        monkeypatch.setattr(usb_mod, "_probe_indices", boom)
+        assert enumerate_cameras() == []
 
 
 # ── NDIDiscovery ───────────────────────────────────────────────────────────────

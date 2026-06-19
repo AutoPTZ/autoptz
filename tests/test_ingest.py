@@ -84,6 +84,37 @@ class TestUSBAdapterOpen:
         cap.release.assert_called_once()
         assert adapter._cap is None
 
+    def test_low_current_fps_is_not_treated_as_max_cap(self) -> None:
+        cap = _make_cap([_FRAME])
+        cap.get.return_value = 15.0
+        with patch("autoptz.engine.pipeline.ingest.cv2.VideoCapture", return_value=cap):
+            adapter = USBAdapter("cam-low-cap", source=0, target_fps=60.0)
+            assert adapter._open()
+
+        assert adapter.status.source_fps_cap is None
+        assert adapter._target_fps == 60.0
+
+    def test_high_fps_probe_sets_trusted_max_cap(self) -> None:
+        cap = _make_cap([_FRAME])
+        state = {"fps": 30.0}
+
+        def fake_set(prop: int, value: float) -> bool:
+            if prop == 5:  # cv2.CAP_PROP_FPS
+                state["fps"] = 60.0 if value <= 60.0 else 30.0
+            return True
+
+        def fake_get(prop: int) -> float:
+            return state["fps"] if prop == 5 else 0.0
+
+        cap.set.side_effect = fake_set
+        cap.get.side_effect = fake_get
+        with patch("autoptz.engine.pipeline.ingest.cv2.VideoCapture", return_value=cap):
+            adapter = USBAdapter("cam-high-cap", source=0, target_fps=120.0)
+            assert adapter._open()
+
+        assert adapter.status.source_fps_cap == 60.0
+        assert adapter._target_fps == 60.0
+
 
 class TestUSBAdapterReconnect:
     """Verify the reconnect loop by running the adapter in a thread."""
@@ -159,6 +190,11 @@ class TestUSBAdapterReconnect:
         assert status.state == AdapterState.RUNNING
         assert status.frames_total > 0
 
+    def test_status_includes_source_fps_cap(self) -> None:
+        adapter = USBAdapter("cam-cap", source=0, target_fps=30.0)
+        adapter._set_source_fps_cap(29.97)
+        assert adapter.status.source_fps_cap == 29.97
+
     def test_stop_state_is_stopped(self) -> None:
         def fake_open(self: USBAdapter) -> bool:
             return False  # always fail
@@ -189,6 +225,21 @@ class TestRTSPAdapterCV2Fallback:
 
         assert ok
         assert adapter._cap is cap
+
+    def test_cv2_stream_rate_is_not_treated_as_source_max(self) -> None:
+        cap = _make_cap([_FRAME])
+        cap.get.return_value = 15.0
+
+        with (
+            patch("autoptz.engine.pipeline.ingest._probe_av", return_value=False),
+            patch("autoptz.engine.pipeline.ingest.cv2.VideoCapture", return_value=cap),
+        ):
+            adapter = RTSPAdapter("rtsp-low-rate", url="rtsp://127.0.0.1/test",
+                                  target_fps=60.0)
+            assert adapter._open()
+
+        assert adapter.status.source_fps_cap is None
+        assert adapter._target_fps == 60.0
 
     def test_read_frame_cv2(self) -> None:
         frame = np.full((_H, _W, 3), 99, dtype=np.uint8)

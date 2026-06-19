@@ -240,19 +240,26 @@ class TestBoxMOTUnavailable:
         result = _probe_boxmot()
         assert isinstance(result, bool)
 
-    def test_no_impl_no_boxmot_raises_on_update(self) -> None:
-        """Without boxmot installed and no _impl, update() must raise ImportError."""
+    def test_no_impl_no_boxmot_falls_back_to_iou_tracker(self) -> None:
+        """Without boxmot installed, update() must NOT raise — it degrades to the
+        built-in lightweight IoU tracker so detection/boxes still work."""
         import autoptz.engine.pipeline.track as track_mod
+        from autoptz.engine.pipeline.track import _SimpleIoUTracker
 
         orig = track_mod._BOXMOT_AVAILABLE
         track_mod._BOXMOT_AVAILABLE = False
         try:
-            # Tracker without _impl
             tracker = Tracker()
             tracker._impl_pending = True
             tracker._impl = None
-            with pytest.raises(ImportError, match="boxmot"):
-                tracker.update([], FRAME)
+            # First detection → a stable confirmed track, no exception.
+            tracks = tracker.update([_det(10, 20, 100, 200)], FRAME, fps=30.0)
+            assert isinstance(tracker._impl, _SimpleIoUTracker)
+            assert len(tracks) == 1
+            first_id = tracks[0].track_id
+            # A nudged box on the next frame keeps the same id (IoU association).
+            tracks2 = tracker.update([_det(14, 24, 104, 204)], FRAME, fps=30.0)
+            assert tracks2[0].track_id == first_id
         finally:
             track_mod._BOXMOT_AVAILABLE = orig
 

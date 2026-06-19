@@ -7,6 +7,131 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — v2.0.0a0
 
+### Added — Phase 10 (packaging): native app builds + the real app-name fix
+
+- **`packaging/autoptz.spec`** — PyInstaller spec building `dist/AutoPTZ.app`
+  (macOS) and `dist/AutoPTZ/AutoPTZ.exe` (Windows). Bundles the `autoptz`
+  package, the QML tree (to `autoptz/ui/qml` so `app.py`'s `__file__`-relative
+  lookup resolves when frozen), `assets/`, `models/`, and PySide6 Qt plugins
+  (platforms, quick, qml, labsplatform, styles, imageformats). Entry =
+  `autoptz/__main__.py` (keeps `multiprocessing.freeze_support()`). Optional NDI
+  runtime + pre-fetched model bundling; trims unused Qt modules.
+- **`packaging/Info.plist`** — macOS bundle metadata. **`CFBundleName=AutoPTZ`**
+  is the definitive fix for the app menu reading "Python"; also
+  `CFBundleDisplayName`, `CFBundleIdentifier=com.autoptz.app`,
+  `CFBundleShortVersionString=2.0.0`, `LSMinimumSystemVersion=12.0`, and the
+  required `NSCameraUsageDescription` (+ local-network usage strings).
+- **`packaging/entitlements.plist`** — hardened-runtime entitlements: camera
+  (`com.apple.security.device.camera`), JIT / unsigned-executable-memory /
+  dyld-env / library-validation (for CPython + PySide6 + onnxruntime), and
+  network client/server; signing-identity + Team-ID placeholders documented.
+- **`packaging/build_macos.sh` + `packaging/build_windows.ps1`** — venv +
+  dependency install + PyInstaller; verify `CFBundleName` and `plutil -lint` on
+  macOS. Print (do **not** run) the `codesign`/`notarytool`/`stapler` and
+  `signtool` steps, which need the user's Apple Developer ID / code-signing cert.
+- **`requirements/packaging.txt`** — `pyinstaller`, `pyinstaller-hooks-contrib`.
+- **Docs** — `docs/v2-rework/11-packaging-and-distribution.md` and a README
+  "Packaging (native apps)" section: per-OS build + the exact sign/notarize
+  commands, NDI/model bundling, and DirectML-vs-CUDA EP notes.
+
+### Added — Phase 8 (engine): face/ReID identity engine + identity API
+
+- **`autoptz/engine/pipeline/identify.py`** — `FaceRecognizer` wrapping
+  InsightFace `FaceAnalysis("buffalo_l")` (SCRFD detect + 512-d ArcFace, CPU
+  ctx, auto-download).  Detects faces, embeds, and cosine-matches against the
+  enabled gallery with a threshold.  Graceful: logs once and disables face
+  features when insightface / the model / network is missing (manual
+  click-to-track still works).  Embedding helpers (`normalize`, `cosine`,
+  `embedding_to_bytes` / `_from_bytes`).
+- **`autoptz/engine/identity/service.py` + `store.py`** — `IdentityService`, an
+  in-memory gallery over the existing `identities` / `identity_embeddings`
+  tables: `enroll`, `add_unlabeled`, `label` (promote), `rename`, `delete`,
+  `set_enabled`, `merge`, `add_embedding`, versioned `reload`.  **Retention =
+  labeled-only persisted**: labeled identities go to the DB; unlabeled
+  auto-harvested "Person N" records live in RAM only and vanish on restart.
+- **`autoptz/engine/pipeline/reid.py`** — `BodyReID` (OSNet via boxmot) +
+  hysteresis matching (`θ_hi` to lock, `θ_lo` to maintain) to recover the right
+  track after occlusion/crossing; graceful when boxmot/weights are absent.
+- **`autoptz/config/models.py`** — `IdentityRecord` gains `enabled: bool = True`
+  and `labeled: bool = True`; auto-harvested records are `labeled=False,
+  enabled=False`.  `ConfigStore` schema v2 adds the `identities.enabled` column
+  (idempotent migration) and round-trips it.
+- **`autoptz/engine/camera_worker.py`** — continuous face stack: a few Hz it
+  detects faces, annotates matched tracks with `identity` + `confidence` in
+  `TelemetryMsg`, and **auto-harvests** an unmatched good face into a memory-only
+  unlabeled identity (base64-able PNG thumbnail) pushed to the UI.  **One target
+  per camera**; `set_target_identity` locks the single target onto the matched
+  track ("track when found").
+- **`messages.py`** — new `SetTargetIdentityCmd` / `SET_TARGET_IDENTITY`; routed
+  by the supervisor, which also owns one shared `IdentityService` and wires the
+  worker→client identity callback (mirrors telemetry).
+- **`autoptz/ui/engine_client.py`** — `IdentityListModel` extended with the
+  frozen roles (`identityId`, `identityName`, `thumbnail` base64 data URI,
+  `enabled`, `labeled`); new slots `setTargetIdentity` / `labelIdentity` /
+  `mergeIdentities` / `setIdentityEnabled`; thread-safe `push_identity`.
+- **`requirements/base.txt`** — add `insightface` (buffalo_l auto-downloads;
+  OSS-pack licensing note).
+
+### Added — Phase 8: UI — config, presets, identities, layouts, themes
+
+- **`autoptz/ui/qml/Theme.qml`** — Single theme file.  `QtObject` with all
+  color tokens (`background`, `surface`, `surfaceAlt`, `borderColor`, `text`,
+  `subtext`, `accent`, `tracking`, `target`, `warning`, `lost`, `error`, `bbox`)
+  and spacing constants.  Dark/light switching via `mode` property; all dependent
+  colors update automatically through QML bindings.  Instantiated once in
+  `CameraWall.qml` and passed as `required property var theme` so every component
+  uses the same single-source palette.
+- **`autoptz/ui/qml/ConfigDrawer.qml`** — Per-camera config panel (5 tabs):
+  - **Source** — type, URI, credentials, fps, substream, rename.
+  - **Tracking** — tracker selector, detect interval, ReID on/off + thresholds,
+    coast window, face confirm, quality floor.
+  - **PTZ** — backend, address, max speeds, invert axes, dead-zone X/Y,
+    controller gains Kp/Kd/Kv, auto-zoom, zoom framing.
+  - **Presets** — list saved presets (Go / delete), save current position as new
+    preset by name.
+  - **Tuning** — live sliders for dead-zone and gains with a short (80 ms)
+    debounce so operators can dial in smoothness while watching a live camera.
+  All changes are sent as `UpdateCameraConfig` commands with a 400 ms debounce;
+  immediate apply for discrete controls (`ComboBox`, `Switch`, text fields).
+- **`autoptz/ui/qml/PresetBar.qml`** — Compact row of up to 6 preset recall
+  buttons, shown above the bottom bar in `CameraTile`.  Clicking calls
+  `ptzGoToPreset`.  Invisible when no presets are saved.
+- **`autoptz/ui/qml/IdentityManager.qml`** — Modal dialog: lists enrolled
+  identities with inline rename and delete; "Enroll new" section picks a camera,
+  shows the current target track ID, and calls `enrollIdentity` with a
+  pre-allocated UUID so the UI and engine share the same key.
+- **Layout save/load** (in `CameraWall.qml`) — "Layouts" top-bar button opens a
+  popup listing saved layouts with Load/Delete and a name-field to save the
+  current camera order as a new layout.
+- **Theme switcher** (in `CameraWall.qml`) — "Theme" top-bar button toggles
+  dark/light; persisted via `ConfigStore`.
+- **`autoptz/engine/runtime/messages.py`** — New command types and `CmdKind`
+  entries: `UpdateCameraConfigCmd`, `EnrollIdentityCmd` (+ `identity_id` field),
+  `DeleteIdentityCmd`, `RenameIdentityCmd`, `SaveLayoutCmd`, `DeleteLayoutCmd`.
+- **`autoptz/ui/engine_client.py`** — Major expansion:
+  - `IdentityListModel` / `LayoutListModel` — new Qt list models exposed via
+    `identityModel` / `layoutModel` context properties.
+  - `PresetsRole` added to `CameraListModel`; `CameraRecord` carries the full
+    `CameraConfig` instance.
+  - `ConfigStore` integration: `EngineClient(store=store)` loads cameras, identities,
+    and layouts on startup; all mutations write-through (debounced for sliders).
+  - New `@Slot` methods: `getCameraConfig`, `updateCameraConfig`, `ptzSavePreset`,
+    `deletePreset`, `enrollIdentity`, `deleteIdentity`, `renameIdentity`,
+    `saveCurrentLayout`, `loadLayout`, `deleteLayout`, `setTheme`.
+  - `addCamera` now creates a proper `CameraConfig` from the URI and saves it.
+  - `removeCamera` cleans up from `ConfigStore`.
+- **`autoptz/ui/app.py`** — Creates `ConfigStore` on launch, passes it to
+  `EngineClient`; calls `store.flush()` + `store.close()` on clean shutdown.
+- **`CameraWall.qml`** / **`CameraTile.qml`** — All hard-coded palette strings
+  removed; all colors now come from the `Theme` instance.  `CameraTile` gains
+  `required property var theme` and `required property var presets` (for
+  `PresetBar`).  Clicking a tile opens the `ConfigDrawer` panel.  Number keys
+  1–6 recall presets on the selected camera.
+- **`tests/test_phase8.py`** — 58 new unit tests covering: new command types,
+  `EngineClient` config/preset/identity/layout CRUD (headless, no Qt), full
+  persistence round-trips (add → save → restart → restore), model deduplication,
+  blank-name rejection, and theme persistence.
+
 ### Added — Phase 1: Config & persistence
 
 - **`autoptz/config/models.py`** — Frozen pydantic models for the full config

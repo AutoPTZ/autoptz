@@ -22,11 +22,24 @@ if TYPE_CHECKING:
     from autoptz.config.models import PTZConfig
     from autoptz.engine.ptz.base import PTZBackend
 
+# Named framing presets → target subject-height fraction of the frame.
+# A larger fraction means the subject fills more of the frame (tighter shot).
+#   face           — head fills most of the frame (closeup)
+#   head_shoulders — classic head-and-shoulders
+#   upper_body     — waist-up (default)
+#   full_body      — whole person in frame
+#   wide           — person small in a wide establishing shot
 _ZOOM_FRAMING_TARGETS = {
-    "tight": 0.65,
+    "face": 0.80,
+    "head_shoulders": 0.60,
+    "upper_body": 0.45,
+    "full_body": 0.30,
+    "wide": 0.20,
+    # Legacy names kept so an un-migrated config still resolves sanely.
+    "tight": 0.60,
     "medium": 0.45,
-    "wide": 0.25,
 }
+_DEFAULT_ZOOM_FRAMING_TARGET = 0.45  # == upper_body
 _ZOOM_HYSTERESIS = 0.05  # ±5 % of frame height before zoom moves
 _POWER = 1.5             # response-curve exponent (ease-in: gentle near zero)
 
@@ -154,15 +167,18 @@ class PTZController:
         self._coast_window_s = coast_window_ms / 1000.0
         self._rate_hz = rate_hz
 
-        # per-axis one-euro filters (freq seed = rate_hz)
+        # per-axis one-euro filters (freq seed = rate_hz); cutoff/beta are set
+        # from cfg.aim_smoothing by _apply_smoothing (called next + on re-acquire).
         self._filt_ex = OneEuroFilter(freq=rate_hz, mincutoff=1.0, beta=0.01)
         self._filt_ey = OneEuroFilter(freq=rate_hz, mincutoff=1.0, beta=0.01)
+        self._apply_smoothing()
 
         # controller state
         self._state = ControllerState.IDLE
         self._coast_start: float = 0.0
         self._coast_pan: float = 0.0
         self._coast_tilt: float = 0.0
+        self._search_start: float = 0.0  # when SEARCHING began (loss-recovery zoom-out)
 
         # PD derivative state
         self._prev_ex_f: float = 0.0
@@ -185,6 +201,28 @@ class PTZController:
     @property
     def state(self) -> ControllerState:
         return self._state
+
+    def update_config(self, cfg: PTZConfig) -> None:
+        """Swap in a new PTZConfig live (e.g. the Advanced tuning sliders).
+
+        Only tuning *values* are read per tick from ``self._cfg``; the backend and
+        coast window are fixed at construction, so this never needs a rebuild.
+        """
+        self._cfg = cfg
+        self._apply_smoothing()
+
+    def _apply_smoothing(self) -> None:
+        """Map ``cfg.aim_smoothing`` (0..1) onto the one-euro filter parameters.
+
+        Higher smoothing → lower cutoff (calmer, more lag); lower smoothing →
+        higher cutoff + beta (snappier, anticipatory).  0.5 ≈ the original tuning.
+        """
+        s = _clamp(float(getattr(self._cfg, "aim_smoothing", 0.5)), 0.0, 1.0)
+        mincutoff = max(0.2, 2.0 - 1.8 * s)
+        beta = 0.005 + (1.0 - s) * 0.05
+        for f in (self._filt_ex, self._filt_ey):
+            f.mincutoff = mincutoff
+            f.beta = beta
 
     def update(
         self,
@@ -309,9 +347,11 @@ class PTZController:
         # ── state transitions ─────────────────────────────────────────────────
         if p.track_active:
             if self._state != ControllerState.TRACKING:
-                # (re-)acquired target: reset filters
+                # (re-)acquired target: reset filters (and re-apply smoothing in
+                # case the tuning changed while we were searching)
                 self._filt_ex.reset()
                 self._filt_ey.reset()
+                self._apply_smoothing()
                 self._prev_ex_f = 0.0
                 self._prev_ey_f = 0.0
                 self._last_t = -1.0
@@ -326,11 +366,14 @@ class PTZController:
             elif self._state == ControllerState.COASTING:
                 if t - self._coast_start >= self._coast_window_s:
                     self._state = ControllerState.SEARCHING
+                    self._search_start = t
+                    # Stop the inherited pan/tilt drift; SEARCHING then zooms out
+                    # to widen the view and re-find the subject (below).
                     try:
                         self._backend.stop()
                     except Exception:
                         pass
-            # IDLE / SEARCHING: nothing to do
+            # IDLE: nothing to do
 
         # ── compute commands per state ────────────────────────────────────────
         if self._state == ControllerState.TRACKING:
@@ -339,7 +382,18 @@ class PTZController:
         elif self._state == ControllerState.COASTING:
             pan_cmd, tilt_cmd = self._coast_pan, self._coast_tilt
             zoom_cmd = 0.0
-        else:
+        elif self._state == ControllerState.SEARCHING:
+            # Loss recovery: hold pan/tilt still and gently zoom OUT for a window
+            # so the lost subject is more likely to re-enter the (wider) frame,
+            # rather than freezing on a tight shot of empty space.
+            pan_cmd = tilt_cmd = 0.0
+            zoom_out = float(getattr(cfg, "loss_zoom_out", 0.0))
+            window = float(getattr(cfg, "reacquire_window_s", 0.0))
+            if zoom_out > 0.0 and (t - self._search_start) < window:
+                zoom_cmd = -_clamp(zoom_out * cfg.max_zoom_speed, 0.0, 1.0)
+            else:
+                zoom_cmd = 0.0
+        else:  # IDLE
             pan_cmd = tilt_cmd = zoom_cmd = 0.0
 
         return pan_cmd, tilt_cmd, zoom_cmd
@@ -349,9 +403,28 @@ class PTZController:
         ex, ey = p.error
         vx, vy = p.velocity
 
-        # 1. dead-zone
-        ex = ex if abs(ex) >= cfg.deadzone_x else 0.0
-        ey = ey if abs(ey) >= cfg.deadzone_y else 0.0
+        # 0. motion prediction — anticipate where the subject is heading by
+        #    projecting the aim error forward by the control lead time, so the
+        #    camera leads the motion instead of always trailing it.
+        lead = float(getattr(cfg, "lead_time_s", 0.0))
+        if lead > 0.0:
+            ex += vx * lead
+            ey += vy * lead
+
+        # 1. dead-zone — the adjustable "framing box" around centre when enabled
+        #    (PTZ holds still while the subject is inside the box), else per-axis.
+        if getattr(cfg, "safe_zone_enabled", False):
+            cx = float(getattr(cfg, "safe_zone_x", 0.0))
+            cy = float(getattr(cfg, "safe_zone_y", 0.0))
+            hw = float(getattr(cfg, "safe_zone_w", 0.15))
+            hh = float(getattr(cfg, "safe_zone_h", 0.22))
+            ex -= cx
+            ey -= cy
+            if abs(ex) <= hw and abs(ey) <= hh:
+                ex = ey = 0.0
+        else:
+            ex = ex if abs(ex) >= cfg.deadzone_x else 0.0
+            ey = ey if abs(ey) >= cfg.deadzone_y else 0.0
 
         # 2. one-euro filter
         ex_f = self._filt_ex(ex, t)
@@ -399,7 +472,13 @@ class PTZController:
         cfg = self._cfg
         if subject_height <= 0.0:
             return 0.0
-        target = _ZOOM_FRAMING_TARGETS.get(cfg.zoom_framing, 0.45)
+        # The unified "Framing" control (``tracking.framing``) drives BOTH aim and
+        # zoom.  The worker mirrors the chosen framing into ``ptz.zoom_framing`` so
+        # this controller — which only sees the PTZConfig — resolves the same
+        # subject-height target.  Prefer an explicit ``framing`` attribute should a
+        # future config carry one directly, then fall back to ``zoom_framing``.
+        framing = getattr(cfg, "framing", None) or cfg.zoom_framing
+        target = _ZOOM_FRAMING_TARGETS.get(framing, _DEFAULT_ZOOM_FRAMING_TARGET)
         zoom_error = subject_height - target
         if zoom_error > _ZOOM_HYSTERESIS:
             # subject too tall → zoom out (negative)

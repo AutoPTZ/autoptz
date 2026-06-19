@@ -149,6 +149,23 @@ class ONVIFPTZBackend(PTZBackend):
         request.PresetName = f"Preset {idx}"
         self._ptz.SetPreset(request)
 
+    def home(self) -> None:
+        """Recall the ONVIF home position via ``GotoHomePosition`` (best effort).
+
+        Cameras that have no home position configured raise; we swallow it so the
+        call stays a safe no-op.
+        """
+        try:
+            request = self._ptz.create_type("GotoHomePosition")
+            request.ProfileToken = self._profile_token
+            self._ptz.GotoHomePosition(request)
+        except Exception:
+            log.debug("ONVIF GotoHomePosition unsupported/failed", exc_info=True)
+
+    def osd_menu(self) -> None:
+        """ONVIF has no standard OSD-menu operation — safe no-op."""
+        log.debug("ONVIF backend has no OSD-menu command; ignoring osd_menu()")
+
     def close(self) -> None:
         try:
             self.stop()

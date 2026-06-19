@@ -56,9 +56,148 @@ def _probe_boxmot() -> bool:
         try:
             import boxmot as _  # noqa: F401
             _BOXMOT_AVAILABLE = True
+            _quiet_boxmot_logging()
         except ImportError:
             _BOXMOT_AVAILABLE = False
     return bool(_BOXMOT_AVAILABLE)
+
+
+def _quiet_boxmot_logging() -> None:
+    """Silence BoxMOT's chatty output (per-tracker config dumps at INFO and the
+    'ECC did not converge' warnings on low-texture frames) so it doesn't flood
+    the console.  BoxMOT ≥ 19 logs through the stdlib ``logging`` module on a
+    ``"boxmot"`` logger with its own Rich handler; raising its level to ERROR
+    keeps genuine failures visible while dropping the noise."""
+    try:
+        blog = logging.getLogger("boxmot")
+        blog.setLevel(logging.ERROR)
+        # boxmot resets the logger level during construction but keeps its Rich
+        # handler — pinning the handler to ERROR filters the init config dump too.
+        for h in blog.handlers:
+            h.setLevel(logging.ERROR)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def boxmot_available() -> bool:
+    """Public capability probe: is the BoxMOT tracker backend importable?"""
+    return _probe_boxmot()
+
+
+# One-time guard so the "using lightweight fallback tracker" line is logged
+# once per process rather than once per camera worker.
+_LOGGED_FALLBACK_TRACKER = False
+
+
+def _log_fallback_tracker_once() -> None:
+    global _LOGGED_FALLBACK_TRACKER
+    if _LOGGED_FALLBACK_TRACKER:
+        return
+    _LOGGED_FALLBACK_TRACKER = True
+    log.info(
+        "boxmot not installed — using built-in lightweight IoU tracker "
+        "(detection + boxes work; install boxmot for occlusion-robust BoT-SORT "
+        "+ ReID re-acquisition).",
+    )
+
+
+# ── Lightweight fallback tracker (no boxmot) ────────────────────────────────────
+
+
+class _SimpleIoUTracker:
+    """Greedy-IoU multi-object tracker used when ``boxmot`` is not installed.
+
+    Mirrors BoxMOT's ``update(dets, frame) -> [N, 7]`` contract
+    (``[x1, y1, x2, y2, track_id, conf, cls]``) so :class:`Tracker` wraps it
+    transparently.  Motion-only: it associates this frame's detections to the
+    previous frame's boxes by IoU and keeps stable integer ids — no appearance
+    ReID and no Kalman prediction.  Enough to draw and follow person boxes on a
+    minimal install; install ``boxmot`` for occlusion-robust BoT-SORT.
+    """
+
+    def __init__(self, iou_threshold: float = 0.3, max_age: int = 30) -> None:
+        self._iou = iou_threshold
+        self._max_age = max(1, int(max_age))
+        self._next_id = 1
+        # track_id → (xyxy box, frames-since-last-seen)
+        self._tracks: dict[int, tuple[NDArray[np.float32], int]] = {}
+
+    @staticmethod
+    def _iou_matrix(a: NDArray[np.float32], b: NDArray[np.float32]) -> NDArray[np.float32]:
+        if len(a) == 0 or len(b) == 0:
+            return np.zeros((len(a), len(b)), dtype=np.float32)
+        ax1, ay1, ax2, ay2 = (a[:, i][:, None] for i in range(4))
+        bx1, by1, bx2, by2 = (b[:, i][None, :] for i in range(4))
+        iw = np.clip(np.minimum(ax2, bx2) - np.maximum(ax1, bx1), 0.0, None)
+        ih = np.clip(np.minimum(ay2, by2) - np.maximum(ay1, by1), 0.0, None)
+        inter = iw * ih
+        area_a = (ax2 - ax1) * (ay2 - ay1)
+        area_b = (bx2 - bx1) * (by2 - by1)
+        union = area_a + area_b - inter
+        return np.where(union > 0, inter / union, 0.0).astype(np.float32)
+
+    def update(self, dets: NDArray[np.float32], frame: Any = None) -> NDArray[np.float32]:
+        dets = np.asarray(dets, dtype=np.float32)
+        if dets.ndim != 2 or dets.shape[0] == 0:
+            self._age_and_prune(set())
+            return np.empty((0, 7), dtype=np.float32)
+
+        boxes = dets[:, :4]
+        track_ids = list(self._tracks.keys())
+        assigned: dict[int, int] = {}  # det index → track id
+        if track_ids:
+            track_boxes = np.array([self._tracks[t][0] for t in track_ids], dtype=np.float32)
+            iou = self._iou_matrix(boxes, track_boxes)
+            pairs = sorted(
+                ((float(iou[i, j]), i, j)
+                 for i in range(iou.shape[0]) for j in range(iou.shape[1])),
+                reverse=True,
+            )
+            used_det: set[int] = set()
+            used_trk: set[int] = set()
+            for score, i, j in pairs:
+                if score < self._iou:
+                    break
+                if i in used_det or j in used_trk:
+                    continue
+                used_det.add(i)
+                used_trk.add(j)
+                assigned[i] = track_ids[j]
+
+        out_rows: list[list[float]] = []
+        seen: set[int] = set()
+        for i in range(dets.shape[0]):
+            tid = assigned.get(i)
+            if tid is None:
+                tid = self._next_id
+                self._next_id += 1
+            self._tracks[tid] = (boxes[i].copy(), 0)
+            seen.add(tid)
+            conf = float(dets[i, 4]) if dets.shape[1] > 4 else 0.0
+            cls = float(dets[i, 5]) if dets.shape[1] > 5 else 0.0
+            out_rows.append([
+                float(boxes[i, 0]), float(boxes[i, 1]),
+                float(boxes[i, 2]), float(boxes[i, 3]),
+                float(tid), conf, cls,
+            ])
+
+        self._age_and_prune(seen)
+        return np.array(out_rows, dtype=np.float32)
+
+    def _age_and_prune(self, seen: set[int]) -> None:
+        for tid in list(self._tracks.keys()):
+            if tid in seen:
+                continue
+            box, age = self._tracks[tid]
+            age += 1
+            if age > self._max_age:
+                del self._tracks[tid]
+            else:
+                self._tracks[tid] = (box, age)
+
+    def reset(self) -> None:
+        self._tracks.clear()
+        self._next_id = 1
 
 
 # ── Track data model ───────────────────────────────────────────────────────────
@@ -102,45 +241,80 @@ def _create_boxmot_tracker(
 ) -> Any:
     """Instantiate the requested BoxMOT tracker.
 
-    ``reid_weights`` is optional for all trackers; if absent, appearance
-    ReID is skipped (motion-only tracking).  ReID models are added in
-    Phase 4.
+    Targets the BoxMOT ≥ 11 API (tested against 19.x): tracker classes live in
+    ``boxmot.trackers`` (not the top-level package), and constructors take
+    ``reid_model`` + ``with_reid`` rather than the old ``reid_weights`` /
+    ``device`` / ``half`` / ``per_class`` / ``max_age`` arguments.
+
+    ``reid_weights`` is optional for all trackers; if absent, appearance ReID is
+    disabled (motion-only tracking) — the trackers still run on boxes alone.
+
+    When ``boxmot`` is not installed (or its API is incompatible) callers fall
+    back to the built-in :class:`_SimpleIoUTracker` so detection/tracking still
+    runs on a minimal install — it never hard-fails.
     """
     if not _probe_boxmot():
-        raise ImportError(
-            "boxmot is required for Tracker: pip install boxmot\n"
-            "See requirements/base.txt for the pinned version."
-        )
+        _log_fallback_tracker_once()
+        return _SimpleIoUTracker(max_age=max_age)
 
-    import boxmot  # noqa: PLC0415
+    buffer = int(max_age)
+    rate = max(1, int(fps))
 
-    # boxmot resolves None reid_weights gracefully for ByteTrack;
-    # for BoT-SORT / DeepOCSORT it disables appearance association.
-    rw = reid_weights  # may be None
+    def _instantiate(use_reid: bool) -> Any:
+        """Build the tracker for the active BoxMOT API.  ``use_reid`` toggles
+        appearance ReID (weights download + extra inference)."""
+        weights = reid_weights if use_reid else None
+        # BoxMOT ≥ 11 exposes tracker classes from ``boxmot.trackers`` with a
+        # ``reid_model`` / ``with_reid`` constructor.  Older 10.x releases
+        # exported them at the top level with ``reid_weights`` / ``device``.
+        try:
+            from boxmot.trackers import BotSort, ByteTrack, DeepOcSort  # noqa: PLC0415
 
-    if tracker_type == TrackerType.BYTETRACK:
-        return boxmot.ByteTrack(
-            track_thresh=0.45,
-            match_thresh=0.8,
-            track_buffer=max_age,
-            frame_rate=int(fps),
-        )
-    if tracker_type == TrackerType.DEEPOCSORT:
-        return boxmot.DeepOcSort(
-            reid_weights=rw,
-            device=device,
-            half=False,
-            per_class=False,
-            max_age=max_age,
-        )
-    # Default: BoT-SORT with CMC
-    return boxmot.BotSort(
-        reid_weights=rw,
-        device=device,
-        half=False,
-        per_class=False,
-        max_age=max_age,
-    )
+            if tracker_type == TrackerType.BYTETRACK:
+                return ByteTrack(
+                    track_thresh=0.45, match_thresh=0.8,
+                    track_buffer=buffer, frame_rate=rate,
+                )
+            if tracker_type == TrackerType.DEEPOCSORT:
+                return DeepOcSort(reid_model=weights, embedding_off=not use_reid)
+            return BotSort(
+                reid_model=weights, with_reid=use_reid,
+                track_buffer=buffer, frame_rate=rate, cmc_method="ecc",
+            )
+        except ImportError:
+            import boxmot  # noqa: PLC0415
+
+            if tracker_type == TrackerType.BYTETRACK:
+                return boxmot.ByteTrack(
+                    track_thresh=0.45, match_thresh=0.8,
+                    track_buffer=buffer, frame_rate=rate,
+                )
+            if tracker_type == TrackerType.DEEPOCSORT:
+                return boxmot.DeepOcSort(
+                    reid_weights=weights, device=device,
+                    half=False, per_class=False, max_age=max_age,
+                )
+            return boxmot.BotSort(
+                reid_weights=weights, device=device,
+                half=False, per_class=False, max_age=max_age,
+            )
+
+    want_reid = reid_weights is not None
+    try:
+        tracker = _instantiate(want_reid)
+    except Exception:  # noqa: BLE001
+        if want_reid:
+            # ReID weights/download failed — fall back to motion-only so tracking
+            # still works (never let an optional appearance model kill tracking).
+            log.warning("ReID init failed; falling back to motion-only tracking.",
+                        exc_info=True)
+            tracker = _instantiate(False)
+        else:
+            raise
+    # BoxMOT re-raises its logger to INFO during construction; re-silence it now
+    # so the per-frame ECC warnings don't reach the console.
+    _quiet_boxmot_logging()
+    return tracker
 
 
 # ── Track-state machine ────────────────────────────────────────────────────────
@@ -235,7 +409,11 @@ class Tracker:
             self._impl_pending = False
 
         dets_np = detections_to_numpy(detections)  # [N, 6]
-        raw_tracks: NDArray[np.float32] = self._impl.update(dets_np, frame)
+        raw = self._impl.update(dets_np, frame)
+        # BoxMOT ≥ 11 returns a ``TrackResults`` object; older versions and the
+        # built-in fallback return a plain ndarray.  Coerce to ndarray either way
+        # so ``_reconcile`` can index/iterate uniformly.
+        raw_tracks: NDArray[np.float32] = np.asarray(raw, dtype=np.float32)
 
         return self._reconcile(raw_tracks)
 

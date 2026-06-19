@@ -1,27 +1,27 @@
-/logic/image_processing/images/
-/libraries/visca/__pycache__
-/views/widgets/__pycache__
-/shared/__pycache__
-/views/homepage/__pycache__
-/logic/image_processing/__pycache__
-/logic/camera_search/__pycache__
-/facial_recognition/__pycache__
-/views/vapix.log
-/logic/image_processing/models/trainer.json
-/logic/image_processing/dialogs/__pycache__
-/vapix.log
-/logic/image_processing/models/encodings.pickle
-/libraries/face_recognition/__pycache__
-/views/functions/__pycache__
-/.idea
-/dlib/
-/logic/image_processing/models/
-
-# AutoPTZ v2
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
 *.egg
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 dist/
 build/
+
+# Virtual environments — always at the project root
+.venv/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# AutoPTZ runtime artefacts
+/autoptz/models/*.onnx
+/autoptz/models/*.mlpackage
+/autoptz/models/*.engine
+*.db
+*.log
