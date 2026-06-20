@@ -172,6 +172,7 @@ class Supervisor:
             self._running = True
 
             camera_ids = self._client.cameraModel.camera_ids()
+            self._apply_hardware_env(len(camera_ids))
             log.info("supervisor starting — %d camera(s), ep=%s", len(camera_ids), self.active_ep)
             _log_macos_capture_path()
             if staged:
@@ -620,6 +621,47 @@ class Supervisor:
             log.warning("inference pool init failed; using per-worker models.", exc_info=True)
             self._inference_pool = None
         return self._inference_pool
+
+    def _apply_hardware_env(self, camera_count: int) -> None:
+        """Publish global hardware prefs into the environment before spawning.
+
+        Camera workers are spawned processes that inherit this environment, so
+        :func:`autoptz.engine.runtime.inference.prefs_from_env` picks these up for
+        every ORT session without threading prefs through the command schema.
+        """
+        import os
+
+        from autoptz.config.models import HardwarePrefs
+
+        try:
+            raw = self._store.get_setting("hardware", {}) if self._store is not None else {}
+            hw = HardwarePrefs.model_validate(raw) if raw else HardwarePrefs()
+        except Exception:  # noqa: BLE001 — bad/absent prefs fall back to defaults
+            hw = HardwarePrefs()
+
+        if hw.force_ep:
+            os.environ["AUTOPTZ_FORCE_EP"] = hw.force_ep
+        else:
+            os.environ.pop("AUTOPTZ_FORCE_EP", None)
+        os.environ["AUTOPTZ_PRECISION"] = hw.precision
+
+        if hw.intra_op_threads:
+            threads = int(hw.intra_op_threads)
+        else:
+            # Spread cores across cameras so several workers don't oversubscribe.
+            cores = os.cpu_count() or 4
+            threads = max(1, cores // max(1, camera_count))
+        os.environ["AUTOPTZ_ORT_INTRA_THREADS"] = str(threads)
+
+        log.info(
+            "hardware prefs → env | force_ep=%s precision=%s intra_threads=%s "
+            "(cores=%s, cameras=%s)",
+            hw.force_ep or "auto",
+            hw.precision,
+            threads,
+            os.cpu_count(),
+            camera_count,
+        )
 
     def _spawn_worker(self, camera_id: str, *, defer_inference: bool = False) -> None:
         config = self._resolve_config(camera_id)

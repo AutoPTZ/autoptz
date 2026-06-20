@@ -33,6 +33,12 @@ class HardwarePrefs(BaseModel, frozen=True):
     force_ep: str | None = None  # "CoreMLExecutionProvider", etc.; None = auto
     model_tier: Literal["nano", "small", "medium", "large"] = "nano"
     max_workers: int = Field(default=4, ge=1, le=32)
+    # Inference precision. "auto" lets each accelerator pick (GPU EPs use FP16);
+    # "fp32"/"fp16" force it. CPU always runs FP32.
+    precision: Literal["auto", "fp32", "fp16"] = "auto"
+    # Cap ORT intra-op threads per camera worker (None = auto: cores ÷ cameras, so
+    # several cameras don't oversubscribe the CPU). Advanced override.
+    intra_op_threads: int | None = Field(default=None, ge=1, le=256)
 
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
