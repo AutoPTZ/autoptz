@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autoptz"
-version = "2.0.0a0"
-description = "AutoPTZ v2 — AI-driven PTZ camera tracking"
+dynamic = ["version"]
+description = "AutoPTZ — AI-driven PTZ camera tracking"
 requires-python = ">=3.12"
-readme = "autoptz/README.md"
+readme = "README.md"
 license = {file = "LICENSE.md"}
+
+[tool.setuptools.dynamic]
+version = {attr = "autoptz.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]

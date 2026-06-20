@@ -15,11 +15,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from autoptz import version as _version
 from autoptz.ui import theme as T
 
 GITHUB_URL = "https://github.com/AutoPTZ/autoptz"
 LINKEDIN_URL = "https://www.linkedin.com/in/stevenson-chittumuri/"
-VERSION = "2.0.0a0"
+VERSION = _version()
 
 
 class AboutDialog(QDialog):

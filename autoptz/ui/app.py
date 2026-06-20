@@ -130,10 +130,12 @@ def run(argv: list[str] | None = None) -> int:
     except Exception:  # noqa: BLE001
         log.debug("Could not set high-DPI rounding policy", exc_info=True)
 
+    from autoptz import version as _app_version
+
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("AutoPTZ")
     app.setOrganizationName("AutoPTZ")
-    app.setApplicationVersion("2.0.0a0")
+    app.setApplicationVersion(_app_version())
     app.setApplicationDisplayName("AutoPTZ")
     _set_macos_app_name("AutoPTZ")
 

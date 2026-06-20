@@ -8,16 +8,30 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+.coverage
+htmlcov/
 
 # Virtual environments — always at the project root
 .venv/
 
+# Environment / secrets
+.env
+*.env
+
 # macOS
 .DS_Store
+**/.DS_Store
 
 # IDE
 .idea/
 .vscode/
+
+# Model weights (never commit; fetched/exported at runtime)
+*.pt
+*.pth
+*.onnx
+*.mlpackage
+*.engine
 
 # AutoPTZ runtime artefacts
 /autoptz/models/*.onnx
@@ -25,3 +39,7 @@ build/
 /autoptz/models/*.engine
 *.db
 *.log
+
+# Packaging build outputs
+/packaging/build/
+/packaging/dist/
