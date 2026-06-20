@@ -16,7 +16,7 @@ import logging
 from typing import Any
 
 from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QDockWidget,
     QLabel,
@@ -83,6 +83,7 @@ class MainWindow(QMainWindow):
         # whenever the appearance flips.
         on_theme_changed(client, self._style_section_tabs)
 
+        self._ensure_desktop_window_chrome()
         self._restore_geometry()
         self._refresh_engine_state()
 
@@ -111,6 +112,8 @@ class MainWindow(QMainWindow):
 
     def _build_central(self) -> None:
         holder = QWidget(self)
+        holder.setObjectName("mainContent")
+        holder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         col = QVBoxLayout(holder)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(0)
@@ -258,7 +261,8 @@ class MainWindow(QMainWindow):
         view = bar.addMenu("&View")
         appearance = view.addMenu("Appearance")
         appearance.setToolTipsVisible(True)
-        group = QActionGroup(self); group.setExclusive(True)
+        group = QActionGroup(self)
+        group.setExclusive(True)
         current = _safe(lambda: str(self._client.themeMode), "dark")
         tips = {"system": "Follow the OS light/dark setting.",
                 "dark": "Dark broadcast palette (easiest on the eyes).",
@@ -308,7 +312,8 @@ class MainWindow(QMainWindow):
         """View → UI Scale: discrete steps + Zoom In/Out/Reset shortcuts."""
         scale = view.addMenu("UI Scale")
         scale.setToolTipsVisible(True)
-        self._scale_group = QActionGroup(self); self._scale_group.setExclusive(True)
+        self._scale_group = QActionGroup(self)
+        self._scale_group.setExclusive(True)
         steps = getattr(self._theme, "SCALE_STEPS", (0.9, 1.0, 1.1, 1.25, 1.5)) \
             if self._theme is not None else (1.0,)
         for s in steps:
@@ -547,16 +552,21 @@ class MainWindow(QMainWindow):
         )
         self.statusBar().addPermanentWidget(self._status, 1)
         self.statusBar().setSizeGripEnabled(False)
+        logs = self._docks.get("logs")
+        if logs is not None:
+            logs.visibilityChanged.connect(self._status.set_logs_visible)
+            self._status.set_logs_visible(logs.isVisible())
 
-    def _toggle_logs(self) -> None:
+    def _toggle_logs(self, shown: bool | None = None) -> None:
         dock = self._docks.get("logs")
         if dock is None:
             return
-        if dock.isVisible():
-            dock.hide()
-        else:
+        target = not dock.isVisible() if shown is None else shown
+        if target:
             dock.show()
             dock.raise_()
+        else:
+            dock.hide()
 
     # ── selection routing ──────────────────────────────────────────────────────
 
@@ -640,13 +650,32 @@ class MainWindow(QMainWindow):
 
     # ── geometry persistence (dock-layout persistence lands in Phase 7) ────────
 
+    def _ensure_desktop_window_chrome(self) -> None:
+        """Keep the main shell as a normal native desktop window."""
+        flags = self.windowFlags()
+        flags &= ~Qt.WindowType.FramelessWindowHint
+        flags &= ~Qt.WindowType.NoDropShadowWindowHint
+        flags |= Qt.WindowType.Window
+        flags |= Qt.WindowType.WindowTitleHint
+        flags |= Qt.WindowType.WindowSystemMenuHint
+        flags |= Qt.WindowType.WindowMinimizeButtonHint
+        flags |= Qt.WindowType.WindowMaximizeButtonHint
+        flags |= Qt.WindowType.WindowCloseButtonHint
+        self.setWindowFlags(flags)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+
     def _restore_geometry(self) -> None:
+        restored_geometry = False
         geo = _safe(lambda: self._client.getSetting("win_geometry", ""), "")
         if isinstance(geo, str) and geo:
             try:
-                self.restoreGeometry(QByteArray(base64.b64decode(geo)))
+                restored_geometry = bool(self.restoreGeometry(QByteArray(base64.b64decode(geo))))
             except Exception:  # noqa: BLE001
                 log.debug("restoreGeometry failed", exc_info=True)
+        self._clear_minimized_state()
+        if not restored_geometry or not self._has_visible_window_frame():
+            self.resize(1320, 820)
+            self._center_on_primary_screen()
         state = _safe(lambda: self._client.getSetting("win_state", ""), "")
         if isinstance(state, str) and state:
             try:
@@ -658,12 +687,20 @@ class MainWindow(QMainWindow):
             self.setTabPosition(Qt.DockWidgetArea.RightDockWidgetArea,
                                 QTabWidget.TabPosition.North)
             self._style_section_tabs()
+        self._clear_minimized_state()
+        if not self._has_visible_window_frame():
+            self.resize(1320, 820)
+            self._center_on_primary_screen()
 
     def showEvent(self, event: Any) -> None:  # noqa: N802
         # Qt can defer creating the dock tab bar until first show; restyle it
         # once it exists so the segmented look is guaranteed on screen.
         super().showEvent(event)
         self._style_section_tabs()
+        self._clear_minimized_state()
+        if not self._has_visible_window_frame():
+            self.resize(1320, 820)
+            self._center_on_primary_screen()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         try:
@@ -674,6 +711,32 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             log.debug("save geometry/state failed", exc_info=True)
         super().closeEvent(event)
+
+    def _clear_minimized_state(self) -> None:
+        state = self.windowState()
+        if state & Qt.WindowState.WindowMinimized:
+            self.setWindowState(state & ~Qt.WindowState.WindowMinimized)
+
+    def _has_visible_window_frame(self) -> bool:
+        frame = self.frameGeometry()
+        if frame.width() < 320 or frame.height() < 240:
+            return False
+        screens = QGuiApplication.screens()
+        if not screens:
+            return True
+        for screen in screens:
+            visible = frame.intersected(screen.availableGeometry())
+            if visible.width() >= 320 and visible.height() >= 200:
+                return True
+        return False
+
+    def _center_on_primary_screen(self) -> None:
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        frame = self.frameGeometry()
+        frame.moveCenter(screen.availableGeometry().center())
+        self.move(frame.topLeft())
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

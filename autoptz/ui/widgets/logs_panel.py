@@ -12,7 +12,7 @@ import logging
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -173,6 +173,8 @@ class LogsPanel(QWidget):
 
     def __init__(self, client: Any, log_model: LogListModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("logsPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._client = client
         self._autoscroll = True
 
@@ -244,11 +246,29 @@ class LogsPanel(QWidget):
         self._proxy.rowsInserted.connect(self._on_rows)
         # Level colors are palette-derived (DEBUG=muted, default=text); repaint
         # the table when the appearance flips so rows aren't stuck dark-on-light.
+        self._restyle()
         on_theme_changed(client, self._restyle)
 
     def _restyle(self) -> None:
-        """Repaint the log table so palette-driven row colors track the theme."""
+        """Repaint the log table and force empty viewport areas onto the theme."""
+        pal = T.CURRENT
+        self.setStyleSheet(f"QWidget#logsPanel {{ background-color: {pal.surface}; }}")
+        self._table.setStyleSheet(
+            f"QTableView {{ background-color: {pal.surface};"
+            f" border: 1px solid {pal.border}; gridline-color: {pal.border};"
+            f" selection-background-color: {T.SELECTION}; selection-color: {pal.text};"
+            f" outline: none; }}"
+            f"QTableView::item {{ background-color: {pal.surface}; color: {pal.text}; }}"
+        )
+        self._table.viewport().setStyleSheet(f"background-color: {pal.surface};")
         self._table.viewport().update()
+        self.update()
+
+    def paintEvent(self, event: Any) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(T.CURRENT.surface))
+        p.end()
+        super().paintEvent(event)
 
     # ── filters / actions ────────────────────────────────────────────────────────
 

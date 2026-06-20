@@ -32,6 +32,8 @@ class CameraInfoPanel(QWidget):
 
     def __init__(self, client: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("cameraInfoPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._client = client
         self._camera_id = ""
         self._vals: dict[str, QLabel] = {}

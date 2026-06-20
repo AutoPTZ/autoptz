@@ -509,8 +509,9 @@ class CameraTile(QWidget):
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         w, h = self.width(), self.height()
 
-        # backing
-        p.fillRect(self.rect(), QColor("#000000"))
+        # backing: real frames cover this, while no-signal/letterbox areas still
+        # read as part of the app surface instead of disappearing into black.
+        p.fillRect(self.rect(), QColor(T.CURRENT.surface_alt))
 
         rec = self._record()
         streaming = bool(getattr(rec, "streaming", False)) if rec else False

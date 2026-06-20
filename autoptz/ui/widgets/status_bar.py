@@ -7,7 +7,8 @@ chip.  Recomputed on telemetry/engine/camera signals.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
@@ -24,7 +25,7 @@ class StatusBar(QWidget):
     def __init__(
         self,
         client: Any,
-        logs_toggle: Callable[[], None] | None = None,
+        logs_toggle: Callable[[bool], None] | None = None,
         cameras_popup: Callable[..., None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -101,12 +102,18 @@ class StatusBar(QWidget):
 
     # ── actions ────────────────────────────────────────────────────────────────
 
-    def _on_logs_toggled(self, shown: bool) -> None:
+    def set_logs_visible(self, shown: bool) -> None:
         # Chevron points up when the console is open, down when it's hidden.
         if self._logs_btn is not None:
+            was_blocked = self._logs_btn.blockSignals(True)
+            self._logs_btn.setChecked(shown)
+            self._logs_btn.blockSignals(was_blocked)
             self._logs_btn.setText("Logs  ▴" if shown else "Logs  ▾")
+
+    def _on_logs_toggled(self, shown: bool) -> None:
+        self.set_logs_visible(shown)
         if self._logs_toggle is not None:
-            self._logs_toggle()
+            self._logs_toggle(shown)
 
     # ── refreshers ───────────────────────────────────────────────────────────────
 

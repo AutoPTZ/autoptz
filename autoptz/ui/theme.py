@@ -235,6 +235,8 @@ def build_stylesheet(pal: Palette, accent: QColor, selection: QColor) -> str:
     return f"""
     QWidget {{ color: {pal.text}; font-size: {fs(13)}px; }}
     QMainWindow, QDialog {{ background: {pal.background}; }}
+    QWidget#mainContent, QWidget#cameraWall, QWidget#cameraGridHost {{
+        background: {pal.background}; }}
     QMainWindow::separator {{ background: {pal.border}; width: 4px; height: 4px; }}
     QMainWindow::separator:hover {{ background: {a}; }}
 
@@ -244,7 +246,10 @@ def build_stylesheet(pal: Palette, accent: QColor, selection: QColor) -> str:
 
     /* dock panels — visible frame + clear title */
     QDockWidget {{ titlebar-close-icon: none; titlebar-normal-icon: none;
-        border: 1px solid {pal.border}; font-weight: 600; }}
+        background: {pal.surface}; border: 1px solid {pal.border}; font-weight: 600; }}
+    QWidget#propertiesPanel, QWidget#servicesPanel, QWidget#logsPanel,
+    QWidget#cameraInfoPanel, QWidget#peoplePanel {{
+        background: {pal.surface}; }}
     QDockWidget::title {{ background: {pal.sidebar_bg}; padding: {fs(8)}px {fs(12)}px;
         border-bottom: 1px solid {pal.border}; }}
 
@@ -320,6 +325,10 @@ def build_stylesheet(pal: Palette, accent: QColor, selection: QColor) -> str:
         margin: -{fs(6)}px 0; border-radius: {fs(7)}px; }}
     QSlider::handle:horizontal:hover {{ background: {a}; }}
 
+    QScrollArea, QAbstractScrollArea {{ background: {pal.surface}; border: none; }}
+    QScrollArea > QWidget > QWidget, QAbstractScrollArea > QWidget > QWidget {{
+        background: {pal.surface}; }}
+
     QScrollBar:vertical {{ background: transparent; width: {fs(11)}px; margin: 0; }}
     QScrollBar::handle:vertical {{ background: {pal.border_hov}; border-radius: {fs(5)}px; min-height: {fs(28)}px; }}
     QScrollBar::handle:vertical:hover {{ background: {pal.muted}; }}
@@ -333,6 +342,8 @@ def build_stylesheet(pal: Palette, accent: QColor, selection: QColor) -> str:
         alternate-background-color: {pal.surface_alt}; border: 1px solid {pal.border};
         gridline-color: {pal.border}; selection-background-color: {sel};
         selection-color: {pal.text}; outline: none; }}
+    QTableView::viewport, QListView::viewport, QTreeView::viewport {{
+        background: {pal.surface}; }}
     QCheckBox {{ color: {pal.text}; spacing: {fs(7)}px; }}
     QCheckBox::indicator {{ width: {fs(16)}px; height: {fs(16)}px;
         border-radius: {fs(4)}px; border: 1px solid {pal.border_hov};
@@ -372,6 +383,15 @@ def build_stylesheet(pal: Palette, accent: QColor, selection: QColor) -> str:
     """
 
 
+def _is_popup_window(win: object) -> bool:
+    try:
+        return (
+            win.windowFlags() & Qt.WindowType.WindowType_Mask  # type: ignore[attr-defined]
+        ) == Qt.WindowType.Popup
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _round_popup_window(win: object, margin: int) -> None:
     """Make a popup's top-level window translucent so its rounded fill shows.
 
@@ -382,6 +402,8 @@ def _round_popup_window(win: object, margin: int) -> None:
     add a small contents margin so the stylesheet's rounded surface paints
     *inside* the transparent window — leaving the corners genuinely empty.
     """
+    if not _is_popup_window(win):
+        return
     try:
         win.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)  # type: ignore[attr-defined]
         win.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)            # type: ignore[attr-defined]
@@ -425,13 +447,13 @@ class _PopupRounder(QObject):
             elif isinstance(obj, QComboBox):
                 view = obj.view()
                 win = view.window() if view is not None else None
-                if win is not None and win is not obj:
+                if win is not None and win is not obj and _is_popup_window(win):
                     # The container window owns the square corners; round it and
                     # let the QAbstractItemView stylesheet draw the rounded fill.
                     _round_popup_window(win, 0)
             elif isinstance(obj, QAbstractItemView):
                 win = obj.window()
-                if win is not None and bool(win.windowFlags() & Qt.WindowType.Popup):
+                if win is not None and _is_popup_window(win):
                     _round_popup_window(win, 0)
                     if et == QEvent.Type.Show:
                         _fade_popup_window(win)

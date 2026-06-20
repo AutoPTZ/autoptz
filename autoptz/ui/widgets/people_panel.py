@@ -53,6 +53,8 @@ class PeoplePanel(QWidget):
 
     def __init__(self, client: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("peoplePanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._client = client
         self._model = client.identityModel
         # Merge selection spans BOTH registered and recognized cards, so faces

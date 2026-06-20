@@ -48,9 +48,70 @@ def _set_macos_app_name(name: str) -> None:
         log.debug("Could not set macOS bundle name via PyObjC", exc_info=True)
 
 
+def _start_engine_after_macos_camera_preflight(client: object, bridge: object | None) -> None:
+    """Start the engine after macOS camera authorization is known.
+
+    AVFoundation/OpenCV camera permission must be requested from the GUI process,
+    not from a capture worker thread.  If the OS prompt is pending, this returns
+    immediately and starts the engine from the async permission callback.
+    """
+    if sys.platform != "darwin" or bridge is None:
+        client.startEngine()  # type: ignore[attr-defined]
+        return
+    try:
+        import AVFoundation  # type: ignore  # noqa: PLC0415
+
+        media = AVFoundation.AVMediaTypeVideo
+        status = AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(media)
+    except Exception:  # noqa: BLE001 — no AVFoundation; let non-native paths run
+        log.debug("macOS camera authorization preflight unavailable", exc_info=True)
+        client.startEngine()  # type: ignore[attr-defined]
+        return
+
+    if status == 3:  # AVAuthorizationStatusAuthorized
+        client.startEngine()  # type: ignore[attr-defined]
+        return
+
+    def _report_blocked(reason: str) -> None:
+        message = (
+            f"Camera access is {reason}. Grant access in System Settings > "
+            "Privacy & Security > Camera, then restart AutoPTZ."
+        )
+        log.warning(message)
+        try:
+            client.errorOccurred.emit(message)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            log.debug("could not surface camera-access error", exc_info=True)
+
+    if status in (1, 2):  # restricted / denied
+        _report_blocked("restricted" if status == 1 else "denied")
+        return
+
+    def _on_resolved(granted: bool) -> None:
+        try:
+            bridge.resolved.disconnect(_on_resolved)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
+        if granted:
+            client.startEngine()  # type: ignore[attr-defined]
+        else:
+            _report_blocked("denied")
+
+    try:
+        bridge.resolved.connect(_on_resolved)  # type: ignore[attr-defined]
+        log.info("Requesting macOS camera access before engine auto-start.")
+        AVFoundation.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+            media,
+            lambda granted: bridge.resolved.emit(bool(granted)),  # type: ignore[attr-defined]
+        )
+    except Exception:  # noqa: BLE001
+        log.debug("macOS camera authorization request failed", exc_info=True)
+        _report_blocked("unavailable")
+
+
 def run(argv: list[str] | None = None) -> int:
     """Launch the AutoPTZ UI.  Returns the process exit code."""
-    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, Signal
     from PySide6.QtWidgets import QApplication
 
     from autoptz.config.store import ConfigStore
@@ -139,13 +200,37 @@ def run(argv: list[str] | None = None) -> int:
     )
     window.show()
 
+    def _present_window() -> None:
+        """Best-effort macOS/Qt nudge so the shell is drawable before engine work."""
+        try:
+            if window.isMinimized():
+                window.showNormal()
+            else:
+                window.show()
+            window.raise_()
+            window.activateWindow()
+        except Exception:  # noqa: BLE001
+            log.debug("Could not present main window", exc_info=True)
+
+    _present_window()
+    app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 100)
+
     log.info("AutoPTZ UI started")
 
     # ── engine auto-start ──────────────────────────────────────────────────────
     # Restore the last on/off state (default ON) and start after the window is
-    # shown so the first paint happens before the heavy ingest/ML imports run.
+    # shown and exposed so the first paint happens before heavy ingest/ML work.
     if bool(store.get_setting("engine_running", True)):
-        QTimer.singleShot(0, client.startEngine)
+        class _CameraAccessBridge(QObject):
+            resolved = Signal(bool)
+
+        camera_access = _CameraAccessBridge(app)
+
+        QTimer.singleShot(50, _present_window)
+        QTimer.singleShot(
+            750,
+            lambda: _start_engine_after_macos_camera_preflight(client, camera_access),
+        )
 
     exit_code = app.exec()
 

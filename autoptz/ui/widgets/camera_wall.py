@@ -105,6 +105,8 @@ class CameraWall(QWidget):
 
     def __init__(self, client: Any, frame_source: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("cameraWall")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._client = client
         self._frames = frame_source
         self._tiles: dict[str, CameraTile] = {}
@@ -131,6 +133,8 @@ class CameraWall(QWidget):
         self._stack.setContentsMargins(0, 0, 0, 0)
 
         self._grid_host = QWidget(content)
+        self._grid_host.setObjectName("cameraGridHost")
+        self._grid_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         # Clicking empty space between/around tiles deselects the active camera
         # (tiles sit on top and handle their own clicks, so this only fires on the
         # bare grid background).
@@ -145,6 +149,7 @@ class CameraWall(QWidget):
 
         self._empty = QLabel("No cameras\n\nAdd a source from the Cameras menu.", content)
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty.setStyleSheet(f"color: {T.CURRENT.subtext};")
         self._stack.addWidget(self._empty)
         root.addWidget(content, 1)
 
@@ -153,6 +158,7 @@ class CameraWall(QWidget):
         self._reflow()
 
         on_theme_changed(client, self._restyle_toolbar)
+        on_theme_changed(client, self._restyle_empty_state)
         on_theme_changed(client, self._restyle_empty_slots)
         _connect(client, "cameraAdded", self._on_camera_added)
         _connect(client, "cameraRemoved", self._on_camera_removed)
@@ -204,6 +210,9 @@ class CameraWall(QWidget):
     def _restyle_empty_slots(self) -> None:
         for slot in self._empty_slots:
             slot.restyle()
+
+    def _restyle_empty_state(self) -> None:
+        self._empty.setStyleSheet(f"color: {T.CURRENT.subtext};")
 
     def _on_layout_changed(self, _index: int) -> None:
         self._layout = str(self._cols_combo.currentData() or _DEFAULT_LAYOUT)

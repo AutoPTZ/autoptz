@@ -9,11 +9,11 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import types
 from pathlib import Path
 
-import pytest
-
 import PySide6  # noqa: F401
+import pytest
 
 # ── one QCoreApplication for the whole module ─────────────────────────────────
 
@@ -43,12 +43,121 @@ def _make_telemetry(camera_id: str, fps: float = 25.0):
     return TelemetryMsg(camera_id=camera_id, seq=1, fps=fps)
 
 
+class _PreflightErrorSignal:
+    def __init__(self, owner):
+        self._owner = owner
+
+    def emit(self, message: str) -> None:
+        self._owner.errors.append(message)
+
+
+class _PreflightClient:
+    def __init__(self) -> None:
+        self.starts = 0
+        self.errors: list[str] = []
+        self.errorOccurred = _PreflightErrorSignal(self)
+
+    def startEngine(self) -> None:
+        self.starts += 1
+
+
+class _PreflightSignal:
+    def __init__(self) -> None:
+        self._slots = []
+
+    def connect(self, slot) -> None:
+        self._slots.append(slot)
+
+    def disconnect(self, slot) -> None:
+        if slot in self._slots:
+            self._slots.remove(slot)
+
+    def emit(self, value: bool) -> None:
+        for slot in list(self._slots):
+            slot(value)
+
+
+class _PreflightBridge:
+    def __init__(self) -> None:
+        self.resolved = _PreflightSignal()
+
+
 class TestAboutLinks:
     def test_public_profile_links(self, qapp) -> None:
         from autoptz.ui.widgets.dialogs.about import GITHUB_URL, LINKEDIN_URL
 
         assert GITHUB_URL == "https://github.com/AutoPTZ/autoptz"
         assert LINKEDIN_URL == "https://www.linkedin.com/in/stevenson-chittumuri/"
+
+
+class TestMacOSCameraPreflight:
+    def test_starts_when_camera_access_authorized(self, monkeypatch) -> None:
+        import autoptz.ui.app as app_mod
+
+        fake = types.ModuleType("AVFoundation")
+        fake.AVMediaTypeVideo = "video"
+
+        class _CaptureDevice:
+            @staticmethod
+            def authorizationStatusForMediaType_(_media):
+                return 3
+
+        fake.AVCaptureDevice = _CaptureDevice
+        monkeypatch.setattr(app_mod.sys, "platform", "darwin")
+        monkeypatch.setitem(sys.modules, "AVFoundation", fake)
+        client = _PreflightClient()
+
+        app_mod._start_engine_after_macos_camera_preflight(client, object())
+
+        assert client.starts == 1
+        assert client.errors == []
+
+    def test_reports_denied_without_starting(self, monkeypatch) -> None:
+        import autoptz.ui.app as app_mod
+
+        fake = types.ModuleType("AVFoundation")
+        fake.AVMediaTypeVideo = "video"
+
+        class _CaptureDevice:
+            @staticmethod
+            def authorizationStatusForMediaType_(_media):
+                return 2
+
+        fake.AVCaptureDevice = _CaptureDevice
+        monkeypatch.setattr(app_mod.sys, "platform", "darwin")
+        monkeypatch.setitem(sys.modules, "AVFoundation", fake)
+        client = _PreflightClient()
+
+        app_mod._start_engine_after_macos_camera_preflight(client, object())
+
+        assert client.starts == 0
+        assert "Camera access is denied" in client.errors[-1]
+
+    def test_requests_access_then_starts_when_granted(self, monkeypatch) -> None:
+        import autoptz.ui.app as app_mod
+
+        bridge = _PreflightBridge()
+        fake = types.ModuleType("AVFoundation")
+        fake.AVMediaTypeVideo = "video"
+
+        class _CaptureDevice:
+            @staticmethod
+            def authorizationStatusForMediaType_(_media):
+                return 0
+
+            @staticmethod
+            def requestAccessForMediaType_completionHandler_(_media, handler):
+                handler(True)
+
+        fake.AVCaptureDevice = _CaptureDevice
+        monkeypatch.setattr(app_mod.sys, "platform", "darwin")
+        monkeypatch.setitem(sys.modules, "AVFoundation", fake)
+        client = _PreflightClient()
+
+        app_mod._start_engine_after_macos_camera_preflight(client, bridge)
+
+        assert client.starts == 1
+        assert client.errors == []
 
 
 class TestCameraTileHelpers:
@@ -797,6 +906,142 @@ try:
     win._wall._grid_host.resize(800, 450)
     win._wall._reflow()
     assert len(win._wall._empty_slots) >= 3
+finally:
+    win.close()
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    def test_status_logs_button_controls_logs_dock(self, tmp_path) -> None:
+        code = f"""
+import os
+import sys
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
+from autoptz.ui.log_bridge import LogListModel
+from autoptz.ui.widgets import MainWindow
+app = QApplication(sys.argv[:1])
+client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+win = MainWindow(client, log_model=LogListModel(), frame_source=ShmFrameSource())
+try:
+    win.show()
+    app.processEvents()
+    dock = win._docks["logs"]
+    button = win._status._logs_btn
+    assert button is not None
+    assert dock.isVisible()
+    assert button.isChecked()
+
+    button.click()
+    app.processEvents()
+    assert not dock.isVisible()
+    assert not button.isChecked()
+
+    button.click()
+    app.processEvents()
+    assert dock.isVisible()
+    assert button.isChecked()
+
+    dock.hide()
+    app.processEvents()
+    assert not button.isChecked()
+finally:
+    win.close()
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    def test_theme_does_not_strip_mainwindow_desktop_chrome(self, tmp_path) -> None:
+        code = f"""
+import os
+import sys
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
+from autoptz.ui.log_bridge import LogListModel
+from autoptz.ui.theme import ThemeController
+from autoptz.ui.widgets import MainWindow
+app = QApplication(sys.argv[:1])
+client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+theme = ThemeController(app, client)
+win = MainWindow(client, log_model=LogListModel(), frame_source=ShmFrameSource(), theme=theme)
+try:
+    win.show()
+    app.processEvents()
+    flags = win.windowFlags()
+    assert not flags & Qt.WindowType.FramelessWindowHint, int(flags)
+    assert not flags & Qt.WindowType.NoDropShadowWindowHint, int(flags)
+    assert flags & Qt.WindowType.WindowTitleHint, int(flags)
+    assert flags & Qt.WindowType.WindowSystemMenuHint, int(flags)
+    assert flags & Qt.WindowType.WindowMinimizeButtonHint, int(flags)
+    assert flags & Qt.WindowType.WindowMaximizeButtonHint, int(flags)
+    assert flags & Qt.WindowType.WindowCloseButtonHint, int(flags)
+    assert not win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+finally:
+    win.close()
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    def test_services_panel_does_not_force_tall_main_window(self, tmp_path) -> None:
+        code = f"""
+import os
+import sys
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
+from autoptz.ui.log_bridge import LogListModel
+from autoptz.ui.widgets import MainWindow
+app = QApplication(sys.argv[:1])
+client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+win = MainWindow(client, log_model=LogListModel(), frame_source=ShmFrameSource())
+try:
+    win.resize(1320, 820)
+    win.show()
+    app.processEvents()
+    assert win.height() <= 900
+    assert win.minimumSizeHint().height() <= 650
 finally:
     win.close()
 """

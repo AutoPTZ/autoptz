@@ -218,6 +218,8 @@ class PropertiesPanel(QWidget):
         frame_source: Any | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("propertiesPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._client = client
         # Optional live-frame handle (a ``ShmFrameSource`` like the camera tiles
         # use).  When supplied, "Save preset" grabs the current frame as a JPEG

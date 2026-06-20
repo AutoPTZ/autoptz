@@ -9,14 +9,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QFrame,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -77,12 +79,28 @@ class ServicesPanel(QWidget):
 
     def __init__(self, client: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("servicesPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._client = client
         self._rows: dict[str, tuple[QLabel, QLabel, QLabel]] = {}
         self._feature_boxes: dict[str, QCheckBox] = {}
         self._detector_tier: QComboBox | None = None
 
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        outer.addWidget(scroll, 1)
+
+        body = QWidget()
+        body.setMinimumSize(0, 0)
+        scroll.setWidget(body)
+
+        root = QVBoxLayout(body)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
@@ -97,9 +115,12 @@ class ServicesPanel(QWidget):
             "control the tracking engine."
         ))
         head.addStretch(1)
-        self._start = QPushButton("Start"); self._start.clicked.connect(client.startEngine)
-        self._stop = QPushButton("Stop"); self._stop.clicked.connect(client.stopEngine)
-        self._restart = QPushButton("Restart"); self._restart.clicked.connect(client.restartEngine)
+        self._start = QPushButton("Start")
+        self._start.clicked.connect(client.startEngine)
+        self._stop = QPushButton("Stop")
+        self._stop.clicked.connect(client.stopEngine)
+        self._restart = QPushButton("Restart")
+        self._restart.clicked.connect(client.restartEngine)
         for b in (self._start, self._stop, self._restart):
             # min-height (not fixed) so vertical padding/descenders aren't clipped.
             b.setMinimumHeight(26)
@@ -168,6 +189,12 @@ class ServicesPanel(QWidget):
         self._refresh_detector_tier()
         self._refresh_optional_components()
         self.refresh()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(260, 220)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(360, 520)
 
     def _restyle(self) -> None:
         """Re-apply literal-color styling (construction + theme change)."""
@@ -304,8 +331,10 @@ class ServicesPanel(QWidget):
         h.setContentsMargins(0, 6, 0, 6)
         h.setSpacing(10)
         dot = QLabel("●")
-        name = QLabel(); name.setTextFormat(Qt.TextFormat.RichText)
-        pill = QLabel(); pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name = QLabel()
+        name.setTextFormat(Qt.TextFormat.RichText)
+        pill = QLabel()
+        pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
         h.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
         h.addWidget(name, 1)
         h.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
