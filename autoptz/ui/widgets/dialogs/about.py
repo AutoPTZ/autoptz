@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from autoptz import version as _version
 from autoptz.ui import theme as T
+from autoptz.ui.branding import logo_pixmap
 
 GITHUB_URL = "https://github.com/AutoPTZ/autoptz"
 LINKEDIN_URL = "https://www.linkedin.com/in/stevenson-chittumuri/"
@@ -37,13 +38,19 @@ class AboutDialog(QDialog):
         col.setContentsMargins(24, 24, 24, 24)
         col.setSpacing(8)
 
-        mark = QLabel("P")
+        mark = QLabel()
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mark.setFixedSize(64, 64)
-        mark.setStyleSheet(
-            f"background: {T.ACCENT_FALLBACK}; color: white; border-radius: 16px;"
-            f" font-size: 32px; font-weight: 700;"
-        )
+        mark.setFixedSize(72, 72)
+        pixmap = logo_pixmap(72)
+        if not pixmap.isNull():
+            mark.setPixmap(pixmap)
+        else:
+            # Fallback if the asset is unavailable (e.g. partial build).
+            mark.setText("AP")
+            mark.setStyleSheet(
+                f"background: {T.ACCENT_FALLBACK}; color: white; border-radius: 16px;"
+                f" font-size: 32px; font-weight: 700;"
+            )
         col.addWidget(mark, 0, Qt.AlignmentFlag.AlignHCenter)
 
         name = QLabel("AutoPTZ")

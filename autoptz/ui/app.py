@@ -132,12 +132,14 @@ def run(argv: list[str] | None = None) -> int:
         log.debug("Could not set high-DPI rounding policy", exc_info=True)
 
     from autoptz import version as _app_version
+    from autoptz.ui.branding import app_icon
 
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("AutoPTZ")
     app.setOrganizationName("AutoPTZ")
     app.setApplicationVersion(_app_version())
     app.setApplicationDisplayName("AutoPTZ")
+    app.setWindowIcon(app_icon())
     _set_macos_app_name("AutoPTZ")
 
     # Persistent config store — creates the DB on first run.
