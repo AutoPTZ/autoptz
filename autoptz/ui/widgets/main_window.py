@@ -34,6 +34,7 @@ from autoptz.ui.widgets.camera_info_panel import CameraInfoPanel
 from autoptz.ui.widgets.camera_wall import CameraWall
 from autoptz.ui.widgets.common import on_theme_changed
 from autoptz.ui.widgets.dialogs import AboutDialog, NetworkCameraDialog
+from autoptz.ui.widgets.dialogs.update_dialog import UpdateDialog
 from autoptz.ui.widgets.logs_panel import LogsPanel
 from autoptz.ui.widgets.people_panel import PeoplePanel
 from autoptz.ui.widgets.properties_panel import PropertiesPanel
@@ -71,6 +72,16 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("AutoPTZ")
         self.setDockNestingEnabled(True)
         self.resize(1320, 820)
+
+        # Update checker (notify-only): created before menus reference it; fired
+        # once on first show.
+        from autoptz import version as _app_version
+        from autoptz.ui.update_manager import UpdateManager
+
+        self._updates = UpdateManager(client, _app_version(), self)
+        self._updates.updateAvailable.connect(self._on_update_available)
+        self._updates.upToDate.connect(self._on_up_to_date)
+        self._startup_update_checked = False
 
         self._build_central()
         self._build_docks()
@@ -326,6 +337,15 @@ class MainWindow(QMainWindow):
         self._layouts_menu.aboutToShow.connect(self._populate_layouts_menu)
 
         helpm = bar.addMenu("&Help")
+        helpm.addAction(
+            _action(
+                self,
+                "Check for Updates…",
+                self._updates.check_now,
+                tip="Check GitHub for a newer AutoPTZ release.",
+            )
+        )
+        helpm.addSeparator()
         helpm.addAction(_action(self, "About AutoPTZ", self._show_about))
 
     def _build_scale_menu(self, view: QMenu) -> None:
@@ -521,6 +541,26 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         AboutDialog(self._client, self).exec()
+
+    def _on_update_available(self, info: Any) -> None:
+        from autoptz import version as _app_version
+
+        UpdateDialog(info, _app_version(), on_skip=self._updates.skip_version, parent=self).exec()
+
+    def _on_up_to_date(self, manual: bool) -> None:
+        # Only nag for manual checks; the silent startup check stays silent.
+        if not manual:
+            return
+        from PySide6.QtWidgets import QMessageBox
+
+        from autoptz import version as _app_version
+
+        QMessageBox.information(
+            self,
+            "Check for Updates",
+            f"You're up to date.\n\nAutoPTZ {_app_version()} is the latest version "
+            "available (or the update server couldn't be reached).",
+        )
 
     # ── saved dock layouts ───────────────────────────────────────────────────────
 
@@ -738,6 +778,12 @@ class MainWindow(QMainWindow):
         if not self._has_visible_window_frame():
             self.resize(1320, 820)
             self._center_on_primary_screen()
+        # Fire the throttled update check once, deferred so first paint isn't blocked.
+        if not self._startup_update_checked:
+            self._startup_update_checked = True
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(2500, self._updates.maybe_check_on_startup)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         try:
