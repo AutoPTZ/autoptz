@@ -74,6 +74,24 @@ echo "==> Verifying CFBundleName (the app-name fix):"
 /usr/libexec/PlistBuddy -c 'Print :CFBundleName' "${APP}/Contents/Info.plist"
 plutil -lint "${APP}/Contents/Info.plist"
 
+# ── 6. (optional) DMG ─────────────────────────────────────────────────────────
+# MAKE_DMG=1 produces a compressed, versioned dmg with an /Applications symlink
+# (drag-to-install).  Dependency-free (uses macOS hdiutil).  The release workflow
+# sets MAKE_DMG=1; local builds skip it by default.
+if [[ "${MAKE_DMG:-0}" == "1" ]]; then
+    VER="$("${PY}" -c 'import autoptz; print(autoptz.__version__)')"
+    DMG="dist/AutoPTZ-${VER}-macos-arm64.dmg"
+    echo "==> Building ${DMG}"
+    STAGE="$(mktemp -d)"
+    cp -R "${APP}" "${STAGE}/"
+    ln -s /Applications "${STAGE}/Applications"
+    rm -f "${DMG}"
+    hdiutil create -volname "AutoPTZ ${VER}" -srcfolder "${STAGE}" \
+        -ov -format UDZO "${DMG}"
+    rm -rf "${STAGE}"
+    echo "==> Built ${DMG}"
+fi
+
 cat <<'EOF'
 
 ============================================================================

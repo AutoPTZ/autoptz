@@ -258,9 +258,7 @@ def make_session(
     name = Path(model_path).name
 
     precision = "fp16" if (chosen in _ACCELERATED_EPS and _wants_fp16(prefs)) else "fp32"
-    logger.info(
-        "Creating ORT session | model=%s ep=%s precision=%s", name, chosen.value, precision
-    )
+    logger.info("Creating ORT session | model=%s ep=%s precision=%s", name, chosen.value, precision)
 
     attempts: list[tuple[str, list[tuple[str, dict[str, object]] | str]]] = [
         ("tuned", _provider_list(chosen, prefs)),
@@ -273,14 +271,10 @@ def make_session(
     last_exc: Exception | None = None
     for label, providers in attempts:
         try:
-            session = ort.InferenceSession(
-                str(model_path), sess_options=so, providers=providers
-            )
+            session = ort.InferenceSession(str(model_path), sess_options=so, providers=providers)
         except Exception as exc:  # noqa: BLE001 — try the next, safer provider set
             last_exc = exc
-            logger.warning(
-                "ORT session attempt '%s' failed (%s); trying fallback", label, exc
-            )
+            logger.warning("ORT session attempt '%s' failed (%s); trying fallback", label, exc)
             continue
         actual_ep = session.get_providers()[0]
         if actual_ep != chosen.value:

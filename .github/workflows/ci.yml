@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: ["dev/v2-architecture-rework", "main"]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Qt runs headless on CI runners (no display).
+  QT_QPA_PLATFORM: offscreen
+
 jobs:
   test:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
@@ -18,6 +26,8 @@ jobs:
             python-version: "3.12"
           - os: windows-latest    # x64
             python-version: "3.12"
+          - os: ubuntu-latest     # x64 (Linux)
+            python-version: "3.12"
 
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +37,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+
+      - name: Install Linux Qt/headless system libs
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            x11-utils
 
       - name: Install base dependencies
         run: pip install -r requirements/base.txt
@@ -39,6 +59,9 @@ jobs:
 
       - name: Lint (ruff)
         run: ruff check autoptz/ tests/ tools/
+
+      - name: Format check (ruff format)
+        run: ruff format --check autoptz/ tests/ tools/
 
       - name: Type check (mypy)
         # Strict gate on the typed core (runtime + config). The UI/pipeline are

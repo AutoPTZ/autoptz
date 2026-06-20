@@ -82,6 +82,26 @@ if (-not (Test-Path $Out)) {
 }
 Write-Host "==> Built $Out"
 
+# ── 6. (optional) Inno Setup installer ───────────────────────────────────────
+# MakeInstaller (or $env:MAKE_INSTALLER=1) compiles the onedir bundle into
+# dist\AutoPTZ-<version>-windows-x64-setup.exe when iscc.exe (Inno Setup 6) is on
+# PATH. The release workflow installs Inno Setup and sets this. Skipped for
+# -OneFile (the installer packages the onedir tree).
+$MakeInstaller = $env:MAKE_INSTALLER -eq "1"
+if (-not $OneFile -and $MakeInstaller) {
+    $Iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue)
+    if ($null -eq $Iscc) {
+        Write-Warning "iscc.exe (Inno Setup) not found on PATH; skipping installer."
+    } else {
+        $Ver = (& $Py -c "import autoptz; print(autoptz.__version__)").Trim()
+        Write-Host "==> Compiling Inno Setup installer (v$Ver)"
+        & $Iscc.Source "/DMyAppVersion=$Ver" "packaging\autoptz.iss"
+        $Installer = "dist\AutoPTZ-$Ver-windows-x64-setup.exe"
+        if (Test-Path $Installer) { Write-Host "==> Built $Installer" }
+        else { Write-Error "Inno Setup did not produce $Installer"; exit 1 }
+    }
+}
+
 @'
 
 ============================================================================
