@@ -3,6 +3,7 @@
 All network/OS I/O is mocked so tests run without physical cameras,
 NDI SDK, or ONVIF-capable devices.
 """
+
 from __future__ import annotations
 
 import sys
@@ -10,12 +11,13 @@ import time
 import types
 from unittest.mock import MagicMock, patch
 
+import autoptz.engine.discovery.usb as usb_mod
 from autoptz.engine.discovery.ndi import NDIDiscovery, NDISource
 from autoptz.engine.discovery.onvif import ONVIFDevice, ONVIFDiscovery
 from autoptz.engine.discovery.usb import USBDevice, USBDiscovery, enumerate_cameras
-import autoptz.engine.discovery.usb as usb_mod
 
 # ── USBDiscovery ───────────────────────────────────────────────────────────────
+
 
 class TestUSBDiscovery:
     """Tests using a mocked _probe_indices function."""
@@ -55,8 +57,8 @@ class TestUSBDiscovery:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return {0}   # initial: only device 0
-            return {0, 2}    # subsequent: device 2 appeared
+                return {0}  # initial: only device 0
+            return {0, 2}  # subsequent: device 2 appeared
 
         with patch("autoptz.engine.discovery.usb._probe_indices", mock_probe):
             discovery = USBDiscovery(poll_interval=0.05)
@@ -78,7 +80,7 @@ class TestUSBDiscovery:
             call_count += 1
             if call_count <= 1:
                 return {0, 1}  # initial: both present
-            return {0}          # device 1 disappeared
+            return {0}  # device 1 disappeared
 
         with patch("autoptz.engine.discovery.usb._probe_indices", mock_probe):
             discovery = USBDiscovery(poll_interval=0.05)
@@ -156,6 +158,7 @@ class _FakeCap:
 
     def read(self):
         import numpy as np
+
         if self._has_frame:
             return True, np.zeros((4, 4, 3), dtype=np.uint8)
         return False, None
@@ -200,15 +203,21 @@ class TestEnumerateCameras:
         """When AVFoundation enumerates, those real devices are returned verbatim."""
         monkeypatch.setattr(usb_mod.platform, "system", lambda: "Darwin")
         fake = [
-            {"name": "FaceTime HD Camera", "unique_id": "0x111",
-             "index": 0, "is_continuity": False},
-            {"name": "iPhone", "unique_id": "0x222",
-             "index": 1, "is_continuity": True},
+            {
+                "name": "FaceTime HD Camera",
+                "unique_id": "0x111",
+                "index": 0,
+                "is_continuity": False,
+            },
+            {"name": "iPhone", "unique_id": "0x222", "index": 1, "is_continuity": True},
         ]
         monkeypatch.setattr(usb_mod, "_enumerate_macos_cameras", lambda: fake)
         # If AVFoundation succeeds we must NOT probe cv2 at all.
-        monkeypatch.setattr(usb_mod, "_probed_fallback_cameras",
-                            lambda: (_ for _ in ()).throw(AssertionError("probed!")))
+        monkeypatch.setattr(
+            usb_mod,
+            "_probed_fallback_cameras",
+            lambda: (_ for _ in ()).throw(AssertionError("probed!")),
+        )
         cams = enumerate_cameras()
         assert cams == fake
         assert all(isinstance(c["name"], str) for c in cams)
@@ -242,6 +251,7 @@ class TestEnumerateCameras:
 
 
 # ── NDIDiscovery ───────────────────────────────────────────────────────────────
+
 
 def _install_mock_cyndilib_for_discovery(source_names_sequence: list[list[str]]) -> None:
     """Install a mock cyndilib.finder.Finder that returns successive source lists."""
@@ -281,6 +291,7 @@ def _remove_mock_cyndilib_for_discovery() -> None:
     for mod in ["cyndilib", "cyndilib.finder"]:
         sys.modules.pop(mod, None)
     import autoptz.engine.discovery.ndi as ndi_mod  # re-import to clear state
+
     # Reset any cached state
     assert ndi_mod.NDIDiscovery is not None  # confirm importable
 
@@ -292,11 +303,13 @@ class TestNDIDiscovery:
     def test_new_source_fires_added_event(self) -> None:
         events: list[tuple[str, NDISource]] = []
         # First poll: no sources. Second poll: one source appears.
-        _install_mock_cyndilib_for_discovery([
-            [],
-            ["LAPTOP (TEST)"],
-            ["LAPTOP (TEST)"],
-        ])
+        _install_mock_cyndilib_for_discovery(
+            [
+                [],
+                ["LAPTOP (TEST)"],
+                ["LAPTOP (TEST)"],
+            ]
+        )
 
         discovery = NDIDiscovery(poll_interval=0.05)
         discovery.on_change(lambda ev, src: events.append((ev, src)))
@@ -310,11 +323,13 @@ class TestNDIDiscovery:
     def test_removed_source_fires_removed_event(self) -> None:
         events: list[tuple[str, NDISource]] = []
         # First poll: source present. Second poll: gone.
-        _install_mock_cyndilib_for_discovery([
-            ["NDI_CAM_1"],
-            [],
-            [],
-        ])
+        _install_mock_cyndilib_for_discovery(
+            [
+                ["NDI_CAM_1"],
+                [],
+                [],
+            ]
+        )
 
         discovery = NDIDiscovery(poll_interval=0.05)
         discovery.on_change(lambda ev, src: events.append((ev, src)))
@@ -326,10 +341,12 @@ class TestNDIDiscovery:
         assert any(e[1].name == "NDI_CAM_1" for e in removed)
 
     def test_sources_property(self) -> None:
-        _install_mock_cyndilib_for_discovery([
-            ["SOURCE_A", "SOURCE_B"],
-            ["SOURCE_A", "SOURCE_B"],
-        ])
+        _install_mock_cyndilib_for_discovery(
+            [
+                ["SOURCE_A", "SOURCE_B"],
+                ["SOURCE_A", "SOURCE_B"],
+            ]
+        )
 
         discovery = NDIDiscovery(poll_interval=0.05)
         discovery.start()
@@ -355,11 +372,13 @@ class TestNDIDiscovery:
 
     def test_no_events_when_sources_stable(self) -> None:
         events: list[tuple[str, NDISource]] = []
-        _install_mock_cyndilib_for_discovery([
-            ["STABLE"],
-            ["STABLE"],
-            ["STABLE"],
-        ])
+        _install_mock_cyndilib_for_discovery(
+            [
+                ["STABLE"],
+                ["STABLE"],
+                ["STABLE"],
+            ]
+        )
 
         discovery = NDIDiscovery(poll_interval=0.05)
         discovery.on_change(lambda ev, src: events.append((ev, src)))
@@ -375,6 +394,7 @@ class TestNDIDiscovery:
 
 
 # ── ONVIFDiscovery ─────────────────────────────────────────────────────────────
+
 
 def _install_mock_wsdiscovery(services_sequence: list[list[dict]]) -> None:
     """Install a mock wsdiscovery that returns successive service lists."""
@@ -395,9 +415,7 @@ def _install_mock_wsdiscovery(services_sequence: list[list[dict]]) -> None:
         def searchServices(self, timeout: float = 3) -> list[MagicMock]:
             idx = call_idx[0]
             services_data = (
-                services_sequence[idx]
-                if idx < len(services_sequence)
-                else services_sequence[-1]
+                services_sequence[idx] if idx < len(services_sequence) else services_sequence[-1]
             )
             call_idx[0] += 1
             return [make_service(d) for d in services_data]
@@ -416,9 +434,17 @@ class TestONVIFDiscovery:
 
     def test_discovered_device_fires_added(self) -> None:
         events: list[tuple[str, ONVIFDevice]] = []
-        _install_mock_wsdiscovery([
-            [{"xaddrs": ["http://192.168.1.10/onvif/device_service"], "types": [], "scopes": []}],
-        ])
+        _install_mock_wsdiscovery(
+            [
+                [
+                    {
+                        "xaddrs": ["http://192.168.1.10/onvif/device_service"],
+                        "types": [],
+                        "scopes": [],
+                    }
+                ],
+            ]
+        )
 
         discovery = ONVIFDiscovery(rescan_interval=60.0)
         discovery.on_change(lambda ev, dev: events.append((ev, dev)))
@@ -434,12 +460,14 @@ class TestONVIFDiscovery:
         events: list[tuple[str, ONVIFDevice]] = []
         device = {"xaddrs": ["http://10.0.0.5/onvif/device_service"], "types": [], "scopes": []}
         # Present on first scan, absent on next 3 (miss threshold = 3)
-        _install_mock_wsdiscovery([
-            [device],
-            [],  # miss 1
-            [],  # miss 2
-            [],  # miss 3 → removed
-        ])
+        _install_mock_wsdiscovery(
+            [
+                [device],
+                [],  # miss 1
+                [],  # miss 2
+                [],  # miss 3 → removed
+            ]
+        )
 
         discovery = ONVIFDiscovery(rescan_interval=0.05)
         discovery.on_change(lambda ev, dev: events.append((ev, dev)))
@@ -456,9 +484,13 @@ class TestONVIFDiscovery:
     def test_stable_device_not_re_reported(self) -> None:
         events: list[tuple[str, ONVIFDevice]] = []
         device = {"xaddrs": ["http://172.16.0.1/onvif"], "types": [], "scopes": []}
-        _install_mock_wsdiscovery([
-            [device], [device], [device],
-        ])
+        _install_mock_wsdiscovery(
+            [
+                [device],
+                [device],
+                [device],
+            ]
+        )
 
         discovery = ONVIFDiscovery(rescan_interval=0.05)
         discovery.on_change(lambda ev, dev: events.append((ev, dev)))
@@ -511,6 +543,7 @@ class TestONVIFDiscovery:
 
 
 # ── ONVIFDevice helpers ────────────────────────────────────────────────────────
+
 
 class TestONVIFDevice:
     def test_primary_xaddr(self) -> None:

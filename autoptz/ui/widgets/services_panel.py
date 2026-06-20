@@ -4,6 +4,7 @@ Header reads "Services and Status" (no ``&`` mnemonic, so no apparent double
 space).  Start is disabled while running; Stop/Restart while stopped.  Rows come
 from ``serviceStatus()``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -34,25 +35,39 @@ from autoptz.ui.widgets.common import (
 log = logging.getLogger(__name__)
 
 _STATE_LABEL = {
-    "ok": "OK", "running": "RUNNING", "warn": "FALLBACK",
-    "stopped": "STOPPED", "off": "OFF",
+    "ok": "OK",
+    "running": "RUNNING",
+    "warn": "FALLBACK",
+    "stopped": "STOPPED",
+    "off": "OFF",
 }
 
 # Session-only ML-subsystem testing overrides: (feature key, label, help text). The keys match
 # ``EngineClient.features()`` / ``setFeatureEnabled`` exactly.
 _FEATURE_TOGGLES = (
-    ("detection", "Person detection",
-     "Testing override: disable person detection for this session. It resets on launch."),
-    ("tracking", "Tracking",
-     "Testing override: disable track association/PTZ follow for this session."),
-    ("face_recognition", "Face recognition",
-     "Testing override: disable face matching for this session."),
-    ("pose", "Pose",
-     "Testing override: disable pose keypoints for this session."),
-    ("reid", "ReID (stable tracking)",
-     "Master switch for appearance ReID. A camera only uses it when this is on "
-     "AND its tracking Mode is “Stable”. Turn it off to disable Stable mode "
-     "everywhere. Resets to on each launch."),
+    (
+        "detection",
+        "Person detection",
+        "Testing override: disable person detection for this session. It resets on launch.",
+    ),
+    (
+        "tracking",
+        "Tracking",
+        "Testing override: disable track association/PTZ follow for this session.",
+    ),
+    (
+        "face_recognition",
+        "Face recognition",
+        "Testing override: disable face matching for this session.",
+    ),
+    ("pose", "Pose", "Testing override: disable pose keypoints for this session."),
+    (
+        "reid",
+        "ReID (stable tracking)",
+        "Master switch for appearance ReID. A camera only uses it when this is on "
+        "AND its tracking Mode is “Stable”. Turn it off to disable Stable mode "
+        "everywhere. Resets to on each launch.",
+    ),
 )
 
 _DETECTOR_TIERS = (
@@ -110,10 +125,12 @@ class ServicesPanel(QWidget):
         title = QLabel("Services and Status")
         title.setStyleSheet("font-weight: 700;")
         head.addWidget(title)
-        head.addWidget(HelpBadge(
-            "Live state of each engine service. Use Start / Stop / Restart to "
-            "control the tracking engine."
-        ))
+        head.addWidget(
+            HelpBadge(
+                "Live state of each engine service. Use Start / Stop / Restart to "
+                "control the tracking engine."
+            )
+        )
         head.addStretch(1)
         self._start = QPushButton("Start")
         self._start.clicked.connect(client.startEngine)
@@ -217,8 +234,10 @@ class ServicesPanel(QWidget):
             dot, name, pill = self._rows[key]
             color = _state_color(state)
             dot.setStyleSheet(f"color: {color}; font-size: 14px;")
-            name.setText(f"<b>{r.get('name', key)}</b><br>"
-                         f"<span style='color:{T.CURRENT.subtext}'>{r.get('detail', '')}</span>")
+            name.setText(
+                f"<b>{r.get('name', key)}</b><br>"
+                f"<span style='color:{T.CURRENT.subtext}'>{r.get('detail', '')}</span>"
+            )
             name.setWordWrap(True)
             pill.setText(_STATE_LABEL.get(state, state.upper()))
             pill.setStyleSheet(
@@ -316,7 +335,9 @@ class ServicesPanel(QWidget):
         retry.clicked.connect(lambda _=False, k=key: self._client.retryOptionalComponent(k))
         ignore = QPushButton("Ignore forever")
         ignore.setEnabled(not bool(row.get("ignored")))
-        ignore.clicked.connect(lambda _=False, k=key: self._client.setOptionalComponentIgnored(k, True))
+        ignore.clicked.connect(
+            lambda _=False, k=key: self._client.setOptionalComponentIgnored(k, True)
+        )
         actions.addWidget(retry)
         actions.addWidget(ignore)
         actions.addStretch(1)

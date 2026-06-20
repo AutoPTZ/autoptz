@@ -3,6 +3,7 @@
 One title (the window title), a protocol toggle, connection fields, a live URI
 preview, and validation.  On accept it calls ``EngineClient.addCamera(uri, name)``.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -41,21 +42,26 @@ class NetworkCameraDialog(QDialog):
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(8)
 
-        self._protocol = QComboBox(); self._protocol.addItems(["RTSP", "ONVIF"])
+        self._protocol = QComboBox()
+        self._protocol.addItems(["RTSP", "ONVIF"])
         self._protocol.currentTextChanged.connect(self._on_protocol)
         form.addRow("Protocol", self._protocol)
 
-        self._ip = QLineEdit(); self._ip.setPlaceholderText("192.168.1.50")
+        self._ip = QLineEdit()
+        self._ip.setPlaceholderText("192.168.1.50")
         form.addRow("IP address", self._ip)
         self._port = QLineEdit(str(_DEFAULT_PORT["RTSP"]))
         form.addRow("Port", self._port)
-        self._path = QLineEdit(); self._path.setPlaceholderText("/stream1")
+        self._path = QLineEdit()
+        self._path.setPlaceholderText("/stream1")
         form.addRow("Stream path", self._path)
         self._user = QLineEdit()
         form.addRow("Username", self._user)
-        self._password = QLineEdit(); self._password.setEchoMode(QLineEdit.EchoMode.Password)
+        self._password = QLineEdit()
+        self._password.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("Password", self._password)
-        self._name = QLineEdit(); self._name.setPlaceholderText("optional")
+        self._name = QLineEdit()
+        self._name.setPlaceholderText("optional")
         form.addRow("Display name", self._name)
         col.addLayout(form)
 

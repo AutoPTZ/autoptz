@@ -10,6 +10,7 @@ Covers the engine-logging + diagnostics work:
 
 All tests use QCoreApplication (no display) so they run cleanly in CI.
 """
+
 from __future__ import annotations
 
 import logging
@@ -18,10 +19,8 @@ import threading
 import time
 
 import numpy as np
-import pytest
-
 import PySide6  # noqa: F401
-
+import pytest
 
 # ── one QCoreApplication for the whole module ─────────────────────────────────
 
@@ -97,7 +96,8 @@ class TestWorkerPopulatesLatency:
         from autoptz.engine.camera_worker import CameraWorker
 
         config = CameraConfig(
-            id="latcam01abcd", name="Cam",
+            id="latcam01abcd",
+            name="Cam",
             source=SourceConfig(type="usb", address="usb://0"),
         )
         received: list = []
@@ -108,8 +108,11 @@ class TestWorkerPopulatesLatency:
                 received.append(m)
 
         worker = CameraWorker(
-            "latcam01abcd", config, on_tel,
-            frame_source=_FakeSource(), telemetry_hz=50.0,
+            "latcam01abcd",
+            config,
+            on_tel,
+            frame_source=_FakeSource(),
+            telemetry_hz=50.0,
         )
         worker.start()
         try:
@@ -175,7 +178,7 @@ class TestSystemMetricsShape:
 
         metrics = system_metrics()
         assert "app_mem_percent" in metrics
-        assert isinstance(metrics["app_mem_percent"], (int, float))
+        assert isinstance(metrics["app_mem_percent"], int | float)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

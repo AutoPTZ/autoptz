@@ -14,6 +14,7 @@ Keeping this layer separate from the service lets the service run with no store
 at all (pure in-memory, used by tests and headless harvesting) and lets the
 store be swapped without touching gallery logic.
 """
+
 from __future__ import annotations
 
 import logging
@@ -83,6 +84,8 @@ class IdentityStore:
         except Exception:  # noqa: BLE001
             log.warning(
                 "IdentityStore.delete_photo failed for %s[%s]",
-                identity_id, index, exc_info=True,
+                identity_id,
+                index,
+                exc_info=True,
             )
             return False

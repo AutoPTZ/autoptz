@@ -3,6 +3,7 @@
 All external I/O (cv2.VideoCapture, av, cyndilib) is mocked so tests run
 without cameras or optional packages installed.
 """
+
 from __future__ import annotations
 
 import sys
@@ -38,6 +39,7 @@ def _make_cap(frames: list[np.ndarray | None]) -> MagicMock:
 
 
 # ── USBAdapter ─────────────────────────────────────────────────────────────────
+
 
 class TestUSBAdapterOpen:
     def test_open_success(self) -> None:
@@ -210,6 +212,7 @@ class TestUSBAdapterReconnect:
 
 # ── RTSPAdapter ────────────────────────────────────────────────────────────────
 
+
 class TestRTSPAdapterCV2Fallback:
     """RTSPAdapter falls back to cv2 when PyAV is unavailable."""
 
@@ -234,8 +237,7 @@ class TestRTSPAdapterCV2Fallback:
             patch("autoptz.engine.pipeline.ingest._probe_av", return_value=False),
             patch("autoptz.engine.pipeline.ingest.cv2.VideoCapture", return_value=cap),
         ):
-            adapter = RTSPAdapter("rtsp-low-rate", url="rtsp://127.0.0.1/test",
-                                  target_fps=60.0)
+            adapter = RTSPAdapter("rtsp-low-rate", url="rtsp://127.0.0.1/test", target_fps=60.0)
             assert adapter._open()
 
         assert adapter.status.source_fps_cap is None
@@ -339,6 +341,7 @@ class TestRTSPAdapterPyAV:
         self._make_mock_av_module([frame])
 
         import autoptz.engine.pipeline.ingest as ingest_mod
+
         ingest_mod._AV_AVAILABLE = True  # force probe to True
 
         adapter = RTSPAdapter("rtsp-av", url="rtsp://127.0.0.1/cam")
@@ -357,6 +360,7 @@ class TestRTSPAdapterPyAV:
 
 
 # ── NDIAdapter ─────────────────────────────────────────────────────────────────
+
 
 class TestNDIAdapter:
     """NDIAdapter with a fully mocked cyndilib."""
@@ -393,11 +397,13 @@ class TestNDIAdapter:
 
         # FrameSyncReceiver
         framesync_instance = MagicMock()
+
         # capture_video sets data on the video_frame object
         def fake_capture_video(vf: MagicMock) -> None:
             vf.get_array.return_value = frame.reshape(-1)
             vf.yres = frame.shape[0]
             vf.xres = frame.shape[1]
+
         framesync_instance.capture_video.side_effect = fake_capture_video
         FrameSyncCls = MagicMock(return_value=framesync_instance)
         framesync_mod.FrameSyncReceiver = FrameSyncCls
@@ -415,12 +421,16 @@ class TestNDIAdapter:
 
     def _remove_mock_cyndilib(self) -> None:
         for mod in [
-            "cyndilib", "cyndilib.finder", "cyndilib.receiver",
-            "cyndilib.framesync", "cyndilib.video_frame",
+            "cyndilib",
+            "cyndilib.finder",
+            "cyndilib.receiver",
+            "cyndilib.framesync",
+            "cyndilib.video_frame",
         ]:
             sys.modules.pop(mod, None)
 
         import autoptz.engine.pipeline.ingest as ingest_mod
+
         ingest_mod._NDI_AVAILABLE = None
 
     def test_open_success_when_source_visible(self) -> None:
@@ -428,6 +438,7 @@ class TestNDIAdapter:
         self._install_mock_cyndilib(["LAPTOP (NDI CAMERA)"], frame)
 
         import autoptz.engine.pipeline.ingest as ingest_mod
+
         ingest_mod._NDI_AVAILABLE = True
 
         try:
@@ -445,6 +456,7 @@ class TestNDIAdapter:
         self._install_mock_cyndilib(["OTHER SOURCE"], frame)
 
         import autoptz.engine.pipeline.ingest as ingest_mod
+
         ingest_mod._NDI_AVAILABLE = True
 
         try:
@@ -456,6 +468,7 @@ class TestNDIAdapter:
 
     def test_ndi_unavailable_returns_error(self) -> None:
         import autoptz.engine.pipeline.ingest as ingest_mod
+
         ingest_mod._NDI_AVAILABLE = False
 
         adapter = NDIAdapter("ndi-3", ndi_name="ANY")
@@ -467,6 +480,7 @@ class TestNDIAdapter:
 
 
 # ── SourceAdapter deliver (shm write) ─────────────────────────────────────────
+
 
 class TestDeliverToShm:
     def test_deliver_writes_to_shm(self) -> None:

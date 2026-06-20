@@ -30,6 +30,7 @@ Track output array convention (BoxMOT ≥ 12)
 
 We require at least 7 columns; column 7 (det_idx) is ignored if absent.
 """
+
 from __future__ import annotations
 
 import logging
@@ -55,6 +56,7 @@ def _probe_boxmot() -> bool:
     if _BOXMOT_AVAILABLE is None:
         try:
             import boxmot as _  # noqa: F401
+
             _BOXMOT_AVAILABLE = True
             _quiet_boxmot_logging()
         except ImportError:
@@ -149,8 +151,11 @@ class _SimpleIoUTracker:
             track_boxes = np.array([self._tracks[t][0] for t in track_ids], dtype=np.float32)
             iou = self._iou_matrix(boxes, track_boxes)
             pairs = sorted(
-                ((float(iou[i, j]), i, j)
-                 for i in range(iou.shape[0]) for j in range(iou.shape[1])),
+                (
+                    (float(iou[i, j]), i, j)
+                    for i in range(iou.shape[0])
+                    for j in range(iou.shape[1])
+                ),
                 reverse=True,
             )
             used_det: set[int] = set()
@@ -175,11 +180,17 @@ class _SimpleIoUTracker:
             seen.add(tid)
             conf = float(dets[i, 4]) if dets.shape[1] > 4 else 0.0
             cls = float(dets[i, 5]) if dets.shape[1] > 5 else 0.0
-            out_rows.append([
-                float(boxes[i, 0]), float(boxes[i, 1]),
-                float(boxes[i, 2]), float(boxes[i, 3]),
-                float(tid), conf, cls,
-            ])
+            out_rows.append(
+                [
+                    float(boxes[i, 0]),
+                    float(boxes[i, 1]),
+                    float(boxes[i, 2]),
+                    float(boxes[i, 3]),
+                    float(tid),
+                    conf,
+                    cls,
+                ]
+            )
 
         self._age_and_prune(seen)
         return np.array(out_rows, dtype=np.float32)
@@ -202,11 +213,12 @@ class _SimpleIoUTracker:
 
 # ── Track data model ───────────────────────────────────────────────────────────
 
+
 class TrackState(str, Enum):
-    TENTATIVE = "tentative"   # newly created, not yet confirmed
-    CONFIRMED = "confirmed"   # seen ≥ min_hits times consecutively
-    LOST = "lost"             # no detection match; coasting on Kalman prediction
-    REMOVED = "removed"       # coast window expired; track is gone
+    TENTATIVE = "tentative"  # newly created, not yet confirmed
+    CONFIRMED = "confirmed"  # seen ≥ min_hits times consecutively
+    LOST = "lost"  # no detection match; coasting on Kalman prediction
+    REMOVED = "removed"  # coast window expired; track is gone
 
 
 @dataclass
@@ -217,12 +229,13 @@ class Track:
     bbox: BBox
     conf: float
     state: TrackState
-    age: int                          # total frames since first seen
-    hits: int                         # total detection matches (not counting lost frames)
-    velocity: tuple[float, float]     # (vx, vy) pixels/frame, estimated from consecutive centres
+    age: int  # total frames since first seen
+    hits: int  # total detection matches (not counting lost frames)
+    velocity: tuple[float, float]  # (vx, vy) pixels/frame, estimated from consecutive centres
 
 
 # ── Tracker type ──────────────────────────────────────────────────────────────
+
 
 class TrackerType(str, Enum):
     BOTSORT = "botsort"
@@ -231,6 +244,7 @@ class TrackerType(str, Enum):
 
 
 # ── BoxMOT factory ────────────────────────────────────────────────────────────
+
 
 def _create_boxmot_tracker(
     tracker_type: TrackerType,
@@ -272,31 +286,44 @@ def _create_boxmot_tracker(
 
             if tracker_type == TrackerType.BYTETRACK:
                 return ByteTrack(
-                    track_thresh=0.45, match_thresh=0.8,
-                    track_buffer=buffer, frame_rate=rate,
+                    track_thresh=0.45,
+                    match_thresh=0.8,
+                    track_buffer=buffer,
+                    frame_rate=rate,
                 )
             if tracker_type == TrackerType.DEEPOCSORT:
                 return DeepOcSort(reid_model=weights, embedding_off=not use_reid)
             return BotSort(
-                reid_model=weights, with_reid=use_reid,
-                track_buffer=buffer, frame_rate=rate, cmc_method="ecc",
+                reid_model=weights,
+                with_reid=use_reid,
+                track_buffer=buffer,
+                frame_rate=rate,
+                cmc_method="ecc",
             )
         except ImportError:
             import boxmot  # noqa: PLC0415
 
             if tracker_type == TrackerType.BYTETRACK:
                 return boxmot.ByteTrack(
-                    track_thresh=0.45, match_thresh=0.8,
-                    track_buffer=buffer, frame_rate=rate,
+                    track_thresh=0.45,
+                    match_thresh=0.8,
+                    track_buffer=buffer,
+                    frame_rate=rate,
                 )
             if tracker_type == TrackerType.DEEPOCSORT:
                 return boxmot.DeepOcSort(
-                    reid_weights=weights, device=device,
-                    half=False, per_class=False, max_age=max_age,
+                    reid_weights=weights,
+                    device=device,
+                    half=False,
+                    per_class=False,
+                    max_age=max_age,
                 )
             return boxmot.BotSort(
-                reid_weights=weights, device=device,
-                half=False, per_class=False, max_age=max_age,
+                reid_weights=weights,
+                device=device,
+                half=False,
+                per_class=False,
+                max_age=max_age,
             )
 
     want_reid = reid_weights is not None
@@ -306,8 +333,7 @@ def _create_boxmot_tracker(
         if want_reid:
             # ReID weights/download failed — fall back to motion-only so tracking
             # still works (never let an optional appearance model kill tracking).
-            log.warning("ReID init failed; falling back to motion-only tracking.",
-                        exc_info=True)
+            log.warning("ReID init failed; falling back to motion-only tracking.", exc_info=True)
             tracker = _instantiate(False)
         else:
             raise
@@ -319,9 +345,11 @@ def _create_boxmot_tracker(
 
 # ── Track-state machine ────────────────────────────────────────────────────────
 
+
 @dataclass
 class _TrackRecord:
     """Mutable bookkeeping for one track across frames."""
+
     age: int = 0
     hits: int = 0
     frames_lost: int = 0
@@ -332,6 +360,7 @@ class _TrackRecord:
 
 
 # ── Tracker ───────────────────────────────────────────────────────────────────
+
 
 class Tracker:
     """Wraps a BoxMOT tracker and manages track lifecycle + velocity.
@@ -456,7 +485,7 @@ class Tracker:
         tracks_out: list[Track] = []
         seen_ids: set[int] = set()
 
-        for row in ([] if len(active_ids) == 0 else raw):
+        for row in [] if len(active_ids) == 0 else raw:
             x1, y1, x2, y2 = float(row[0]), float(row[1]), float(row[2]), float(row[3])
             tid = int(row[4])
             conf = float(row[5])
@@ -485,19 +514,19 @@ class Tracker:
             rec.last_bbox = bbox
             rec.last_conf = conf
 
-            state = (
-                TrackState.CONFIRMED if rec.hits >= self._min_hits else TrackState.TENTATIVE
-            )
+            state = TrackState.CONFIRMED if rec.hits >= self._min_hits else TrackState.TENTATIVE
 
-            tracks_out.append(Track(
-                track_id=tid,
-                bbox=bbox,
-                conf=conf,
-                state=state,
-                age=rec.age,
-                hits=rec.hits,
-                velocity=(vx, vy),
-            ))
+            tracks_out.append(
+                Track(
+                    track_id=tid,
+                    bbox=bbox,
+                    conf=conf,
+                    state=state,
+                    age=rec.age,
+                    hits=rec.hits,
+                    velocity=(vx, vy),
+                )
+            )
 
         # Move tracks that disappeared this frame from active → lost
         gone_ids = set(self._records) - seen_ids
@@ -514,15 +543,17 @@ class Tracker:
                 continue
             rec.frames_lost += 1
             if rec.last_bbox is not None:
-                tracks_out.append(Track(
-                    track_id=tid,
-                    bbox=rec.last_bbox,
-                    conf=rec.last_conf,
-                    state=TrackState.LOST,
-                    age=rec.age,
-                    hits=rec.hits,
-                    velocity=(0.0, 0.0),
-                ))
+                tracks_out.append(
+                    Track(
+                        track_id=tid,
+                        bbox=rec.last_bbox,
+                        conf=rec.last_conf,
+                        state=TrackState.LOST,
+                        age=rec.age,
+                        hits=rec.hits,
+                        velocity=(0.0, 0.0),
+                    )
+                )
 
         for tid in to_remove:
             del self._lost[tid]

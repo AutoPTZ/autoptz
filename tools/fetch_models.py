@@ -15,6 +15,7 @@ caches on first use and are out of scope for this CLI.
 
 Exit code 0 if a usable detector ONNX is available afterwards, 1 otherwise.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -32,18 +33,18 @@ def main(argv: list[str] | None = None) -> int:
         "--cache-dir",
         type=Path,
         default=None,
-        help="Override the model cache directory (default: platform app-data "
-             "…/AutoPTZ/models).",
+        help="Override the model cache directory (default: platform app-data …/AutoPTZ/models).",
     )
     parser.add_argument(
         "--tier",
         choices=("all", "auto", "fast", "balanced", "medium"),
         default="all",
         help="Which detector tier(s) to fetch (default: all, so the Balanced "
-             "and Medium tiers work offline too).",
+        "and Medium tiers work offline too).",
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="Enable debug logging.",
     )
@@ -56,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     log = logging.getLogger("fetch_models")
 
     # Import lazily so --help works without the engine package importable.
-    from autoptz.engine.runtime.models import detector_model_for_tier, ModelManager
+    from autoptz.engine.runtime.models import ModelManager, detector_model_for_tier
 
     mgr = ModelManager(cache_dir=args.cache_dir)
     log.info("Model cache dir: %s", mgr.cache_dir)

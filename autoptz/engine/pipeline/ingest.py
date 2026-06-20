@@ -19,6 +19,7 @@ Optional dependencies:
 - ``av`` (PyAV) for RTSPAdapter HW decode — falls back to cv2 if absent
 - ``cyndilib`` for NDIAdapter — raises ImportError in ``_open`` if absent
 """
+
 from __future__ import annotations
 
 import logging
@@ -49,6 +50,7 @@ def _probe_av() -> bool:
     if _AV_AVAILABLE is None:
         try:
             import av as _av  # noqa: F401
+
             _AV_AVAILABLE = True
         except ImportError:
             _AV_AVAILABLE = False
@@ -60,6 +62,7 @@ def _probe_ndi() -> bool:
     if _NDI_AVAILABLE is None:
         try:
             import cyndilib as _ndi  # noqa: F401
+
             _NDI_AVAILABLE = True
         except ImportError:
             _NDI_AVAILABLE = False
@@ -67,6 +70,7 @@ def _probe_ndi() -> bool:
 
 
 # ── Status ─────────────────────────────────────────────────────────────────────
+
 
 class AdapterState(str, Enum):
     STARTING = "starting"
@@ -90,7 +94,7 @@ class AdapterStatus:
 
 # ── Reconnect back-off constants ────────────────────────────────────────────────
 
-_BACKOFF_MIN = 1.0    # seconds
+_BACKOFF_MIN = 1.0  # seconds
 _BACKOFF_MAX = 30.0
 _BACKOFF_FACTOR = 2.0
 _STALL_TIMEOUT_DEFAULT = 5.0  # seconds without a frame → stalled
@@ -107,6 +111,7 @@ _NATIVE_AVF_BROKEN = False
 
 
 # ── Abstract base ──────────────────────────────────────────────────────────────
+
 
 class SourceAdapter(ABC):
     """Base for all ingest adapters. Subclasses implement _open / _read_frame / _close."""
@@ -217,7 +222,8 @@ class SourceAdapter(ABC):
                 self._set_state(AdapterState.RECONNECTING)
                 log.info(
                     "camera_id=%s open failed; retrying in %.0fs",
-                    self.camera_id, backoff,
+                    self.camera_id,
+                    backoff,
                 )
                 if self._stop_event.wait(timeout=backoff):
                     break
@@ -361,12 +367,16 @@ def _macos_index_for_unique_id(unique_id: str) -> int | None:
     try:
         import AVFoundation  # type: ignore  # noqa: PLC0415
 
-        video = list(AVFoundation.AVCaptureDevice.devicesWithMediaType_(
-            AVFoundation.AVMediaTypeVideo,
-        ))
-        muxed = list(AVFoundation.AVCaptureDevice.devicesWithMediaType_(
-            AVFoundation.AVMediaTypeMuxed,
-        ))
+        video = list(
+            AVFoundation.AVCaptureDevice.devicesWithMediaType_(
+                AVFoundation.AVMediaTypeVideo,
+            )
+        )
+        muxed = list(
+            AVFoundation.AVCaptureDevice.devicesWithMediaType_(
+                AVFoundation.AVMediaTypeMuxed,
+            )
+        )
         devices = video + muxed
         # OpenCV preserves system ordering by sorting the combined list by
         # uniqueID before indexing into it. Match that exactly.
@@ -378,8 +388,9 @@ def _macos_index_for_unique_id(unique_id: str) -> int | None:
             except Exception:  # noqa: BLE001 — a flaky device must not abort
                 continue
     except Exception:  # noqa: BLE001 — PyObjC/framework absent or runtime error
-        log.debug("AVFoundation uniqueID→index resolution unavailable for %s",
-                  unique_id, exc_info=True)
+        log.debug(
+            "AVFoundation uniqueID→index resolution unavailable for %s", unique_id, exc_info=True
+        )
     return None
 
 
@@ -438,11 +449,13 @@ class USBAdapter(SourceAdapter):
             return False
         try:
             from autoptz.engine.pipeline import avf_capture  # noqa: PLC0415
+
             if avf_capture.is_available():
                 return True
         except Exception:  # noqa: BLE001 — import/probe failure → OpenCV fallback
-            log.debug("camera_id=%s native AVF probe failed; using OpenCV",
-                      self.camera_id, exc_info=True)
+            log.debug(
+                "camera_id=%s native AVF probe failed; using OpenCV", self.camera_id, exc_info=True
+            )
         # macOS + a uniqueID but no native path: capture must fall back to OpenCV,
         # whose AVFoundation device ordering diverges from the picker — selection
         # can be unreliable.  Warn once, loudly, so it shows in the Logs panel.
@@ -480,7 +493,9 @@ class USBAdapter(SourceAdapter):
                 if idx != self._source:
                     log.info(
                         "camera_id=%s resolved uniqueID=%s → capture index %d",
-                        self.camera_id, self._unique_id, idx,
+                        self.camera_id,
+                        self._unique_id,
+                        idx,
                     )
                 return idx
             log.warning(
@@ -488,7 +503,8 @@ class USBAdapter(SourceAdapter):
                 "capture index (PyObjC/AVFoundation unavailable?); refusing to "
                 "open a possibly-wrong device. Install the macOS pyobjc extras "
                 "(requirements/macos.txt) for reliable camera selection.",
-                self.camera_id, self._unique_id,
+                self.camera_id,
+                self._unique_id,
             )
             return None
         return self._source
@@ -513,7 +529,8 @@ class USBAdapter(SourceAdapter):
             _NATIVE_AVF_BROKEN = True
             log.warning(
                 "camera_id=%s native AVFoundation delivered no frames — using "
-                "OpenCV for this and subsequent cameras.", self.camera_id,
+                "OpenCV for this and subsequent cameras.",
+                self.camera_id,
             )
         return self._open_cv()
 
@@ -535,14 +552,21 @@ class USBAdapter(SourceAdapter):
         if reported is not None and _FPS_CAP_MIN <= reported <= _FPS_CAP_MAX:
             self._set_source_fps_cap(reported)
             if self._target_fps > reported:
-                log.info("camera_id=%s clamping target_fps %.0f → source cap %.0f",
-                         self.camera_id, self._target_fps, reported)
+                log.info(
+                    "camera_id=%s clamping target_fps %.0f → source cap %.0f",
+                    self.camera_id,
+                    self._target_fps,
+                    reported,
+                )
                 self._target_fps = reported
         else:
             self._set_source_fps_cap(None)
         self._avf = cap
-        log.info("camera_id=%s USBAdapter opened uniqueID=%s via native AVFoundation",
-                 self.camera_id, self._unique_id)
+        log.info(
+            "camera_id=%s USBAdapter opened uniqueID=%s via native AVFoundation",
+            self.camera_id,
+            self._unique_id,
+        )
         return True
 
     def _open_cv(self) -> bool:
@@ -563,14 +587,14 @@ class USBAdapter(SourceAdapter):
             cap.release()
             log.warning(
                 "camera_id=%s USBAdapter: cannot open source %r",
-                self.camera_id, source,
+                self.camera_id,
+                source,
             )
             return False
         try:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s USB cv2 buffer-size set failed", self.camera_id,
-                      exc_info=True)
+            log.debug("camera_id=%s USB cv2 buffer-size set failed", self.camera_id, exc_info=True)
         # Probe for a trusted source fps ceiling. A plain CAP_PROP_FPS read is
         # usually just the current/default rate, so low readings stay "unknown".
         self._detect_fps_cap(cap)
@@ -602,8 +626,12 @@ class USBAdapter(SourceAdapter):
         if _FPS_CAP_MIN <= cap <= _FPS_CAP_MAX:
             self._set_source_fps_cap(cap)
             if self._target_fps > cap:
-                log.info("camera_id=%s clamping target_fps %.0f → source cap %.0f",
-                         self.camera_id, self._target_fps, cap)
+                log.info(
+                    "camera_id=%s clamping target_fps %.0f → source cap %.0f",
+                    self.camera_id,
+                    self._target_fps,
+                    cap,
+                )
                 self._target_fps = cap
         else:
             self._set_source_fps_cap(None)
@@ -630,8 +658,7 @@ class USBAdapter(SourceAdapter):
             try:
                 self._avf.release()  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001 — teardown must not raise
-                log.debug("camera_id=%s AVF release raised", self.camera_id,
-                          exc_info=True)
+                log.debug("camera_id=%s AVF release raised", self.camera_id, exc_info=True)
             self._avf = None
         if self._cap is not None:
             self._cap.release()
@@ -639,6 +666,7 @@ class USBAdapter(SourceAdapter):
 
 
 # ── RTSP Adapter ───────────────────────────────────────────────────────────────
+
 
 def _hw_decode_codec() -> tuple[str, dict[str, str]]:
     """Return (codec_name, extra_options) for PyAV hardware-accelerated decode."""
@@ -694,7 +722,7 @@ class RTSPAdapter(SourceAdapter):
             "rtsp_transport": self._transport,
             "fflags": "nobuffer",
             "flags": "low_delay",
-            "stimeout": "5000000",   # socket read timeout in µs (5 s)
+            "stimeout": "5000000",  # socket read timeout in µs (5 s)
             "max_delay": "0",
             "reorder_queue_size": "0",
             "probesize": "32768",
@@ -727,7 +755,8 @@ class RTSPAdapter(SourceAdapter):
                 except Exception:  # noqa: BLE001
                     log.debug(
                         "camera_id=%s HW codec %r unavailable; using software decode",
-                        self.camera_id, hw_codec,
+                        self.camera_id,
+                        hw_codec,
                     )
 
         self._container = container
@@ -741,20 +770,21 @@ class RTSPAdapter(SourceAdapter):
             cap.release()
             log.warning(
                 "camera_id=%s RTSPAdapter: cv2 fallback could not open %r",
-                self.camera_id, self._url,
+                self.camera_id,
+                self._url,
             )
             return False
         try:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s RTSP cv2 buffer-size set failed", self.camera_id,
-                      exc_info=True)
+            log.debug("camera_id=%s RTSP cv2 buffer-size set failed", self.camera_id, exc_info=True)
         # OpenCV exposes the current RTSP stream rate here, not a source max.
         self._set_source_fps_cap(None)
         self._cap = cap
         log.info(
             "camera_id=%s RTSPAdapter opened %r via cv2 (PyAV not installed)",
-            self.camera_id, self._url,
+            self.camera_id,
+            self._url,
         )
         return True
 
@@ -762,6 +792,7 @@ class RTSPAdapter(SourceAdapter):
     def _iter_frames_av(container: object, video_stream: object) -> Iterator[NDArray[np.uint8]]:
         """Yield decoded BGR frames from a PyAV container."""
         import av  # noqa: PLC0415
+
         try:
             for packet in container.demux(video_stream):  # type: ignore[union-attr]
                 if packet.size == 0:  # EOS sentinel
@@ -798,6 +829,7 @@ class RTSPAdapter(SourceAdapter):
 
 
 # ── NDI Adapter ────────────────────────────────────────────────────────────────
+
 
 class NDIAdapter(SourceAdapter):
     """Capture from an NDI source using cyndilib FrameSync.
@@ -840,7 +872,9 @@ class NDIAdapter(SourceAdapter):
             if self._ndi_name not in known_names:
                 log.warning(
                     "camera_id=%s NDI source %r not found on network (seen: %s)",
-                    self.camera_id, self._ndi_name, known_names,
+                    self.camera_id,
+                    self._ndi_name,
+                    known_names,
                 )
                 return False
 

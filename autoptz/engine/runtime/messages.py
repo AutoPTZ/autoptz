@@ -3,6 +3,7 @@
 Serialization: pydantic models round-trip through msgpack for compact
 cross-process transport.  JSON is also available via .model_dump_json().
 """
+
 from __future__ import annotations
 
 import time
@@ -15,8 +16,10 @@ from pydantic import BaseModel, Field
 
 # ── shared primitives ─────────────────────────────────────────────────────────
 
+
 class BBox(BaseModel):
     """Pixel-space bounding box (top-left, bottom-right)."""
+
     x1: float
     y1: float
     x2: float
@@ -25,11 +28,12 @@ class BBox(BaseModel):
 
 # ── telemetry (Engine → UI) ───────────────────────────────────────────────────
 
+
 class TrackInfo(BaseModel):
     track_id: int
     bbox: BBox
-    identity: str | None = None       # display NAME ("Person 3" / "Alice"), or None
-    identity_id: str | None = None    # stable gallery id (for enroll / target), or None
+    identity: str | None = None  # display NAME ("Person 3" / "Alice"), or None
+    identity_id: str | None = None  # stable gallery id (for enroll / target), or None
     confidence: float = 0.0
     is_target: bool = False
     # True while the track is coasting (LOST: no fresh detection this frame).  The
@@ -49,13 +53,15 @@ class TrackInfo(BaseModel):
 
 class FaceBox(BaseModel):
     """A detected face for the optional face-recognition overlay (pixel-space)."""
+
     bbox: BBox
-    identity: str | None = None       # matched display NAME, or None when unknown
-    score: float = 0.0                # match cosine (0 when unmatched)
+    identity: str | None = None  # matched display NAME, or None when unknown
+    score: float = 0.0  # match cosine (0 when unmatched)
 
 
 class PoseKeypoint(BaseModel):
     """One COCO-17 pose keypoint (pixel-space) for the optional pose overlay."""
+
     x: float
     y: float
     conf: float = 0.0
@@ -152,6 +158,7 @@ class RuntimeEventInfo(BaseModel):
 
 class TelemetryMsg(BaseModel):
     """Emitted by each CameraWorker at ~telemetry_hz (default 10 Hz)."""
+
     camera_id: str
     seq: int
     ts: float = Field(default_factory=time.time)
@@ -208,7 +215,7 @@ class TelemetryMsg(BaseModel):
     # this tick (faces a few Hz, pose for the single target).  The UI draws them
     # only when the operator enables the corresponding overlay toggle.
     faces: list[FaceBox] = Field(default_factory=list)
-    pose: list[PoseKeypoint] = Field(default_factory=list)   # target subject only
+    pose: list[PoseKeypoint] = Field(default_factory=list)  # target subject only
     ptz: PTZState = Field(default_factory=PTZState)
     health: HealthInfo = Field(default_factory=HealthInfo)
 
@@ -222,6 +229,7 @@ class TelemetryMsg(BaseModel):
 
 
 # ── commands (UI → Engine) ────────────────────────────────────────────────────
+
 
 class CmdKind(str, Enum):
     ADD_CAMERA = "add_camera"
@@ -250,6 +258,7 @@ class CmdKind(str, Enum):
 class BaseCommand(BaseModel):
     """All commands carry a stable UUID camera_id so the engine never uses
     global "current active" state."""
+
     cmd_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     kind: CmdKind
     camera_id: str | None = None  # None for supervisor-level commands
@@ -382,7 +391,7 @@ class UpdateCameraConfigCmd(BaseCommand):
 class EnrollIdentityCmd(BaseCommand):
     kind: CmdKind = CmdKind.ENROLL_IDENTITY
     identity_name: str = ""
-    identity_id: str = ""   # pre-allocated by UI so store and engine share the same key
+    identity_id: str = ""  # pre-allocated by UI so store and engine share the same key
     track_id: int | None = None
     # Optional normalized frame-space click point (0..1). When present, the
     # worker enrolls the face nearest this exact click instead of whichever face

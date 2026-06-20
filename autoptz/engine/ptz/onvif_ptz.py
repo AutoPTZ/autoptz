@@ -11,6 +11,7 @@ Implements:
   SetPreset       — store current position as named preset
   GetStatus       — PTZState with current position
 """
+
 from __future__ import annotations
 
 import logging
@@ -24,11 +25,11 @@ log = logging.getLogger(__name__)
 def _require_onvif() -> Any:
     try:
         from onvif import ONVIFCamera
+
         return ONVIFCamera
     except ImportError as exc:
         raise ImportError(
-            "onvif-zeep is required for ONVIF PTZ control.  "
-            "Install it: pip install onvif-zeep"
+            "onvif-zeep is required for ONVIF PTZ control.  Install it: pip install onvif-zeep"
         ) from exc
 
 
@@ -78,7 +79,9 @@ class ONVIFPTZBackend(PTZBackend):
 
         # Probe capabilities
         try:
-            caps_resp = self._ptz.GetConfigurationOptions({"ConfigurationToken": self._profile_token})
+            caps_resp = self._ptz.GetConfigurationOptions(
+                {"ConfigurationToken": self._profile_token}
+            )
             has_abs = caps_resp.Spaces is not None
         except Exception:
             has_abs = False
@@ -115,11 +118,13 @@ class ONVIFPTZBackend(PTZBackend):
 
     def stop(self) -> None:
         try:
-            self._ptz.Stop({
-                "ProfileToken": self._profile_token,
-                "PanTilt": True,
-                "Zoom": True,
-            })
+            self._ptz.Stop(
+                {
+                    "ProfileToken": self._profile_token,
+                    "PanTilt": True,
+                    "Zoom": True,
+                }
+            )
         except Exception:
             pass
 

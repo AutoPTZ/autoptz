@@ -14,9 +14,9 @@ devices are touched.  Covers:
   error → command in the right direction; manual override suspends then resumes
   auto; ``stop()`` always halts the backend.
 """
+
 from __future__ import annotations
 
-import sys
 import time
 
 import numpy as np
@@ -30,7 +30,6 @@ from autoptz.engine.ptz.controller import (
     _ZOOM_FRAMING_TARGETS,
 )
 from autoptz.engine.ptz.factory import _split_host_port, build_backend
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fakes
@@ -110,8 +109,7 @@ class TestFactoryDispatch:
         seen: dict[str, object] = {}
         monkeypatch.setattr(
             "autoptz.engine.ptz.visca_ip.ViscaIPBackend",
-            lambda host, port, *a, **k: seen.update(host=host, port=port)
-            or RecordingBackend(),
+            lambda host, port, *a, **k: seen.update(host=host, port=port) or RecordingBackend(),
         )
         build_backend(_cfg(backend="visca_ip", address="cam.local"))
         assert seen["port"] == factory._DEFAULT_VISCA_IP_PORT
@@ -255,7 +253,8 @@ class TestFramingModel:
         assert PTZConfig().zoom_framing == "upper_body"
 
     @pytest.mark.parametrize(
-        "name", ["face", "head_shoulders", "upper_body", "full_body", "wide"],
+        "name",
+        ["face", "head_shoulders", "upper_body", "full_body", "wide"],
     )
     def test_five_named_presets_accepted(self, name) -> None:
         assert _cfg(zoom_framing=name).zoom_framing == name
@@ -282,10 +281,12 @@ class TestPresetSlotsModel:
         # coerce them back to int so the PTZ section maps slot index → preset.
         import json
 
-        cfg = _cfg(preset_slots={
-            0: {"label": "Stage", "thumbnail": "data:image/png;base64,AA=="},
-            3: {"label": "Podium", "thumbnail": None},
-        })
+        cfg = _cfg(
+            preset_slots={
+                0: {"label": "Stage", "thumbnail": "data:image/png;base64,AA=="},
+                3: {"label": "Podium", "thumbnail": None},
+            }
+        )
         restored = PTZConfig.model_validate(json.loads(cfg.model_dump_json()))
         assert restored.preset_slots[0].label == "Stage"
         assert restored.preset_slots[0].thumbnail == "data:image/png;base64,AA=="
@@ -310,10 +311,7 @@ class TestPresetSlotsModel:
 class TestFramingTargetMap:
     def test_ordering_tighter_is_larger_fraction(self) -> None:
         t = _ZOOM_FRAMING_TARGETS
-        assert (
-            t["face"] > t["head_shoulders"] > t["upper_body"]
-            > t["full_body"] > t["wide"]
-        )
+        assert t["face"] > t["head_shoulders"] > t["upper_body"] > t["full_body"] > t["wide"]
 
     def test_expected_values(self) -> None:
         t = _ZOOM_FRAMING_TARGETS
@@ -324,9 +322,7 @@ class TestFramingTargetMap:
         assert t["wide"] == pytest.approx(0.20)
 
     def test_default_target_matches_upper_body(self) -> None:
-        assert _DEFAULT_ZOOM_FRAMING_TARGET == pytest.approx(
-            _ZOOM_FRAMING_TARGETS["upper_body"]
-        )
+        assert _DEFAULT_ZOOM_FRAMING_TARGET == pytest.approx(_ZOOM_FRAMING_TARGETS["upper_body"])
 
     def test_controller_uses_named_target(self) -> None:
         from autoptz.engine.ptz.controller import PTZController
@@ -356,10 +352,12 @@ class TestFramingTargetMap:
 class TestViscaHomeMenuBytes:
     def test_home_cmd_bytes(self) -> None:
         from autoptz.engine.ptz.base import visca_home_cmd
+
         assert visca_home_cmd() == bytes([0x81, 0x01, 0x06, 0x04, 0xFF])
 
     def test_menu_cmd_bytes(self) -> None:
         from autoptz.engine.ptz.base import visca_menu_cmd
+
         assert visca_menu_cmd() == bytes([0x81, 0x01, 0x06, 0x06, 0x10, 0xFF])
 
 
@@ -424,16 +422,17 @@ class TestBackendHomeMenuDefaults:
 
 def _bbox(x1, y1, x2, y2):
     from autoptz.engine.runtime.messages import BBox
+
     return BBox(x1=x1, y1=y1, x2=x2, y2=y2)
 
 
 def _track(track_id, bbox):
     from autoptz.engine.runtime.messages import TrackInfo
+
     return TrackInfo(track_id=track_id, bbox=bbox)
 
 
-def _worker(camera_id="ptzcam0xabcd", *, ptz_backend=None, ptz_controller=None,
-            mode="manual"):
+def _worker(camera_id="ptzcam0xabcd", *, ptz_backend=None, ptz_controller=None, mode="manual"):
     from autoptz.config.models import (
         CameraConfig,
         PTZConfig,
@@ -446,14 +445,25 @@ def _worker(camera_id="ptzcam0xabcd", *, ptz_backend=None, ptz_controller=None,
         id=camera_id,
         name="PTZ Cam",
         source=SourceConfig(type="usb", address="usb://0"),
-        ptz=PTZConfig(backend="visca_ip", address="cam.local",
-                      kp=1.0, kd=0.0, kv=0.0, deadzone_x=0.0, deadzone_y=0.0,
-                      max_pan_speed=1.0, max_tilt_speed=1.0),
+        ptz=PTZConfig(
+            backend="visca_ip",
+            address="cam.local",
+            kp=1.0,
+            kd=0.0,
+            kv=0.0,
+            deadzone_x=0.0,
+            deadzone_y=0.0,
+            max_pan_speed=1.0,
+            max_tilt_speed=1.0,
+        ),
         target=TargetConfig(mode=mode),
     )
     return CameraWorker(
-        camera_id, cfg, lambda m: None,
-        ptz_backend=ptz_backend, ptz_controller=ptz_controller,
+        camera_id,
+        cfg,
+        lambda m: None,
+        ptz_backend=ptz_backend,
+        ptz_controller=ptz_controller,
     )
 
 
@@ -482,6 +492,7 @@ class TestWorkerManualNudge:
 class TestWorkerAutoControl:
     def _ctrl_worker(self, backend):
         from autoptz.engine.ptz.controller import PTZController
+
         w = _worker(ptz_backend=backend, mode="manual")
         # Wire a real controller around the recording backend.
         w._ptz = PTZController(backend, w.config.ptz)
@@ -540,6 +551,7 @@ class TestWorkerAutoControl:
 
     def test_auto_no_target_drives_idle_then_stops(self) -> None:
         from autoptz.engine.ptz.controller import ControllerState, PTZController
+
         backend = RecordingBackend()
         w = _worker(ptz_backend=backend, mode="manual")
         w._ptz = PTZController(backend, w.config.ptz, coast_window_ms=0)
@@ -550,8 +562,8 @@ class TestWorkerAutoControl:
 
         # Acquire then lose the target → controller coasts → searches → stops.
         w._drive_ptz_auto([_track(7, _bbox(800, 300, 900, 500))], frame, now=0.0)
-        w._drive_ptz_auto([], frame, now=0.1)   # lost → coast
-        w._drive_ptz_auto([], frame, now=0.2)   # coast window 0 → searching/stop
+        w._drive_ptz_auto([], frame, now=0.1)  # lost → coast
+        w._drive_ptz_auto([], frame, now=0.2)  # coast window 0 → searching/stop
         assert w._ptz.state in (ControllerState.SEARCHING, ControllerState.COASTING)
 
 
@@ -592,6 +604,7 @@ class TestWorkerStopHaltsBackend:
 
     def test_close_resources_closes_owned_controller(self) -> None:
         from autoptz.engine.ptz.controller import PTZController
+
         backend = RecordingBackend()
         w = _worker(ptz_backend=None)
         w._ptz = PTZController(backend, w.config.ptz)

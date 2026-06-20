@@ -37,6 +37,7 @@ disappearance (sleep/lock) shows up as ``read()`` returning ``(False, None)``
 indefinitely → the adapter's stall timer fires and triggers a reconnect, at
 which point we rebind by ``uniqueID``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -133,9 +134,9 @@ def ensure_camera_access(timeout: float = 30.0) -> bool:
 
         media = AVFoundation.AVMediaTypeVideo
         status = AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(media)
-        if status == 3:          # AVAuthorizationStatusAuthorized
+        if status == 3:  # AVAuthorizationStatusAuthorized
             return True
-        if status in (1, 2):     # restricted / denied
+        if status in (1, 2):  # restricted / denied
             log.warning(
                 "Camera access is %s — grant it in System Settings › Privacy & "
                 "Security › Camera, then restart, for live video.",
@@ -156,7 +157,8 @@ def ensure_camera_access(timeout: float = 30.0) -> bool:
                     _ACCESS_EVENT.set()
 
                 AVFoundation.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
-                    media, _handler,
+                    media,
+                    _handler,
                 )
         _ACCESS_EVENT.wait(timeout)
         return bool(_ACCESS_RESULT)
@@ -188,9 +190,7 @@ def _make_dispatch_queue(label: bytes):  # noqa: ANN202 — opaque dispatch obje
 
         import objc  # type: ignore  # noqa: PLC0415
 
-        lib = ctypes.CDLL(
-            ctypes.util.find_library("System") or "/usr/lib/libSystem.B.dylib"
-        )
+        lib = ctypes.CDLL(ctypes.util.find_library("System") or "/usr/lib/libSystem.B.dylib")
         lib.dispatch_queue_create.restype = ctypes.c_void_p
         lib.dispatch_queue_create.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
         raw = lib.dispatch_queue_create(label, None)
@@ -216,8 +216,7 @@ def _device_for_unique_id(unique_id: str):  # noqa: ANN202 — PyObjC opaque typ
         dev = AVFoundation.AVCaptureDevice.deviceWithUniqueID_(unique_id)
         return dev  # may be None when absent
     except Exception:  # noqa: BLE001
-        log.debug("AVFoundation deviceWithUniqueID_ failed for %s",
-                  unique_id, exc_info=True)
+        log.debug("AVFoundation deviceWithUniqueID_ failed for %s", unique_id, exc_info=True)
         return None
 
 
@@ -270,8 +269,7 @@ class AVFCapture:
         try:
             return self._open_impl()
         except Exception as exc:  # noqa: BLE001 — opening must never crash ingest
-            log.warning("AVFCapture open failed for uniqueID=%s: %s",
-                        self._unique_id, exc)
+            log.warning("AVFCapture open failed for uniqueID=%s: %s", self._unique_id, exc)
             self.release()
             return False
 
@@ -282,8 +280,7 @@ class AVFCapture:
 
         # Without camera authorization the session starts but delivers no frames.
         if not ensure_camera_access():
-            log.warning("AVFCapture: no camera access — cannot open %s.",
-                        self._unique_id)
+            log.warning("AVFCapture: no camera access — cannot open %s.", self._unique_id)
             return False
 
         device = _device_for_unique_id(self._unique_id)
@@ -293,19 +290,16 @@ class AVFCapture:
 
         # Build the capture input from the device.
         error = objc.nil
-        dev_input, error = (
-            AVFoundation.AVCaptureDeviceInput
-            .deviceInputWithDevice_error_(device, None)
+        dev_input, error = AVFoundation.AVCaptureDeviceInput.deviceInputWithDevice_error_(
+            device, None
         )
         if dev_input is None:
-            log.warning("AVFCapture: cannot create input for %s (%s)",
-                        self._unique_id, error)
+            log.warning("AVFCapture: cannot create input for %s (%s)", self._unique_id, error)
             return False
 
         session = AVFoundation.AVCaptureSession.alloc().init()
         if not session.canAddInput_(dev_input):
-            log.warning("AVFCapture: session cannot add input for %s",
-                        self._unique_id)
+            log.warning("AVFCapture: session cannot add input for %s", self._unique_id)
             return False
         session.addInput_(dev_input)
 
@@ -313,6 +307,7 @@ class AVFCapture:
         output = AVFoundation.AVCaptureVideoDataOutput.alloc().init()
         try:
             from Quartz import kCVPixelBufferPixelFormatTypeKey  # type: ignore  # noqa: PLC0415
+
             pixel_key = kCVPixelBufferPixelFormatTypeKey
         except Exception:  # noqa: BLE001 — fall back to the string key name
             pixel_key = "PixelFormatType"
@@ -321,8 +316,7 @@ class AVFCapture:
         output.setAlwaysDiscardsLateVideoFrames_(True)
 
         if not session.canAddOutput_(output):
-            log.warning("AVFCapture: session cannot add output for %s",
-                        self._unique_id)
+            log.warning("AVFCapture: session cannot add output for %s", self._unique_id)
             return False
         session.addOutput_(output)
 
@@ -330,8 +324,7 @@ class AVFCapture:
         delegate = _build_delegate(NSObject, self)
         queue = _make_dispatch_queue(b"autoptz.avf.capture")
         if queue is None:
-            log.warning("AVFCapture: could not create a dispatch queue for %s",
-                        self._unique_id)
+            log.warning("AVFCapture: could not create a dispatch queue for %s", self._unique_id)
             return False
         output.setSampleBufferDelegate_queue_(delegate, queue)
 
@@ -357,13 +350,17 @@ class AVFCapture:
                 "AVFCapture: session for uniqueID=%s started but delivered no "
                 "frame within %.1fs (camera in use elsewhere, or access not "
                 "granted?) — will retry.",
-                self._unique_id, _FIRST_FRAME_TIMEOUT,
+                self._unique_id,
+                _FIRST_FRAME_TIMEOUT,
             )
             self.release()
             return False
 
-        log.info("AVFCapture opened uniqueID=%s (%s) — first frame OK",
-                 self._unique_id, _safe_name(device))
+        log.info(
+            "AVFCapture opened uniqueID=%s (%s) — first frame OK",
+            self._unique_id,
+            _safe_name(device),
+        )
         return True
 
     def _detect_fps(self, device: object) -> None:
@@ -476,13 +473,15 @@ def _build_delegate(nsobject_base: object, owner: AVFCapture):  # noqa: ANN202
                     return self
 
                 def captureOutput_didOutputSampleBuffer_fromConnection_(  # noqa: N802
-                    self, _output, sample_buffer, _connection,
+                    self,
+                    _output,
+                    sample_buffer,
+                    _connection,
                 ) -> None:
                     try:
                         frame = _sample_buffer_to_bgr(sample_buffer)
                     except Exception:  # noqa: BLE001 — never raise into AVF runtime
-                        log.debug("AVFCapture: sample-buffer decode failed",
-                                  exc_info=True)
+                        log.debug("AVFCapture: sample-buffer decode failed", exc_info=True)
                         return
                     if frame is not None and self._owner is not None:
                         self._owner._on_sample_buffer(frame)
@@ -522,8 +521,7 @@ def _sample_buffer_to_bgr(sample_buffer) -> NDArray[np.uint8] | None:  # noqa: A
         n = bytes_per_row * height
         flat = _base_to_uint8(base, n)
         if flat is None:
-            _log_decode_once(False, "no buffer strategy worked for base=%r"
-                             % type(base).__name__)
+            _log_decode_once(False, f"no buffer strategy worked for base={type(base).__name__!r}")
             return None
         rows = flat.reshape((height, bytes_per_row))
         bgra = rows[:, : width * 4].reshape((height, width, 4))
@@ -575,8 +573,7 @@ def _log_decode_once(ok: bool, detail: str) -> None:
     if ok:
         log.info("AVFCapture: first frame decoded (%s)", detail)
     else:
-        log.warning("AVFCapture: frame decode FAILED (%s) — will fall back to "
-                    "OpenCV", detail)
+        log.warning("AVFCapture: frame decode FAILED (%s) — will fall back to OpenCV", detail)
 
 
 def _safe_name(device: object) -> str:

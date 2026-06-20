@@ -5,6 +5,7 @@ Regression guard for the double-pacing bug where the worker slept a full
 roughly halving the delivered rate (slider 30 → ~15, 15 → ~10).  These tests
 drive the pacer with a fake clock so the timing is deterministic.
 """
+
 from __future__ import annotations
 
 import numpy as np

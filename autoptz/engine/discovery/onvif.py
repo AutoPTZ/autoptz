@@ -17,6 +17,7 @@ manually via RTSP URL).
 Callbacks receive ``("added"|"removed", ONVIFDevice)`` from the discovery
 thread — do not do heavy work inside them.
 """
+
 from __future__ import annotations
 
 import logging
@@ -40,7 +41,7 @@ class ONVIFDevice:
     """Immutable description of one ONVIF device found via WS-Discovery."""
 
     xaddrs: tuple[str, ...]  # ONVIF service endpoint URLs
-    types: tuple[str, ...]   # WS-Discovery device types
+    types: tuple[str, ...]  # WS-Discovery device types
     scopes: tuple[str, ...]  # WS-Discovery scopes (contain make/model hints)
 
     @property
@@ -70,8 +71,8 @@ class ONVIFDiscovery:
     def __init__(self, rescan_interval: float = 30.0) -> None:
         self._rescan_interval = rescan_interval
         self._callbacks: list[ONVIFCallback] = []
-        self._known: dict[str, ONVIFDevice] = {}   # key → device
-        self._misses: dict[str, int] = {}           # key → missed scan count
+        self._known: dict[str, ONVIFDevice] = {}  # key → device
+        self._misses: dict[str, int] = {}  # key → missed scan count
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -99,13 +100,9 @@ class ONVIFDiscovery:
             return
 
         self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run, name="onvif-discovery", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="onvif-discovery", daemon=True)
         self._thread.start()
-        log.info(
-            "ONVIFDiscovery started (rescan_interval=%.0f s)", self._rescan_interval
-        )
+        log.info("ONVIFDiscovery started (rescan_interval=%.0f s)", self._rescan_interval)
 
     def stop(self) -> None:
         """Stop the discovery thread."""
@@ -178,7 +175,8 @@ class ONVIFDiscovery:
                 if is_new:
                     log.info(
                         "ONVIFDiscovery: device added host=%r xaddr=%r",
-                        device.host, device.primary_xaddr,
+                        device.host,
+                        device.primary_xaddr,
                     )
                     self._fire("added", device)
 

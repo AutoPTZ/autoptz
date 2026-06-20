@@ -1,4 +1,5 @@
 """Unit tests for autoptz.engine.runtime.shm."""
+
 from __future__ import annotations
 
 import time
@@ -60,8 +61,8 @@ class TestShmWriterReader:
         with ShmWriter(name, H, W, C) as w:
             w.push(frame)
             with ShmReader(name, H, W, C) as r:
-                r.latest()             # consume seq 0
-                result = r.latest()    # same seq → None
+                r.latest()  # consume seq 0
+                result = r.latest()  # same seq → None
 
         assert result is None
 
@@ -70,7 +71,7 @@ class TestShmWriterReader:
         name = _unique_name()
 
         with ShmWriter(name, H, W, C), ShmReader(name, H, W, C) as r:
-            result = r.latest()   # nothing pushed yet
+            result = r.latest()  # nothing pushed yet
 
         assert result is None
 

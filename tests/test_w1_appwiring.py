@@ -9,14 +9,13 @@ Covers the Python app-wiring contracts exposed to QML:
 
 All tests use QCoreApplication (no display) so they run in CI.
 """
+
 from __future__ import annotations
 
 import sys
 
-import pytest
-
 import PySide6  # noqa: F401
-
+import pytest
 
 # ── one QCoreApplication for the whole module ─────────────────────────────────
 
@@ -24,6 +23,7 @@ import PySide6  # noqa: F401
 @pytest.fixture(scope="module")
 def qapp():
     from PySide6.QtCore import QCoreApplication
+
     existing = QCoreApplication.instance()
     if existing is not None:
         yield existing
@@ -35,6 +35,7 @@ def qapp():
 @pytest.fixture()
 def store(tmp_path):
     from autoptz.config.store import ConfigStore
+
     s = ConfigStore(db_path=tmp_path / "w1.db", debounce_s=0.0)
     yield s
     s.close()
@@ -42,6 +43,7 @@ def store(tmp_path):
 
 def _client(store=None):
     from autoptz.ui.engine_client import EngineClient
+
     return EngineClient(store=store)
 
 
@@ -118,18 +120,12 @@ class TestOptionalComponentState:
     def test_ignore_state_round_trips_per_component(self, qapp, store) -> None:
         client = _client(store=store)
         client.setOptionalComponentIgnored("reid", True)
-        ignored = {
-            row["key"]: row["ignored"]
-            for row in client.optionalComponents()
-        }
+        ignored = {row["key"]: row["ignored"] for row in client.optionalComponents()}
         assert ignored["reid"] is True
         assert ignored.get("pose", False) is False
 
         client.setOptionalComponentIgnored("reid", False)
-        ignored = {
-            row["key"]: row["ignored"]
-            for row in client.optionalComponents()
-        }
+        ignored = {row["key"]: row["ignored"] for row in client.optionalComponents()}
         assert ignored["reid"] is False
 
 
@@ -144,22 +140,38 @@ def _patch_enumerate(monkeypatch, devices):
 
 class TestScanUSBCameras:
     def test_shape_and_continuity_label(self, qapp, monkeypatch) -> None:
-        _patch_enumerate(monkeypatch, [
-            {"name": "FaceTime HD", "unique_id": "uid-builtin", "index": 0, "is_continuity": False},
-            {"name": "iPhone", "unique_id": "uid-phone", "index": 1, "is_continuity": True},
-        ])
+        _patch_enumerate(
+            monkeypatch,
+            [
+                {
+                    "name": "FaceTime HD",
+                    "unique_id": "uid-builtin",
+                    "index": 0,
+                    "is_continuity": False,
+                },
+                {"name": "iPhone", "unique_id": "uid-phone", "index": 1, "is_continuity": True},
+            ],
+        )
         client = _client()
         rows = client.scanUSBCameras()
 
         assert len(rows) == 2
         for row in rows:
             assert set(row.keys()) == {
-                "name", "uri", "unique_id", "in_use", "is_continuity", "source_label",
+                "name",
+                "uri",
+                "unique_id",
+                "in_use",
+                "is_continuity",
+                "source_label",
             }
 
         assert rows[0] == {
-            "name": "FaceTime HD", "uri": "usb://0",
-            "unique_id": "uid-builtin", "in_use": False, "is_continuity": False,
+            "name": "FaceTime HD",
+            "uri": "usb://0",
+            "unique_id": "uid-builtin",
+            "in_use": False,
+            "is_continuity": False,
             "source_label": "USB",
         }
         # Continuity Camera gets a label + the flag (drives the menu tooltip).
@@ -209,13 +221,17 @@ class TestScanUSBCameras:
 
     def test_names_are_plain_strings(self, qapp, monkeypatch) -> None:
         """QML must only ever see plain-string names — never objects/functions."""
+
         class Weird:
             def __str__(self) -> str:
                 return "Weird Cam"
 
-        _patch_enumerate(monkeypatch, [
-            {"name": Weird(), "unique_id": "uid-x", "index": 0, "is_continuity": False},
-        ])
+        _patch_enumerate(
+            monkeypatch,
+            [
+                {"name": Weird(), "unique_id": "uid-x", "index": 0, "is_continuity": False},
+            ],
+        )
         client = _client()
         rows = client.scanUSBCameras()
         assert len(rows) == 1
@@ -254,10 +270,12 @@ class TestAddCameraUniqueId:
 class TestSourceConfigField:
     def test_unique_id_default_none(self) -> None:
         from autoptz.config.models import SourceConfig
+
         assert SourceConfig().unique_id is None
 
     def test_unique_id_round_trips_json(self) -> None:
         from autoptz.config.models import SourceConfig
+
         src = SourceConfig(type="usb", address="usb://0", unique_id="uid-X")
         restored = SourceConfig.model_validate_json(src.model_dump_json())
         assert restored.unique_id == "uid-X"

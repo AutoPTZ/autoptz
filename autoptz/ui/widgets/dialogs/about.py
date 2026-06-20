@@ -1,11 +1,11 @@
 """AboutDialog — app identity, version, author, inference EP, and profile links."""
+
 from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -46,7 +46,8 @@ class AboutDialog(QDialog):
         )
         col.addWidget(mark, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        name = QLabel("AutoPTZ"); name.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        name = QLabel("AutoPTZ")
+        name.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         name.setStyleSheet("font-size: 22px; font-weight: 700;")
         col.addWidget(name)
         sub = QLabel("AI-driven PTZ camera tracking")
@@ -79,6 +80,7 @@ class AboutDialog(QDialog):
         col.addLayout(form)
 
         col.addSpacing(8)
-        close = QPushButton("Close"); close.setProperty("accent", True)
+        close = QPushButton("Close")
+        close.setProperty("accent", True)
         close.clicked.connect(self.accept)
         col.addWidget(close, 0, Qt.AlignmentFlag.AlignHCenter)

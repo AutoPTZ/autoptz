@@ -8,6 +8,7 @@ Preset memory, zoom, and pan/tilt all use standard VISCA serial commands wrapped
 in the chosen transport framing.  Position inquiry (InqPanTiltPos) is issued on
 get_position() for cameras that answer it; others return None.
 """
+
 from __future__ import annotations
 
 import logging
@@ -138,7 +139,9 @@ class ViscaIPBackend(PTZBackend):
         zoom_n = 0.0
         if zoom_resp is not None and len(zoom_resp) >= 7 and zoom_resp[0] == 0x90:
             try:
-                z_raw = (zoom_resp[2] << 12) | (zoom_resp[3] << 8) | (zoom_resp[4] << 4) | zoom_resp[5]
+                z_raw = (
+                    (zoom_resp[2] << 12) | (zoom_resp[3] << 8) | (zoom_resp[4] << 4) | zoom_resp[5]
+                )
                 zoom_n = _clamp(z_raw / 0x4000, 0.0, 1.0)
             except Exception:
                 pass

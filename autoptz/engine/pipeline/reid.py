@@ -19,6 +19,7 @@ we re-bind the *correct* track instead of locking onto an interloper.
 This module is appearance-only; track lifecycle stays in
 ``autoptz.engine.pipeline.track``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -52,7 +53,7 @@ class _Template:
     """EMA appearance template for the locked target."""
 
     vec: NDArray[np.float32]
-    ema: float = 0.6   # weight of the existing template when updating
+    ema: float = 0.6  # weight of the existing template when updating
 
     def update(self, new: NDArray[np.floating]) -> None:
         n = _normalize(new)
@@ -129,7 +130,9 @@ class BodyReID:
             )
 
             self._backend = ReidAutoBackend(
-                weights=name, device=device, half=False,
+                weights=name,
+                device=device,
+                half=False,
             ).model
             self._new_api = False
             self._available = True
@@ -199,7 +202,8 @@ class BodyReID:
             self._template.update(embedding)
 
     def recover(
-        self, candidates: NDArray[np.float32],
+        self,
+        candidates: NDArray[np.float32],
     ) -> ReIDResult:
         """Pick the candidate body crop that best matches the target template.
 
@@ -219,5 +223,8 @@ class BodyReID:
             self._template.update(candidates[best_i])
             self._locked = True
         return ReIDResult(
-            matched=matched, best_score=best, best_index=best_i, scores=scores,
+            matched=matched,
+            best_score=best,
+            best_index=best_i,
+            scores=scores,
         )

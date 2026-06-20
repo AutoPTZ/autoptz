@@ -1,4 +1,5 @@
 """Unit tests for autoptz.engine.runtime.messages."""
+
 from __future__ import annotations
 
 import time
@@ -20,6 +21,7 @@ from autoptz.engine.runtime.messages import (
     PtzNudgeCmd,
     PtzSavePresetCmd,
     PTZState,
+    QualityStateInfo,
     RemoveCameraCmd,
     RuntimeEventInfo,
     RuntimeServiceInfo,
@@ -29,7 +31,6 @@ from autoptz.engine.runtime.messages import (
     SwitchStateInfo,
     TelemetryMsg,
     TrackInfo,
-    QualityStateInfo,
 )
 
 
@@ -101,7 +102,11 @@ class TestTelemetryMsg:
 
     def test_camera_info_fields_round_trip(self) -> None:
         msg = TelemetryMsg(
-            camera_id="c", seq=1, width=1920, height=1080, dropped_frames=7,
+            camera_id="c",
+            seq=1,
+            width=1920,
+            height=1080,
+            dropped_frames=7,
         )
         restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
         assert restored.width == 1920
@@ -117,8 +122,13 @@ class TestTelemetryMsg:
         """Per-stage costs (incl. the new face/pose) survive msgpack — they feed
         the tile "?" badge + Camera Info Performance section."""
         msg = TelemetryMsg(
-            camera_id="c", seq=1, ingest_ms=2.0, detect_ms=8.5,
-            track_ms=1.2, face_ms=13.0, pose_ms=4.5,
+            camera_id="c",
+            seq=1,
+            ingest_ms=2.0,
+            detect_ms=8.5,
+            track_ms=1.2,
+            face_ms=13.0,
+            pose_ms=4.5,
         )
         restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
         assert restored.ingest_ms == 2.0
@@ -134,32 +144,50 @@ class TestTelemetryMsg:
             frame_budget_ms=33.333,
             runtime_services=[
                 RuntimeServiceInfo(
-                    key="detector", name="Detector", scope="global",
-                    state="active", model="yolo11s.onnx", tier="balanced",
+                    key="detector",
+                    name="Detector",
+                    scope="global",
+                    state="active",
+                    model="yolo11s.onnx",
+                    tier="balanced",
                     ep="CoreMLExecutionProvider",
                 ),
             ],
             stage_timings=[
                 StageTimingInfo(
-                    key="detect", name="Detector", status="active",
-                    last_ms=12.0, avg_ms=10.0, p95_ms=15.0,
-                    cadence="every frame", fresh=True, budget_pct=30.0,
+                    key="detect",
+                    name="Detector",
+                    status="active",
+                    last_ms=12.0,
+                    avg_ms=10.0,
+                    p95_ms=15.0,
+                    cadence="every frame",
+                    fresh=True,
+                    budget_pct=30.0,
                 ),
             ],
             quality_state=QualityStateInfo(
-                floor="auto", active="balanced",
+                floor="auto",
+                active="balanced",
                 reason="latency headroom stable",
-                detector_tier="balanced", detector_model="yolo11s.onnx",
-                tracker="botsort", detect_interval=2,
+                detector_tier="balanced",
+                detector_model="yolo11s.onnx",
+                tracker="botsort",
+                detect_interval=2,
             ),
             model_switch=SwitchStateInfo(
-                kind="detector", state="active",
-                from_value="fast", to_value="balanced",
-                active_value="balanced", reason="ready",
+                kind="detector",
+                state="active",
+                from_value="fast",
+                to_value="balanced",
+                active_value="balanced",
+                reason="ready",
             ),
             tracker_switch=SwitchStateInfo(
-                kind="tracker", state="active",
-                from_value="bytetrack", to_value="botsort",
+                kind="tracker",
+                state="active",
+                from_value="bytetrack",
+                to_value="botsort",
                 active_value="botsort",
             ),
             runtime_events=[RuntimeEventInfo(kind="detector", message="ready")],
@@ -179,9 +207,11 @@ class TestTelemetryMsg:
     def test_overlay_payloads_round_trip(self) -> None:
         """Face boxes + target pose keypoints survive msgpack for the overlays."""
         msg = TelemetryMsg(
-            camera_id="c", seq=1, width=1280, height=720,
-            faces=[FaceBox(bbox=BBox(x1=30, y1=25, x2=70, y2=65),
-                           identity="Alice", score=0.82)],
+            camera_id="c",
+            seq=1,
+            width=1280,
+            height=720,
+            faces=[FaceBox(bbox=BBox(x1=30, y1=25, x2=70, y2=65), identity="Alice", score=0.82)],
             pose=[PoseKeypoint(x=50.0, y=60.0, conf=0.9) for _ in range(17)],
         )
         restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
@@ -200,9 +230,18 @@ class TestTelemetryMsg:
     def test_track_lost_and_velocity_round_trip(self) -> None:
         """The lost flag + velocity (for the prediction indicator) survive msgpack."""
         msg = TelemetryMsg(
-            camera_id="c", seq=1,
-            tracks=[TrackInfo(track_id=3, bbox=BBox(x1=1, y1=2, x2=3, y2=4),
-                              lost=True, vx=5.5, vy=-2.0, is_target=True)],
+            camera_id="c",
+            seq=1,
+            tracks=[
+                TrackInfo(
+                    track_id=3,
+                    bbox=BBox(x1=1, y1=2, x2=3, y2=4),
+                    lost=True,
+                    vx=5.5,
+                    vy=-2.0,
+                    is_target=True,
+                )
+            ],
         )
         restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
         t = restored.tracks[0]
@@ -211,11 +250,20 @@ class TestTelemetryMsg:
 
     def test_track_aim_round_trip(self) -> None:
         msg = TelemetryMsg(
-            camera_id="c", seq=1, width=640, height=480,
-            tracks=[TrackInfo(
-                track_id=3, bbox=BBox(x1=10, y1=20, x2=110, y2=220),
-                is_target=True, aim_x=70.0, aim_y=90.0, aim_source="pose",
-            )],
+            camera_id="c",
+            seq=1,
+            width=640,
+            height=480,
+            tracks=[
+                TrackInfo(
+                    track_id=3,
+                    bbox=BBox(x1=10, y1=20, x2=110, y2=220),
+                    is_target=True,
+                    aim_x=70.0,
+                    aim_y=90.0,
+                    aim_source="pose",
+                )
+            ],
         )
         restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
         t = restored.tracks[0]
@@ -284,8 +332,11 @@ class TestCommands:
 
     def test_enroll_identity(self) -> None:
         cmd = EnrollIdentityCmd(
-            camera_id="cam-1", identity_name="Bob", track_id=3,
-            click_x=0.25, click_y=0.75,
+            camera_id="cam-1",
+            identity_name="Bob",
+            track_id=3,
+            click_x=0.25,
+            click_y=0.75,
         )
         restored = EnrollIdentityCmd.from_msgpack(cmd.to_msgpack())
         assert restored.kind == CmdKind.ENROLL_IDENTITY

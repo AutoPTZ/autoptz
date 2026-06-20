@@ -17,6 +17,7 @@ Interactions drive ``EngineClient`` slots:
 Manual PTZ controls and quick-recall presets now live in the Properties → PTZ
 section, so the tile overlay is intentionally lean: target, track, stop, clear.
 """
+
 from __future__ import annotations
 
 import logging
@@ -59,21 +60,46 @@ _FB_CENTER_SNAP = 0.04
 # The 8 resize handles, as (name, x-sign, y-sign) where sign ∈ {-1,0,1} relative
 # to the box centre.  Corners drive both axes; edges drive one.
 _FB_HANDLES = (
-    ("nw", -1, -1), ("n", 0, -1), ("ne", 1, -1), ("e", 1, 0),
-    ("se", 1, 1), ("s", 0, 1), ("sw", -1, 1), ("w", -1, 0),
+    ("nw", -1, -1),
+    ("n", 0, -1),
+    ("ne", 1, -1),
+    ("e", 1, 0),
+    ("se", 1, 1),
+    ("s", 0, 1),
+    ("sw", -1, 1),
+    ("w", -1, 0),
 )
 _FB_CURSORS = {
-    "nw": Qt.CursorShape.SizeFDiagCursor, "se": Qt.CursorShape.SizeFDiagCursor,
-    "ne": Qt.CursorShape.SizeBDiagCursor, "sw": Qt.CursorShape.SizeBDiagCursor,
-    "n": Qt.CursorShape.SizeVerCursor, "s": Qt.CursorShape.SizeVerCursor,
-    "e": Qt.CursorShape.SizeHorCursor, "w": Qt.CursorShape.SizeHorCursor,
+    "nw": Qt.CursorShape.SizeFDiagCursor,
+    "se": Qt.CursorShape.SizeFDiagCursor,
+    "ne": Qt.CursorShape.SizeBDiagCursor,
+    "sw": Qt.CursorShape.SizeBDiagCursor,
+    "n": Qt.CursorShape.SizeVerCursor,
+    "s": Qt.CursorShape.SizeVerCursor,
+    "e": Qt.CursorShape.SizeHorCursor,
+    "w": Qt.CursorShape.SizeHorCursor,
 }
 
 # COCO-17 skeleton edges (pairs of keypoint indices) for the pose overlay.
 _POSE_EDGES = (
-    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12),
-    (11, 13), (13, 15), (12, 14), (14, 16),
-    (0, 1), (0, 2), (1, 3), (2, 4), (0, 5), (0, 6),
+    (5, 6),
+    (5, 7),
+    (7, 9),
+    (6, 8),
+    (8, 10),
+    (5, 11),
+    (6, 12),
+    (11, 12),
+    (11, 13),
+    (13, 15),
+    (12, 14),
+    (14, 16),
+    (0, 1),
+    (0, 2),
+    (1, 3),
+    (2, 4),
+    (0, 5),
+    (0, 6),
 )
 # Arm limbs (shoulder→elbow→wrist) — hidden when "Ignore arms" is on, so the
 # skeleton visibly reflects that the aim/zoom is disregarding them.
@@ -90,11 +116,11 @@ _BOX_JUMP_FRAC = 0.22
 # velocity for the lead arrow + ghost box, plus gates that keep it calm.  Working
 # in seconds (not frames) makes the lead frame-rate independent; the persistence
 # + min-speed gates stop it flicking on detection jitter.
-_PREDICT_LEAD_S = 0.30          # project the aim ~0.3 s ahead
-_PREDICT_SMOOTH_A = 0.20        # EMA weight on the normalized aim velocity
-_PREDICT_MIN_SPEED = 0.05       # min normalized speed (fraction/s) before drawing
-_PREDICT_PERSIST = 3            # consecutive moving frames required before drawing
-_PREDICT_MIN_PX = 6.0           # and a floor in painted px so it never micro-jitters
+_PREDICT_LEAD_S = 0.30  # project the aim ~0.3 s ahead
+_PREDICT_SMOOTH_A = 0.20  # EMA weight on the normalized aim velocity
+_PREDICT_MIN_SPEED = 0.05  # min normalized speed (fraction/s) before drawing
+_PREDICT_PERSIST = 3  # consecutive moving frames required before drawing
+_PREDICT_MIN_PX = 6.0  # and a floor in painted px so it never micro-jitters
 _PREDICT_MAX_BOX_FACTOR = 0.85
 _REORDER_DRAG_PX = 8.0
 
@@ -102,12 +128,12 @@ _REORDER_DRAG_PX = 8.0
 class CameraTile(QWidget):
     """Live preview + HUD for one camera, addressed by stable ``camera_id``."""
 
-    selectedRequested = Signal(str)   # camera_id — background click (toggles selection)
+    selectedRequested = Signal(str)  # camera_id — background click (toggles selection)
     selectExclusiveRequested = Signal(str)  # camera_id — box click (selects, never toggles off)
-    infoRequested = Signal(str)       # camera_id — "Camera Info" chosen
-    renameRequested = Signal(str)     # camera_id — "Rename…" chosen
-    reorderDragStarted = Signal(str, object)   # camera_id, global QPoint
-    reorderDragMoved = Signal(str, object)     # camera_id, global QPoint
+    infoRequested = Signal(str)  # camera_id — "Camera Info" chosen
+    renameRequested = Signal(str)  # camera_id — "Rename…" chosen
+    reorderDragStarted = Signal(str, object)  # camera_id, global QPoint
+    reorderDragMoved = Signal(str, object)  # camera_id, global QPoint
     reorderDragFinished = Signal(str, object)  # camera_id, global QPoint
 
     def __init__(
@@ -123,7 +149,7 @@ class CameraTile(QWidget):
         self._model = client.cameraModel
         self._frames = frame_source
         self._selected = False
-        self._painted_rect = QRectF()   # where the video is drawn (overlay mapping)
+        self._painted_rect = QRectF()  # where the video is drawn (overlay mapping)
         # Framing-box drag state: the handle being dragged ("nw".."e"/None) and a
         # live (half_w, half_h) override applied while dragging (committed to the
         # camera config on release).
@@ -140,7 +166,7 @@ class CameraTile(QWidget):
         # Motion-prediction state, all in normalized [0,1] frame space so it's
         # resolution- and zoom-independent.  Driven by the framing-aware aim
         # point (not the raw detection box) so it stays calm and on-body.
-        self._pred_smooth: dict[int, tuple[float, float]] = {}   # smoothed vel /s
+        self._pred_smooth: dict[int, tuple[float, float]] = {}  # smoothed vel /s
         self._pred_prev: dict[int, tuple[float, float, float, int]] = {}  # ax, ay, ts, seq
         self._pred_hits: dict[int, int] = {}  # consecutive frames of real motion
         self._target_choices: list[tuple[str, str]] = [("Anyone", "")]
@@ -315,11 +341,7 @@ class CameraTile(QWidget):
 
     def _overlay_should_show(self, rec: Any | None = None) -> bool:
         rec = rec if rec is not None else self._record()
-        return (
-            self._hover
-            or self._selected
-            or _tracking_enabled(rec)
-        )
+        return self._hover or self._selected or _tracking_enabled(rec)
 
     def _follow_label(self, *, short: bool = False) -> str:
         return "Track"
@@ -480,18 +502,22 @@ class CameraTile(QWidget):
             return f"{f:.0f} fps"
 
         lines = [
-            f"Capture      {cap:.0f} fps   (ingest {ingest:.1f} ms)" if cap > 0
+            f"Capture      {cap:.0f} fps   (ingest {ingest:.1f} ms)"
+            if cap > 0
             else "Capture      — (no signal)",
             f"+ Detection  {eff(ingest + detect)}   (detect {detect:.1f} ms)"
-            if detect > 0 else "+ Detection  — (off / warming up)",
+            if detect > 0
+            else "+ Detection  — (off / warming up)",
             f"+ Face       {eff(ingest + detect + face)}   (face {face:.1f} ms)"
-            if face > 0 else "+ Face       — (off / not yet run)",
+            if face > 0
+            else "+ Face       — (off / not yet run)",
         ]
         # Source line: resolution + friendly source kind.
         src = {}
         try:
-            src = (rec.camera_config.source.model_dump()
-                   if getattr(rec, "camera_config", None) else {})
+            src = (
+                rec.camera_config.source.model_dump() if getattr(rec, "camera_config", None) else {}
+            )
         except Exception:  # noqa: BLE001
             src = {}
         w = int(getattr(tel, "width", 0) or 0) if tel else 0
@@ -570,7 +596,8 @@ class CameraTile(QWidget):
         ring = QRectF(4, 4, self.width() - 8, self.height() - 8)
         p.save()
         p.setBrush(Qt.BrushStyle.NoBrush)
-        glow = QColor(accent); glow.setAlphaF(0.28)
+        glow = QColor(accent)
+        glow.setAlphaF(0.28)
         p.setPen(QPen(glow, 6))
         p.drawRect(ring)
         p.setPen(QPen(accent, 2))
@@ -580,8 +607,10 @@ class CameraTile(QWidget):
         length, inset = 18.0, 4.0
         w, h = float(self.width()), float(self.height())
         for cx, cy, dx, dy in (
-            (inset, inset, 1, 1), (w - inset, inset, -1, 1),
-            (inset, h - inset, 1, -1), (w - inset, h - inset, -1, -1),
+            (inset, inset, 1, 1),
+            (w - inset, inset, -1, 1),
+            (inset, h - inset, 1, -1),
+            (w - inset, h - inset, -1, -1),
         ):
             p.drawLine(QPointF(cx, cy), QPointF(cx + dx * length, cy))
             p.drawLine(QPointF(cx, cy), QPointF(cx, cy + dy * length))
@@ -601,8 +630,7 @@ class CameraTile(QWidget):
             return None
         if self._fb_live is not None:
             return self._fb_live
-        return (float(getattr(ptz, "safe_zone_w", 0.15)),
-                float(getattr(ptz, "safe_zone_h", 0.22)))
+        return (float(getattr(ptz, "safe_zone_w", 0.15)), float(getattr(ptz, "safe_zone_h", 0.22)))
 
     def _framing_center(self, rec: Any) -> tuple[float, float]:
         """Return the framing-box centre offset in controller error coordinates."""
@@ -651,8 +679,7 @@ class CameraTile(QWidget):
         if box is None:
             return None
         for name, pt in self._framing_handle_points(box).items():
-            if (abs(pt.x() - pos.x()) <= _FB_HANDLE_HIT
-                    and abs(pt.y() - pos.y()) <= _FB_HANDLE_HIT):
+            if abs(pt.x() - pos.x()) <= _FB_HANDLE_HIT and abs(pt.y() - pos.y()) <= _FB_HANDLE_HIT:
                 return name
         return None
 
@@ -762,12 +789,14 @@ class CameraTile(QWidget):
         try:
             self._client.updateCameraConfigPatch(
                 self.camera_id,
-                {"ptz": {
-                    "safe_zone_x": round(cx, 4),
-                    "safe_zone_y": round(cy, 4),
-                    "safe_zone_w": round(hw, 4),
-                    "safe_zone_h": round(hh, 4),
-                }},
+                {
+                    "ptz": {
+                        "safe_zone_x": round(cx, 4),
+                        "safe_zone_y": round(cy, 4),
+                        "safe_zone_w": round(hw, 4),
+                        "safe_zone_h": round(hh, 4),
+                    }
+                },
             )
         except Exception:  # noqa: BLE001
             log.debug("framing-box persist failed", exc_info=True)
@@ -791,7 +820,9 @@ class CameraTile(QWidget):
         state = self._box_smooth.get(track_id)
         if state is None:
             self._box_smooth[track_id] = {
-                "seq": seq, "from": QRectF(target), "to": QRectF(target),
+                "seq": seq,
+                "from": QRectF(target),
+                "to": QRectF(target),
                 "start": now,
             }
             return QRectF(target)
@@ -803,7 +834,9 @@ class CameraTile(QWidget):
             if _rect_jump(drawn, target, self._painted_rect):
                 drawn = QRectF(target)
             state = {
-                "seq": seq, "from": QRectF(drawn), "to": QRectF(target),
+                "seq": seq,
+                "from": QRectF(drawn),
+                "to": QRectF(target),
                 "start": now,
             }
             self._box_smooth[track_id] = state
@@ -838,9 +871,15 @@ class CameraTile(QWidget):
         cy = (float(bb.get("y1", 0.0)) + float(bb.get("y2", 0.0))) * 0.5
         return cx, cy
 
-    def _paint_prediction(self, p: QPainter, t: dict[str, Any], rect: QRectF,
-                          color: QColor, origin: QPointF | None = None,
-                          seq: int = 0) -> None:
+    def _paint_prediction(
+        self,
+        p: QPainter,
+        t: dict[str, Any],
+        rect: QRectF,
+        color: QColor,
+        origin: QPointF | None = None,
+        seq: int = 0,
+    ) -> None:
         """Draw the motion-prediction indicator: a lead arrow + a ghost box.
 
         Driven by the framing-aware *aim point* (engine-smoothed, normalized),
@@ -874,13 +913,14 @@ class CameraTile(QWidget):
                 return
             a = _PREDICT_SMOOTH_A
             svx, svy = self._pred_smooth.get(tid, (0.0, 0.0))
-            svx += ((ax - px) / dt - svx) * a   # normalized fraction/s
+            svx += ((ax - px) / dt - svx) * a  # normalized fraction/s
             svy += ((ay - py) / dt - svy) * a
             self._pred_smooth[tid] = (svx, svy)
             # Persistence gate: only draw once motion is real and sustained.
             speed = (svx * svx + svy * svy) ** 0.5
-            self._pred_hits[tid] = (self._pred_hits.get(tid, 0) + 1
-                                    if speed >= _PREDICT_MIN_SPEED else 0)
+            self._pred_hits[tid] = (
+                self._pred_hits.get(tid, 0) + 1 if speed >= _PREDICT_MIN_SPEED else 0
+            )
         # else: a repaint between engine frames — reuse the last velocity/hits.
 
         if self._pred_hits.get(tid, 0) < _PREDICT_PERSIST:
@@ -893,6 +933,7 @@ class CameraTile(QWidget):
         if (dx * dx + dy * dy) < _PREDICT_MIN_PX * _PREDICT_MIN_PX:
             return
         import math
+
         length = math.hypot(dx, dy)
         max_len = max(18.0, max(rect.width(), rect.height()) * _PREDICT_MAX_BOX_FACTOR)
         if length > max_len:
@@ -905,7 +946,8 @@ class CameraTile(QWidget):
         p.save()
         # Ghost box where the subject is predicted to be.
         ghost = rect.translated(dx, dy)
-        gc = QColor(color); gc.setAlphaF(0.35)
+        gc = QColor(color)
+        gc.setAlphaF(0.35)
         p.setPen(QPen(gc, 1.3, Qt.PenStyle.DashLine))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(ghost)
@@ -974,8 +1016,9 @@ class CameraTile(QWidget):
             p.drawRect(rect)
             name = f.get("identity") or ""
             if name:
-                self._draw_label(p, rect.x(), rect.y() - 16, name, QColor(T.VIDEO_TEXT),
-                                 bg=QColor(T.FACE_BOX))
+                self._draw_label(
+                    p, rect.x(), rect.y() - 16, name, QColor(T.VIDEO_TEXT), bg=QColor(T.FACE_BOX)
+                )
         p.restore()
 
     def _paint_pose(self, p: QPainter, rec: Any) -> None:
@@ -989,9 +1032,11 @@ class CameraTile(QWidget):
             return
         r = self._painted_rect
         pts = [
-            (r.x() + k.get("x", 0.0) * r.width(),
-             r.y() + k.get("y", 0.0) * r.height(),
-             k.get("conf", 0.0))
+            (
+                r.x() + k.get("x", 0.0) * r.width(),
+                r.y() + k.get("y", 0.0) * r.height(),
+                k.get("conf", 0.0),
+            )
             for k in kps
         ]
         ignore_arms = _ignore_arms(rec)
@@ -1026,8 +1071,13 @@ class CameraTile(QWidget):
         p.drawRect(rect)
         ident = t.get("identity") or ""
         label = ident if ident else f"ID {t.get('track_id', '?')}"
-        self._draw_label(p, rect.x(), rect.y() - 18, label,
-                         QColor(T.WARNING) if ident else QColor(T.VIDEO_SUBTEXT))
+        self._draw_label(
+            p,
+            rect.x(),
+            rect.y() - 18,
+            label,
+            QColor(T.WARNING) if ident else QColor(T.VIDEO_SUBTEXT),
+        )
         p.restore()
 
     def _paint_target(self, p: QPainter, t: dict[str, Any], live: bool, seq: int) -> None:
@@ -1038,8 +1088,7 @@ class CameraTile(QWidget):
         p.save()
         # Lost/coasting → amber + dashed (clearly "searching", not actively
         # following).  Live-tracking the present target → red; locked-idle → green.
-        accent = (QColor(T.WARNING) if lost
-                  else QColor(T.ERROR) if live else QColor(T.TARGET))
+        accent = QColor(T.WARNING) if lost else QColor(T.ERROR) if live else QColor(T.TARGET)
         pen = QPen(accent, 2)
         if lost:
             pen.setStyle(Qt.PenStyle.DashLine)
@@ -1047,12 +1096,12 @@ class CameraTile(QWidget):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(rect)
         if not lost and live and self._overlays.get("prediction", False):
-            self._paint_prediction(p, t, rect, accent,
-                                   self._target_aim_point(t, rect), seq)
+            self._paint_prediction(p, t, rect, accent, self._target_aim_point(t, rect), seq)
         # PTZ aim dot (telemetry-smoothed aim point, not raw bbox/body debug).
         aim_pt = self._target_aim_point(t, rect)
         cx, cy = aim_pt.x(), aim_pt.y()
-        ring = QColor(accent); ring.setAlphaF(0.8)
+        ring = QColor(accent)
+        ring.setAlphaF(0.8)
         p.setPen(QPen(ring, 2.0))
         p.setBrush(QColor(accent))
         p.drawEllipse(QPointF(cx, cy), 4.5, 4.5)
@@ -1061,8 +1110,8 @@ class CameraTile(QWidget):
         # lock label — its pill matches the state; "searching" while coasting.
         conf = t.get("confidence")
         ident = t.get("identity") or f"ID {t.get('track_id', '?')}"
-        label = (f"Searching: {ident}" if lost else f"Target: {ident}")
-        if not lost and isinstance(conf, (int, float)) and conf > 0:
+        label = f"Searching: {ident}" if lost else f"Target: {ident}"
+        if not lost and isinstance(conf, int | float) and conf > 0:
             label += f"  {round(conf * 100)}%"
         self._draw_target_label(p, label, accent)
         p.restore()
@@ -1082,15 +1131,23 @@ class CameraTile(QWidget):
         n = min(rect.width(), rect.height()) * 0.22
         p.setPen(QPen(color, 3))
         x1, y1, x2, y2 = rect.left(), rect.top(), rect.right(), rect.bottom()
-        for (cx, cy, dx, dy) in (
-            (x1, y1, 1, 1), (x2, y1, -1, 1), (x1, y2, 1, -1), (x2, y2, -1, -1),
+        for cx, cy, dx, dy in (
+            (x1, y1, 1, 1),
+            (x2, y1, -1, 1),
+            (x1, y2, 1, -1),
+            (x2, y2, -1, -1),
         ):
             p.drawLine(QPointF(cx, cy), QPointF(cx + dx * n, cy))
             p.drawLine(QPointF(cx, cy), QPointF(cx, cy + dy * n))
 
     def _draw_label(
-        self, p: QPainter, x: float, y: float, text: str,
-        fg: QColor, bg: QColor | None = None,
+        self,
+        p: QPainter,
+        x: float,
+        y: float,
+        text: str,
+        fg: QColor,
+        bg: QColor | None = None,
     ) -> None:
         f = QFont(self.font())
         f.setPixelSize(11)
@@ -1108,8 +1165,11 @@ class CameraTile(QWidget):
         p.setBrush(bg if bg is not None else T.VIDEO_SCRIM)
         p.drawRoundedRect(rect, 4, 4)
         p.setPen(fg)
-        p.drawText(rect, Qt.AlignmentFlag.AlignCenter,
-                   fm.elidedText(text, Qt.TextElideMode.ElideRight, int(width - pad * 2)))
+        p.drawText(
+            rect,
+            Qt.AlignmentFlag.AlignCenter,
+            fm.elidedText(text, Qt.TextElideMode.ElideRight, int(width - pad * 2)),
+        )
 
     def _draw_target_label(self, p: QPainter, text: str, bg: QColor) -> None:
         """Draw the active target label as a readable tile chip, not a bbox chip."""
@@ -1132,18 +1192,27 @@ class CameraTile(QWidget):
         p.setBrush(bg)
         p.drawRoundedRect(rect, 5, 5)
         p.setPen(QColor(T.VIDEO_TEXT))
-        p.drawText(rect, Qt.AlignmentFlag.AlignCenter,
-                   fm.elidedText(text, Qt.TextElideMode.ElideRight, int(width - pad_x * 2)))
+        p.drawText(
+            rect,
+            Qt.AlignmentFlag.AlignCenter,
+            fm.elidedText(text, Qt.TextElideMode.ElideRight, int(width - pad_x * 2)),
+        )
 
     def _paint_name_pill(self, p: QPainter, rec: Any) -> None:
         name = getattr(rec, "display_name", "") or self.camera_id
         health = str(getattr(rec, "health", "ok"))
         streaming = bool(getattr(rec, "streaming", False))
-        dot = (QColor(T.TRACKING) if (streaming and health == "ok")
-               else QColor(T.WARNING) if health in ("reconnecting", "stalled")
-               else QColor(T.ERROR) if health == "error"
-               else QColor(T.VIDEO_SUBTEXT))
-        f = QFont(self.font()); f.setPixelSize(12)
+        dot = (
+            QColor(T.TRACKING)
+            if (streaming and health == "ok")
+            else QColor(T.WARNING)
+            if health in ("reconnecting", "stalled")
+            else QColor(T.ERROR)
+            if health == "error"
+            else QColor(T.VIDEO_SUBTEXT)
+        )
+        f = QFont(self.font())
+        f.setPixelSize(12)
         f.setWeight(QFont.Weight.DemiBold)
         p.setFont(f)
         fm = QFontMetrics(f)
@@ -1164,8 +1233,11 @@ class CameraTile(QWidget):
         p.setBrush(dot)
         p.drawEllipse(QPointF(rect.x() + 14, rect.center().y()), 4, 4)
         p.setPen(QColor(T.VIDEO_TEXT))
-        p.drawText(QRectF(rect.x() + 23, rect.y(), tw + 6, rect.height()),
-                   Qt.AlignmentFlag.AlignVCenter, name)
+        p.drawText(
+            QRectF(rect.x() + 23, rect.y(), tw + 6, rect.height()),
+            Qt.AlignmentFlag.AlignVCenter,
+            name,
+        )
 
     def _paint_fps_chip(self, p: QPainter, rec: Any) -> None:
         fps = float(getattr(rec, "fps", 0.0) or 0.0)
@@ -1175,9 +1247,16 @@ class CameraTile(QWidget):
             color = QColor(T.ERROR) if health == "error" else QColor(T.WARNING)
         else:
             text = f"{fps:.0f} fps"
-            color = (QColor(T.TRACKING) if fps > 20
-                     else QColor(T.WARNING) if fps > 10 else QColor(T.LOST))
-        f = QFont(self.font()); f.setPixelSize(10); f.setBold(True)
+            color = (
+                QColor(T.TRACKING)
+                if fps > 20
+                else QColor(T.WARNING)
+                if fps > 10
+                else QColor(T.LOST)
+            )
+        f = QFont(self.font())
+        f.setPixelSize(10)
+        f.setBold(True)
         p.setFont(f)
         fm = QFontMetrics(f)
         tw = fm.horizontalAdvance(text)
@@ -1199,7 +1278,9 @@ class CameraTile(QWidget):
             text = "⚠ ERROR"
         if not text:
             return
-        f = QFont(self.font()); f.setPixelSize(12); f.setBold(True)
+        f = QFont(self.font())
+        f.setPixelSize(12)
+        f.setBold(True)
         p.setFont(f)
         fm = QFontMetrics(f)
         tw = fm.horizontalAdvance(text)
@@ -1279,7 +1360,7 @@ class CameraTile(QWidget):
         if self._empty_press_pos is not None:
             dx = pos.x() - self._empty_press_pos.x()
             dy = pos.y() - self._empty_press_pos.y()
-            if not self._reorder_dragging and (dx * dx + dy * dy) >= (_REORDER_DRAG_PX ** 2):
+            if not self._reorder_dragging and (dx * dx + dy * dy) >= (_REORDER_DRAG_PX**2):
                 self._reorder_dragging = True
                 self.reorderDragStarted.emit(self.camera_id, self._empty_press_global)
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -1369,6 +1450,7 @@ class CameraTile(QWidget):
             name.setVisible(is_new)
             if is_new:
                 name.setFocus()
+
         combo.currentIndexChanged.connect(lambda *_: _sync())
         _sync()
 
@@ -1389,7 +1471,11 @@ class CameraTile(QWidget):
             if identity_id:
                 if click is not None:
                     self._client.assignTrackToIdentity(
-                        self.camera_id, identity_id, track_id, click[0], click[1],
+                        self.camera_id,
+                        identity_id,
+                        track_id,
+                        click[0],
+                        click[1],
                     )
                 else:
                     self._client.assignTrackToIdentity(self.camera_id, identity_id, track_id)
@@ -1398,7 +1484,11 @@ class CameraTile(QWidget):
                 if nm:
                     if click is not None:
                         self._client.enrollIdentity(
-                            self.camera_id, nm, track_id, click[0], click[1],
+                            self.camera_id,
+                            nm,
+                            track_id,
+                            click[0],
+                            click[1],
                         )
                     else:
                         self._client.enrollIdentity(self.camera_id, nm, track_id)
@@ -1406,7 +1496,9 @@ class CameraTile(QWidget):
             log.debug("assign identity failed", exc_info=True)
 
     def _enrollment_preview_pixmap(
-        self, track_id: int, click_pos: QPointF | None,
+        self,
+        track_id: int,
+        click_pos: QPointF | None,
     ) -> QPixmap | None:
         """Return a current face crop, falling back to upper-body track crop."""
         img = self._frames.latest_qimage(self.camera_id) if self._frames else None
@@ -1442,8 +1534,11 @@ class CameraTile(QWidget):
         if not candidates:
             return None
         if click is None:
-            return max(candidates, key=lambda b: (b.get("x2", 0.0) - b.get("x1", 0.0))
-                       * (b.get("y2", 0.0) - b.get("y1", 0.0)))
+            return max(
+                candidates,
+                key=lambda b: (b.get("x2", 0.0) - b.get("x1", 0.0))
+                * (b.get("y2", 0.0) - b.get("y1", 0.0)),
+            )
 
         def score(box: dict[str, float]) -> tuple[int, float]:
             x, y = click
@@ -1455,7 +1550,11 @@ class CameraTile(QWidget):
         return min(candidates, key=score)
 
     def _crop_preview(
-        self, img: Any, bbox: dict[str, float], *, pad: float,
+        self,
+        img: Any,
+        bbox: dict[str, float],
+        *,
+        pad: float,
     ) -> QPixmap | None:
         w, h = img.width(), img.height()
         x1 = float(bbox.get("x1", 0.0)) * w
@@ -1475,7 +1574,8 @@ class CameraTile(QWidget):
         if pix.isNull():
             return None
         return pix.scaled(
-            T.fs(300), T.fs(190),
+            T.fs(300),
+            T.fs(190),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
@@ -1637,7 +1737,10 @@ class CameraTile(QWidget):
     def _nudge(self, pan: int, tilt: int, zoom: int) -> None:
         try:
             self._client.ptzNudge(
-                self.camera_id, pan * _NUDGE_SPEED, tilt * _NUDGE_SPEED, zoom * _NUDGE_SPEED,
+                self.camera_id,
+                pan * _NUDGE_SPEED,
+                tilt * _NUDGE_SPEED,
+                zoom * _NUDGE_SPEED,
             )
         except Exception:  # noqa: BLE001
             log.debug("ptzNudge failed", exc_info=True)
@@ -1709,10 +1812,9 @@ def _snap_center_axis(value: float) -> float:
 
 
 def _norm_bbox_contains(box: dict[str, float], x: float, y: float) -> bool:
-    return (
-        float(box.get("x1", 0.0)) <= x <= float(box.get("x2", 0.0))
-        and float(box.get("y1", 0.0)) <= y <= float(box.get("y2", 0.0))
-    )
+    return float(box.get("x1", 0.0)) <= x <= float(box.get("x2", 0.0)) and float(
+        box.get("y1", 0.0)
+    ) <= y <= float(box.get("y2", 0.0))
 
 
 def _upper_body_bbox(box: dict[str, float]) -> dict[str, float]:

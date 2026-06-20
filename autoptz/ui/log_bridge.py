@@ -22,6 +22,7 @@ Wiring (done in ``app.py``)::
 The QML ``LogConsole`` (built by another agent) binds to the ``logModel``
 context property and reads the roles above.
 """
+
 from __future__ import annotations
 
 import logging
@@ -34,8 +35,8 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPersistentModelIndex,
-    QThread,
     Qt,
+    QThread,
     Signal,
     Slot,
 )
@@ -52,10 +53,10 @@ class LogListModel(QAbstractListModel):
     ISO-ish ``HH:MM:SS.mmm`` formatted time).
     """
 
-    LevelRole   = Qt.ItemDataRole.UserRole + 1
-    LoggerRole  = Qt.ItemDataRole.UserRole + 2
+    LevelRole = Qt.ItemDataRole.UserRole + 1
+    LoggerRole = Qt.ItemDataRole.UserRole + 2
     MessageRole = Qt.ItemDataRole.UserRole + 3
-    TsRole      = Qt.ItemDataRole.UserRole + 4
+    TsRole = Qt.ItemDataRole.UserRole + 4
 
     def __init__(self, capacity: int = DEFAULT_CAPACITY, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -72,10 +73,10 @@ class LogListModel(QAbstractListModel):
 
     def roleNames(self) -> dict[int, QByteArray]:
         return {
-            self.LevelRole:   QByteArray(b"level"),
-            self.LoggerRole:  QByteArray(b"logger"),
+            self.LevelRole: QByteArray(b"level"),
+            self.LoggerRole: QByteArray(b"logger"),
             self.MessageRole: QByteArray(b"message"),
-            self.TsRole:      QByteArray(b"ts"),
+            self.TsRole: QByteArray(b"ts"),
         }
 
     def data(
@@ -87,10 +88,14 @@ class LogListModel(QAbstractListModel):
             return None
         row = self._rows[index.row()]
         match role:
-            case self.LevelRole:   return row["level"]
-            case self.LoggerRole:  return row["logger"]
-            case self.MessageRole: return row["message"]
-            case self.TsRole:      return row["ts"]
+            case self.LevelRole:
+                return row["level"]
+            case self.LoggerRole:
+                return row["logger"]
+            case self.MessageRole:
+                return row["message"]
+            case self.TsRole:
+                return row["ts"]
         return None
 
     # ── mutation ────────────────────────────────────────────────────────────────
@@ -111,12 +116,14 @@ class LogListModel(QAbstractListModel):
             self.endRemoveRows()
         row = len(self._rows)
         self.beginInsertRows(QModelIndex(), row, row)
-        self._rows.append({
-            "level": level,
-            "logger": logger,
-            "message": message,
-            "ts": ts,
-        })
+        self._rows.append(
+            {
+                "level": level,
+                "logger": logger,
+                "message": message,
+                "ts": ts,
+            }
+        )
         self.endInsertRows()
 
     @Slot()
@@ -134,10 +141,7 @@ class LogListModel(QAbstractListModel):
         Each line is ``ts  LEVEL  logger  message``.  Used by the EngineClient's
         copy/export slots so the operator can hand the console off to a bug report.
         """
-        lines = [
-            f"{r['ts']}  {r['level']:<8}  {r['logger']}  {r['message']}"
-            for r in self._rows
-        ]
+        lines = [f"{r['ts']}  {r['level']:<8}  {r['logger']}  {r['message']}" for r in self._rows]
         return "\n".join(lines)
 
     # ── test helpers ──────────────────────────────────────────────────────────
@@ -169,7 +173,8 @@ class QtLogHandler(logging.Handler):
         # Queued connection: emit() may run on a worker thread, but appendRow
         # must mutate the model on the GUI thread.
         self._emitter.recordReady.connect(
-            model.appendRow, Qt.ConnectionType.QueuedConnection,
+            model.appendRow,
+            Qt.ConnectionType.QueuedConnection,
         )
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -177,8 +182,11 @@ class QtLogHandler(logging.Handler):
             message = record.getMessage()
             if record.exc_info:
                 # Append a formatted traceback so errors are visible in-app.
-                message = f"{message}\n{self.formatter.formatException(record.exc_info)}" \
-                    if self.formatter else message
+                message = (
+                    f"{message}\n{self.formatter.formatException(record.exc_info)}"
+                    if self.formatter
+                    else message
+                )
             ts = self.formatTime(record)
             if QThread.currentThread() is self._model.thread():
                 self._model.appendRow(record.levelname, record.name, message, ts)
@@ -194,5 +202,6 @@ class QtLogHandler(logging.Handler):
 
     def formatTime(self, record: logging.LogRecord) -> str:
         import time as _time
+
         base = _time.strftime(self._TIME_FMT, _time.localtime(record.created))
         return f"{base}.{int(record.msecs):03d}"

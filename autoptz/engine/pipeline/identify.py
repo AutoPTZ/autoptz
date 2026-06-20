@@ -21,6 +21,7 @@ Design
 This module owns *embedding + matching*; gallery storage/CRUD lives in
 ``autoptz.engine.identity.service``.  The camera worker drives both.
 """
+
 from __future__ import annotations
 
 import logging
@@ -98,7 +99,7 @@ class IdentityMatch:
 
     identity_id: str
     name: str
-    score: float   # cosine similarity in [-1, 1]
+    score: float  # cosine similarity in [-1, 1]
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────────
@@ -194,7 +195,8 @@ class FaceRecognizer:
             self._available = True
             log.info(
                 "FaceRecognizer ready (insightface %s, ep=%s)",
-                self._model_name, best.value,
+                self._model_name,
+                best.value,
             )
         except Exception:  # noqa: BLE001 — missing dep/model/network must not raise
             self._app = None
@@ -241,12 +243,14 @@ class FaceRecognizer:
             if bbox is None:
                 continue
             x1, y1, x2, y2 = (float(v) for v in np.asarray(bbox).ravel()[:4])
-            out.append(FaceObservation(
-                bbox=(x1, y1, x2, y2),
-                embedding=normalize(emb),
-                det_score=float(getattr(f, "det_score", 0.0)),
-                kps=self._extract_kps(f),
-            ))
+            out.append(
+                FaceObservation(
+                    bbox=(x1, y1, x2, y2),
+                    embedding=normalize(emb),
+                    det_score=float(getattr(f, "det_score", 0.0)),
+                    kps=self._extract_kps(f),
+                )
+            )
         return out
 
     @staticmethod
@@ -289,8 +293,7 @@ class FaceRecognizer:
         """
         thr = self._match_threshold if threshold is None else threshold
         candidates = (
-            service.matchable_identities() if include_disabled
-            else service.enabled_identities()
+            service.matchable_identities() if include_disabled else service.enabled_identities()
         )
         best: IdentityMatch | None = None
         for ident in candidates:

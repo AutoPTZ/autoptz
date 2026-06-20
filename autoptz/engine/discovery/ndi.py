@@ -7,6 +7,7 @@ Callbacks receive ``("added"|"removed", NDISource)``.
 NDI sources can join or leave at any time (e.g. an encoder starts/stops),
 so this runs continuously — not just at startup.
 """
+
 from __future__ import annotations
 
 import logging
@@ -26,7 +27,7 @@ NDICallback = Callable[[DiscoveryEvent, "NDISource"], None]
 class NDISource:
     """Immutable description of one NDI source seen on the network."""
 
-    name: str           # full NDI name, e.g. "LAPTOP (NDI CAMERA)"
+    name: str  # full NDI name, e.g. "LAPTOP (NDI CAMERA)"
     url_address: str = ""  # optional host:port hint from the SDK
 
 
@@ -72,9 +73,7 @@ class NDIDiscovery:
             return
 
         self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run, name="ndi-discovery", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="ndi-discovery", daemon=True)
         self._thread.start()
         log.info("NDIDiscovery started (poll_interval=%.1f s)", self._poll_interval)
 

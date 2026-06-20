@@ -23,6 +23,7 @@ configured; otherwise a safe no-op), and ``updateConfig(CameraConfig)``.
 Threading model is per-thread for P0; process-per-camera is the future
 hardening step (see ``supervisor.py``).
 """
+
 from __future__ import annotations
 
 import logging
@@ -283,18 +284,26 @@ def build_frame_source(camera_id: str, config: CameraConfig) -> FrameSource:
 
     if source.type == "usb":
         dev = _resolve_usb_device(source)
-        adapter: Any = USBAdapter(camera_id, source=dev, target_fps=target_fps,
-                                  stall_timeout=stall,
-                                  unique_id=getattr(source, "unique_id", None))
+        adapter: Any = USBAdapter(
+            camera_id,
+            source=dev,
+            target_fps=target_fps,
+            stall_timeout=stall,
+            unique_id=getattr(source, "unique_id", None),
+        )
     elif source.type in ("rtsp", "onvif"):
-        adapter = RTSPAdapter(camera_id, url=source.address, target_fps=target_fps,
-                              stall_timeout=stall)
+        adapter = RTSPAdapter(
+            camera_id, url=source.address, target_fps=target_fps, stall_timeout=stall
+        )
     elif source.type == "ndi":
-        adapter = NDIAdapter(camera_id, ndi_name=_strip_scheme(source.address, "ndi://"),
-                             target_fps=target_fps, stall_timeout=stall)
+        adapter = NDIAdapter(
+            camera_id,
+            ndi_name=_strip_scheme(source.address, "ndi://"),
+            target_fps=target_fps,
+            stall_timeout=stall,
+        )
     else:  # pragma: no cover - validated by pydantic Literal
-        adapter = USBAdapter(camera_id, source=0, target_fps=target_fps,
-                             stall_timeout=stall)
+        adapter = USBAdapter(camera_id, source=0, target_fps=target_fps, stall_timeout=stall)
 
     return _AdapterFrameSource(adapter)
 
@@ -314,8 +323,9 @@ def _resolve_usb_device(source: Any) -> int | str:
         idx = _index_for_unique_id(unique_id)
         if idx is not None:
             return idx
-        log.debug("USB unique_id=%s not in current enumeration; "
-                  "falling back to address index.", unique_id)
+        log.debug(
+            "USB unique_id=%s not in current enumeration; falling back to address index.", unique_id
+        )
     return _parse_usb_index(getattr(source, "address", ""))
 
 
@@ -331,8 +341,7 @@ def _index_for_unique_id(unique_id: str) -> int | None:
             if cam.get("unique_id") == unique_id:
                 return int(cam["index"])
     except Exception:  # noqa: BLE001 — enumeration must never break source build
-        log.debug("USB enumeration lookup failed for unique_id=%s", unique_id,
-                  exc_info=True)
+        log.debug("USB enumeration lookup failed for unique_id=%s", unique_id, exc_info=True)
     return None
 
 
@@ -348,7 +357,7 @@ def _parse_usb_index(address: str) -> int | str:
 
 
 def _strip_scheme(address: str, scheme: str) -> str:
-    return address[len(scheme):] if address.startswith(scheme) else address
+    return address[len(scheme) :] if address.startswith(scheme) else address
 
 
 def _sanitize_address(address: str | None) -> str:
@@ -434,7 +443,8 @@ class _FaceStack:
 
 
 def _build_face_stack(
-    config: CameraConfig, identity_service: Any | None,
+    config: CameraConfig,
+    identity_service: Any | None,
 ) -> _FaceStack | None:
     """Try to build the face recognizer + identity gallery; None on any failure.
 
@@ -452,8 +462,9 @@ def _build_face_stack(
         recognizer = FaceRecognizer()
         return _FaceStack(recognizer=recognizer, service=service)
     except Exception:  # noqa: BLE001 — face stack must never break the worker
-        log.warning("camera_id=%s face stack init failed; identity features off.",
-                    config.id, exc_info=True)
+        log.warning(
+            "camera_id=%s face stack init failed; identity features off.", config.id, exc_info=True
+        )
         return None
 
 
@@ -514,8 +525,11 @@ def _resolve_model_path(config: CameraConfig) -> str | None:
 
         return default_manager().ensure_detector()
     except Exception:  # noqa: BLE001 — model bootstrap must never break the worker
-        log.warning("camera_id=%s detector model resolution failed; "
-                    "live-preview-only.", config.id, exc_info=True)
+        log.warning(
+            "camera_id=%s detector model resolution failed; live-preview-only.",
+            config.id,
+            exc_info=True,
+        )
         return None
 
 
@@ -711,17 +725,18 @@ class CameraWorker:
         self._pose: Any | None = None
         self._pose_probed = False
         self._pose_keypoints: list[Any] | None = None  # last keypoints (reused)
-        self._pose_kp_track_id: int | None = None       # track they belong to
+        self._pose_kp_track_id: int | None = None  # track they belong to
         self._last_pose_t = 0.0
         self._last_pose_overlay_t = 0.0
         self._last_pose_overlay_frame_id = 0
         self._last_pose_emitted_frame_id = -1
         self._aim_smoother: Any | None = None  # framing.AimSmoother (lazy)
-        self._last_aim_framing = ""             # Frame-on at the last aim tick
+        self._last_aim_framing = ""  # Frame-on at the last aim tick
         # Per-frame memo of the fused aim so _track_error (called by both the PTZ
         # loop and the aim-dot annotation each tick) advances the smoother once.
-        self._aim_cache: tuple[float, int, tuple[float, float], float,
-                               float, float, str] | None = None
+        self._aim_cache: tuple[float, int, tuple[float, float], float, float, float, str] | None = (
+            None
+        )
 
         # ── appearance ReID recovery (lazy, gated on _reid_active) ────────────────
         # OSNet body-appearance matcher used to re-bind the target onto the right
@@ -853,7 +868,9 @@ class CameraWorker:
         self._stop_event.clear()
         self._create_shm_writer_eager()
         self._thread = threading.Thread(
-            target=self._run, name=f"camworker-{self.camera_id[:8]}", daemon=True,
+            target=self._run,
+            name=f"camworker-{self.camera_id[:8]}",
+            daemon=True,
         )
         self._thread.start()
 
@@ -886,8 +903,12 @@ class CameraWorker:
             self._cmd_queue.append(("set_target_identity", identity_id))
 
     def enroll_track(
-        self, track_id: int, identity_id: str, name: str,
-        click_x: float | None = None, click_y: float | None = None,
+        self,
+        track_id: int,
+        identity_id: str,
+        name: str,
+        click_x: float | None = None,
+        click_y: float | None = None,
     ) -> None:
         """Bind a clicked track's face to ``identity_id`` (click-to-assign).
 
@@ -904,7 +925,8 @@ class CameraWorker:
             self._cmd_queue.append(("enroll_track", (track_id, identity_id, name, click)))
 
     def set_identity_callback(
-        self, callback: Callable[[IdentityRecord], None] | None,
+        self,
+        callback: Callable[[IdentityRecord], None] | None,
     ) -> None:
         """Wire the worker→client identity push (mirrors the telemetry callback).
 
@@ -1004,8 +1026,7 @@ class CameraWorker:
             try:
                 self._apply_command(kind, payload)
             except Exception:  # noqa: BLE001
-                log.warning("camera_id=%s command %s failed", self.camera_id, kind,
-                            exc_info=True)
+                log.warning("camera_id=%s command %s failed", self.camera_id, kind, exc_info=True)
 
     def _apply_command(self, kind: str, payload: Any) -> None:
         if kind == "enable_tracking":
@@ -1066,8 +1087,9 @@ class CameraWorker:
                 try:
                     ctrl.update_config(payload.ptz)
                 except Exception:  # noqa: BLE001
-                    log.debug("camera_id=%s ptz update_config failed",
-                              self.camera_id, exc_info=True)
+                    log.debug(
+                        "camera_id=%s ptz update_config failed", self.camera_id, exc_info=True
+                    )
         elif kind == "set_target_fps":
             self._apply_target_fps(float(payload))
         elif kind == "refresh_detector":
@@ -1104,8 +1126,7 @@ class CameraWorker:
                 self._add_event("fps", f"FPS cap set to {fps:.0f}.")
             self._last_applied_fps = float(fps)
         except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s set_target_fps failed", self.camera_id,
-                      exc_info=True)
+            log.debug("camera_id=%s set_target_fps failed", self.camera_id, exc_info=True)
 
     def _refresh_detector_from_pool(self) -> None:
         """Replace the detector pointer with the pool's active detector."""
@@ -1115,12 +1136,14 @@ class CameraWorker:
         try:
             detector = pool.detector()
         except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s detector refresh from pool failed",
-                      self.camera_id, exc_info=True)
+            log.debug(
+                "camera_id=%s detector refresh from pool failed", self.camera_id, exc_info=True
+            )
             return
         if detector is None:
-            self._add_event("detector", "Detector refresh failed; kept current model.",
-                            level="warning")
+            self._add_event(
+                "detector", "Detector refresh failed; kept current model.", level="warning"
+            )
             return
         if self._detect is None:
             self._detect = self._build_detect_stack_pooled()
@@ -1187,10 +1210,16 @@ class CameraWorker:
                 ts=time.time(),
                 error=str(exc),
             )
-            self._add_event("tracker", f"Tracker switch to {new} failed; kept {old}.",
-                            level="warning")
-            log.warning("camera_id=%s tracker switch %s -> %s failed",
-                        self.camera_id, old, new, exc_info=True)
+            self._add_event(
+                "tracker", f"Tracker switch to {new} failed; kept {old}.", level="warning"
+            )
+            log.warning(
+                "camera_id=%s tracker switch %s -> %s failed",
+                self.camera_id,
+                old,
+                new,
+                exc_info=True,
+            )
 
     def _save_ptz_preset(self, slot: int) -> None:
         """Store the current position into the backend's hardware preset *slot*.
@@ -1200,15 +1229,17 @@ class CameraWorker:
         """
         backend = self._ptz_backend
         if backend is None or not hasattr(backend, "save_preset"):
-            log.debug("camera_id=%s save_ptz_preset slot=%d ignored (no backend)",
-                      self.camera_id, slot)
+            log.debug(
+                "camera_id=%s save_ptz_preset slot=%d ignored (no backend)", self.camera_id, slot
+            )
             return
         try:
             backend.save_preset(slot)
             log.info("camera_id=%s saved PTZ preset slot=%d", self.camera_id, slot)
         except Exception:  # noqa: BLE001
-            log.warning("camera_id=%s save_preset slot=%d failed", self.camera_id,
-                        slot, exc_info=True)
+            log.warning(
+                "camera_id=%s save_preset slot=%d failed", self.camera_id, slot, exc_info=True
+            )
 
     def _recall_ptz_preset(self, slot: int) -> None:
         """Recall the backend's hardware preset *slot*.
@@ -1218,15 +1249,17 @@ class CameraWorker:
         """
         backend = self._ptz_backend
         if backend is None or not hasattr(backend, "goto_preset"):
-            log.debug("camera_id=%s recall_ptz_preset slot=%d ignored (no backend)",
-                      self.camera_id, slot)
+            log.debug(
+                "camera_id=%s recall_ptz_preset slot=%d ignored (no backend)", self.camera_id, slot
+            )
             return
         try:
             backend.goto_preset(slot)
             log.info("camera_id=%s recalled PTZ preset slot=%d", self.camera_id, slot)
         except Exception:  # noqa: BLE001
-            log.warning("camera_id=%s goto_preset slot=%d failed", self.camera_id,
-                        slot, exc_info=True)
+            log.warning(
+                "camera_id=%s goto_preset slot=%d failed", self.camera_id, slot, exc_info=True
+            )
 
     def _ptz_home(self) -> None:
         """Drive the backend to optical home, if it supports ``home()``.
@@ -1237,8 +1270,7 @@ class CameraWorker:
         """
         backend = self._ptz_backend
         if backend is None or not hasattr(backend, "home"):
-            log.debug("camera_id=%s ptz_home ignored (no backend / unsupported)",
-                      self.camera_id)
+            log.debug("camera_id=%s ptz_home ignored (no backend / unsupported)", self.camera_id)
             return
         self._manual_override_until = time.monotonic() + _MANUAL_OVERRIDE_WINDOW_S
         try:
@@ -1256,8 +1288,7 @@ class CameraWorker:
         """
         backend = self._ptz_backend
         if backend is None or not hasattr(backend, "osd_menu"):
-            log.debug("camera_id=%s ptz_menu ignored (no backend / unsupported)",
-                      self.camera_id)
+            log.debug("camera_id=%s ptz_menu ignored (no backend / unsupported)", self.camera_id)
             return
         try:
             backend.osd_menu()
@@ -1283,8 +1314,14 @@ class CameraWorker:
         try:
             backend.move_velocity(pan, tilt, zoom)
             self._ptz_last_cmd = (pan, tilt, zoom)
-            log.debug("camera_id=%s ptz nudge backend=%s pan=%.3f tilt=%.3f zoom=%.3f",
-                      self.camera_id, self.config.ptz.backend, pan, tilt, zoom)
+            log.debug(
+                "camera_id=%s ptz nudge backend=%s pan=%.3f tilt=%.3f zoom=%.3f",
+                self.camera_id,
+                self.config.ptz.backend,
+                pan,
+                tilt,
+                zoom,
+            )
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s ptz nudge failed", self.camera_id, exc_info=True)
 
@@ -1333,27 +1370,25 @@ class CameraWorker:
             err, height = self._track_error(target, frame, now)
             vel = self._estimate_aim_velocity(err, now)
             try:
-                pan, tilt, zoom = ctrl.step(err, vel, height,
-                                            track_active=True, t=now)
+                pan, tilt, zoom = ctrl.step(err, vel, height, track_active=True, t=now)
                 self._ptz_last_cmd = (pan, tilt, zoom)
                 self._log_ptz_cmd("auto", pan, tilt, zoom)
             except Exception:  # noqa: BLE001
-                log.debug("camera_id=%s ptz auto step failed", self.camera_id,
-                          exc_info=True)
+                log.debug("camera_id=%s ptz auto step failed", self.camera_id, exc_info=True)
         else:
             # No target → drop the velocity estimate so a re-acquire starts clean.
             self._prev_aim_err = None
             self._aim_vel = (0.0, 0.0)
             try:
-                pan, tilt, zoom = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0,
-                                            track_active=False, t=now)
+                pan, tilt, zoom = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, track_active=False, t=now)
                 self._ptz_last_cmd = (pan, tilt, zoom)
             except Exception:  # noqa: BLE001
-                log.debug("camera_id=%s ptz auto idle step failed", self.camera_id,
-                          exc_info=True)
+                log.debug("camera_id=%s ptz auto idle step failed", self.camera_id, exc_info=True)
 
     def _estimate_aim_velocity(
-        self, err: tuple[float, float], now: float,
+        self,
+        err: tuple[float, float],
+        now: float,
     ) -> tuple[float, float]:
         """EMA-smoothed d(error)/dt in normalized units/sec for PTZ feed-forward."""
         vx = vy = 0.0
@@ -1381,8 +1416,15 @@ class CameraWorker:
         if cmd == self._last_logged_ptz:
             return
         self._last_logged_ptz = cmd
-        log.debug("camera_id=%s ptz %s backend=%s pan=%.3f tilt=%.3f zoom=%.3f",
-                  self.camera_id, source, self.config.ptz.backend, pan, tilt, zoom)
+        log.debug(
+            "camera_id=%s ptz %s backend=%s pan=%.3f tilt=%.3f zoom=%.3f",
+            self.camera_id,
+            source,
+            self.config.ptz.backend,
+            pan,
+            tilt,
+            zoom,
+        )
 
     def _resolve_target_track(self, tracks: list[TrackInfo]) -> TrackInfo | None:
         """Pick the tracked subject to follow: the explicit target, else None."""
@@ -1426,8 +1468,7 @@ class CameraWorker:
                 )
                 self._reid = reid if reid.available else None
             except Exception:  # noqa: BLE001 — missing dep/weights must not crash
-                log.debug("camera_id=%s BodyReID build failed", self.camera_id,
-                          exc_info=True)
+                log.debug("camera_id=%s BodyReID build failed", self.camera_id, exc_info=True)
                 self._reid = None
         return self._reid
 
@@ -1441,7 +1482,10 @@ class CameraWorker:
                 pass
 
     def _maybe_reid_recover(
-        self, tracks: list[TrackInfo], frame: NDArray[np.uint8] | None, now: float,
+        self,
+        tracks: list[TrackInfo],
+        frame: NDArray[np.uint8] | None,
+        now: float,
     ) -> None:
         """Keep the target template fresh while visible; re-bind it when lost.
 
@@ -1451,8 +1495,7 @@ class CameraWorker:
         so the lock follows the *person*, not whichever box happens to be nearest.
         Throttled to ``_REID_INTERVAL_S`` and a no-op unless ReID is enabled.
         """
-        if (self._target_track_id is None or frame is None
-                or not self._feature("tracking")):
+        if self._target_track_id is None or frame is None or not self._feature("tracking"):
             return
         reid = self._ensure_reid()
         if reid is None or not getattr(reid, "available", False):
@@ -1482,8 +1525,12 @@ class CameraWorker:
             if new_id != self._target_track_id:
                 if not self._reid_recovery_confirmed(new_id):
                     return
-                log.info("camera_id=%s ReID recovered target → track=%d score=%.2f",
-                         self.camera_id, new_id, result.best_score)
+                log.info(
+                    "camera_id=%s ReID recovered target → track=%d score=%.2f",
+                    self.camera_id,
+                    new_id,
+                    result.best_score,
+                )
                 self._target_track_id = new_id
                 self._reset_pose_aim()
 
@@ -1497,7 +1544,10 @@ class CameraWorker:
         return count >= required
 
     def _track_error(
-        self, track: TrackInfo, frame: NDArray[np.uint8], now: float | None = None,
+        self,
+        track: TrackInfo,
+        frame: NDArray[np.uint8],
+        now: float | None = None,
     ) -> tuple[tuple[float, float], float]:
         """Return (normalized center error, subject-height fraction).
 
@@ -1564,8 +1614,7 @@ class CameraWorker:
                 w_pose = max(0.0, min(1.0, pose_conf))
                 ax = w_pose * pose_anchor[0] + (1.0 - w_pose) * ax_bbox
                 ay = w_pose * pose_anchor[1] + (1.0 - w_pose) * ay_bbox
-                aim_source = ("pose" if w_pose >= 0.66
-                              else "fused" if w_pose >= 0.25 else "bbox")
+                aim_source = "pose" if w_pose >= 0.66 else "fused" if w_pose >= 0.25 else "bbox"
                 subject_height = (
                     torso_height if (ignore_arms and torso_height > 0.0) else bbox_height
                 )
@@ -1577,19 +1626,29 @@ class CameraWorker:
             track.aim_y = float(ay)
             track.aim_source = aim_source
 
-        ex = (ax - w * 0.5) / (w * 0.5)            # [-1, 1] right-positive
-        ey = -((ay - h * 0.5) / (h * 0.5))         # [-1, 1] up-positive
+        ex = (ax - w * 0.5) / (w * 0.5)  # [-1, 1] right-positive
+        ey = -((ay - h * 0.5) / (h * 0.5))  # [-1, 1] up-positive
         ex = max(-1.0, min(1.0, ex))
         ey = max(-1.0, min(1.0, ey))
         subject_height = max(0.0, min(1.0, subject_height))
         if now is not None:
-            self._aim_cache = (now, track.track_id, (ex, ey), subject_height,
-                               float(ax), float(ay), aim_source)
+            self._aim_cache = (
+                now,
+                track.track_id,
+                (ex, ey),
+                subject_height,
+                float(ax),
+                float(ay),
+                aim_source,
+            )
         return (ex, ey), subject_height
 
     def _smooth_aim(
-        self, point: tuple[float, float], track: TrackInfo,
-        framing_name: str, frame_extent: float,
+        self,
+        point: tuple[float, float],
+        track: TrackInfo,
+        framing_name: str,
+        frame_extent: float,
     ) -> tuple[float, float]:
         """EMA-smooth the fused aim point in pixel space.
 
@@ -1626,7 +1685,10 @@ class CameraWorker:
         return out if out is not None else point
 
     def _annotate_target_aim(
-        self, tracks: list[TrackInfo], frame: NDArray[np.uint8] | None, now: float,
+        self,
+        tracks: list[TrackInfo],
+        frame: NDArray[np.uint8] | None,
+        now: float,
     ) -> None:
         """Populate aim telemetry for the active live target, even without PTZ."""
         if frame is None:
@@ -1637,13 +1699,15 @@ class CameraWorker:
         try:
             self._track_error(target, frame, now)
         except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s target aim annotation failed", self.camera_id,
-                      exc_info=True)
+            log.debug("camera_id=%s target aim annotation failed", self.camera_id, exc_info=True)
 
     # ── pose-stable aim (lazy, graceful) ────────────────────────────────────────
 
     def _pose_aim(
-        self, track: TrackInfo, frame: NDArray[np.uint8], now: float,
+        self,
+        track: TrackInfo,
+        frame: NDArray[np.uint8],
+        now: float,
     ) -> tuple[tuple[float, float] | None, float, float]:
         """Return ``(raw_anchor | None, confidence, subject_height_fraction)``.
 
@@ -1675,10 +1739,7 @@ class CameraWorker:
             self._reset_pose_aim()
 
         # Re-estimate only every _POSE_INTERVAL_S; reuse last keypoints between.
-        if (
-            self._pose_keypoints is None
-            or now - self._last_pose_t >= _POSE_INTERVAL_S
-        ):
+        if self._pose_keypoints is None or now - self._last_pose_t >= _POSE_INTERVAL_S:
             pose_t0 = time.perf_counter()
             kps = pose.estimate(frame, bbox)
             self._pose_ms = (time.perf_counter() - pose_t0) * 1000.0
@@ -1700,7 +1761,8 @@ class CameraWorker:
             return None, 0.0, 0.0
 
         raw_aim, conf = framing.body_aim_point(
-            kps, framing=_resolve_framing(self.config.tracking),
+            kps,
+            framing=_resolve_framing(self.config.tracking),
         )
         if raw_aim is None:
             return None, 0.0, 0.0
@@ -1710,7 +1772,10 @@ class CameraWorker:
         return raw_aim, float(conf), subject_height
 
     def _maybe_estimate_pose_overlay(
-        self, tracks: list[TrackInfo], frame: NDArray[np.uint8] | None, now: float,
+        self,
+        tracks: list[TrackInfo],
+        frame: NDArray[np.uint8] | None,
+        now: float,
     ) -> None:
         """Populate the tracked target's pose keypoints for the overlay + aim.
 
@@ -1753,8 +1818,9 @@ class CameraWorker:
             try:
                 self._pose = self._pool.pose()
             except Exception:  # noqa: BLE001 — pool must never break the worker
-                log.debug("camera_id=%s pool pose() failed; bbox aim only.",
-                          self.camera_id, exc_info=True)
+                log.debug(
+                    "camera_id=%s pool pose() failed; bbox aim only.", self.camera_id, exc_info=True
+                )
                 self._pose = None
             return self._pose
 
@@ -1765,8 +1831,11 @@ class CameraWorker:
 
             self._pose = PoseEstimator()
         except Exception:  # noqa: BLE001 — pose must never break the worker
-            log.debug("camera_id=%s pose estimator init failed; bbox aim only.",
-                      self.camera_id, exc_info=True)
+            log.debug(
+                "camera_id=%s pose estimator init failed; bbox aim only.",
+                self.camera_id,
+                exc_info=True,
+            )
             self._pose = None
         return self._pose
 
@@ -1791,8 +1860,11 @@ class CameraWorker:
         src = self.config.source
         log.info(
             "camera_id=%s worker starting — source=%s addr=%s target_fps=%.0f shm=%s",
-            self.camera_id, src.type, _sanitize_address(src.address),
-            float(getattr(src, "fps", 0.0) or 0.0), self.shm_name,
+            self.camera_id,
+            src.type,
+            _sanitize_address(src.address),
+            float(getattr(src, "fps", 0.0) or 0.0),
+            self.shm_name,
         )
         self._open_resources()
 
@@ -1801,7 +1873,8 @@ class CameraWorker:
         # live preview) and processes the latest captured frame.
         self._inference_thread = threading.Thread(
             target=self._inference_loop,
-            name=f"caminfer-{self.camera_id[:8]}", daemon=True,
+            name=f"caminfer-{self.camera_id[:8]}",
+            daemon=True,
         )
         self._inference_thread.start()
 
@@ -1810,9 +1883,7 @@ class CameraWorker:
         fps_window_frames = 0
         self._next_drop_log_t = time.monotonic() + _DROP_LOG_INTERVAL_S
         last_health = HealthState.OK if self._source is not None else HealthState.ERROR
-        last_error: str | None = (
-            None if self._source is not None else "frame source unavailable"
-        )
+        last_error: str | None = None if self._source is not None else "frame source unavailable"
 
         # If the source could not be opened at all, still emit telemetry so the
         # UI shows an error/no-signal state instead of a silent hang.
@@ -1831,8 +1902,9 @@ class CameraWorker:
                         self._dropped_frames += 1
                 except Exception as exc:  # noqa: BLE001
                     if last_health is not HealthState.RECONNECTING:
-                        log.warning("camera_id=%s frame read failed (%s); "
-                                    "reconnecting", self.camera_id, exc)
+                        log.warning(
+                            "camera_id=%s frame read failed (%s); reconnecting", self.camera_id, exc
+                        )
                     last_health = HealthState.RECONNECTING
                     last_error = str(exc)
                     self._dropped_frames += 1
@@ -1873,8 +1945,9 @@ class CameraWorker:
 
             # Telemetry pacing (~telemetry_hz) — report the latest inference output.
             if now - last_telemetry >= self._telemetry_period:
-                self._emit_telemetry(tracks=list(self._last_tracks),
-                                     health=last_health, last_error=last_error)
+                self._emit_telemetry(
+                    tracks=list(self._last_tracks), health=last_health, last_error=last_error
+                )
                 last_telemetry = now
 
             # Small idle sleep when there is no frame to avoid a busy-spin.
@@ -1887,8 +1960,11 @@ class CameraWorker:
             self._inference_thread.join(timeout=5.0)
             self._inference_thread = None
         self._close_resources()
-        log.info("camera_id=%s worker stopped (frames dropped total=%d)",
-                 self.camera_id, self._dropped_frames)
+        log.info(
+            "camera_id=%s worker stopped (frames dropped total=%d)",
+            self.camera_id,
+            self._dropped_frames,
+        )
         # Final STOPPED telemetry so the UI reflects the camera going down.
         self._emit_telemetry(tracks=[], health=HealthState.STOPPED, last_error=None)
 
@@ -1958,9 +2034,12 @@ class CameraWorker:
             self._last_tracks_frame_id = fid
             if log.isEnabledFor(logging.DEBUG):
                 log.debug(
-                    "camera_id=%s timings detect+track=%.1fms face=%.1fms tracks=%d "
-                    "fps=%.1f", self.camera_id, self._detect_ms, self._face_ms,
-                    len(tracks), self._fps,
+                    "camera_id=%s timings detect+track=%.1fms face=%.1fms tracks=%d fps=%.1f",
+                    self.camera_id,
+                    self._detect_ms,
+                    self._face_ms,
+                    len(tracks),
+                    self._fps,
                 )
 
     # ── resource management ─────────────────────────────────────────────────────
@@ -1973,19 +2052,20 @@ class CameraWorker:
             try:
                 self._source = build_frame_source(self.camera_id, self.config)
             except Exception:  # noqa: BLE001
-                log.warning("camera_id=%s could not build frame source (cv2 missing?)",
-                            self.camera_id, exc_info=True)
+                log.warning(
+                    "camera_id=%s could not build frame source (cv2 missing?)",
+                    self.camera_id,
+                    exc_info=True,
+                )
                 self._source = None
 
         if self._source is not None:
             try:
                 if not self._source.open():
-                    log.warning("camera_id=%s frame source failed to open",
-                                self.camera_id)
+                    log.warning("camera_id=%s frame source failed to open", self.camera_id)
                     self._source = None
             except Exception:  # noqa: BLE001
-                log.warning("camera_id=%s frame source open raised", self.camera_id,
-                            exc_info=True)
+                log.warning("camera_id=%s frame source open raised", self.camera_id, exc_info=True)
                 self._source = None
 
         # Shared-memory writer is created eagerly in start() (before the thread)
@@ -2030,7 +2110,8 @@ class CameraWorker:
             face = self._build_face_stack_pooled()
             if face is None and detection_runtime_available():
                 face = _build_face_stack(
-                    self.config, self._injected_identity_service,
+                    self.config,
+                    self._injected_identity_service,
                 )
             self._face = face
 
@@ -2048,8 +2129,11 @@ class CameraWorker:
         try:
             detector = pool.detector()
         except Exception:  # noqa: BLE001 — pool must never break the worker
-            log.debug("camera_id=%s pool detector() failed; per-worker fallback.",
-                      self.camera_id, exc_info=True)
+            log.debug(
+                "camera_id=%s pool detector() failed; per-worker fallback.",
+                self.camera_id,
+                exc_info=True,
+            )
             return None
         if detector is None:
             return None
@@ -2068,8 +2152,11 @@ class CameraWorker:
             )
             return _DetectStack(detector=detector, tracker=tracker, ep=ep)
         except Exception:  # noqa: BLE001
-            log.warning("camera_id=%s per-worker tracker init failed; "
-                        "live-preview-only.", self.camera_id, exc_info=True)
+            log.warning(
+                "camera_id=%s per-worker tracker init failed; live-preview-only.",
+                self.camera_id,
+                exc_info=True,
+            )
             return None
 
     def _build_face_stack_pooled(self) -> _FaceStack | None:
@@ -2086,8 +2173,11 @@ class CameraWorker:
         try:
             recognizer = pool.face()
         except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s pool face() failed; per-worker fallback.",
-                      self.camera_id, exc_info=True)
+            log.debug(
+                "camera_id=%s pool face() failed; per-worker fallback.",
+                self.camera_id,
+                exc_info=True,
+            )
             return None
         if recognizer is None:
             return None
@@ -2097,8 +2187,11 @@ class CameraWorker:
             service = self._injected_identity_service or IdentityService()
             return _FaceStack(recognizer=recognizer, service=service)
         except Exception:  # noqa: BLE001 — gallery build must never break the worker
-            log.warning("camera_id=%s identity gallery init failed; identity off.",
-                        self.camera_id, exc_info=True)
+            log.warning(
+                "camera_id=%s identity gallery init failed; identity off.",
+                self.camera_id,
+                exc_info=True,
+            )
             return None
 
     def _build_ptz_stack(self) -> None:
@@ -2121,15 +2214,18 @@ class CameraWorker:
                 return
             self._ptz_backend = backend
             self._ptz = PTZController(
-                backend, self.config.ptz,
+                backend,
+                self.config.ptz,
                 coast_window_ms=int(self.config.tracking.coast_window_ms),
             )
             self._ptz_owned = True
-            log.info("camera_id=%s PTZ control active (%s)", self.camera_id,
-                     self.config.ptz.backend)
+            log.info(
+                "camera_id=%s PTZ control active (%s)", self.camera_id, self.config.ptz.backend
+            )
         except Exception:  # noqa: BLE001 — PTZ must never break the worker
-            log.warning("camera_id=%s PTZ stack init failed; PTZ disabled.",
-                        self.camera_id, exc_info=True)
+            log.warning(
+                "camera_id=%s PTZ stack init failed; PTZ disabled.", self.camera_id, exc_info=True
+            )
             self._ptz = None
             self._ptz_backend = None
 
@@ -2159,18 +2255,27 @@ class CameraWorker:
         try:
             return ShmWriter(self.shm_name, _PREVIEW_H, _PREVIEW_W)
         except FileExistsError:
-            log.warning("camera_id=%s reclaiming stale shm segment %s",
-                        self.camera_id, self.shm_name)
+            log.warning(
+                "camera_id=%s reclaiming stale shm segment %s", self.camera_id, self.shm_name
+            )
             self._unlink_stale_shm()
             try:
                 return ShmWriter(self.shm_name, _PREVIEW_H, _PREVIEW_W)
             except Exception:  # noqa: BLE001
-                log.warning("camera_id=%s could not create ShmWriter %s after reclaim",
-                            self.camera_id, self.shm_name, exc_info=True)
+                log.warning(
+                    "camera_id=%s could not create ShmWriter %s after reclaim",
+                    self.camera_id,
+                    self.shm_name,
+                    exc_info=True,
+                )
                 return None
         except Exception:  # noqa: BLE001
-            log.warning("camera_id=%s could not create ShmWriter %s",
-                        self.camera_id, self.shm_name, exc_info=True)
+            log.warning(
+                "camera_id=%s could not create ShmWriter %s",
+                self.camera_id,
+                self.shm_name,
+                exc_info=True,
+            )
             return None
 
     def _unlink_stale_shm(self) -> None:
@@ -2184,8 +2289,12 @@ class CameraWorker:
             except FileNotFoundError:
                 pass
             except Exception:  # noqa: BLE001
-                log.debug("camera_id=%s could not unlink stale shm %s",
-                          self.camera_id, name, exc_info=True)
+                log.debug(
+                    "camera_id=%s could not unlink stale shm %s",
+                    self.camera_id,
+                    name,
+                    exc_info=True,
+                )
 
     def _close_resources(self) -> None:
         if self._source is not None:
@@ -2251,10 +2360,12 @@ class CameraWorker:
         self._last_logged_drops = self._dropped_frames
         if delta > 0:
             log.info(
-                "camera_id=%s dropped %d frame(s) in the last %.0fs "
-                "(total=%d, fps=%.1f)",
-                self.camera_id, delta, _DROP_LOG_INTERVAL_S,
-                self._dropped_frames, self._fps,
+                "camera_id=%s dropped %d frame(s) in the last %.0fs (total=%d, fps=%.1f)",
+                self.camera_id,
+                delta,
+                _DROP_LOG_INTERVAL_S,
+                self._dropped_frames,
+                self._fps,
             )
 
     def _push_frame(self, frame: NDArray[np.uint8]) -> None:
@@ -2274,6 +2385,7 @@ class CameraWorker:
             return np.ascontiguousarray(frame)
         try:
             import cv2
+
             resized = cv2.resize(frame, (self._shm.width, self._shm.height))
             return np.ascontiguousarray(resized.astype(np.uint8))
         except Exception:  # noqa: BLE001 - cv2 absent: pad/crop with numpy
@@ -2314,8 +2426,7 @@ class CameraWorker:
             self._detect_frame_index += 1
             interval = self._effective_detect_interval()
             should_detect = (
-                not self._pooled_detector
-                or (self._detect_frame_index - 1) % interval == 0
+                not self._pooled_detector or (self._detect_frame_index - 1) % interval == 0
             )
             if should_detect:
                 detections = self._detect.detector.detect(frame)
@@ -2348,21 +2459,27 @@ class CameraWorker:
             # _track_identity[track_id] = (identity_id, display_name, score)
             ident = self._track_identity.get(t.track_id)
             vel = getattr(t, "velocity", (0.0, 0.0)) or (0.0, 0.0)
-            out.append(TrackInfo(
-                track_id=t.track_id,
-                bbox=BBox(x1=t.bbox.x1, y1=t.bbox.y1, x2=t.bbox.x2, y2=t.bbox.y2),
-                identity=(ident[1] if ident else None),       # NAME, for display
-                identity_id=(ident[0] if ident else None),    # id, for enroll/target
-                confidence=(ident[2] if ident else t.conf),
-                is_target=(self._target_track_id is not None
-                           and t.track_id == self._target_track_id),
-                lost=False,
-                vx=float(vel[0]), vy=float(vel[1]),
-            ))
+            out.append(
+                TrackInfo(
+                    track_id=t.track_id,
+                    bbox=BBox(x1=t.bbox.x1, y1=t.bbox.y1, x2=t.bbox.x2, y2=t.bbox.y2),
+                    identity=(ident[1] if ident else None),  # NAME, for display
+                    identity_id=(ident[0] if ident else None),  # id, for enroll/target
+                    confidence=(ident[2] if ident else t.conf),
+                    is_target=(
+                        self._target_track_id is not None and t.track_id == self._target_track_id
+                    ),
+                    lost=False,
+                    vx=float(vel[0]),
+                    vy=float(vel[1]),
+                )
+            )
         return out
 
     def _filter_small_detections(
-        self, detections: list[Any], frame: NDArray[np.uint8],
+        self,
+        detections: list[Any],
+        frame: NDArray[np.uint8],
     ) -> list[Any]:
         """Drop detections shorter than ``min_detection_size_frac`` * frame height.
 
@@ -2384,8 +2501,12 @@ class CameraWorker:
         min_px = frac * h
         kept = [d for d in detections if (d.bbox.y2 - d.bbox.y1) >= min_px]
         if log.isEnabledFor(logging.DEBUG) and len(kept) != len(detections):
-            log.debug("camera_id=%s dropped %d small detection(s) (< %.0fpx)",
-                      self.camera_id, len(detections) - len(kept), min_px)
+            log.debug(
+                "camera_id=%s dropped %d small detection(s) (< %.0fpx)",
+                self.camera_id,
+                len(detections) - len(kept),
+                min_px,
+            )
         return kept
 
     # ── face recognition + identity ───────────────────────────────────────────
@@ -2399,7 +2520,9 @@ class CameraWorker:
         self._last_faces_emitted_frame_id = -1
 
     def _expire_face_overlay(
-        self, now: float, tracks: list[TrackInfo] | None = None,
+        self,
+        now: float,
+        tracks: list[TrackInfo] | None = None,
     ) -> None:
         """Clear face boxes once they are stale or their owning tracks vanished."""
         if not self._last_faces:
@@ -2426,7 +2549,10 @@ class CameraWorker:
         return list(self._last_faces)
 
     def _maybe_identify(
-        self, frame: NDArray[np.uint8] | None, tracks: list[TrackInfo], now: float,
+        self,
+        frame: NDArray[np.uint8] | None,
+        tracks: list[TrackInfo],
+        now: float,
     ) -> None:
         """Run the face stack a few Hz: bind tracks → identities + auto-harvest.
 
@@ -2449,11 +2575,7 @@ class CameraWorker:
             self._clear_face_overlay()
             return
         face = self._face
-        if (
-            frame is None
-            or face is None
-            or not getattr(face.recognizer, "available", False)
-        ):
+        if frame is None or face is None or not getattr(face.recognizer, "available", False):
             self._clear_face_overlay()
             return
         if now - self._last_face_t < _FACE_INTERVAL_S:
@@ -2492,18 +2614,28 @@ class CameraWorker:
                 iid, name, _click = self._pending_enroll.pop(track.track_id)
                 try:
                     face.service.add_embedding(
-                        iid, obs.embedding, thumbnail=_face_crop_png(frame, obs.bbox),
+                        iid,
+                        obs.embedding,
+                        thumbnail=_face_crop_png(frame, obs.bbox),
                     )
                 except Exception:  # noqa: BLE001
-                    log.debug("camera_id=%s enroll_track add_embedding failed",
-                              self.camera_id, exc_info=True)
+                    log.debug(
+                        "camera_id=%s enroll_track add_embedding failed",
+                        self.camera_id,
+                        exc_info=True,
+                    )
                 self._track_identity[track.track_id] = (iid, name, 1.0)
                 matched_identity_track[iid] = track.track_id
                 rec = face.service.get(iid) if hasattr(face.service, "get") else None
                 if rec is not None:
                     self._push_identity(rec)
-                log.info("camera_id=%s enrolled track=%d → id=%s name=%s",
-                         self.camera_id, track.track_id, iid, name)
+                log.info(
+                    "camera_id=%s enrolled track=%d → id=%s name=%s",
+                    self.camera_id,
+                    track.track_id,
+                    iid,
+                    name,
+                )
                 continue
             match = None
             try:
@@ -2512,25 +2644,31 @@ class CameraWorker:
                 # re-harvested as a duplicate — this is the dedup that turns
                 # "16 faces for one person" into one.
                 match = face.recognizer.match(
-                    obs.embedding, face.service, include_disabled=True,
+                    obs.embedding,
+                    face.service,
+                    include_disabled=True,
                 )
             except Exception:  # noqa: BLE001
-                log.debug("camera_id=%s face match failed", self.camera_id,
-                          exc_info=True)
+                log.debug("camera_id=%s face match failed", self.camera_id, exc_info=True)
             if match is not None:
                 if track is not None:
                     prev = self._track_identity.get(track.track_id)
                     self._track_identity[track.track_id] = (
-                        match.identity_id, match.name, match.score,
+                        match.identity_id,
+                        match.name,
+                        match.score,
                     )
                     matched_identity_track[match.identity_id] = track.track_id
                     # Log only on a new track→identity binding to avoid per-tick
                     # spam while the same person stays in frame.
                     if prev is None or prev[0] != match.identity_id:
                         log.info(
-                            "camera_id=%s identity match track=%d id=%s name=%s "
-                            "score=%.2f", self.camera_id, track.track_id,
-                            match.identity_id, match.name, match.score,
+                            "camera_id=%s identity match track=%d id=%s name=%s score=%.2f",
+                            self.camera_id,
+                            track.track_id,
+                            match.identity_id,
+                            match.name,
+                            match.score,
                         )
                 # Keep the matched identity's template fresh, and occasionally
                 # capture a fresh crop so the person accrues a few varied
@@ -2541,11 +2679,12 @@ class CameraWorker:
                     self._last_crop_t = now
                 try:
                     face.service.add_embedding(
-                        match.identity_id, obs.embedding, thumbnail=crop,
+                        match.identity_id,
+                        obs.embedding,
+                        thumbnail=crop,
                     )
                 except Exception:  # noqa: BLE001
-                    log.debug("camera_id=%s add_embedding failed", self.camera_id,
-                              exc_info=True)
+                    log.debug("camera_id=%s add_embedding failed", self.camera_id, exc_info=True)
             elif track is not None:
                 self._maybe_harvest(face, frame, obs, track, now)
 
@@ -2555,19 +2694,19 @@ class CameraWorker:
         if self._target_identity_id is not None:
             tid = matched_identity_track.get(self._target_identity_id)
             if tid is not None and tid != self._target_track_id:
-                log.info("camera_id=%s identity-target id=%s acquired on track=%d",
-                         self.camera_id, self._target_identity_id, tid)
+                log.info(
+                    "camera_id=%s identity-target id=%s acquired on track=%d",
+                    self.camera_id,
+                    self._target_identity_id,
+                    tid,
+                )
                 self._target_track_id = tid
                 self._reset_pose_aim()
 
         # Prune stale cache entries for tracks no longer present.
         live_ids = {t.track_id for t in tracks}
-        self._track_identity = {
-            k: v for k, v in self._track_identity.items() if k in live_ids
-        }
-        self._pending_enroll = {
-            k: v for k, v in self._pending_enroll.items() if k in live_ids
-        }
+        self._track_identity = {k: v for k, v in self._track_identity.items() if k in live_ids}
+        self._pending_enroll = {k: v for k, v in self._pending_enroll.items() if k in live_ids}
 
         # Build the face overlay payload: each detected face with the name of the
         # track it sits on (when bound).  Published in telemetry; the UI draws it
@@ -2581,12 +2720,13 @@ class CameraWorker:
             face_track_ids.add(tr.track_id)
             ident = self._track_identity.get(tr.track_id) if tr is not None else None
             bx = obs.bbox
-            faces_out.append(FaceBox(
-                bbox=BBox(x1=float(bx[0]), y1=float(bx[1]),
-                          x2=float(bx[2]), y2=float(bx[3])),
-                identity=(ident[1] if ident else None),
-                score=(ident[2] if ident else 0.0),
-            ))
+            faces_out.append(
+                FaceBox(
+                    bbox=BBox(x1=float(bx[0]), y1=float(bx[1]), x2=float(bx[2]), y2=float(bx[3])),
+                    identity=(ident[1] if ident else None),
+                    score=(ident[2] if ident else 0.0),
+                )
+            )
         self._last_faces = faces_out
         self._last_faces_t = now if faces_out else 0.0
         self._last_face_track_ids = face_track_ids
@@ -2594,7 +2734,8 @@ class CameraWorker:
 
     @staticmethod
     def _track_for_face(
-        obs: Any, tracks: list[TrackInfo],
+        obs: Any,
+        tracks: list[TrackInfo],
     ) -> TrackInfo | None:
         """Return the track whose bbox contains the face centre (closest wins)."""
         best: TrackInfo | None = None
@@ -2673,18 +2814,24 @@ class CameraWorker:
         try:
             rec = face.service.add_unlabeled(obs.embedding, thumbnail)
         except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s add_unlabeled failed", self.camera_id,
-                      exc_info=True)
+            log.debug("camera_id=%s add_unlabeled failed", self.camera_id, exc_info=True)
             return
         # Bind the freshly-harvested identity to its track so telemetry shows it.
         self._track_identity[track.track_id] = (rec.id, rec.name, obs.det_score)
-        log.info("camera_id=%s harvested unlabeled identity id=%s from track=%d "
-                 "(det_score=%.2f)", self.camera_id, rec.id, track.track_id,
-                 obs.det_score)
+        log.info(
+            "camera_id=%s harvested unlabeled identity id=%s from track=%d (det_score=%.2f)",
+            self.camera_id,
+            rec.id,
+            track.track_id,
+            obs.det_score,
+        )
         self._push_identity(rec)
 
     def _harvest_quality_ok(
-        self, face: Any, frame: NDArray[np.uint8], obs: Any,
+        self,
+        face: Any,
+        frame: NDArray[np.uint8],
+        obs: Any,
     ) -> bool:
         """Return True iff *obs* is a clean, frontal, novel face worth harvesting.
 
@@ -2699,27 +2846,27 @@ class CameraWorker:
             return False
 
         if float(getattr(obs, "det_score", 0.0)) < _MIN_HARVEST_DET_SCORE:
-            log.debug("camera_id=%s harvest skip: low det_score=%.2f",
-                      self.camera_id, float(getattr(obs, "det_score", 0.0)))
+            log.debug(
+                "camera_id=%s harvest skip: low det_score=%.2f",
+                self.camera_id,
+                float(getattr(obs, "det_score", 0.0)),
+            )
             return False
 
         yaw = obs.yaw_ratio() if hasattr(obs, "yaw_ratio") else None
         if yaw is not None and yaw > _MAX_HARVEST_YAW_RATIO:
-            log.debug("camera_id=%s harvest skip: non-frontal yaw_ratio=%.2f",
-                      self.camera_id, yaw)
+            log.debug("camera_id=%s harvest skip: non-frontal yaw_ratio=%.2f", self.camera_id, yaw)
             return False
 
         # Novelty: only create a NEW identity when the face is confidently NOT in
         # the gallery already (low best similarity over labeled + unlabeled).
         if self._best_gallery_similarity(face, obs) > _HARVEST_NOVELTY_MAX_SIM:
-            log.debug("camera_id=%s harvest skip: already similar to gallery",
-                      self.camera_id)
+            log.debug("camera_id=%s harvest skip: already similar to gallery", self.camera_id)
             return False
 
         sharp = self._face_sharpness(frame, obs.bbox)
         if sharp is not None and sharp < _MIN_HARVEST_SHARPNESS:
-            log.debug("camera_id=%s harvest skip: blurry crop (var=%.1f)",
-                      self.camera_id, sharp)
+            log.debug("camera_id=%s harvest skip: blurry crop (var=%.1f)", self.camera_id, sharp)
             return False
 
         return True
@@ -2740,12 +2887,13 @@ class CameraWorker:
                     best = score
             return best
         except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s gallery-novelty check failed", self.camera_id,
-                      exc_info=True)
+            log.debug("camera_id=%s gallery-novelty check failed", self.camera_id, exc_info=True)
             return 0.0
 
     def _face_sharpness(
-        self, frame: NDArray[np.uint8], bbox: tuple[float, float, float, float],
+        self,
+        frame: NDArray[np.uint8],
+        bbox: tuple[float, float, float, float],
     ) -> float | None:
         """Return the Laplacian variance of the face crop (blur measure), or None.
 
@@ -2776,16 +2924,17 @@ class CameraWorker:
         try:
             cb(record)
         except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s identity callback raised", self.camera_id,
-                      exc_info=True)
+            log.debug("camera_id=%s identity callback raised", self.camera_id, exc_info=True)
 
     def _add_event(self, kind: str, message: str, *, level: str = "info") -> None:
         """Append a recent runtime event for diagnostics/history."""
-        self._runtime_events.append(RuntimeEventInfo(
-            kind=str(kind or "runtime"),
-            level=str(level or "info"),
-            message=str(message),
-        ))
+        self._runtime_events.append(
+            RuntimeEventInfo(
+                kind=str(kind or "runtime"),
+                level=str(level or "info"),
+                message=str(message),
+            )
+        )
 
     def _record_stage(self, key: str, ms: float) -> None:
         """Remember a stage measurement for last/avg/p95 diagnostics."""
@@ -2870,8 +3019,7 @@ class CameraWorker:
         if time.monotonic() - self._last_pose_overlay_t > _POSE_TTL_S:
             return []
         self._last_pose_emitted_frame_id = self._last_pose_overlay_frame_id
-        return [PoseKeypoint(x=float(k.x), y=float(k.y), conf=float(k.conf))
-                for k in kps]
+        return [PoseKeypoint(x=float(k.x), y=float(k.y), conf=float(k.conf)) for k in kps]
 
     def _stage_status(self, key: str, *, enabled: bool, available: bool = True) -> str:
         if not enabled:
@@ -2926,33 +3074,48 @@ class CameraWorker:
         detect_interval = self._effective_detect_interval()
         return [
             self._stage_row(
-                "ingest", "Ingest",
-                status=self._stage_status("ingest", enabled=True, available=self._source is not None),
+                "ingest",
+                "Ingest",
+                status=self._stage_status(
+                    "ingest", enabled=True, available=self._source is not None
+                ),
                 cadence="every frame",
             ),
             self._stage_row(
-                "detect", "Detector",
-                status=self._stage_status("detect", enabled=detection_on, available=self._detect is not None),
+                "detect",
+                "Detector",
+                status=self._stage_status(
+                    "detect", enabled=detection_on, available=self._detect is not None
+                ),
                 cadence=f"every {detect_interval} frame{'s' if detect_interval != 1 else ''}",
             ),
             self._stage_row(
-                "track", "Tracker",
+                "track",
+                "Tracker",
                 status=self._stage_status(
-                    "track", enabled=detection_on and tracking_on, available=self._detect is not None,
+                    "track",
+                    enabled=detection_on and tracking_on,
+                    available=self._detect is not None,
                 ),
                 cadence="every inference frame",
             ),
             self._stage_row(
-                "face", "Face",
+                "face",
+                "Face",
                 status=self._stage_status(
-                    "face", enabled=face_on, available=self._face is not None,
+                    "face",
+                    enabled=face_on,
+                    available=self._face is not None,
                 ),
                 cadence=f"{1.0 / _FACE_INTERVAL_S:.0f} Hz",
             ),
             self._stage_row(
-                "pose", "Pose",
+                "pose",
+                "Pose",
                 status=self._stage_status(
-                    "pose", enabled=pose_on, available=self._pose is not None or not self._pose_probed,
+                    "pose",
+                    enabled=pose_on,
+                    available=self._pose is not None or not self._pose_probed,
                 ),
                 cadence=f"{1.0 / _POSE_INTERVAL_S:.0f} Hz target-only",
             ),
@@ -2961,19 +3124,13 @@ class CameraWorker:
     def _runtime_services(self) -> list[RuntimeServiceInfo]:
         pool = self._pool
         detector_model = (
-            str(getattr(pool, "detector_model_name", "") or "")
-            if pool is not None else ""
+            str(getattr(pool, "detector_model_name", "") or "") if pool is not None else ""
         )
-        detector_tier = (
-            str(getattr(pool, "detector_tier", "") or "")
-            if pool is not None else ""
-        )
+        detector_tier = str(getattr(pool, "detector_tier", "") or "") if pool is not None else ""
         detector_ep = self._ep or (
             str(getattr(pool, "detector_ep", "") or "") if pool is not None else ""
         )
-        detector_error = (
-            str(getattr(pool, "detector_error", "") or "") if pool is not None else ""
-        )
+        detector_error = str(getattr(pool, "detector_error", "") or "") if pool is not None else ""
         cap = self._source_fps_cap()
         target_fps = self._target_fps()
         tracking = self.config.tracking
@@ -2992,10 +3149,10 @@ class CameraWorker:
                 configured=str(getattr(tracking, "quality_floor", "auto")),
                 enabled=det_enabled,
                 active=bool(det_enabled and det_available),
-                state="failed" if det_failed else self._stage_status(
-                    "detect", enabled=det_enabled, available=det_available),
-                detail=detector_error if det_failed
-                else (detector_model or "per-camera detector"),
+                state="failed"
+                if det_failed
+                else self._stage_status("detect", enabled=det_enabled, available=det_available),
+                detail=detector_error if det_failed else (detector_model or "per-camera detector"),
                 model=detector_model,
                 tier=detector_tier,
                 ep=detector_ep,
@@ -3006,8 +3163,9 @@ class CameraWorker:
                 configured=str(getattr(tracking, "tracker", "")),
                 enabled=self._feature("tracking"),
                 active=bool(self._feature("tracking") and self._detect is not None),
-                state=self._stage_status("track", enabled=self._feature("tracking"),
-                                         available=self._detect is not None),
+                state=self._stage_status(
+                    "track", enabled=self._feature("tracking"), available=self._detect is not None
+                ),
                 backend=str(getattr(tracking, "tracker", "")),
                 detail="manual targets clear on rebuild; identity targets reacquire",
             ),
@@ -3018,8 +3176,11 @@ class CameraWorker:
                 configured="on" if getattr(tracking, "face_confirm", False) else "off",
                 enabled=self._feature("face_recognition"),
                 active=bool(self._feature("face_recognition") and self._face is not None),
-                state=self._stage_status("face", enabled=self._feature("face_recognition"),
-                                         available=self._face is not None),
+                state=self._stage_status(
+                    "face",
+                    enabled=self._feature("face_recognition"),
+                    available=self._face is not None,
+                ),
                 detail="recognition and identity reacquire",
             ),
             RuntimeServiceInfo(
@@ -3028,8 +3189,11 @@ class CameraWorker:
                 configured="on",
                 enabled=self._feature("pose"),
                 active=bool(self._feature("pose") and self._pose is not None),
-                state=self._stage_status("pose", enabled=self._feature("pose"),
-                                         available=self._pose is not None or not self._pose_probed),
+                state=self._stage_status(
+                    "pose",
+                    enabled=self._feature("pose"),
+                    available=self._pose is not None or not self._pose_probed,
+                ),
                 detail="PTZ aim point" if self._feature("pose") else "disabled",
             ),
             RuntimeServiceInfo(
@@ -3038,7 +3202,9 @@ class CameraWorker:
                 configured=str(getattr(tracking, "framing", "upper_body")),
                 enabled=bool(getattr(self.config.ptz, "safe_zone_enabled", True)),
                 active=bool(getattr(self.config.ptz, "safe_zone_enabled", True)),
-                state="active" if getattr(self.config.ptz, "safe_zone_enabled", True) else "disabled",
+                state="active"
+                if getattr(self.config.ptz, "safe_zone_enabled", True)
+                else "disabled",
                 detail="ignore arms" if ignore_arms else "include arms",
             ),
             RuntimeServiceInfo(
@@ -3155,8 +3321,7 @@ class CameraWorker:
         try:
             self._on_telemetry(msg)
         except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s telemetry callback raised", self.camera_id,
-                      exc_info=True)
+            log.debug("camera_id=%s telemetry callback raised", self.camera_id, exc_info=True)
 
     def _source_fps_cap(self) -> float:
         """Return the source's detected hardware fps ceiling (0.0 = unknown).
@@ -3203,7 +3368,7 @@ class CameraWorker:
         if position is not None:
             pan, tilt, zoom = position.pan, position.tilt, position.zoom
 
-        moving = (abs(pan) > 1e-3 or abs(tilt) > 1e-3 or abs(zoom) > 1e-3)
+        moving = abs(pan) > 1e-3 or abs(tilt) > 1e-3 or abs(zoom) > 1e-3
 
         if self._manual_override_active(time.monotonic()):
             state = "manual"

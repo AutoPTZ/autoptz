@@ -20,6 +20,7 @@ Design
 Dependencies: onnxruntime (always), numpy, opencv-contrib-python.
 Optional: onnx (only needed for the test-model helper).
 """
+
 from __future__ import annotations
 
 import logging
@@ -36,6 +37,7 @@ from autoptz.engine.runtime.inference import HardwarePrefs, make_session
 log = logging.getLogger(__name__)
 
 # ── Shared BBox / Detection types (re-used by track.py) ──────────────────────
+
 
 @dataclass(frozen=True)
 class BBox:
@@ -84,16 +86,17 @@ class Detection:
 
     bbox: BBox
     conf: float
-    class_id: int = 0   # 0 = person in COCO
+    class_id: int = 0  # 0 = person in COCO
 
 
 # ── Letterbox helpers ─────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class _ScaleInfo:
-    ratio: float   # resize ratio (same for both axes)
-    pad_x: int     # left padding in the padded image (pixels)
-    pad_y: int     # top padding
+    ratio: float  # resize ratio (same for both axes)
+    pad_x: int  # left padding in the padded image (pixels)
+    pad_y: int  # top padding
     orig_h: int
     orig_w: int
 
@@ -135,7 +138,10 @@ def _to_orig_coords(x1: float, y1: float, x2: float, y2: float, si: _ScaleInfo) 
 
 # ── Output format normalisation ───────────────────────────────────────────────
 
-def _nms(boxes: NDArray[np.float32], scores: NDArray[np.float32], iou_thr: float = 0.45) -> list[int]:
+
+def _nms(
+    boxes: NDArray[np.float32], scores: NDArray[np.float32], iou_thr: float = 0.45
+) -> list[int]:
     """Vectorised greedy NMS.  Returns kept indices sorted by descending score."""
     if len(boxes) == 0:
         return []
@@ -228,8 +234,17 @@ def _parse_raw_output(
         keep = _nms(c_boxes, c_conf)
         for k in keep:
             result_rows.append(
-                np.array([c_boxes[k, 0], c_boxes[k, 1], c_boxes[k, 2], c_boxes[k, 3],
-                          float(c_conf[k]), float(c)], dtype=np.float32)
+                np.array(
+                    [
+                        c_boxes[k, 0],
+                        c_boxes[k, 1],
+                        c_boxes[k, 2],
+                        c_boxes[k, 3],
+                        float(c_conf[k]),
+                        float(c),
+                    ],
+                    dtype=np.float32,
+                )
             )
 
     if not result_rows:
@@ -238,6 +253,7 @@ def _parse_raw_output(
 
 
 # ── Detector ──────────────────────────────────────────────────────────────────
+
 
 class PersonDetector:
     """YOLO26 person detector backed by an ONNX Runtime session.
@@ -284,14 +300,17 @@ class PersonDetector:
 
         log.info(
             "PersonDetector ready | ep=%s input=%s→%s output=%s",
-            self.ep, inp.name, inp.shape, out.name,
+            self.ep,
+            inp.name,
+            inp.shape,
+            out.name,
         )
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
     @property
     def ep(self) -> str:
-        return self._session.get_providers()[0]
+        return str(self._session.get_providers()[0])
 
     def detect(self, frame: NDArray[np.uint8]) -> list[Detection]:
         """Run detection on *frame* (BGR H×W×3).
@@ -307,9 +326,7 @@ class PersonDetector:
 
         inp_tensor, scale_info = _letterbox(frame, self._input_size)
 
-        raw_outputs = self._session.run(
-            [self._output_name], {self._input_name: inp_tensor}
-        )
+        raw_outputs = self._session.run([self._output_name], {self._input_name: inp_tensor})
         raw: NDArray[np.float32] = raw_outputs[0].astype(np.float32)
 
         dets_np = _parse_raw_output(raw, self._input_size, self._conf_floor)
@@ -317,7 +334,14 @@ class PersonDetector:
         # Filter to person class and apply hard confidence threshold
         results: list[Detection] = []
         for row in dets_np:
-            x1, y1, x2, y2, conf, cls = float(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5])
+            x1, y1, x2, y2, conf, cls = (
+                float(row[0]),
+                float(row[1]),
+                float(row[2]),
+                float(row[3]),
+                float(row[4]),
+                float(row[5]),
+            )
             if int(round(cls)) != self._person_class_id:
                 continue
             if conf < self._conf_threshold:
@@ -329,7 +353,9 @@ class PersonDetector:
 
         log.debug(
             "detect() frame=%d detections=%d ep=%s",
-            self._frame_count, len(results), self.ep,
+            self._frame_count,
+            len(results),
+            self.ep,
         )
         return results
 
@@ -340,6 +366,7 @@ class PersonDetector:
 
 # ── Model utilities ───────────────────────────────────────────────────────────
 
+
 def detections_to_numpy(dets: list[Detection]) -> NDArray[np.float32]:
     """Convert detections to ``[N, 6]`` float32 array expected by BoxMOT trackers.
 
@@ -348,10 +375,7 @@ def detections_to_numpy(dets: list[Detection]) -> NDArray[np.float32]:
     """
     if not dets:
         return np.empty((0, 6), dtype=np.float32)
-    rows = [
-        [d.bbox.x1, d.bbox.y1, d.bbox.x2, d.bbox.y2, d.conf, float(d.class_id)]
-        for d in dets
-    ]
+    rows = [[d.bbox.x1, d.bbox.y1, d.bbox.x2, d.bbox.y2, d.conf, float(d.class_id)] for d in dets]
     return np.array(rows, dtype=np.float32)
 
 
@@ -391,14 +415,16 @@ def make_synthetic_detector_session(
     const_node = helper.make_node("Constant", inputs=[], outputs=["output0"], value=const_tensor)
 
     # Graph: unused 'images' input + Constant → output
-    images_in = helper.make_tensor_value_info("images", TensorProto.FLOAT,
-                                              [1, 3, input_size, input_size])
+    images_in = helper.make_tensor_value_info(
+        "images", TensorProto.FLOAT, [1, 3, input_size, input_size]
+    )
     output_out = helper.make_tensor_value_info("output0", TensorProto.FLOAT, [1, n, 6])
     graph = helper.make_graph([const_node], "synthetic_yolo26", [images_in], [output_out])
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 14)])
     model.ir_version = 8
 
     import io  # noqa: PLC0415
+
     buf = io.BytesIO()
     onnx.save(model, buf)
     buf.seek(0)

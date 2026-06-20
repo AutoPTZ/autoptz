@@ -3,6 +3,7 @@
 All tests use an in-memory or tmp_path SQLite database — no filesystem
 side-effects and no hardware needed.
 """
+
 from __future__ import annotations
 
 import json
@@ -33,6 +34,7 @@ from autoptz.config.store import ConfigStore
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def store(tmp_path: Path) -> ConfigStore:
     """Fresh ConfigStore backed by a tmp-path SQLite file (debounce disabled)."""
@@ -57,9 +59,11 @@ def cam() -> CameraConfig:
 
 # ── Model validation ───────────────────────────────────────────────────────────
 
+
 class TestModels:
     def test_camera_id_is_uuid(self, cam: CameraConfig) -> None:
         import uuid
+
         uuid.UUID(cam.id)  # raises if not a valid UUID
 
     def test_camera_name_blank_raises(self) -> None:
@@ -102,6 +106,7 @@ class TestModels:
 
     def test_aim_region_fraction_table_covers_all_choices(self) -> None:
         from autoptz.config.models import AIM_REGION_FRACTION
+
         for region in ("face", "head_shoulders", "upper_body", "full_body"):
             assert region in AIM_REGION_FRACTION
             assert 0.0 <= AIM_REGION_FRACTION[region] <= 1.0
@@ -209,6 +214,7 @@ class TestModels:
 
 # ── Store: bootstrap & schema version ─────────────────────────────────────────
 
+
 class TestStoreBootstrap:
     def test_schema_version_set_on_init(self, store: ConfigStore) -> None:
         assert store._get_schema_version() == CURRENT_SCHEMA_VERSION
@@ -226,13 +232,12 @@ class TestStoreBootstrap:
         """A DB with schema_version=0 (simulated old DB) must migrate cleanly."""
         p = tmp_path / "old.db"
         import sqlite3
+
         conn = sqlite3.connect(str(p))
         conn.execute(
             "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value JSON NOT NULL)"
         )
-        conn.execute(
-            "INSERT INTO app_settings(key,value) VALUES ('schema_version','0')"
-        )
+        conn.execute("INSERT INTO app_settings(key,value) VALUES ('schema_version','0')")
         conn.commit()
         conn.close()
 
@@ -282,6 +287,7 @@ class TestStoreBootstrap:
 
 # ── Store: camera CRUD ─────────────────────────────────────────────────────────
 
+
 class TestCameraStore:
     def test_save_and_reload_camera(self, store: ConfigStore, cam: CameraConfig) -> None:
         """Create → persist → reload must round-trip identity."""
@@ -321,7 +327,10 @@ class TestCameraStore:
     def test_upsert_updates_name(self, store: ConfigStore, cam: CameraConfig) -> None:
         store.save_camera(cam)
         updated = CameraConfig(
-            id=cam.id, name="Rear Camera", source=cam.source, enabled=cam.enabled,
+            id=cam.id,
+            name="Rear Camera",
+            source=cam.source,
+            enabled=cam.enabled,
         )
         store.save_camera(updated)
         cameras = store.load_cameras()
@@ -344,7 +353,9 @@ class TestCameraStore:
         store.save_camera(cam)
         new_preset = PTZPreset(camera_id=cam.id, idx=1, name="Stage Left")
         cam2 = CameraConfig(
-            id=cam.id, name=cam.name, source=cam.source,
+            id=cam.id,
+            name=cam.name,
+            source=cam.source,
             presets=[new_preset],
         )
         store.save_camera(cam2)
@@ -359,9 +370,7 @@ class TestCameraStore:
         loaded = store.load_cameras()
         assert len(loaded) == 3
 
-    def test_invalid_row_quarantined_not_fatal(
-        self, store: ConfigStore, cam: CameraConfig
-    ) -> None:
+    def test_invalid_row_quarantined_not_fatal(self, store: ConfigStore, cam: CameraConfig) -> None:
         """A corrupted JSON blob must quarantine the row without crashing load_cameras."""
         store.save_camera(cam)
         # Corrupt a second row directly in the DB
@@ -381,6 +390,7 @@ class TestCameraStore:
 
 # ── Store: settings ────────────────────────────────────────────────────────────
 
+
 class TestSettings:
     def test_get_missing_returns_default(self, store: ConfigStore) -> None:
         assert store.get_setting("nonexistent", "fallback") == "fallback"
@@ -396,6 +406,7 @@ class TestSettings:
 
 
 # ── Store: layout CRUD ─────────────────────────────────────────────────────────
+
 
 class TestLayoutStore:
     def test_save_and_reload_layout(self, store: ConfigStore, cam: CameraConfig) -> None:
@@ -417,6 +428,7 @@ class TestLayoutStore:
 
 
 # ── Store: identity CRUD ───────────────────────────────────────────────────────
+
 
 class TestIdentityStore:
     def test_save_and_reload_identity(self, store: ConfigStore) -> None:
@@ -443,6 +455,7 @@ class TestIdentityStore:
 
 
 # ── Store: debounced writes ────────────────────────────────────────────────────
+
 
 class TestDebounce:
     def test_debounced_write_eventually_persists(self, tmp_path: Path, cam: CameraConfig) -> None:
@@ -478,6 +491,7 @@ class TestDebounce:
 
 # ── Store: AppConfig convenience ───────────────────────────────────────────────
 
+
 class TestAppConfig:
     def test_load_empty_db_returns_defaults(self, store: ConfigStore) -> None:
         cfg = store.load_app_config()
@@ -500,6 +514,7 @@ class TestAppConfig:
 
 # ── Store: JSON export / import ────────────────────────────────────────────────
 
+
 class TestExportImport:
     def test_export_import_equality(self, store: ConfigStore, cam: CameraConfig) -> None:
         """export_show → import_show must round-trip camera equality."""
@@ -512,6 +527,7 @@ class TestExportImport:
 
         # Fresh store — import into it
         import tempfile
+
         with tempfile.TemporaryDirectory() as d:
             s2 = ConfigStore(db_path=Path(d) / "import.db", debounce_s=0)
             count = s2.import_show(bundle)
@@ -530,7 +546,7 @@ class TestExportImport:
     def test_export_import_with_identities(self, store: ConfigStore) -> None:
         identity = IdentityRecord(
             name="Carol",
-            embeddings=[b"\xAA\xBB\xCC"],
+            embeddings=[b"\xaa\xbb\xcc"],
             thumbnail=b"\x01",
         )
         store.save_identity(identity)
@@ -539,6 +555,7 @@ class TestExportImport:
         assert len(bundle["identities"]) == 1
 
         import tempfile
+
         with tempfile.TemporaryDirectory() as d:
             s2 = ConfigStore(db_path=Path(d) / "ids.db", debounce_s=0)
             s2.import_show(bundle)
@@ -547,11 +564,9 @@ class TestExportImport:
 
         assert len(ids2) == 1
         assert ids2[0].name == "Carol"
-        assert ids2[0].embeddings[0] == b"\xAA\xBB\xCC"
+        assert ids2[0].embeddings[0] == b"\xaa\xbb\xcc"
 
-    def test_import_merge_preserves_existing(
-        self, tmp_path: Path, cam: CameraConfig
-    ) -> None:
+    def test_import_merge_preserves_existing(self, tmp_path: Path, cam: CameraConfig) -> None:
         """merge=True must not delete cameras already in the target store."""
         p = tmp_path / "merge.db"
         store = ConfigStore(db_path=p, debounce_s=0)
@@ -560,7 +575,11 @@ class TestExportImport:
         store.save_camera(existing)
 
         new_cam = CameraConfig(name="Imported")
-        bundle = {"schema_version": CURRENT_SCHEMA_VERSION, "cameras": [json.loads(new_cam.model_dump_json())], "layouts": []}
+        bundle = {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "cameras": [json.loads(new_cam.model_dump_json())],
+            "layouts": [],
+        }
         store.import_show(bundle, merge=True)
 
         cameras = store.load_cameras()
@@ -569,9 +588,7 @@ class TestExportImport:
         assert existing.id in ids
         assert new_cam.id in ids
 
-    def test_import_invalid_camera_quarantined(
-        self, store: ConfigStore, cam: CameraConfig
-    ) -> None:
+    def test_import_invalid_camera_quarantined(self, store: ConfigStore, cam: CameraConfig) -> None:
         """Invalid camera blobs in the import bundle must quarantine, not raise."""
         bundle = {
             "schema_version": CURRENT_SCHEMA_VERSION,
@@ -593,6 +610,7 @@ class TestExportImport:
 
 
 # ── Store: event log ───────────────────────────────────────────────────────────
+
 
 class TestEventLog:
     def test_log_event_stored(self, store: ConfigStore) -> None:

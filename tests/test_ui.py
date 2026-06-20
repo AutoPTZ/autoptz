@@ -4,6 +4,7 @@ All tests use QCoreApplication (no display needed) so they run cleanly in CI.
 Widget smoke tests run in an offscreen subprocess so they do not conflict with
 the module-level QCoreApplication used by the headless model tests.
 """
+
 from __future__ import annotations
 
 import os
@@ -21,6 +22,7 @@ import pytest
 @pytest.fixture(scope="module")
 def qapp():
     from PySide6.QtCore import QCoreApplication
+
     existing = QCoreApplication.instance()
     if existing is not None:
         yield existing
@@ -35,11 +37,13 @@ def qapp():
 
 def _client(qapp):  # noqa: ANN001 — fixture type varies
     from autoptz.ui.engine_client import EngineClient
+
     return EngineClient()
 
 
 def _make_telemetry(camera_id: str, fps: float = 25.0):
     from autoptz.engine.runtime.messages import TelemetryMsg
+
     return TelemetryMsg(camera_id=camera_id, seq=1, fps=fps)
 
 
@@ -160,7 +164,7 @@ class TestMacOSCameraPreflight:
         assert client.errors == []
 
 
-class TestCameraTileHelpers:
+class TestCameraTileFramingHelpers:
     def test_framing_snap_threshold(self, qapp) -> None:
         from autoptz.ui.widgets.camera_tile import _snap_center_axis
 
@@ -177,32 +181,38 @@ class TestCameraTileHelpers:
 class TestCameraRecord:
     def test_shm_name_derived_from_id(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraRecord
+
         rec = CameraRecord("abc123def456", "usb://0", "Cam")
         assert rec.shm_name == "cam_abc123de_preview"
 
     def test_fps_zero_without_telemetry(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraRecord
+
         rec = CameraRecord("id1", "usb://0", "Cam")
         assert rec.fps == 0.0
 
     def test_fps_from_telemetry(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraRecord
+
         rec = CameraRecord("id1", "usb://0", "Cam")
         rec.telemetry = _make_telemetry("id1", fps=30.0)
         assert rec.fps == pytest.approx(30.0)
 
     def test_health_ok_without_telemetry(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraRecord
+
         rec = CameraRecord("id1", "usb://0", "Cam")
         assert rec.health == "ok"
 
     def test_tracks_empty_without_telemetry(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraRecord
+
         rec = CameraRecord("id1", "usb://0", "Cam")
         assert rec.tracks_as_list() == []
 
     def test_ptz_defaults_without_telemetry(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraRecord
+
         rec = CameraRecord("id1", "usb://0", "Cam")
         p = rec.ptz_as_dict()
         assert p["pan"] == 0.0
@@ -213,20 +223,29 @@ class TestCameraRecord:
         # gallery id carried separately as identity_id (not the UUID as the label).
         from autoptz.engine.runtime.messages import BBox, TelemetryMsg, TrackInfo
         from autoptz.ui.engine_client import CameraRecord
+
         rec = CameraRecord("id1", "usb://0", "Cam")
         rec.telemetry = TelemetryMsg(
-            camera_id="id1", seq=0, width=1000, height=500,
-            tracks=[TrackInfo(
-                track_id=7, bbox=BBox(x1=100, y1=50, x2=300, y2=450),
-                identity="Person 3", identity_id="uuid-abc", confidence=0.8,
-                is_target=True,
-            )],
+            camera_id="id1",
+            seq=0,
+            width=1000,
+            height=500,
+            tracks=[
+                TrackInfo(
+                    track_id=7,
+                    bbox=BBox(x1=100, y1=50, x2=300, y2=450),
+                    identity="Person 3",
+                    identity_id="uuid-abc",
+                    confidence=0.8,
+                    is_target=True,
+                )
+            ],
         )
         out = rec.tracks_as_list()
         assert len(out) == 1
         t = out[0]
-        assert t["identity"] == "Person 3"      # display name
-        assert t["identity_id"] == "uuid-abc"   # stable id for enroll/target
+        assert t["identity"] == "Person 3"  # display name
+        assert t["identity_id"] == "uuid-abc"  # stable id for enroll/target
         # bbox normalised to 0..1 by frame dims
         assert t["bbox"]["x1"] == pytest.approx(0.1)
         assert t["bbox"]["y2"] == pytest.approx(0.9)
@@ -234,13 +253,23 @@ class TestCameraRecord:
     def test_tracks_emit_normalized_target_aim(self, qapp) -> None:
         from autoptz.engine.runtime.messages import BBox, TelemetryMsg, TrackInfo
         from autoptz.ui.engine_client import CameraRecord
+
         rec = CameraRecord("id1", "usb://0", "Cam")
         rec.telemetry = TelemetryMsg(
-            camera_id="id1", seq=0, width=1000, height=500,
-            tracks=[TrackInfo(
-                track_id=7, bbox=BBox(x1=100, y1=50, x2=300, y2=450),
-                is_target=True, aim_x=250, aim_y=125, aim_source="pose",
-            )],
+            camera_id="id1",
+            seq=0,
+            width=1000,
+            height=500,
+            tracks=[
+                TrackInfo(
+                    track_id=7,
+                    bbox=BBox(x1=100, y1=50, x2=300, y2=450),
+                    is_target=True,
+                    aim_x=250,
+                    aim_y=125,
+                    aim_source="pose",
+                )
+            ],
         )
         aim = rec.tracks_as_list()[0]["aim"]
         assert aim == {"x": pytest.approx(0.25), "y": pytest.approx(0.25), "source": "pose"}
@@ -254,10 +283,12 @@ class TestCameraRecord:
 class TestCameraListModel:
     def _model(self):
         from autoptz.ui.engine_client import CameraListModel
+
         return CameraListModel()
 
     def _rec(self, cid: str, name: str = "Cam"):
         from autoptz.ui.engine_client import CameraRecord
+
         return CameraRecord(cid, "usb://0", name)
 
     def test_empty_on_init(self, qapp) -> None:
@@ -294,6 +325,7 @@ class TestCameraListModel:
 
     def test_data_camera_id_role(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraListModel
+
         m = self._model()
         m.add_camera(self._rec("cam-xyz", "Test"))
         idx = m.index(0)
@@ -301,6 +333,7 @@ class TestCameraListModel:
 
     def test_data_display_name_role(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraListModel
+
         m = self._model()
         m.add_camera(self._rec("c1", "Studio Cam"))
         idx = m.index(0)
@@ -308,12 +341,14 @@ class TestCameraListModel:
 
     def test_data_fps_zero_initially(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraListModel
+
         m = self._model()
         m.add_camera(self._rec("c1"))
         assert m.data(m.index(0), CameraListModel.FpsRole) == 0.0
 
     def test_update_telemetry_updates_fps(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraListModel
+
         m = self._model()
         m.add_camera(self._rec("c1"))
         msg = _make_telemetry("c1", fps=29.97)
@@ -327,6 +362,7 @@ class TestCameraListModel:
 
     def test_swap_cameras(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraListModel
+
         m = self._model()
         m.add_camera(self._rec("c1"))
         m.add_camera(self._rec("c2"))
@@ -342,6 +378,7 @@ class TestCameraListModel:
 
     def test_move_camera(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraListModel
+
         m = self._model()
         m.add_camera(self._rec("c1"))
         m.add_camera(self._rec("c2"))
@@ -352,21 +389,22 @@ class TestCameraListModel:
     def test_role_names_present(self, qapp) -> None:
         m = self._model()
         names = m.roleNames()
-        assert b"cameraId"       in names.values()
-        assert b"displayName"    in names.values()
+        assert b"cameraId" in names.values()
+        assert b"displayName" in names.values()
         assert b"trackingEnabled" in names.values()
-        assert b"tracks"         in names.values()
-        assert b"fps"            in names.values()
+        assert b"tracks" in names.values()
+        assert b"fps" in names.values()
 
     def test_resolution_and_dropped_frames_roles_present(self, qapp) -> None:
         """FROZEN role names the QML Camera Info panel binds to."""
         m = self._model()
         names = m.roleNames()
-        assert b"resolution"    in names.values()
+        assert b"resolution" in names.values()
         assert b"droppedFrames" in names.values()
 
     def test_resolution_role_defaults_empty(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraListModel
+
         m = self._model()
         m.add_camera(self._rec("c1"))
         assert m.data(m.index(0), CameraListModel.ResolutionRole) == ""
@@ -375,10 +413,15 @@ class TestCameraListModel:
     def test_update_telemetry_sets_resolution_and_dropped(self, qapp) -> None:
         from autoptz.engine.runtime.messages import TelemetryMsg
         from autoptz.ui.engine_client import CameraListModel
+
         m = self._model()
         m.add_camera(self._rec("c1"))
         msg = TelemetryMsg(
-            camera_id="c1", seq=2, width=1920, height=1080, dropped_frames=4,
+            camera_id="c1",
+            seq=2,
+            width=1920,
+            height=1080,
+            dropped_frames=4,
         )
         m.update_telemetry(msg)
         assert m.data(m.index(0), CameraListModel.ResolutionRole) == "1920x1080"
@@ -388,11 +431,13 @@ class TestCameraListModel:
         from PySide6.QtCore import QModelIndex
 
         from autoptz.ui.engine_client import CameraListModel
+
         m = self._model()
         assert m.data(QModelIndex(), CameraListModel.CameraIdRole) is None
 
     def test_out_of_range_index_returns_none(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraListModel
+
         m = self._model()
         idx = m.index(99)
         assert m.data(idx, CameraListModel.CameraIdRole) is None
@@ -410,10 +455,11 @@ class TestEngineClient:
 
     def test_add_camera_returns_uuid(self, qapp) -> None:
         import uuid
+
         c = _client(qapp)
         cid = c.addCamera("usb://0", "Cam 1")
         assert len(cid) == 36  # standard UUID string length
-        uuid.UUID(cid)         # raises if invalid
+        uuid.UUID(cid)  # raises if invalid
 
     def test_add_camera_increments_count(self, qapp) -> None:
         c = _client(qapp)
@@ -645,6 +691,7 @@ class TestEngineClient:
 
     def test_drain_commands_add_camera(self, qapp) -> None:
         from autoptz.engine.runtime.messages import CmdKind
+
         c = _client(qapp)
         c.addCamera("usb://0", "Cam")
         cmds = c.drain_commands()
@@ -659,6 +706,7 @@ class TestEngineClient:
 
     def test_drain_includes_enable_tracking(self, qapp) -> None:
         from autoptz.engine.runtime.messages import CmdKind
+
         c = _client(qapp)
         cid = c.addCamera("usb://0", "Cam")
         c.enableTracking(cid, True)
@@ -668,6 +716,7 @@ class TestEngineClient:
 
     def test_drain_includes_set_target(self, qapp) -> None:
         from autoptz.engine.runtime.messages import SetTargetCmd
+
         c = _client(qapp)
         cid = c.addCamera("usb://0", "Cam")
         c.setTarget(cid, 5)
@@ -678,6 +727,7 @@ class TestEngineClient:
 
     def test_drain_includes_remove_camera(self, qapp) -> None:
         from autoptz.engine.runtime.messages import CmdKind
+
         c = _client(qapp)
         cid = c.addCamera("usb://0", "Cam")
         c.removeCamera(cid)
@@ -687,6 +737,7 @@ class TestEngineClient:
 
     def test_camera_model_property(self, qapp) -> None:
         from autoptz.ui.engine_client import CameraListModel
+
         c = _client(qapp)
         assert isinstance(c.cameraModel, CameraListModel)
 
@@ -703,6 +754,7 @@ class TestEngineClient:
 
     def test_ptz_nudge_queues_command(self, qapp) -> None:
         from autoptz.engine.runtime.messages import PtzNudgeCmd
+
         c = _client(qapp)
         cid = c.addCamera("usb://0", "Cam")
         c.ptzNudge(cid, 0.5, 0.0, 0.0)
@@ -740,9 +792,11 @@ class TestEngineClient:
 # ShmFrameSource — shm → QImage bridge for the Qt Widgets camera tiles
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestShmFrameSource:
     def test_unknown_camera_returns_none(self) -> None:
         from autoptz.ui.frames import ShmFrameSource
+
         assert ShmFrameSource().latest_qimage("no-such-cam") is None
 
     def test_self_healing_reads_after_writer_appears(self) -> None:
@@ -788,6 +842,7 @@ class TestShmFrameSource:
 
     def test_detach_clears_intent(self) -> None:
         from autoptz.ui.frames import ShmFrameSource
+
         src = ShmFrameSource()
         src.attach("cam-x", "nonexistent_shm_region", 8, 8)
         src.detach("cam-x")
@@ -803,11 +858,13 @@ class TestShmFrameSource:
 class TestCameraWallAspectLayout:
     def test_fit_tile_preserves_16x9(self, qapp) -> None:
         from autoptz.ui.widgets.camera_wall import _fit_16x9_tile
+
         w, h = _fit_16x9_tile(1280, 720, 2, 2)
         assert (w / h) == pytest.approx(16 / 9)
 
     def test_fit_tile_accounts_for_columns_rows(self, qapp) -> None:
         from autoptz.ui.widgets.camera_wall import _fit_16x9_tile
+
         w2, h2 = _fit_16x9_tile(1280, 720, 2, 2)
         w3, h3 = _fit_16x9_tile(1280, 720, 3, 2)
         assert w3 < w2
@@ -815,15 +872,18 @@ class TestCameraWallAspectLayout:
 
     def test_fixed_layout_placeholder_count(self, qapp) -> None:
         from autoptz.ui.widgets.camera_wall import _placeholder_count
+
         assert _placeholder_count("2x2", used=1, cols=2, rows=2) == 3
         assert _placeholder_count("3x2", used=4, cols=3, rows=2) == 2
 
     def test_auto_layout_has_no_placeholders(self, qapp) -> None:
         from autoptz.ui.widgets.camera_wall import _placeholder_count
+
         assert _placeholder_count("auto", used=1, cols=2, rows=2) == 0
 
     def test_drop_index_from_rects_insert_before_after(self, qapp) -> None:
         from autoptz.ui.widgets.camera_wall import _drop_index_from_rects
+
         order = ["a", "b", "c"]
         rects = {
             "a": (0, 0, 100, 56),
@@ -838,30 +898,48 @@ class TestCameraWallAspectLayout:
 class TestCameraTileHelpers:
     def test_target_button_label(self, qapp) -> None:
         from autoptz.ui.widgets.camera_tile import _format_target_button_label
+
         assert _format_target_button_label("Anyone") == "Track: Anyone ▾"
         assert _format_target_button_label("Alice") == "Track: Alice ▾"
         assert _format_target_button_label("ID 4") == "Track: ID 4 ▾"
 
     def test_context_menu_action_labels(self, qapp) -> None:
         from autoptz.ui.widgets.camera_tile import _context_menu_action_labels
+
         assert _context_menu_action_labels(
-            person=True, current_target=False, has_target=False, tracking=False,
+            person=True,
+            current_target=False,
+            has_target=False,
+            tracking=False,
         ) == ["Save Face / Name Person…", "Set Target", "Set Target and Track"]
         assert _context_menu_action_labels(
-            person=True, current_target=True, has_target=True, tracking=False,
+            person=True,
+            current_target=True,
+            has_target=True,
+            tracking=False,
         ) == ["Save Face / Name Person…", "Track", "Clear"]
         assert _context_menu_action_labels(
-            person=True, current_target=True, has_target=True, tracking=True,
+            person=True,
+            current_target=True,
+            has_target=True,
+            tracking=True,
         ) == ["Save Face / Name Person…", "Stop Tracking", "Clear"]
         assert _context_menu_action_labels(
-            person=False, current_target=False, has_target=True, tracking=False,
+            person=False,
+            current_target=False,
+            has_target=True,
+            tracking=False,
         ) == ["Track", "Clear"]
         assert _context_menu_action_labels(
-            person=False, current_target=False, has_target=True, tracking=True,
+            person=False,
+            current_target=False,
+            has_target=True,
+            tracking=True,
         ) == ["Stop Tracking", "Clear"]
 
     def test_upper_body_bbox_crops_lower_body(self, qapp) -> None:
         from autoptz.ui.widgets.camera_tile import _upper_body_bbox
+
         out = _upper_body_bbox({"x1": 0.2, "y1": 0.1, "x2": 0.8, "y2": 0.9})
         assert out["x1"] == pytest.approx(0.2)
         assert out["x2"] == pytest.approx(0.8)
@@ -869,6 +947,7 @@ class TestCameraTileHelpers:
 
     def test_norm_bbox_contains(self, qapp) -> None:
         from autoptz.ui.widgets.camera_tile import _norm_bbox_contains
+
         box = {"x1": 0.2, "y1": 0.1, "x2": 0.8, "y2": 0.9}
         assert _norm_bbox_contains(box, 0.5, 0.5)
         assert not _norm_bbox_contains(box, 0.1, 0.5)

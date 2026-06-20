@@ -3,6 +3,7 @@
 Must be in a named module (not __main__) so multiprocessing 'spawn'
 can pickle and locate the target function in the child process.
 """
+
 from __future__ import annotations
 
 import os
@@ -32,12 +33,14 @@ def shm_reader_proc(
         got = reader.latest()
         if got is not None:
             hdr, frame = got
-            result_q.put({
-                "ok": True,
-                "seq": hdr.seq,
-                "sum": int(frame.sum()),
-                "shape": list(frame.shape),
-            })
+            result_q.put(
+                {
+                    "ok": True,
+                    "seq": hdr.seq,
+                    "sum": int(frame.sum()),
+                    "shape": list(frame.shape),
+                }
+            )
             reader.close()
             return
         time.sleep(0.005)

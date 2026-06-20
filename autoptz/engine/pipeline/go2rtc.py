@@ -20,6 +20,7 @@ Usage::
     ...
     gw.stop()
 """
+
 from __future__ import annotations
 
 import logging
@@ -95,12 +96,12 @@ class Go2RTCGateway:
 
         if not self._wait_healthy():
             self.stop()
-            raise RuntimeError(
-                f"go2rtc did not become healthy within {_HEALTH_TIMEOUT} s."
-            )
+            raise RuntimeError(f"go2rtc did not become healthy within {_HEALTH_TIMEOUT} s.")
         log.info(
             "go2rtc running (pid=%d, rtsp=:%d, api=:%d)",
-            self._process.pid, self.rtsp_port, self.api_port,
+            self._process.pid,
+            self.rtsp_port,
+            self.api_port,
         )
 
     def stop(self) -> None:
@@ -139,8 +140,8 @@ class Go2RTCGateway:
     def _write_config(self) -> Path:
         """Write a minimal go2rtc YAML config to a temp file."""
         lines = [
-            f"api:\n  listen: \":{ self.api_port}\"\n",
-            f"rtsp:\n  listen: \":{self.rtsp_port}\"\n",
+            f'api:\n  listen: ":{self.api_port}"\n',
+            f'rtsp:\n  listen: ":{self.rtsp_port}"\n',
             "streams:\n",
         ]
         for name, source in self._streams.items():

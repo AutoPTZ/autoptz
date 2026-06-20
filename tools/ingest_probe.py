@@ -17,11 +17,11 @@ Usage examples::
 
 Press Ctrl+C to stop.
 """
+
 from __future__ import annotations
 
 import argparse
 import logging
-import signal
 import sys
 import time
 
@@ -83,8 +83,8 @@ def _run_adapter(adapter: object, duration: float) -> None:
 
 def _run_discover(timeout: float) -> None:
     from autoptz.engine.discovery.ndi import NDIDiscovery  # noqa: PLC0415
-    from autoptz.engine.discovery.usb import USBDiscovery  # noqa: PLC0415
     from autoptz.engine.discovery.onvif import ONVIFDiscovery  # noqa: PLC0415
+    from autoptz.engine.discovery.usb import USBDiscovery  # noqa: PLC0415
 
     log.info("Running discovery for %.0f s — plug/unplug cameras to test …", timeout)
 
@@ -130,7 +130,9 @@ def main(argv: list[str] | None = None) -> None:
         epilog=__doc__,
     )
     parser.add_argument("--fps", type=float, default=30.0, help="Target FPS (default: 30)")
-    parser.add_argument("--duration", type=float, default=30.0, help="Run for N seconds (default: 30)")
+    parser.add_argument(
+        "--duration", type=float, default=30.0, help="Run for N seconds (default: 30)"
+    )
 
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -145,8 +147,7 @@ def main(argv: list[str] | None = None) -> None:
 
     p_disc = sub.add_parser("discover", help="Run all discovery services")
     p_disc.add_argument(
-        "--timeout", type=float, default=30.0,
-        help="How long to run (default: 30 s)"
+        "--timeout", type=float, default=30.0, help="How long to run (default: 30 s)"
     )
 
     args = parser.parse_args(argv)

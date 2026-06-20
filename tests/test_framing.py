@@ -3,6 +3,7 @@
 Pure aim-point / subject-height math + EMA smoothing for pose-stable framing.
 No model required — keypoints are synthetic, so these run anywhere.
 """
+
 from __future__ import annotations
 
 import math
@@ -98,8 +99,8 @@ class TestTorsoAimPoint:
         before = torso_aim_point(_STANDING, bias="upper_body")
         # Raise both wrists/elbows wildly — torso anchors are unchanged.
         moved = list(_STANDING)
-        moved[7] = Keypoint(120.0, 40.0, 0.9)   # left_elbow up high
-        moved[9] = Keypoint(110.0, 10.0, 0.9)   # left_wrist way up
+        moved[7] = Keypoint(120.0, 40.0, 0.9)  # left_elbow up high
+        moved[9] = Keypoint(110.0, 10.0, 0.9)  # left_wrist way up
         moved[10] = Keypoint(290.0, 10.0, 0.9)  # right_wrist way up
         after = torso_aim_point(moved, bias="upper_body")
         assert before == after

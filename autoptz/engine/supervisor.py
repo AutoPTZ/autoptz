@@ -27,6 +27,7 @@ The command pump can either be driven externally (``tick()`` from a GUI-thread
 ``QTimer`` — the default the UI uses) or by an internal daemon thread
 (``start(run_pump=True)``) for headless use.
 """
+
 from __future__ import annotations
 
 import logging
@@ -171,8 +172,7 @@ class Supervisor:
             self._running = True
 
             camera_ids = self._client.cameraModel.camera_ids()
-            log.info("supervisor starting — %d camera(s), ep=%s",
-                     len(camera_ids), self.active_ep)
+            log.info("supervisor starting — %d camera(s), ep=%s", len(camera_ids), self.active_ep)
             _log_macos_capture_path()
             if staged:
                 self._start_pump_if_needed(run_pump)
@@ -197,8 +197,7 @@ class Supervisor:
                 return
             self._running = False
 
-            log.info("supervisor stopping — tearing down %d worker(s)",
-                     len(self._workers))
+            log.info("supervisor stopping — tearing down %d worker(s)", len(self._workers))
             self._pump_stop.set()
             pump = self._pump_thread
             self._pump_thread = None
@@ -230,7 +229,9 @@ class Supervisor:
         if run_pump and self._pump_thread is None:
             self._pump_stop.clear()
             self._pump_thread = threading.Thread(
-                target=self._pump_loop, name="engine-cmd-pump", daemon=True,
+                target=self._pump_loop,
+                name="engine-cmd-pump",
+                daemon=True,
             )
             self._pump_thread.start()
 
@@ -239,11 +240,9 @@ class Supervisor:
         total = len(camera_ids)
         adaptive_concurrency = self._adaptive_startup_concurrency()
         concurrency = 1
-        self._progress(progress, active=True, phase="Opening cameras",
-                       started=0, total=total)
+        self._progress(progress, active=True, phase="Opening cameras", started=0, total=total)
         if total == 0:
-            self._progress(progress, active=False, phase="Ready",
-                           started=0, total=0)
+            self._progress(progress, active=False, phase="Ready", started=0, total=0)
             return
         started = 0
         for camera_id in camera_ids:
@@ -254,8 +253,9 @@ class Supervisor:
                 if camera_id not in self._workers:
                     self._spawn_worker(camera_id, defer_inference=True)
             started += 1
-            self._progress(progress, active=True, phase="Opening cameras",
-                           started=started, total=total)
+            self._progress(
+                progress, active=True, phase="Opening cameras", started=started, total=total
+            )
             if started == 1:
                 concurrency = adaptive_concurrency
                 time.sleep(0.25)
@@ -263,8 +263,9 @@ class Supervisor:
                 time.sleep(0.35)
 
         pool = self._ensure_inference_pool()
-        self._progress(progress, active=True, phase="Warming detector",
-                       started=started, total=total)
+        self._progress(
+            progress, active=True, phase="Warming detector", started=started, total=total
+        )
         if pool is not None:
             try:
                 detector = getattr(pool, "detector", None)
@@ -273,13 +274,13 @@ class Supervisor:
             except Exception:  # noqa: BLE001
                 log.debug("startup detector warmup failed", exc_info=True)
 
-        self._progress(progress, active=True, phase="Warming ReID",
-                       started=started, total=total)
+        self._progress(progress, active=True, phase="Warming ReID", started=started, total=total)
         self._warm_reid()
 
         if pool is not None:
-            self._progress(progress, active=True, phase="Warming face",
-                           started=started, total=total)
+            self._progress(
+                progress, active=True, phase="Warming face", started=started, total=total
+            )
             try:
                 face = getattr(pool, "face", None)
                 if callable(face):
@@ -287,8 +288,9 @@ class Supervisor:
             except Exception:  # noqa: BLE001
                 log.debug("startup face warmup failed", exc_info=True)
 
-            self._progress(progress, active=True, phase="Warming pose",
-                           started=started, total=total)
+            self._progress(
+                progress, active=True, phase="Warming pose", started=started, total=total
+            )
             try:
                 pose = getattr(pool, "pose", None)
                 if callable(pose):
@@ -297,8 +299,7 @@ class Supervisor:
                 log.debug("startup pose warmup failed", exc_info=True)
 
         self._release_worker_inference()
-        self._progress(progress, active=False, phase="Ready",
-                       started=started, total=total)
+        self._progress(progress, active=False, phase="Ready", started=started, total=total)
 
     @staticmethod
     def _adaptive_startup_concurrency() -> int:
@@ -370,10 +371,12 @@ class Supervisor:
 
         def _swap() -> None:
             try:
-                ok = bool(pool.switch_detector_tier(
-                    tier,
-                    reason=reason or f"Operator selected detector tier {tier}.",
-                ))
+                ok = bool(
+                    pool.switch_detector_tier(
+                        tier,
+                        reason=reason or f"Operator selected detector tier {tier}.",
+                    )
+                )
             except Exception:  # noqa: BLE001
                 log.warning("detector tier switch to %s failed", tier, exc_info=True)
                 return
@@ -418,8 +421,7 @@ class Supervisor:
             try:
                 self._route(cmd)
             except Exception:  # noqa: BLE001
-                log.warning("error routing command %s", getattr(cmd, "kind", "?"),
-                            exc_info=True)
+                log.warning("error routing command %s", getattr(cmd, "kind", "?"), exc_info=True)
 
     def _pump_loop(self) -> None:
         while not self._pump_stop.is_set():
@@ -479,13 +481,11 @@ class Supervisor:
             try:
                 worker.stop()
             except Exception:  # noqa: BLE001
-                log.warning("error stopping removed worker %s", cmd.camera_id,
-                            exc_info=True)
+                log.warning("error stopping removed worker %s", cmd.camera_id, exc_info=True)
             try:
                 self._client.request_provider_detach(cmd.camera_id or "")
             except Exception:  # noqa: BLE001
-                log.debug("provider detach request failed for %s", cmd.camera_id,
-                          exc_info=True)
+                log.debug("provider detach request failed for %s", cmd.camera_id, exc_info=True)
 
     def _on_enable_tracking(self, cmd: EnableTrackingCmd) -> None:
         worker = self._get(cmd.camera_id)
@@ -510,11 +510,18 @@ class Supervisor:
         so the named person is recognised on every camera afterwards.
         """
         worker = self._get(cmd.camera_id)
-        if (worker is not None and cmd.track_id is not None
-                and cmd.identity_id and hasattr(worker, "enroll_track")):
+        if (
+            worker is not None
+            and cmd.track_id is not None
+            and cmd.identity_id
+            and hasattr(worker, "enroll_track")
+        ):
             worker.enroll_track(
-                cmd.track_id, cmd.identity_id, cmd.identity_name,
-                getattr(cmd, "click_x", None), getattr(cmd, "click_y", None),
+                cmd.track_id,
+                cmd.identity_id,
+                cmd.identity_name,
+                getattr(cmd, "click_x", None),
+                getattr(cmd, "click_y", None),
             )
 
     def _on_ptz_nudge(self, cmd: PtzNudgeCmd) -> None:
@@ -585,8 +592,7 @@ class Supervisor:
             if hasattr(self._client, "set_identity_service"):
                 self._client.set_identity_service(self._identity_service)
         except Exception:  # noqa: BLE001 — identity stack must never break startup
-            log.warning("identity service init failed; identity features off.",
-                        exc_info=True)
+            log.warning("identity service init failed; identity features off.", exc_info=True)
             self._identity_service = None
         return self._identity_service
 
@@ -611,8 +617,7 @@ class Supervisor:
                 tier = "auto"
             self._inference_pool = build_inference_pool(detector_tier=tier)
         except Exception:  # noqa: BLE001 — pool is an optimisation, never load-bearing
-            log.warning("inference pool init failed; using per-worker models.",
-                        exc_info=True)
+            log.warning("inference pool init failed; using per-worker models.", exc_info=True)
             self._inference_pool = None
         return self._inference_pool
 
@@ -623,8 +628,12 @@ class Supervisor:
             return
         worker = self._worker_factory(camera_id, config, self._client.push_telemetry)
         self._workers[camera_id] = worker
-        log.info("spawned worker camera_id=%s name=%s (workers=%d)",
-                 camera_id, getattr(config, "name", "?"), len(self._workers))
+        log.info(
+            "spawned worker camera_id=%s name=%s (workers=%d)",
+            camera_id,
+            getattr(config, "name", "?"),
+            len(self._workers),
+        )
 
         # Share the gallery + wire the worker→client identity push (mirrors
         # telemetry).  Done via setters so the 3-arg worker_factory contract
@@ -633,7 +642,8 @@ class Supervisor:
         if service is not None and hasattr(worker, "set_identity_service"):
             worker.set_identity_service(service)
         if hasattr(worker, "set_identity_callback") and hasattr(
-            self._client, "push_identity",
+            self._client,
+            "push_identity",
         ):
             worker.set_identity_callback(self._client.push_identity)
 
@@ -660,11 +670,13 @@ class Supervisor:
         # frame sooner.
         try:
             self._client.request_provider_attach(
-                camera_id, shm_name, _PREVIEW_W, _PREVIEW_H,
+                camera_id,
+                shm_name,
+                _PREVIEW_W,
+                _PREVIEW_H,
             )
         except Exception:  # noqa: BLE001
-            log.debug("provider attach request failed for %s", camera_id,
-                      exc_info=True)
+            log.debug("provider attach request failed for %s", camera_id, exc_info=True)
 
     def _release_worker_inference(self) -> None:
         with self._lock:
@@ -683,7 +695,10 @@ class Supervisor:
             return self._workers.get(camera_id)
 
     def _default_worker_factory(
-        self, camera_id: str, config: CameraConfig, on_telemetry: Any,
+        self,
+        camera_id: str,
+        config: CameraConfig,
+        on_telemetry: Any,
     ) -> CameraWorker:
         return CameraWorker(camera_id, config, on_telemetry)
 

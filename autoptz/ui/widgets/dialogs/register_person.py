@@ -6,11 +6,12 @@ Two modes:
   * **change photo**: an already-registered person → just re-pick the profile
     photo → ``setProfileThumbnail(id, index)``.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -89,8 +90,9 @@ class RegisterPersonDialog(QDialog):
         col.setContentsMargins(18, 18, 18, 18)
         col.setSpacing(12)
 
-        col.addWidget(QLabel("Choose a profile photo" + (" and name this person:"
-                             if register else ":")))
+        col.addWidget(
+            QLabel("Choose a profile photo" + (" and name this person:" if register else ":"))
+        )
         self._strip = _PhotoStrip(photo_uris, name)
         col.addWidget(self._strip)
 

@@ -3,6 +3,7 @@
 BoxMOT is NOT required — the tracker implementation is injected via ``_impl``
 so all state-machine and lifecycle logic can be tested with a plain mock.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -20,6 +21,7 @@ from autoptz.engine.pipeline.track import (
 )
 
 # ── Mock BoxMOT implementation ────────────────────────────────────────────────
+
 
 def _make_impl(track_rows: list[list[float]] | None = None) -> MagicMock:
     """Return a mock BoxMOT tracker whose update() returns *track_rows*.
@@ -39,11 +41,13 @@ def _make_impl(track_rows: list[list[float]] | None = None) -> MagicMock:
 
 FRAME = np.zeros((480, 640, 3), dtype=np.uint8)
 
+
 def _det(x1, y1, x2, y2, conf=0.9) -> Detection:
     return Detection(BBox(x1, y1, x2, y2), conf, 0)
 
 
 # ── Tracker basics ─────────────────────────────────────────────────────────────
+
 
 class TestTrackerBasics:
     def test_no_detections_no_tracks(self) -> None:
@@ -63,10 +67,12 @@ class TestTrackerBasics:
         assert t.conf == pytest.approx(0.9)
 
     def test_two_tracks_returned(self) -> None:
-        impl = _make_impl([
-            [10, 20, 100, 200, 1, 0.9, 0],
-            [300, 50, 400, 300, 2, 0.85, 0],
-        ])
+        impl = _make_impl(
+            [
+                [10, 20, 100, 200, 1, 0.9, 0],
+                [300, 50, 400, 300, 2, 0.85, 0],
+            ]
+        )
         tracker = Tracker(_impl=impl)
         tracks = tracker.update([_det(10, 20, 100, 200), _det(300, 50, 400, 300)], FRAME)
         assert len(tracks) == 2
@@ -89,12 +95,11 @@ class TestTrackerBasics:
 
 # ── Track lifecycle ────────────────────────────────────────────────────────────
 
+
 class TestTrackLifecycle:
     def test_new_track_is_tentative_with_min_hits_2(self) -> None:
         impl = MagicMock()
-        impl.update.return_value = np.array(
-            [[10, 20, 100, 200, 1, 0.9, 0]], dtype=np.float32
-        )
+        impl.update.return_value = np.array([[10, 20, 100, 200, 1, 0.9, 0]], dtype=np.float32)
         tracker = Tracker(_impl=impl, min_hits=2)
         tracks = tracker.update([_det(10, 20, 100, 200)], FRAME)
         assert tracks[0].state == TrackState.TENTATIVE
@@ -155,13 +160,13 @@ class TestTrackLifecycle:
         impl = MagicMock()
         row = np.array([[10, 20, 100, 200, 1, 0.9, 0]], dtype=np.float32)
         impl.update.side_effect = [
-            row,                                     # frame 1: present
-            np.empty((0, 7), dtype=np.float32),     # frame 2: missing
-            row,                                     # frame 3: re-detected
+            row,  # frame 1: present
+            np.empty((0, 7), dtype=np.float32),  # frame 2: missing
+            row,  # frame 3: re-detected
         ]
         tracker = Tracker(_impl=impl, min_hits=1, coast_window=1.0)
-        tracker.update([_det(10, 20, 100, 200)], FRAME, fps=10.0)   # confirmed
-        tracker.update([], FRAME, fps=10.0)                           # lost
+        tracker.update([_det(10, 20, 100, 200)], FRAME, fps=10.0)  # confirmed
+        tracker.update([], FRAME, fps=10.0)  # lost
         tracks = tracker.update([_det(10, 20, 100, 200)], FRAME, fps=10.0)
 
         confirmed = [t for t in tracks if t.track_id == 1 and t.state == TrackState.CONFIRMED]
@@ -187,6 +192,7 @@ class TestTrackLifecycle:
 
 
 # ── Velocity ──────────────────────────────────────────────────────────────────
+
 
 class TestVelocity:
     def test_first_frame_velocity_zero(self) -> None:
@@ -223,6 +229,7 @@ class TestVelocity:
 
 # ── TrackerType handling ───────────────────────────────────────────────────────
 
+
 class TestTrackerTypeEnum:
     def test_bytetrack_string(self) -> None:
         tracker = Tracker(_impl=_make_impl(), tracker_type="bytetrack")
@@ -234,6 +241,7 @@ class TestTrackerTypeEnum:
 
 
 # ── BoxMOT unavailability ──────────────────────────────────────────────────────
+
 
 class TestBoxMOTUnavailable:
     def test_probe_returns_bool(self) -> None:
@@ -266,6 +274,7 @@ class TestBoxMOTUnavailable:
 
 # ── Edge cases ─────────────────────────────────────────────────────────────────
 
+
 class TestEdgeCases:
     def test_update_with_8col_output(self) -> None:
         """BoxMOT sometimes returns 8 columns [… det_idx]; wrapper must handle it."""
@@ -285,10 +294,13 @@ class TestEdgeCases:
     def test_multiple_lost_tracks_all_returned(self) -> None:
         impl = MagicMock()
         impl.update.side_effect = [
-            np.array([
-                [10, 10, 100, 200, 1, 0.9, 0],
-                [300, 10, 400, 200, 2, 0.8, 0],
-            ], dtype=np.float32),
+            np.array(
+                [
+                    [10, 10, 100, 200, 1, 0.9, 0],
+                    [300, 10, 400, 200, 2, 0.8, 0],
+                ],
+                dtype=np.float32,
+            ),
             np.empty((0, 7), dtype=np.float32),  # both gone
         ]
         tracker = Tracker(_impl=impl, min_hits=1, coast_window=2.0)

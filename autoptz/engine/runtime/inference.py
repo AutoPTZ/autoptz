@@ -5,6 +5,7 @@ Selection order:
   Windows:               TensorRT → CUDA → DirectML → OpenVINO → CPU
   Linux:                 TensorRT → CUDA → OpenVINO → CPU
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,6 +31,7 @@ class EP(str, Enum):
 @dataclass
 class HardwarePrefs:
     """Per-camera or global hardware preferences."""
+
     force_ep: EP | None = None
 
 
@@ -120,9 +122,7 @@ def make_session(
         )
     except Exception as exc:
         if chosen != EP.CPU:
-            logger.warning(
-                "EP %s failed (%s); downgrading to CPU", chosen.value, exc
-            )
+            logger.warning("EP %s failed (%s); downgrading to CPU", chosen.value, exc)
             session = ort.InferenceSession(
                 str(model_path),
                 sess_options=session_options,

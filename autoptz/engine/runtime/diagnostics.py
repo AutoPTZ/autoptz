@@ -15,6 +15,7 @@ State vocabulary (the UI maps these to colours):
     "off"     — unavailable / not installed         (grey/red)
     "running" / "stopped" — engine lifecycle        (green / grey)
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -48,29 +49,26 @@ def inference_status() -> dict[str, str]:
 
         provs = list(ort.get_available_providers())
         labels = [p.replace("ExecutionProvider", "") for p in provs] or ["none"]
-        return _entry("inference", "Inference runtime", "ok",
-                      "ONNX Runtime · " + ", ".join(labels))
+        return _entry("inference", "Inference runtime", "ok", "ONNX Runtime · " + ", ".join(labels))
     except Exception:  # noqa: BLE001
-        return _entry("inference", "Inference runtime", "off",
-                      "onnxruntime not importable")
+        return _entry("inference", "Inference runtime", "off", "onnxruntime not importable")
 
 
 def detector_model_status() -> dict[str, str]:
     """Whether a usable detector ONNX is present (without triggering a download)."""
     env = os.environ.get("AUTOPTZ_MODEL_PATH")
     if env and Path(env).is_file():
-        return _entry("detector", "Detector model", "ok",
-                      f"AUTOPTZ_MODEL_PATH · {Path(env).name}")
+        return _entry("detector", "Detector model", "ok", f"AUTOPTZ_MODEL_PATH · {Path(env).name}")
     try:
         from autoptz.engine.runtime.models import default_manager  # noqa: PLC0415
 
         onnx = default_manager().cache_dir / "yolo11n.onnx"
         if onnx.is_file():
             size_mb = onnx.stat().st_size / (1 << 20)
-            return _entry("detector", "Detector model", "ok",
-                          f"{onnx.name} · {size_mb:.1f} MB")
-        return _entry("detector", "Detector model", "off",
-                      "not downloaded — run tools/fetch_models.py")
+            return _entry("detector", "Detector model", "ok", f"{onnx.name} · {size_mb:.1f} MB")
+        return _entry(
+            "detector", "Detector model", "off", "not downloaded — run tools/fetch_models.py"
+        )
     except Exception:  # noqa: BLE001
         return _entry("detector", "Detector model", "off", "lookup failed")
 
@@ -82,8 +80,9 @@ def tracker_status() -> dict[str, str]:
 
         if boxmot_available():
             return _entry("tracker", "Tracker", "ok", "BoT-SORT (boxmot)")
-        return _entry("tracker", "Tracker", "warn",
-                      "Lightweight IoU fallback · install boxmot for BoT-SORT")
+        return _entry(
+            "tracker", "Tracker", "warn", "Lightweight IoU fallback · install boxmot for BoT-SORT"
+        )
     except Exception:  # noqa: BLE001
         return _entry("tracker", "Tracker", "off", "tracker module unavailable")
 
@@ -91,19 +90,24 @@ def tracker_status() -> dict[str, str]:
 def reid_status() -> dict[str, str]:
     """Appearance ReID (OSNet) recovery after occlusion — provided by boxmot."""
     if _module_present("boxmot"):
-        return _entry("reid", "ReID (re-acquire)", "ok",
-                      "OSNet (boxmot) · required for Stable tracking")
-    return _entry("reid", "ReID (re-acquire)", "off",
-                  "needs boxmot / OSNet — Stable tracking unavailable")
+        return _entry(
+            "reid", "ReID (re-acquire)", "ok", "OSNet (boxmot) · required for Stable tracking"
+        )
+    return _entry(
+        "reid", "ReID (re-acquire)", "off", "needs boxmot / OSNet — Stable tracking unavailable"
+    )
 
 
 def face_status() -> dict[str, str]:
     """Face recognition (insightface SCRFD + ArcFace) availability."""
     if _module_present("insightface"):
-        return _entry("face", "Face recognition", "ok",
-                      "insightface SCRFD + ArcFace")
-    return _entry("face", "Face recognition", "off",
-                  "insightface not installed · manual click-to-track still works")
+        return _entry("face", "Face recognition", "ok", "insightface SCRFD + ArcFace")
+    return _entry(
+        "face",
+        "Face recognition",
+        "off",
+        "insightface not installed · manual click-to-track still works",
+    )
 
 
 def pose_status() -> dict[str, str]:
@@ -114,13 +118,15 @@ def pose_status() -> dict[str, str]:
         onnx = default_manager().cache_dir / "yolo11n-pose.onnx"
         if onnx.is_file():
             size_mb = onnx.stat().st_size / (1 << 20)
-            return _entry("pose", "Pose model", "ok",
-                          f"{onnx.name} · {size_mb:.1f} MB")
+            return _entry("pose", "Pose model", "ok", f"{onnx.name} · {size_mb:.1f} MB")
         if _module_present("ultralytics"):
-            return _entry("pose", "Pose model", "warn",
-                          f"not cached · can export to {onnx}")
-        return _entry("pose", "Pose model", "off",
-                      f"not cached · needs bundled model or ultralytics export to {onnx}")
+            return _entry("pose", "Pose model", "warn", f"not cached · can export to {onnx}")
+        return _entry(
+            "pose",
+            "Pose model",
+            "off",
+            f"not cached · needs bundled model or ultralytics export to {onnx}",
+        )
     except Exception:  # noqa: BLE001
         return _entry("pose", "Pose model", "off", "lookup failed")
 
@@ -141,38 +147,43 @@ def optional_components() -> list[dict[str, str]]:
         cache = Path("AutoPTZ/models")
 
     reid = reid_status()
-    rows.append({
-        **reid,
-        "source": "boxmot OSNet weights",
-        "size": "varies by tracker package",
-        "path": str(cache / "reid"),
-        "network": "May contact package/model hosts when prepared.",
-    })
+    rows.append(
+        {
+            **reid,
+            "source": "boxmot OSNet weights",
+            "size": "varies by tracker package",
+            "path": str(cache / "reid"),
+            "network": "May contact package/model hosts when prepared.",
+        }
+    )
 
     pose = pose_status()
-    rows.append({
-        **pose,
-        "source": "YOLO11n-pose ONNX",
-        "size": "small model bundle",
-        "path": str(cache / "yolo11n-pose.onnx"),
-        "network": "Can be bundled offline or exported from ultralytics.",
-    })
+    rows.append(
+        {
+            **pose,
+            "source": "YOLO11n-pose ONNX",
+            "size": "small model bundle",
+            "path": str(cache / "yolo11n-pose.onnx"),
+            "network": "Can be bundled offline or exported from ultralytics.",
+        }
+    )
 
     face = face_status()
-    rows.append({
-        **face,
-        "source": "insightface buffalo_l (SCRFD + ArcFace)",
-        "size": "face model pack",
-        "path": str(Path.home() / ".insightface" / "models"),
-        "network": "insightface may download its model pack on first prepare.",
-    })
+    rows.append(
+        {
+            **face,
+            "source": "insightface buffalo_l (SCRFD + ArcFace)",
+            "size": "face model pack",
+            "path": str(Path.home() / ".insightface" / "models"),
+            "network": "insightface may download its model pack on first prepare.",
+        }
+    )
     return rows
 
 
 def engine_status(running: bool, ep: str) -> dict[str, str]:
     if running:
-        return _entry("engine", "Engine", "running",
-                      f"running{(' · ' + ep) if ep else ''}")
+        return _entry("engine", "Engine", "running", f"running{(' · ' + ep) if ep else ''}")
     return _entry("engine", "Engine", "stopped", "stopped")
 
 
@@ -252,7 +263,8 @@ def system_metrics() -> dict[str, Any]:
         out["mem_percent"] = round(float(vm.percent), 1)
         # Process CPU can exceed 100% across cores; normalise to the whole machine.
         out["app_cpu_percent"] = round(
-            float(_PROC.cpu_percent(interval=None)) / float(ncpu), 1,
+            float(_PROC.cpu_percent(interval=None)) / float(ncpu),
+            1,
         )
         rss = _PROC.memory_info().rss
         out["app_rss_mb"] = round(rss / (1 << 20), 1)

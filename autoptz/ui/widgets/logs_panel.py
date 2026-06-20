@@ -6,6 +6,7 @@ category (logger-name prefixes — Cameras / Detection / Identity / PTZ / Engine
 a minimum **level**, and free **text**.  Capture level (INFO/DEBUG), Copy,
 Export, Clear, and auto-scroll round it out.
 """
+
 from __future__ import annotations
 
 import logging
@@ -39,11 +40,24 @@ _SOURCES: list[tuple[str, tuple[str, ...]]] = [
     ("All sources", ()),
     ("Cameras", ("autoptz.engine.camera_worker",)),
     ("Detection / Tracking", ("autoptz.engine.pipeline.detect", "autoptz.engine.pipeline.track")),
-    ("Identity / Faces", ("autoptz.engine.pipeline.identify", "autoptz.engine.pipeline.reid",
-                          "autoptz.engine.identity")),
+    (
+        "Identity / Faces",
+        (
+            "autoptz.engine.pipeline.identify",
+            "autoptz.engine.pipeline.reid",
+            "autoptz.engine.identity",
+        ),
+    ),
     ("PTZ", ("autoptz.engine.ptz",)),
-    ("Engine / System", ("autoptz.engine.supervisor", "autoptz.engine.runtime",
-                         "autoptz.engine.discovery", "autoptz.ui")),
+    (
+        "Engine / System",
+        (
+            "autoptz.engine.supervisor",
+            "autoptz.engine.runtime",
+            "autoptz.engine.discovery",
+            "autoptz.ui",
+        ),
+    ),
 ]
 
 
@@ -61,7 +75,7 @@ class LogTableModel(QAbstractTableModel):
     def __init__(self, source: LogListModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._src = source
-        self._raw: list[tuple[str, str, str, str]] = []   # mirrors ALL source rows
+        self._raw: list[tuple[str, str, str, str]] = []  # mirrors ALL source rows
         self._view: list[tuple[str, str, str, str]] = []  # filtered subset (same objs)
         self._prefixes: tuple[str, ...] = ()
         self._min_rank = 0
@@ -95,7 +109,9 @@ class LogTableModel(QAbstractTableModel):
     def columnCount(self, parent: QModelIndex | None = None) -> int:  # type: ignore[override]
         return 4
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+    def headerData(
+        self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole
+    ) -> Any:
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return self._HEADERS[section] if 0 <= section < 4 else None
         return None
@@ -206,7 +222,8 @@ class LogsPanel(QWidget):
         bar.addWidget(self._search, 1)
 
         bar.addWidget(QLabel("Capture:"))
-        self._capture = QComboBox(); self._capture.addItems(["INFO", "DEBUG"])
+        self._capture = QComboBox()
+        self._capture.addItems(["INFO", "DEBUG"])
         self._capture.currentTextChanged.connect(client.setLogLevel)
         bar.addWidget(self._capture)
         root.addLayout(bar)
@@ -214,11 +231,15 @@ class LogsPanel(QWidget):
         # actions
         actions = QHBoxLayout()
         self._autoscroll_btn = QPushButton("Autoscroll: On")
-        self._autoscroll_btn.setCheckable(True); self._autoscroll_btn.setChecked(True)
+        self._autoscroll_btn.setCheckable(True)
+        self._autoscroll_btn.setChecked(True)
         self._autoscroll_btn.toggled.connect(self._toggle_autoscroll)
-        copy_btn = QPushButton("Copy"); copy_btn.clicked.connect(client.copyLogsToClipboard)
-        export_btn = QPushButton("Export…"); export_btn.clicked.connect(self._export)
-        clear_btn = QPushButton("Clear"); clear_btn.clicked.connect(log_model.clear)
+        copy_btn = QPushButton("Copy")
+        copy_btn.clicked.connect(client.copyLogsToClipboard)
+        export_btn = QPushButton("Export…")
+        export_btn.clicked.connect(self._export)
+        clear_btn = QPushButton("Clear")
+        clear_btn.clicked.connect(log_model.clear)
         actions.addWidget(self._autoscroll_btn)
         actions.addStretch(1)
         for b in (copy_btn, export_btn, clear_btn):
@@ -234,7 +255,9 @@ class LogsPanel(QWidget):
         self._table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self._table.setWordWrap(False)
-        mono = self._table.font(); mono.setFamily("Menlo"); mono.setPixelSize(11)
+        mono = self._table.font()
+        mono.setFamily("Menlo")
+        mono.setPixelSize(11)
         self._table.setFont(mono)
         hh = self._table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -287,8 +310,9 @@ class LogsPanel(QWidget):
             self._table.scrollToBottom()
 
     def _export(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Export Logs", "autoptz-logs.txt",
-                                              "Text files (*.txt)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Logs", "autoptz-logs.txt", "Text files (*.txt)"
+        )
         if path:
             self._client.exportLogs(path)
 

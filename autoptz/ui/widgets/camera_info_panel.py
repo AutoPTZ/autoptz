@@ -5,6 +5,7 @@ holds named value labels and updates them imperatively whenever
 ``telemetryUpdated`` fires for the shown camera (plus a slow fallback timer and
 on ``configChanged``/``engineStateChanged``), so it actually shows live data.
 """
+
 from __future__ import annotations
 
 import logging
@@ -102,21 +103,50 @@ class CameraInfoPanel(QWidget):
         ("Tracking", ["Following", "Match", "Lock", "People in view"]),
         ("Identity", ["Display name", "Source", "Address"]),
         ("Stream", ["Resolution", "Live fps", "Health", "Dropped frames"]),
-        ("Runtime", [
-            "Target fps", "Frame budget", "Runtime load", "Setting cost",
-            "Quality floor", "Quality active", "Quality reason",
-        ]),
-        ("Models", [
-            "Detector model", "Detector tier", "Model switch",
-            "Tracker backend", "Tracker switch",
-        ]),
-        ("Services", [
-            "Detector service", "Tracker service", "ReID", "Face", "Pose", "Framing",
-        ]),
-        ("Performance", [
-            "Ingest", "Detector stage", "Tracker stage", "Face stage", "Pose stage",
-            "Latency",
-        ]),
+        (
+            "Runtime",
+            [
+                "Target fps",
+                "Frame budget",
+                "Runtime load",
+                "Setting cost",
+                "Quality floor",
+                "Quality active",
+                "Quality reason",
+            ],
+        ),
+        (
+            "Models",
+            [
+                "Detector model",
+                "Detector tier",
+                "Model switch",
+                "Tracker backend",
+                "Tracker switch",
+            ],
+        ),
+        (
+            "Services",
+            [
+                "Detector service",
+                "Tracker service",
+                "ReID",
+                "Face",
+                "Pose",
+                "Framing",
+            ],
+        ),
+        (
+            "Performance",
+            [
+                "Ingest",
+                "Detector stage",
+                "Tracker stage",
+                "Face stage",
+                "Pose stage",
+                "Latency",
+            ],
+        ),
         ("PTZ", ["Backend"]),
         ("Engine", ["Inference EP"]),
     ]
@@ -125,31 +155,30 @@ class CameraInfoPanel(QWidget):
     # the live numbers are self-explanatory.
     _GROUP_HELP: dict[str, str] = {
         "Tracking": "Who the camera is following right now: the locked person (or "
-                    "“no target”), the match confidence, lock state, and how many "
-                    "people are currently in view.",
+        "“no target”), the match confidence, lock state, and how many "
+        "people are currently in view.",
         "Identity": "The camera's display name and where its video comes from "
-                    "(source type and address; credentials are hidden).",
+        "(source type and address; credentials are hidden).",
         "Stream": "Live video health: current resolution, measured frames per "
-                  "second, an overall health flag, and how many frames have been "
-                  "dropped.",
+        "second, an overall health flag, and how many frames have been "
+        "dropped.",
         "Runtime": "Effective runtime choices: FPS budget, load against that "
-                   "budget, active quality level, and the reason for the current "
-                   "auto/manual setting.",
+        "budget, active quality level, and the reason for the current "
+        "auto/manual setting.",
         "Models": "The shared detector model and per-camera tracker backend in "
-                  "effect, including any current or recent switch.",
+        "effect, including any current or recent switch.",
         "Services": "Enabled/active service state for this selected camera. "
-                    "Disabled or stale services keep their last-known timing "
-                    "ghosted instead of pretending they are 0 ms.",
+        "Disabled or stale services keep their last-known timing "
+        "ghosted instead of pretending they are 0 ms.",
         "Performance": "Per-stage processing time. Rows show last + rolling "
-                       "average by default, with Disabled/Stale labels when a "
-                       "service is off or no longer fresh.",
+        "average by default, with Disabled/Stale labels when a "
+        "service is off or no longer fresh.",
         "PTZ": "The pan/tilt/zoom backend in use for this camera (NDI, ONVIF, "
-               "VISCA-IP/USB, or auto).",
+        "VISCA-IP/USB, or auto).",
         "Detection": "The detection settings in effect: quality floor, the "
-                     "tracking algorithm, and how often the detector runs (every "
-                     "N frames).",
-        "Engine": "The ONNX Runtime execution provider doing inference (e.g. "
-                  "CoreML / CUDA / CPU).",
+        "tracking algorithm, and how often the detector runs (every "
+        "N frames).",
+        "Engine": "The ONNX Runtime execution provider doing inference (e.g. CoreML / CUDA / CPU).",
     }
 
     def _build_groups(self, col: QVBoxLayout) -> None:
@@ -231,8 +260,7 @@ class CameraInfoPanel(QWidget):
             for k in self._vals:
                 if k in {"Display name", "Source", "Address", "Backend", "Tracker backend"}:
                     continue
-                self._set(k, "engine stopped" if not running else "—",
-                          color=T.CURRENT.muted)
+                self._set(k, "engine stopped" if not running else "—", color=T.CURRENT.muted)
             return
 
         tel = getattr(rec, "telemetry", None)
@@ -240,21 +268,36 @@ class CameraInfoPanel(QWidget):
         tracks = _tracks(rec)
         target = next((t for t in tracks if t.get("is_target")), None)
 
-        self._set("Following",
-                  (target.get("identity") or f"ID {target.get('track_id')}") if target else "no target",
-                  color=T.TRACKING if target else T.CURRENT.subtext)
+        self._set(
+            "Following",
+            (target.get("identity") or f"ID {target.get('track_id')}") if target else "no target",
+            color=T.TRACKING if target else T.CURRENT.subtext,
+        )
         conf = target.get("confidence") if target else None
-        self._set("Match", f"{round(conf * 100)}%" if isinstance(conf, (int, float)) and conf > 0 else "—")
-        self._set("Lock", "Locked" if target else "Searching",
-                  color=T.TRACKING if target else T.CURRENT.subtext)
+        self._set(
+            "Match", f"{round(conf * 100)}%" if isinstance(conf, int | float) and conf > 0 else "—"
+        )
+        self._set(
+            "Lock",
+            "Locked" if target else "Searching",
+            color=T.TRACKING if target else T.CURRENT.subtext,
+        )
         self._set("People in view", str(len(tracks)))
 
-        self._set("Resolution", getattr(rec, "resolution", "") or ("waiting for video…" if not streaming else "—"))
+        self._set(
+            "Resolution",
+            getattr(rec, "resolution", "") or ("waiting for video…" if not streaming else "—"),
+        )
         fps = float(getattr(rec, "fps", 0.0) or 0.0)
-        self._set("Live fps", f"{fps:.1f} fps" if fps > 0 else ("waiting…" if not streaming else "0 fps"))
+        self._set(
+            "Live fps", f"{fps:.1f} fps" if fps > 0 else ("waiting…" if not streaming else "0 fps")
+        )
         health = str(getattr(rec, "health", "ok"))
-        self._set("Health", health,
-                  color=T.TRACKING if health == "ok" else T.ERROR if health == "error" else T.WARNING)
+        self._set(
+            "Health",
+            health,
+            color=T.TRACKING if health == "ok" else T.ERROR if health == "error" else T.WARNING,
+        )
         self._set("Dropped frames", str(getattr(rec, "dropped_frames", 0)))
 
         target_fps = float(getattr(tel, "target_fps", 0.0) or src.get("fps", 30.0) or 30.0)
@@ -278,19 +321,21 @@ class CameraInfoPanel(QWidget):
             active_txt += f" · detect every {n} frame{'s' if n != 1 else ''}"
         except (TypeError, ValueError):
             pass
-        diverged = (
-            str(floor) == "auto"
-            and str(active) not in ("auto", "—", "")
-        )
-        self._set("Quality active", active_txt,
-                  color=T.WARNING if diverged else None)
+        diverged = str(floor) == "auto" and str(active) not in ("auto", "—", "")
+        self._set("Quality active", active_txt, color=T.WARNING if diverged else None)
         self._set("Quality reason", _field(qs, "reason", "—"), color=T.CURRENT.subtext)
         self._set("Detector model", _field(qs, "detector_model", "—") or "—")
         self._set("Detector tier", _field(qs, "detector_tier", "—") or "—")
-        self._set("Model switch", _switch_text(getattr(tel, "model_switch", None)),
-                  color=_switch_color(getattr(tel, "model_switch", None)))
-        self._set("Tracker switch", _switch_text(getattr(tel, "tracker_switch", None)),
-                  color=_switch_color(getattr(tel, "tracker_switch", None)))
+        self._set(
+            "Model switch",
+            _switch_text(getattr(tel, "model_switch", None)),
+            color=_switch_color(getattr(tel, "model_switch", None)),
+        )
+        self._set(
+            "Tracker switch",
+            _switch_text(getattr(tel, "tracker_switch", None)),
+            color=_switch_color(getattr(tel, "tracker_switch", None)),
+        )
 
         for key, label in (
             ("detector", "Detector service"),
@@ -333,7 +378,7 @@ class CameraInfoPanel(QWidget):
 
 def _ms(tel: Any, attr: str) -> str:
     v = getattr(tel, attr, None) if tel is not None else None
-    if isinstance(v, (int, float)) and v >= 0:
+    if isinstance(v, int | float) and v >= 0:
         return f"{v:.1f} ms"
     return "—"
 
@@ -392,9 +437,12 @@ def _service_text(tel: Any, key: str) -> tuple[str, str | None]:
     if detail:
         text += f" · {detail}"
     color = (
-        T.ERROR if state == "failed"
-        else T.TRACKING if state == "active"
-        else T.WARNING if state == "warming"
+        T.ERROR
+        if state == "failed"
+        else T.TRACKING
+        if state == "active"
+        else T.WARNING
+        if state == "warming"
         else T.CURRENT.muted
     )
     return text, color

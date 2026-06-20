@@ -1,4 +1,5 @@
 """AutoPTZ v2 config package."""
+
 from autoptz.config.models import (
     AppConfig,
     CameraConfig,

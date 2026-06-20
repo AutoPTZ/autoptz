@@ -5,6 +5,7 @@ right = +1, tilt: up = +1) continuously while the thumb is held — even when th
 mouse stops moving — so the engine's manual-override window stays alive.  On
 release the thumb springs back to centre and a final ``(0, 0)`` is emitted.
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, Qt, QTimer, Signal
@@ -25,7 +26,7 @@ class JoystickPad(QWidget):
         self._size = size
         self._knob_r = max(10, size // 6)
         self._max = size / 2 - self._knob_r
-        self._vec = QPointF(0.0, 0.0)   # thumb offset from centre, in pixels
+        self._vec = QPointF(0.0, 0.0)  # thumb offset from centre, in pixels
         self._dragging = False
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setToolTip(
@@ -53,7 +54,7 @@ class JoystickPad(QWidget):
 
     def _emit(self) -> None:
         pan = self._vec.x() / self._max if self._max else 0.0
-        tilt = -self._vec.y() / self._max if self._max else 0.0   # screen y is down
+        tilt = -self._vec.y() / self._max if self._max else 0.0  # screen y is down
         self.moved.emit(float(pan), float(tilt))
 
     # ── interaction ──────────────────────────────────────────────────────────────

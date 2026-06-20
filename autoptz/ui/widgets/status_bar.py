@@ -4,6 +4,7 @@ Replaces the meaningless "total fps" with a meaningful summary: engine state +
 EP, an add-camera affordance, and an aggregate ``N cams · X fps avg · ● Health``
 chip.  Recomputed on telemetry/engine/camera signals.
 """
+
 from __future__ import annotations
 
 import logging
@@ -120,9 +121,7 @@ class StatusBar(QWidget):
     def refresh(self) -> None:
         running = bool(_safe(lambda: self._client.engineRunning, False))
         ep = (_safe(lambda: self._client.engineEp, "") or "").replace("ExecutionProvider", "")
-        self._engine_dot.setStyleSheet(
-            f"color: {T.TRACKING if running else T.CURRENT.muted};"
-        )
+        self._engine_dot.setStyleSheet(f"color: {T.TRACKING if running else T.CURRENT.muted};")
         self._engine_label.setText(
             f"Engine running{('  ·  ' + ep) if ep else ''}" if running else "Engine stopped"
         )
@@ -131,14 +130,19 @@ class StatusBar(QWidget):
 
     def _refresh_summary(self) -> None:
         n, avg, state = self._aggregate()
-        color = {"healthy": T.TRACKING, "degraded": T.WARNING,
-                 "error": T.ERROR}.get(state, T.CURRENT.muted)
+        color = {"healthy": T.TRACKING, "degraded": T.WARNING, "error": T.ERROR}.get(
+            state, T.CURRENT.muted
+        )
         cams = f"{n} cam" if n == 1 else f"{n} cams"
         if not bool(_safe(lambda: self._client.engineRunning, False)):
             self._summary.setText(f"{cams}")
             return
-        label = {"healthy": "Healthy", "degraded": "Degraded",
-                 "error": "Error", "idle": "Idle"}.get(state, "Idle")
+        label = {
+            "healthy": "Healthy",
+            "degraded": "Degraded",
+            "error": "Error",
+            "idle": "Idle",
+        }.get(state, "Idle")
         self._summary.setText(
             f'{cams} · {avg:.0f} fps avg · <span style="color:{color}">●</span> {label}'
         )

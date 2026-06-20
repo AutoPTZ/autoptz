@@ -13,6 +13,7 @@ All methods run on the GUI thread (``attach``/``detach`` are delivered via a
 queued connection in ``app.py``; ``latest_qimage`` is called from the tile's
 paint timer), but a lock guards the maps so ordering is never a hazard.
 """
+
 from __future__ import annotations
 
 import logging
@@ -28,10 +29,10 @@ log = logging.getLogger(__name__)
 
 def bgr_to_qimage(bgr: np.ndarray) -> QImage:  # type: ignore[type-arg]
     """Convert a BGR numpy frame to an owned RGB :class:`QImage`."""
-    rgb = bgr[..., ::-1].copy()        # BGR→RGB; copy gives data ownership
+    rgb = bgr[..., ::-1].copy()  # BGR→RGB; copy gives data ownership
     h, w = rgb.shape[:2]
     img = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888)
-    return img.copy()                  # detach from the numpy buffer
+    return img.copy()  # detach from the numpy buffer
 
 
 class ShmFrameSource:
@@ -51,8 +52,7 @@ class ShmFrameSource:
         self.detach(camera_id)
         with self._lock:
             self._intents[camera_id] = (shm_name, int(height), int(width))
-        log.debug("ShmFrameSource: intent %s → %s (%dx%d)",
-                  camera_id, shm_name, width, height)
+        log.debug("ShmFrameSource: intent %s → %s (%dx%d)", camera_id, shm_name, width, height)
 
     def detach(self, camera_id: str) -> None:
         with self._lock:
@@ -98,9 +98,9 @@ class ShmFrameSource:
         except Exception:  # noqa: BLE001
             return last
         if result is None:
-            return last            # no new frame this tick — keep the last one
+            return last  # no new frame this tick — keep the last one
 
-        _header, frame = result    # frame: (H, W, 3) uint8 BGR
+        _header, frame = result  # frame: (H, W, 3) uint8 BGR
         img = bgr_to_qimage(frame)
         with self._lock:
             self._last[camera_id] = img
@@ -117,6 +117,7 @@ class ShmFrameSource:
         except Exception:  # noqa: BLE001 — writer segment not created yet
             return None
         self._readers[camera_id] = reader
-        log.debug("ShmFrameSource: opened reader %s → %s (%dx%d)",
-                  camera_id, shm_name, width, height)
+        log.debug(
+            "ShmFrameSource: opened reader %s → %s (%dx%d)", camera_id, shm_name, width, height
+        )
         return reader

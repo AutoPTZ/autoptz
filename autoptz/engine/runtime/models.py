@@ -28,6 +28,7 @@ The ONNX we prefer is the **NMS-free** ``[1, N, 6]`` layout that
 both NMS-free and pre-NMS, but NMS-free avoids the ultralytics batched-NMS
 export bug; see ``detect.py`` and the v2 plan §"Recommended libraries").
 """
+
 from __future__ import annotations
 
 import logging
@@ -57,6 +58,7 @@ def detector_model_for_tier(tier: str | None) -> str:
     key = str(tier or "auto").strip().lower()
     return _DETECTOR_TIER_TO_PT.get(key, _DEFAULT_DETECTOR_PT)
 
+
 # Optional prebuilt, torch-free YOLO11n ONNX URL.  No reliable public URL is
 # wired by default (HuggingFace `resolve` links for community exports returned
 # 401), so this is empty and acquisition falls through to the ultralytics export.
@@ -72,7 +74,7 @@ _DOWNLOAD_CHUNK = 1 << 16
 _MIN_ONNX_BYTES = 1 << 18  # 256 KiB
 
 # Export knobs that match what detect.py expects (see module docstring).
-_EXPORT_KWARGS = dict(format="onnx", nms=False, dynamic=False, opset=12)
+_EXPORT_KWARGS = {"format": "onnx", "nms": False, "dynamic": False, "opset": 12}
 
 
 def _models_cache_dir() -> Path:
@@ -210,9 +212,7 @@ class ModelManager:
            default detector, so it can't fetch the wrong weights for balanced/
            medium.
         """
-        per_model = os.environ.get(
-            f"AUTOPTZ_MODEL_URL_{stem.upper().replace('-', '_')}"
-        )
+        per_model = os.environ.get(f"AUTOPTZ_MODEL_URL_{stem.upper().replace('-', '_')}")
         if per_model:
             return per_model
         base = os.environ.get("AUTOPTZ_MODEL_URL", _DEFAULT_PREBUILT_URL)
@@ -238,17 +238,16 @@ class ModelManager:
         try:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
         except Exception:  # noqa: BLE001
-            log.warning("Could not create model cache dir %s", self._cache_dir,
-                        exc_info=True)
+            log.warning("Could not create model cache dir %s", self._cache_dir, exc_info=True)
             return None
 
         tmp_fd, tmp_name = tempfile.mkstemp(
-            suffix=".onnx.part", dir=str(self._cache_dir),
+            suffix=".onnx.part",
+            dir=str(self._cache_dir),
         )
         tmp_path = Path(tmp_name)
         try:
-            log.info("Downloading prebuilt detector ONNX from %s (first run, "
-                     "~one-time)", url)
+            log.info("Downloading prebuilt detector ONNX from %s (first run, ~one-time)", url)
             written = 0
             with urllib.request.urlopen(url) as resp, os.fdopen(tmp_fd, "wb") as out:  # noqa: S310
                 while True:
@@ -260,14 +259,18 @@ class ModelManager:
 
             if written < _MIN_ONNX_BYTES:
                 log.warning(
-                    "Prebuilt detector download from %s looked truncated "
-                    "(%d bytes); ignoring.", url, written,
+                    "Prebuilt detector download from %s looked truncated (%d bytes); ignoring.",
+                    url,
+                    written,
                 )
                 return None
 
             tmp_path.replace(onnx_path)
-            log.info("Detector ONNX ready at %s (%.1f MB, prebuilt, torch-free)",
-                     onnx_path, written / (1 << 20))
+            log.info(
+                "Detector ONNX ready at %s (%.1f MB, prebuilt, torch-free)",
+                onnx_path,
+                written / (1 << 20),
+            )
             return str(onnx_path)
         except Exception:  # noqa: BLE001 — network / disk / URL errors
             log.warning(
@@ -280,8 +283,7 @@ class ModelManager:
                 if tmp_path.exists():
                     tmp_path.unlink()
             except Exception:  # noqa: BLE001
-                log.debug("Could not remove temp download %s", tmp_path,
-                          exc_info=True)
+                log.debug("Could not remove temp download %s", tmp_path, exc_info=True)
 
     def _download_and_export(self, model_pt: str, onnx_path: Path) -> str | None:
         """Download the ultralytics ``.pt`` and export it to *onnx_path*.
@@ -289,7 +291,7 @@ class ModelManager:
         Returns the ONNX path on success, ``None`` on any failure (logged).
         """
         try:
-            from ultralytics import YOLO  # noqa: PLC0415
+            from ultralytics import YOLO  # type: ignore[attr-defined]  # noqa: PLC0415
         except Exception:  # noqa: BLE001 — ImportError or transitive import failure
             self._last_error = (
                 f"{Path(model_pt).stem}: ultralytics not installed and no "
@@ -306,8 +308,7 @@ class ModelManager:
         try:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
         except Exception:  # noqa: BLE001
-            log.warning("Could not create model cache dir %s", self._cache_dir,
-                        exc_info=True)
+            log.warning("Could not create model cache dir %s", self._cache_dir, exc_info=True)
             return None
 
         # ultralytics downloads weights into the *current* working directory by
@@ -317,13 +318,15 @@ class ModelManager:
         try:
             os.chdir(self._cache_dir)
         except Exception:  # noqa: BLE001
-            log.warning("Could not chdir to cache dir %s", self._cache_dir,
-                        exc_info=True)
+            log.warning("Could not chdir to cache dir %s", self._cache_dir, exc_info=True)
             return None
 
         try:
-            log.info("Downloading + exporting detector %s → %s (first run, ~one-time)",
-                     model_pt, onnx_path.name)
+            log.info(
+                "Downloading + exporting detector %s → %s (first run, ~one-time)",
+                model_pt,
+                onnx_path.name,
+            )
             model = YOLO(model_pt)  # downloads the .pt if missing
             exported = model.export(**_EXPORT_KWARGS)
             # ultralytics returns the exported path (str/Path) on success.
@@ -360,8 +363,7 @@ class ModelManager:
             return str(onnx_path)
 
         self._last_error = (
-            f"{onnx_path.stem}: export reported success but the ONNX file is "
-            "missing."
+            f"{onnx_path.stem}: export reported success but the ONNX file is missing."
         )
         log.warning("Detector export reported success but %s is missing.", onnx_path)
         return None

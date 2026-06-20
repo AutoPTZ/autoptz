@@ -6,6 +6,7 @@ Usage::
     python -m autoptz --selftest   # verify foundations and exit
     python -m autoptz --help
 """
+
 from __future__ import annotations
 
 import argparse
@@ -23,6 +24,7 @@ logger = logging.getLogger("autoptz")
 
 
 # ── selftest ──────────────────────────────────────────────────────────────────
+
 
 def selftest() -> None:
     import numpy as np
@@ -102,12 +104,13 @@ def selftest() -> None:
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="autoptz", description="AutoPTZ v2")
-    parser.add_argument("--selftest", action="store_true",
-                        help="Run foundation selftest and exit")
-    parser.add_argument("--log-level", default="WARNING",
-                        choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    parser.add_argument("--selftest", action="store_true", help="Run foundation selftest and exit")
+    parser.add_argument(
+        "--log-level", default="WARNING", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
+    )
     args = parser.parse_args()
 
     logging.getLogger().setLevel(getattr(logging, args.log_level))
@@ -118,6 +121,7 @@ def main() -> None:
 
     # Default: launch the UI
     from autoptz.ui.app import run
+
     sys.exit(run())
 
 

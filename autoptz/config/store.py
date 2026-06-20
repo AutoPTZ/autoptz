@@ -17,6 +17,7 @@ Design decisions
 - JSON export/import ("show file") is a self-contained dict that can be
   round-tripped across machines.
 """
+
 from __future__ import annotations
 
 import json
@@ -45,15 +46,18 @@ log = logging.getLogger(__name__)
 
 # ── Platform config-dir resolution ────────────────────────────────────────────
 
+
 def default_config_dir() -> Path:
     """Return the platform-appropriate directory for the AutoPTZ config DB."""
     if sys.platform == "darwin":
         base = Path.home() / "Library" / "Application Support"
     elif sys.platform == "win32":
         import os
+
         base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
     else:
         import os
+
         base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     return base / "AutoPTZ"
 
@@ -141,6 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_photo_identity    ON identity_photos(identity_id)
 # Each entry: (target_version, callable(conn) -> None)
 # The runner applies all entries whose target_version > current schema_version.
 
+
 def _migrate_to_v1(conn: sqlite3.Connection) -> None:
     """Apply the v1 schema to an older DB.
 
@@ -160,9 +165,7 @@ def _migrate_to_v2(conn: sqlite3.Connection) -> None:
     """
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(identities)")}
     if "enabled" not in cols:
-        conn.execute(
-            "ALTER TABLE identities ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"
-        )
+        conn.execute("ALTER TABLE identities ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
 
 
 def _migrate_to_v3(conn: sqlite3.Connection) -> None:
@@ -184,8 +187,7 @@ def _migrate_to_v3(conn: sqlite3.Connection) -> None:
                 (json.dumps(data), row["id"]),
             )
         except Exception:  # noqa: BLE001
-            log.debug("v3 coast-window migration skipped camera %s", row["id"],
-                      exc_info=True)
+            log.debug("v3 coast-window migration skipped camera %s", row["id"], exc_info=True)
 
 
 def _migrate_to_v4(conn: sqlite3.Connection) -> None:
@@ -203,8 +205,7 @@ def _migrate_to_v4(conn: sqlite3.Connection) -> None:
                 (json.dumps(data), row["id"]),
             )
         except Exception:  # noqa: BLE001
-            log.debug("v4 aim-body-mode migration skipped camera %s", row["id"],
-                      exc_info=True)
+            log.debug("v4 aim-body-mode migration skipped camera %s", row["id"], exc_info=True)
 
 
 _MIGRATIONS: list[tuple[int, Any]] = [
@@ -217,6 +218,7 @@ _MIGRATIONS: list[tuple[int, Any]] = [
 
 
 # ── ConfigStore ───────────────────────────────────────────────────────────────
+
 
 class ConfigStore:
     """Persistent config store backed by a SQLite database.
@@ -318,9 +320,7 @@ class ConfigStore:
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         assert self._conn is not None
-        row = self._conn.execute(
-            "SELECT value FROM app_settings WHERE key=?", (key,)
-        ).fetchone()
+        row = self._conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
         if row is None:
             return default
         val = row["value"]
@@ -359,8 +359,14 @@ class ConfigStore:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        preset.id, cam.id, preset.idx, preset.name,
-                        preset.pan, preset.tilt, preset.zoom, preset.native_preset,
+                        preset.id,
+                        cam.id,
+                        preset.idx,
+                        preset.name,
+                        preset.pan,
+                        preset.tilt,
+                        preset.zoom,
+                        preset.native_preset,
                     ),
                 )
 
@@ -401,9 +407,7 @@ class ConfigStore:
     def load_cameras(self) -> list[CameraConfig]:
         """Load all cameras; quarantine rows that fail validation."""
         assert self._conn is not None
-        rows = self._conn.execute(
-            "SELECT config FROM cameras ORDER BY rowid"
-        ).fetchall()
+        rows = self._conn.execute("SELECT config FROM cameras ORDER BY rowid").fetchall()
         cameras: list[CameraConfig] = []
         for row in rows:
             try:
@@ -483,13 +487,15 @@ class ConfigStore:
                 VALUES (?,?,?,?,?,?)
                 """,
                 (
-                    identity.id, identity.name, identity.thumbnail,
-                    int(identity.enabled), identity.created_at.isoformat(), now,
+                    identity.id,
+                    identity.name,
+                    identity.thumbnail,
+                    int(identity.enabled),
+                    identity.created_at.isoformat(),
+                    now,
                 ),
             )
-            conn.execute(
-                "DELETE FROM identity_embeddings WHERE identity_id=?", (identity.id,)
-            )
+            conn.execute("DELETE FROM identity_embeddings WHERE identity_id=?", (identity.id,))
             for i, vec in enumerate(identity.embeddings):
                 emb_id = f"{identity.id}:{i}"
                 conn.execute(
@@ -501,9 +507,7 @@ class ConfigStore:
                     (emb_id, identity.id, vec, "", now),
                 )
             # Candidate profile photos (the recognition crops the user re-picks from).
-            conn.execute(
-                "DELETE FROM identity_photos WHERE identity_id=?", (identity.id,)
-            )
+            conn.execute("DELETE FROM identity_photos WHERE identity_id=?", (identity.id,))
             for i, img in enumerate(identity.thumbnails):
                 conn.execute(
                     """
@@ -516,9 +520,7 @@ class ConfigStore:
 
     def load_identities(self) -> list[IdentityRecord]:
         assert self._conn is not None
-        id_rows = self._conn.execute(
-            "SELECT * FROM identities ORDER BY created_at"
-        ).fetchall()
+        id_rows = self._conn.execute("SELECT * FROM identities ORDER BY created_at").fetchall()
         records: list[IdentityRecord] = []
         for row in id_rows:
             try:
@@ -555,12 +557,8 @@ class ConfigStore:
     def delete_identity(self, identity_id: str) -> None:
         with self._tx() as conn:
             conn.execute("DELETE FROM identities WHERE id=?", (identity_id,))
-            conn.execute(
-                "DELETE FROM identity_embeddings WHERE identity_id=?", (identity_id,)
-            )
-            conn.execute(
-                "DELETE FROM identity_photos WHERE identity_id=?", (identity_id,)
-            )
+            conn.execute("DELETE FROM identity_embeddings WHERE identity_id=?", (identity_id,))
+            conn.execute("DELETE FROM identity_photos WHERE identity_id=?", (identity_id,))
 
     def delete_identity_photo(self, identity_id: str, index: int) -> bool:
         """Delete a single candidate photo (``identity_photos`` row) by position.
@@ -586,9 +584,7 @@ class ConfigStore:
                 return False
             images = [bytes(r["image"]) for r in rows]
             images.pop(index)
-            conn.execute(
-                "DELETE FROM identity_photos WHERE identity_id=?", (identity_id,)
-            )
+            conn.execute("DELETE FROM identity_photos WHERE identity_id=?", (identity_id,))
             for i, img in enumerate(images):
                 conn.execute(
                     """
@@ -737,7 +733,9 @@ class ConfigStore:
                 layout = Layout.model_validate(raw_layout)
                 self.save_layout(layout)
             except Exception as exc:
-                log.warning("import_show: skipping invalid layout %r: %s", raw_layout.get("id"), exc)
+                log.warning(
+                    "import_show: skipping invalid layout %r: %s", raw_layout.get("id"), exc
+                )
                 self.quarantine.append({"error": str(exc), "data": raw_layout})
 
         for raw_id in data.get("identities", []):
@@ -753,8 +751,12 @@ class ConfigStore:
                     thumbnails=thumbnails,
                     enabled=bool(raw_id.get("enabled", True)),
                     labeled=True,
-                    created_at=datetime.fromisoformat(raw_id.get("created_at", datetime.now(UTC).replace(tzinfo=None).isoformat())),
-                    updated_at=datetime.fromisoformat(raw_id.get("updated_at", datetime.now(UTC).replace(tzinfo=None).isoformat())),
+                    created_at=datetime.fromisoformat(
+                        raw_id.get("created_at", datetime.now(UTC).replace(tzinfo=None).isoformat())
+                    ),
+                    updated_at=datetime.fromisoformat(
+                        raw_id.get("updated_at", datetime.now(UTC).replace(tzinfo=None).isoformat())
+                    ),
                 )
                 self.save_identity(identity)
             except Exception as exc:

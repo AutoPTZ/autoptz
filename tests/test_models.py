@@ -6,6 +6,7 @@ a cached ONNX, **prefers a prebuilt torch-free ONNX download**, falls back to
 the ultralytics export, and NEVER raises — it returns ``None``
 (live-preview-only) when neither acquisition path is reachable.
 """
+
 from __future__ import annotations
 
 import sys
@@ -78,8 +79,9 @@ def test_detector_tier_maps_to_expected_weights() -> None:
 # ── download + export path (mocked ultralytics) ───────────────────────────────
 
 
-def _install_fake_ultralytics(monkeypatch, *, export_writes: bool = True,
-                              raise_on_export: bool = False) -> dict:
+def _install_fake_ultralytics(
+    monkeypatch, *, export_writes: bool = True, raise_on_export: bool = False
+) -> dict:
     """Install a fake ``ultralytics`` module exposing ``YOLO``.
 
     Returns a dict capturing the kwargs the test asserts on.
@@ -167,7 +169,7 @@ class _FakeHTTPResponse:
         self._pos += len(out)
         return out
 
-    def __enter__(self) -> "_FakeHTTPResponse":
+    def __enter__(self) -> _FakeHTTPResponse:
         return self
 
     def __exit__(self, *exc) -> bool:
@@ -269,7 +271,9 @@ def test_prebuilt_download_loadable_by_person_detector(tmp_path, monkeypatch) ->
     const = numpy_helper.from_array(data, name="out_const")
     node = helper.make_node("Constant", [], ["output0"], value=const)
     images_in = helper.make_tensor_value_info(
-        "images", TensorProto.FLOAT, [1, 3, 640, 640],
+        "images",
+        TensorProto.FLOAT,
+        [1, 3, 640, 640],
     )
     out = helper.make_tensor_value_info("output0", TensorProto.FLOAT, [1, 1, 6])
     graph = helper.make_graph([node], "synthetic", [images_in], [out])
@@ -324,11 +328,13 @@ def test_camera_worker_resolve_model_path_uses_manager(monkeypatch) -> None:
     fake_mgr = MagicMock()
     fake_mgr.ensure_detector.return_value = sentinel
     monkeypatch.setattr(
-        "autoptz.engine.runtime.models.default_manager", lambda: fake_mgr,
+        "autoptz.engine.runtime.models.default_manager",
+        lambda: fake_mgr,
     )
 
-    cfg = CameraConfig(id="cam-abcd1234", name="C",
-                       source=SourceConfig(type="usb", address="usb://0"))
+    cfg = CameraConfig(
+        id="cam-abcd1234", name="C", source=SourceConfig(type="usb", address="usb://0")
+    )
     assert camera_worker._resolve_model_path(cfg) == sentinel
     fake_mgr.ensure_detector.assert_called_once()
 
@@ -341,8 +347,10 @@ def test_camera_worker_resolve_model_path_never_raises(monkeypatch) -> None:
         raise RuntimeError("manager broke")
 
     monkeypatch.setattr(
-        "autoptz.engine.runtime.models.default_manager", boom,
+        "autoptz.engine.runtime.models.default_manager",
+        boom,
     )
-    cfg = CameraConfig(id="cam-abcd1234", name="C",
-                       source=SourceConfig(type="usb", address="usb://0"))
+    cfg = CameraConfig(
+        id="cam-abcd1234", name="C", source=SourceConfig(type="usb", address="usb://0")
+    )
     assert camera_worker._resolve_model_path(cfg) is None

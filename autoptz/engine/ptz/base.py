@@ -1,4 +1,5 @@
 """PTZBackend abstract interface, capability/state dataclasses, and shared VISCA helpers."""
+
 from __future__ import annotations
 
 import time
@@ -31,7 +32,7 @@ class PTZCaps:
 class PTZState:
     """Snapshot of camera position; all values normalized."""
 
-    pan: float = 0.0   # [-1, 1]  left → right
+    pan: float = 0.0  # [-1, 1]  left → right
     tilt: float = 0.0  # [-1, 1]  down → up
     zoom: float = 0.0  # [0,  1]  wide → tele
     timestamp: float = field(default_factory=time.monotonic)
@@ -84,6 +85,7 @@ class PTZBackend(ABC):
         Optional capability — the default is a safe no-op so backends/cameras
         that cannot home simply ignore the request.
         """
+        return None
 
     def osd_menu(self) -> None:
         """Open (or toggle) the camera's on-screen-display menu.
@@ -91,6 +93,7 @@ class PTZBackend(ABC):
         Optional capability — the default is a safe no-op so backends/cameras
         without an OSD menu silently ignore the request.
         """
+        return None
 
     @abstractmethod
     def close(self) -> None:
@@ -137,10 +140,10 @@ def visca_zoom_cmd(zoom: float) -> bytes:
         zoom_byte = 0x00
     elif zoom > 0:
         speed = max(0x01, min(0x07, round(zoom * 7)))
-        zoom_byte = 0x20 | speed   # tele at variable speed
+        zoom_byte = 0x20 | speed  # tele at variable speed
     else:
         speed = max(0x01, min(0x07, round(abs(zoom) * 7)))
-        zoom_byte = 0x30 | speed   # wide at variable speed
+        zoom_byte = 0x30 | speed  # wide at variable speed
     return bytes([0x81, 0x01, 0x04, 0x07, zoom_byte, 0xFF])
 
 

@@ -4,6 +4,7 @@ All tests are headless (no display): they use ``QCoreApplication`` for the
 EngineClient's Qt machinery and inject fakes for frame sources / workers so no
 camera hardware, ML model, or GUI is required.
 """
+
 from __future__ import annotations
 
 import sys
@@ -11,10 +12,8 @@ import threading
 import time
 
 import numpy as np
-import pytest
-
 import PySide6  # noqa: F401
-
+import pytest
 
 # ── one QCoreApplication for the whole module ─────────────────────────────────
 
@@ -22,6 +21,7 @@ import PySide6  # noqa: F401
 @pytest.fixture(scope="module")
 def qapp():
     from PySide6.QtCore import QCoreApplication
+
     existing = QCoreApplication.instance()
     if existing is not None:
         yield existing
@@ -36,6 +36,7 @@ def qapp():
 def _cleanup_shm(name: str) -> None:
     """Unlink a possibly-leaked shm segment (and its ``__idx``) before a test."""
     from multiprocessing.shared_memory import SharedMemory
+
     for n in (name, f"{name}__idx"):
         try:
             s = SharedMemory(name=n, create=False)
@@ -49,6 +50,7 @@ def _cleanup_shm(name: str) -> None:
 
 def _camera_config(camera_id: str = "cam-1234abcd5678", name: str = "Cam"):
     from autoptz.config.models import CameraConfig, SourceConfig
+
     return CameraConfig(
         id=camera_id,
         name=name,
@@ -178,11 +180,13 @@ class FakeWorker:
 
 def _make_client(qapp):
     from autoptz.ui.engine_client import EngineClient
+
     return EngineClient()
 
 
 def _make_supervisor(client, factory=None):
     from autoptz.engine.supervisor import Supervisor
+
     return Supervisor(client, store=None, worker_factory=factory)
 
 
@@ -197,6 +201,7 @@ class FakeDetector:
     def detect(self, frame):
         from autoptz.engine.pipeline.detect import BBox as DBBox
         from autoptz.engine.pipeline.detect import Detection
+
         self.calls += 1
         return [Detection(bbox=DBBox(10.0, 20.0, 110.0, 220.0), conf=0.9, class_id=0)]
 
@@ -206,12 +211,20 @@ class FakeTracker:
 
     def update(self, detections, frame, fps=30.0):
         from autoptz.engine.pipeline.track import Track, TrackState
+
         out = []
         for i, d in enumerate(detections):
-            out.append(Track(
-                track_id=i + 1, bbox=d.bbox, conf=d.conf,
-                state=TrackState.CONFIRMED, age=1, hits=1, velocity=(0.0, 0.0),
-            ))
+            out.append(
+                Track(
+                    track_id=i + 1,
+                    bbox=d.bbox,
+                    conf=d.conf,
+                    state=TrackState.CONFIRMED,
+                    age=1,
+                    hits=1,
+                    velocity=(0.0, 0.0),
+                )
+            )
         return out
 
 
@@ -225,6 +238,7 @@ def _install_fake_detect_stack(monkeypatch):
     tests and would otherwise starve the inference loop within tight deadlines.
     """
     from autoptz.engine import camera_worker as cw
+
     det = FakeDetector()
     stack = cw._DetectStack(detector=det, tracker=FakeTracker(), ep=det.ep)
     monkeypatch.setattr(cw, "_build_detect_stack", lambda config: stack)
@@ -266,8 +280,12 @@ class TestCameraWorker:
         writer = ShmWriter(shm_name, _PREVIEW_H, _PREVIEW_W)
         reader = ShmReader(shm_name, _PREVIEW_H, _PREVIEW_W)
         worker = CameraWorker(
-            cid, _camera_config(cid), on_tel,
-            frame_source=src, shm_writer=writer, telemetry_hz=50.0,
+            cid,
+            _camera_config(cid),
+            on_tel,
+            frame_source=src,
+            shm_writer=writer,
+            telemetry_hz=50.0,
         )
         worker.start()
         try:
@@ -307,8 +325,11 @@ class TestCameraWorker:
                 received.append(m)
 
         worker = CameraWorker(
-            "fpscam01abcd", _camera_config("fpscam01abcd"), on_tel,
-            frame_source=FakeFrameSource(), telemetry_hz=50.0,
+            "fpscam01abcd",
+            _camera_config("fpscam01abcd"),
+            on_tel,
+            frame_source=FakeFrameSource(),
+            telemetry_hz=50.0,
         )
         worker.start()
         try:
@@ -330,8 +351,10 @@ class TestCameraWorker:
 
         src = FakeFrameSource()
         worker = CameraWorker(
-            "stopcam01abc", _camera_config("stopcam01abc"),
-            lambda m: None, frame_source=src,
+            "stopcam01abc",
+            _camera_config("stopcam01abc"),
+            lambda m: None,
+            frame_source=src,
         )
         worker.start()
         time.sleep(0.1)
@@ -352,8 +375,10 @@ class TestCameraWorker:
                 received.append(m)
 
         worker = CameraWorker(
-            "failcam01abc", _camera_config("failcam01abc"),
-            on_tel, frame_source=FakeFrameSource(fail_open=True),
+            "failcam01abc",
+            _camera_config("failcam01abc"),
+            on_tel,
+            frame_source=FakeFrameSource(fail_open=True),
         )
         worker.start()
         try:
@@ -372,8 +397,13 @@ class TestCameraWorker:
 
     def test_commands_are_thread_safe_noops_before_start(self, qapp) -> None:
         from autoptz.engine.camera_worker import CameraWorker
-        worker = CameraWorker("cmdcam01abcd", _camera_config("cmdcam01abcd"),
-                              lambda m: None, frame_source=FakeFrameSource())
+
+        worker = CameraWorker(
+            "cmdcam01abcd",
+            _camera_config("cmdcam01abcd"),
+            lambda m: None,
+            frame_source=FakeFrameSource(),
+        )
         # Queueing commands before start must not raise.
         worker.enable_tracking(True)
         worker.set_target(7)
@@ -384,8 +414,13 @@ class TestCameraWorker:
     def test_enroll_track_sets_pending_and_immediate_label(self, qapp) -> None:
         """Click-to-assign queues a pending enrollment and labels the box at once."""
         from autoptz.engine.camera_worker import CameraWorker
-        worker = CameraWorker("enrollcam01a", _camera_config("enrollcam01a"),
-                              lambda m: None, frame_source=FakeFrameSource())
+
+        worker = CameraWorker(
+            "enrollcam01a",
+            _camera_config("enrollcam01a"),
+            lambda m: None,
+            frame_source=FakeFrameSource(),
+        )
         worker._apply_command("enroll_track", (7, "id-123", "Alice", (0.4, 0.3)))
         # Awaiting a detected face to bind the embedding…
         assert worker._pending_enroll == {7: ("id-123", "Alice", (0.4, 0.3))}
@@ -395,8 +430,13 @@ class TestCameraWorker:
     def test_set_target_resets_reid_template(self, qapp) -> None:
         """Switching target drops the previous subject's appearance template."""
         from autoptz.engine.camera_worker import CameraWorker
-        worker = CameraWorker("reidcam01abc", _camera_config("reidcam01abc"),
-                              lambda m: None, frame_source=FakeFrameSource())
+
+        worker = CameraWorker(
+            "reidcam01abc",
+            _camera_config("reidcam01abc"),
+            lambda m: None,
+            frame_source=FakeFrameSource(),
+        )
 
         class _FakeReid:
             def __init__(self) -> None:
@@ -432,8 +472,11 @@ class TestCameraWorker:
 
         # Default config → target.mode == "off" → _tracking_enabled is False.
         worker = CameraWorker(
-            "dettest01abc", _camera_config("dettest01abc"), on_tel,
-            frame_source=FakeFrameSource(), telemetry_hz=50.0,
+            "dettest01abc",
+            _camera_config("dettest01abc"),
+            on_tel,
+            frame_source=FakeFrameSource(),
+            telemetry_hz=50.0,
         )
         assert worker._tracking_enabled is False  # no target, tracking off
         worker.start()
@@ -487,8 +530,11 @@ class TestCameraWorker:
                 received.append(m)
 
         worker = CameraWorker(
-            "restest01abc", _camera_config("restest01abc"), on_tel,
-            frame_source=FlakySource(), telemetry_hz=50.0,
+            "restest01abc",
+            _camera_config("restest01abc"),
+            on_tel,
+            frame_source=FlakySource(),
+            telemetry_hz=50.0,
         )
         worker.start()
         try:
@@ -526,8 +572,11 @@ class TestCameraWorker:
         leaked.close()  # leave it linked (orphaned)
 
         worker = CameraWorker(
-            cid, _camera_config(cid), lambda m: None,
-            frame_source=FakeFrameSource(h=_PREVIEW_H, w=_PREVIEW_W), telemetry_hz=50.0,
+            cid,
+            _camera_config(cid),
+            lambda m: None,
+            frame_source=FakeFrameSource(h=_PREVIEW_H, w=_PREVIEW_W),
+            telemetry_hz=50.0,
         )
         worker.start()
         try:
@@ -573,8 +622,11 @@ class TestCameraWorker:
 
         backend = FakeBackend()
         worker = CameraWorker(
-            "ptzcam01abcd", _camera_config("ptzcam01abcd"), lambda m: None,
-            frame_source=FakeFrameSource(), ptz_controller=backend,
+            "ptzcam01abcd",
+            _camera_config("ptzcam01abcd"),
+            lambda m: None,
+            frame_source=FakeFrameSource(),
+            ptz_controller=backend,
         )
         worker.start()
         try:
@@ -606,6 +658,7 @@ class TestTrackErrorAimRegion:
             TrackingConfig,
         )
         from autoptz.engine.camera_worker import CameraWorker
+
         cfg = CameraConfig(
             id="aimcam012345",
             name="Aim",
@@ -618,6 +671,7 @@ class TestTrackErrorAimRegion:
     @staticmethod
     def _track(x1, y1, x2, y2):
         from autoptz.engine.runtime.messages import BBox, TrackInfo
+
         return TrackInfo(track_id=1, bbox=BBox(x1=x1, y1=y1, x2=x2, y2=y2))
 
     def test_full_body_aims_at_box_centre(self) -> None:
@@ -636,8 +690,12 @@ class TestTrackErrorAimRegion:
         for region in ("face", "head_shoulders", "upper_body", "full_body"):
             (_ex, ey), _h = self._worker(region)._track_error(trk, frame)
             ey_by_region[region] = ey
-        assert (ey_by_region["face"] > ey_by_region["head_shoulders"]
-                > ey_by_region["upper_body"] > ey_by_region["full_body"])
+        assert (
+            ey_by_region["face"]
+            > ey_by_region["head_shoulders"]
+            > ey_by_region["upper_body"]
+            > ey_by_region["full_body"]
+        )
         assert abs(ey_by_region["full_body"]) < 1e-6
 
     def test_horizontal_aim_is_box_centre_regardless_of_region(self) -> None:
@@ -658,9 +716,9 @@ class TestTrackErrorAimRegion:
         trk = self._track(40, 0, 60, 100)
         (_ex, torso_ey), torso_h = self._worker("face", "torso")._track_error(trk, frame)
         (_ex, sil_ey), sil_h = self._worker("face", "full_silhouette")._track_error(trk, frame)
-        assert torso_ey > 0.0                     # "face" aims high in both modes
+        assert torso_ey > 0.0  # "face" aims high in both modes
         assert sil_ey == pytest.approx(torso_ey)
-        assert sil_h == pytest.approx(torso_h)    # same bbox height when pose absent
+        assert sil_h == pytest.approx(torso_h)  # same bbox height when pose absent
 
     def test_pose_aim_sits_on_torso_and_sets_source(self) -> None:
         # With a confident pose, the aim CENTRE is the landmark-precise torso
@@ -674,8 +732,8 @@ class TestTrackErrorAimRegion:
 
             def estimate(self, _frame, _bbox):
                 kps = [Keypoint(0.0, 0.0, 0.0)] * 17
-                kps[5] = Keypoint(40.0, 30.0, 0.9)   # left shoulder
-                kps[6] = Keypoint(60.0, 30.0, 0.9)   # right shoulder
+                kps[5] = Keypoint(40.0, 30.0, 0.9)  # left shoulder
+                kps[6] = Keypoint(60.0, 30.0, 0.9)  # right shoulder
                 kps[11] = Keypoint(42.0, 70.0, 0.9)  # left hip
                 kps[12] = Keypoint(58.0, 70.0, 0.9)  # right hip
                 return kps
@@ -683,7 +741,7 @@ class TestTrackErrorAimRegion:
         w = self._worker("upper_body", "torso")
         w._pose = _FakePose()
         w._pose_probed = True  # bypass the lazy model build
-        trk = self._track(20, 0, 80, 100)        # box centre (50,50) ≠ torso anchor
+        trk = self._track(20, 0, 80, 100)  # box centre (50,50) ≠ torso anchor
         trk.is_target = True
         w._target_track_id = trk.track_id
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -826,6 +884,7 @@ class TestSupervisorRouting:
 
     def test_update_config_routes_to_worker(self, qapp) -> None:
         import json
+
         client = _make_client(qapp)
         cid = client.addCamera("usb://0", "X")
         client.drain_commands()
@@ -866,6 +925,7 @@ class TestSupervisorRouting:
         sup.start()
         try:
             from autoptz.engine.runtime.messages import TelemetryMsg
+
             worker = captured[cid]
             # Simulate the worker emitting telemetry from its own context.
             worker.on_telemetry(TelemetryMsg(camera_id=cid, seq=3, fps=24.0))
@@ -889,9 +949,7 @@ class TestSupervisorRouting:
         client.drain_commands()
 
         attaches = []
-        client.providerAttachRequested.connect(
-            lambda c, shm, w, h: attaches.append((c, shm, w, h))
-        )
+        client.providerAttachRequested.connect(lambda c, shm, w, h: attaches.append((c, shm, w, h)))
         sup = _make_supervisor(client, factory=FakeWorker)
         sup.start()
         try:
@@ -909,20 +967,23 @@ class TestSupervisorRouting:
 
         monkeypatch.setattr(sup_mod.os, "cpu_count", lambda: 10)
         monkeypatch.setattr(
-            diagnostics, "system_metrics",
+            diagnostics,
+            "system_metrics",
             lambda: {"available": True, "cpu_percent": 20.0, "mem_percent": 40.0},
         )
         assert Supervisor._adaptive_startup_concurrency() == 4
 
         monkeypatch.setattr(sup_mod.os, "cpu_count", lambda: 6)
         monkeypatch.setattr(
-            diagnostics, "system_metrics",
+            diagnostics,
+            "system_metrics",
             lambda: {"available": True, "cpu_percent": 60.0, "mem_percent": 80.0},
         )
         assert Supervisor._adaptive_startup_concurrency() == 2
 
         monkeypatch.setattr(
-            diagnostics, "system_metrics",
+            diagnostics,
+            "system_metrics",
             lambda: {"available": False},
         )
         assert Supervisor._adaptive_startup_concurrency() == 1
@@ -988,8 +1049,10 @@ class TestSupervisorRouting:
             deadline = time.monotonic() + 2.0
             while "detector" not in events and time.monotonic() < deadline:
                 time.sleep(0.01)
-            assert events[:2] == [f"start:{client.cameraModel.camera_ids()[0]}",
-                                  f"start:{client.cameraModel.camera_ids()[1]}"]
+            assert events[:2] == [
+                f"start:{client.cameraModel.camera_ids()[0]}",
+                f"start:{client.cameraModel.camera_ids()[1]}",
+            ]
             assert events[2] == "detector"
             workers = list(sup._workers.values())
             assert workers and all(w.inference_paused[0] is True for w in workers)
@@ -1082,6 +1145,7 @@ class TestEngineLifecycleApi:
 
     def test_frozen_api_surface_present(self, qapp) -> None:
         from PySide6.QtCore import QMetaMethod  # noqa: F401  (ensures Qt meta avail)
+
         c = _make_client(qapp)
         # Properties exist on the meta-object and read as the right types.
         mo = c.metaObject()
@@ -1196,6 +1260,7 @@ class TestTelemetryThreadSafety:
 
     def test_push_from_owning_thread_applies_synchronously(self, qapp) -> None:
         from autoptz.engine.runtime.messages import TelemetryMsg
+
         c = _make_client(qapp)
         cid = c.addCamera("usb://0", "X")
         c.drain_commands()

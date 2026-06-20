@@ -37,6 +37,7 @@ at one, to enable pose-stable framing.
 
 Dependencies: onnxruntime + numpy + cv2 (all already required by the detector).
 """
+
 from __future__ import annotations
 
 import logging
@@ -79,7 +80,9 @@ def _log_no_pose_once(reason: str) -> None:
     log.debug(
         "pose estimator unavailable (%s); pose-stable framing off — falling "
         "back to bbox aim. Place %s in the models dir or set %s to enable.",
-        reason, DEFAULT_POSE_MODEL, _ENV_POSE_PATH,
+        reason,
+        DEFAULT_POSE_MODEL,
+        _ENV_POSE_PATH,
     )
 
 
@@ -186,9 +189,14 @@ class PoseEstimator:
                 # made ORT raise on every estimate() (caught → None), so pose
                 # silently produced no keypoints (no skeleton, bbox-only aim).
                 self._input_size = _model_input_size(inp.shape, self._input_size)
-                log.info("PoseEstimator ready | ep=%s input=%s%s output=%s size=%d",
-                         self.ep, inp.name, getattr(inp, "shape", None), out.name,
-                         self._input_size)
+                log.info(
+                    "PoseEstimator ready | ep=%s input=%s%s output=%s size=%d",
+                    self.ep,
+                    inp.name,
+                    getattr(inp, "shape", None),
+                    out.name,
+                    self._input_size,
+                )
             except Exception:  # noqa: BLE001
                 log.debug("pose session introspection failed", exc_info=True)
                 self._session = None
@@ -252,7 +260,8 @@ class PoseEstimator:
 
             inp, scale, pad = self._letterbox(crop, np, cv2)
             raw = self._session.run(
-                [self._output_name], {self._input_name: inp},
+                [self._output_name],
+                {self._input_name: inp},
             )[0]
             raw = np.asarray(raw, dtype=np.float32)
 
@@ -275,7 +284,9 @@ class PoseEstimator:
     # ── internals ─────────────────────────────────────────────────────────────
 
     def _try_build_session(
-        self, model_path: str | Path | None, prefs: Any | None,
+        self,
+        model_path: str | Path | None,
+        prefs: Any | None,
     ) -> None:
         """Resolve the model + build an ORT session; stay unavailable on failure."""
         path = str(model_path) if model_path is not None else resolve_pose_model_path()
@@ -292,7 +303,10 @@ class PoseEstimator:
             self._session = None
 
     def _letterbox(
-        self, crop: NDArray[np.uint8], np: Any, cv2: Any,
+        self,
+        crop: NDArray[np.uint8],
+        np: Any,
+        cv2: Any,
     ) -> tuple[NDArray[np.float32], float, tuple[int, int]]:
         """Letterbox *crop* to a square ``input_size``; return (chw_batch, ratio, pad)."""
         size = self._input_size
@@ -310,7 +324,9 @@ class PoseEstimator:
         return img, ratio, (pad_x, pad_y)
 
     def _parse_pose(
-        self, raw: NDArray[np.float32], np: Any,
+        self,
+        raw: NDArray[np.float32],
+        np: Any,
     ) -> list[tuple[float, float, float]] | None:
         """Parse a YOLO-pose output into the best person's 17 keypoints.
 

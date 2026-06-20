@@ -11,6 +11,7 @@ Phase 8 additions
 - IdentityListModel / LayoutListModel — new list models for QML.
 - getTheme / setTheme  — persist theme preference via ConfigStore.
 """
+
 from __future__ import annotations
 
 import json
@@ -99,6 +100,7 @@ def _switch_detail(switch: Any) -> str:
         parts.append(error)
     return " · ".join(parts)
 
+
 # Auto-harvested ("Person N") identities not seen for this long are forgotten, so
 # their track-ID numbers don't accumulate; swept on this cadence.
 _UNLABELED_MAX_AGE_S = 90.0
@@ -117,7 +119,7 @@ class CameraRecord:
     tracking_enabled: bool = False
     target_track_id: int | None = None
     telemetry: TelemetryMsg | None = None
-    camera_config: Any | None = None   # autoptz.config.models.CameraConfig
+    camera_config: Any | None = None  # autoptz.config.models.CameraConfig
     shm_name: str = field(init=False)
     shm_width: int = 1280
     shm_height: int = 720
@@ -184,33 +186,35 @@ class CameraRecord:
         h = max(1.0, float(self.telemetry.height or 1))
         result = []
         for t in self.telemetry.tracks:
-            result.append({
-                "track_id": t.track_id,
-                "bbox": {
-                    "x1": t.bbox.x1 / w,
-                    "y1": t.bbox.y1 / h,
-                    "x2": t.bbox.x2 / w,
-                    "y2": t.bbox.y2 / h,
-                },
-                "identity": t.identity or "",
-                "identity_id": t.identity_id or "",
-                "confidence": t.confidence,
-                "is_target": t.is_target,
-                "lost": bool(getattr(t, "lost", False)),
-                # Velocity normalized to frame fractions/frame for overlay drawing.
-                "vx": getattr(t, "vx", 0.0) / w,
-                "vy": getattr(t, "vy", 0.0) / h,
-                "aim": (
-                    {
-                        "x": max(0.0, min(1.0, float(t.aim_x) / w)),
-                        "y": max(0.0, min(1.0, float(t.aim_y) / h)),
-                        "source": t.aim_source or "",
-                    }
-                    if getattr(t, "aim_x", None) is not None
-                    and getattr(t, "aim_y", None) is not None
-                    else None
-                ),
-            })
+            result.append(
+                {
+                    "track_id": t.track_id,
+                    "bbox": {
+                        "x1": t.bbox.x1 / w,
+                        "y1": t.bbox.y1 / h,
+                        "x2": t.bbox.x2 / w,
+                        "y2": t.bbox.y2 / h,
+                    },
+                    "identity": t.identity or "",
+                    "identity_id": t.identity_id or "",
+                    "confidence": t.confidence,
+                    "is_target": t.is_target,
+                    "lost": bool(getattr(t, "lost", False)),
+                    # Velocity normalized to frame fractions/frame for overlay drawing.
+                    "vx": getattr(t, "vx", 0.0) / w,
+                    "vy": getattr(t, "vy", 0.0) / h,
+                    "aim": (
+                        {
+                            "x": max(0.0, min(1.0, float(t.aim_x) / w)),
+                            "y": max(0.0, min(1.0, float(t.aim_y) / h)),
+                            "source": t.aim_source or "",
+                        }
+                        if getattr(t, "aim_x", None) is not None
+                        and getattr(t, "aim_y", None) is not None
+                        else None
+                    ),
+                }
+            )
         return result
 
     def faces_as_list(self) -> list[dict[str, Any]]:
@@ -222,8 +226,10 @@ class CameraRecord:
         return [
             {
                 "bbox": {
-                    "x1": f.bbox.x1 / w, "y1": f.bbox.y1 / h,
-                    "x2": f.bbox.x2 / w, "y2": f.bbox.y2 / h,
+                    "x1": f.bbox.x1 / w,
+                    "y1": f.bbox.y1 / h,
+                    "x2": f.bbox.x2 / w,
+                    "y2": f.bbox.y2 / h,
                 },
                 "identity": f.identity or "",
                 "score": f.score,
@@ -270,22 +276,22 @@ class CameraRecord:
 class CameraListModel(QAbstractListModel):
     """Ordered list of CameraRecords exposed to QML."""
 
-    CameraIdRole        = Qt.ItemDataRole.UserRole + 1
-    DisplayNameRole     = Qt.ItemDataRole.UserRole + 2
+    CameraIdRole = Qt.ItemDataRole.UserRole + 1
+    DisplayNameRole = Qt.ItemDataRole.UserRole + 2
     TrackingEnabledRole = Qt.ItemDataRole.UserRole + 3
-    TargetTrackIdRole   = Qt.ItemDataRole.UserRole + 4
-    FpsRole             = Qt.ItemDataRole.UserRole + 5
-    TracksRole          = Qt.ItemDataRole.UserRole + 6
-    PtzStateRole        = Qt.ItemDataRole.UserRole + 7
-    HealthRole          = Qt.ItemDataRole.UserRole + 8
-    ShmNameRole         = Qt.ItemDataRole.UserRole + 9
-    ShmWidthRole        = Qt.ItemDataRole.UserRole + 10
-    ShmHeightRole       = Qt.ItemDataRole.UserRole + 11
-    PresetsRole         = Qt.ItemDataRole.UserRole + 12
-    ResolutionRole      = Qt.ItemDataRole.UserRole + 13
-    DroppedFramesRole   = Qt.ItemDataRole.UserRole + 14
-    LatencyMsRole       = Qt.ItemDataRole.UserRole + 15
-    StreamingRole       = Qt.ItemDataRole.UserRole + 16
+    TargetTrackIdRole = Qt.ItemDataRole.UserRole + 4
+    FpsRole = Qt.ItemDataRole.UserRole + 5
+    TracksRole = Qt.ItemDataRole.UserRole + 6
+    PtzStateRole = Qt.ItemDataRole.UserRole + 7
+    HealthRole = Qt.ItemDataRole.UserRole + 8
+    ShmNameRole = Qt.ItemDataRole.UserRole + 9
+    ShmWidthRole = Qt.ItemDataRole.UserRole + 10
+    ShmHeightRole = Qt.ItemDataRole.UserRole + 11
+    PresetsRole = Qt.ItemDataRole.UserRole + 12
+    ResolutionRole = Qt.ItemDataRole.UserRole + 13
+    DroppedFramesRole = Qt.ItemDataRole.UserRole + 14
+    LatencyMsRole = Qt.ItemDataRole.UserRole + 15
+    StreamingRole = Qt.ItemDataRole.UserRole + 16
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -299,50 +305,73 @@ class CameraListModel(QAbstractListModel):
 
     def roleNames(self) -> dict[int, QByteArray]:
         return {
-            self.CameraIdRole:        QByteArray(b"cameraId"),
-            self.DisplayNameRole:     QByteArray(b"displayName"),
+            self.CameraIdRole: QByteArray(b"cameraId"),
+            self.DisplayNameRole: QByteArray(b"displayName"),
             self.TrackingEnabledRole: QByteArray(b"trackingEnabled"),
-            self.TargetTrackIdRole:   QByteArray(b"targetTrackId"),
-            self.FpsRole:             QByteArray(b"fps"),
-            self.TracksRole:          QByteArray(b"tracks"),
-            self.PtzStateRole:        QByteArray(b"ptzState"),
-            self.HealthRole:          QByteArray(b"health"),
-            self.ShmNameRole:         QByteArray(b"shmName"),
-            self.ShmWidthRole:        QByteArray(b"shmWidth"),
-            self.ShmHeightRole:       QByteArray(b"shmHeight"),
-            self.PresetsRole:         QByteArray(b"presets"),
-            self.ResolutionRole:      QByteArray(b"resolution"),
-            self.DroppedFramesRole:   QByteArray(b"droppedFrames"),
-            self.LatencyMsRole:       QByteArray(b"latencyMs"),
-            self.StreamingRole:       QByteArray(b"streaming"),
+            self.TargetTrackIdRole: QByteArray(b"targetTrackId"),
+            self.FpsRole: QByteArray(b"fps"),
+            self.TracksRole: QByteArray(b"tracks"),
+            self.PtzStateRole: QByteArray(b"ptzState"),
+            self.HealthRole: QByteArray(b"health"),
+            self.ShmNameRole: QByteArray(b"shmName"),
+            self.ShmWidthRole: QByteArray(b"shmWidth"),
+            self.ShmHeightRole: QByteArray(b"shmHeight"),
+            self.PresetsRole: QByteArray(b"presets"),
+            self.ResolutionRole: QByteArray(b"resolution"),
+            self.DroppedFramesRole: QByteArray(b"droppedFrames"),
+            self.LatencyMsRole: QByteArray(b"latencyMs"),
+            self.StreamingRole: QByteArray(b"streaming"),
         }
 
-    def data(self, index: QModelIndex | QPersistentModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+    def data(
+        self, index: QModelIndex | QPersistentModelIndex, role: int = Qt.ItemDataRole.DisplayRole
+    ) -> Any:
         if not index.isValid() or index.row() >= len(self._order):
             return None
         rec = self._records.get(self._order[index.row()])
         if rec is None:
             return None
         match role:
-            case self.CameraIdRole:        return rec.camera_id
-            case self.DisplayNameRole:     return rec.display_name
-            case self.TrackingEnabledRole: return rec.tracking_enabled
-            case self.TargetTrackIdRole:   return rec.target_track_id
-            case self.FpsRole:             return rec.fps
-            case self.TracksRole:          return rec.tracks_as_list()
-            case self.PtzStateRole:        return rec.ptz_as_dict()
-            case self.HealthRole:          return rec.health
-            case self.ShmNameRole:         return rec.shm_name
-            case self.ShmWidthRole:        return rec.shm_width
-            case self.ShmHeightRole:       return rec.shm_height
-            case self.PresetsRole:         return rec.presets_as_list()
-            case self.ResolutionRole:      return rec.resolution
-            case self.DroppedFramesRole:   return rec.dropped_frames
-            case self.LatencyMsRole:       return rec.latency_ms
-            case self.StreamingRole:       return rec.streaming
+            case self.CameraIdRole:
+                return rec.camera_id
+            case self.DisplayNameRole:
+                return rec.display_name
+            case self.TrackingEnabledRole:
+                return rec.tracking_enabled
+            case self.TargetTrackIdRole:
+                return rec.target_track_id
+            case self.FpsRole:
+                return rec.fps
+            case self.TracksRole:
+                return rec.tracks_as_list()
+            case self.PtzStateRole:
+                return rec.ptz_as_dict()
+            case self.HealthRole:
+                return rec.health
+            case self.ShmNameRole:
+                return rec.shm_name
+            case self.ShmWidthRole:
+                return rec.shm_width
+            case self.ShmHeightRole:
+                return rec.shm_height
+            case self.PresetsRole:
+                return rec.presets_as_list()
+            case self.ResolutionRole:
+                return rec.resolution
+            case self.DroppedFramesRole:
+                return rec.dropped_frames
+            case self.LatencyMsRole:
+                return rec.latency_ms
+            case self.StreamingRole:
+                return rec.streaming
         return None
 
-    def setData(self, index: QModelIndex | QPersistentModelIndex, value: Any, role: int = Qt.ItemDataRole.EditRole) -> bool:
+    def setData(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        value: Any,
+        role: int = Qt.ItemDataRole.EditRole,
+    ) -> bool:
         if not index.isValid() or index.row() >= len(self._order):
             return False
         rec = self._records.get(self._order[index.row()])
@@ -386,11 +415,20 @@ class CameraListModel(QAbstractListModel):
         rec.telemetry = msg
         row = self._order.index(msg.camera_id)
         idx = self.index(row)
-        self.dataChanged.emit(idx, idx, [
-            self.FpsRole, self.TracksRole, self.PtzStateRole, self.HealthRole,
-            self.ResolutionRole, self.DroppedFramesRole, self.LatencyMsRole,
-            self.StreamingRole,
-        ])
+        self.dataChanged.emit(
+            idx,
+            idx,
+            [
+                self.FpsRole,
+                self.TracksRole,
+                self.PtzStateRole,
+                self.HealthRole,
+                self.ResolutionRole,
+                self.DroppedFramesRole,
+                self.LatencyMsRole,
+                self.StreamingRole,
+            ],
+        )
 
     def get_record(self, camera_id: str) -> CameraRecord | None:
         return self._records.get(camera_id)
@@ -441,6 +479,7 @@ def _thumbnail_data_uri(thumbnail: bytes | None) -> str:
     if not thumbnail:
         return ""
     import base64
+
     return "data:image/png;base64," + base64.b64encode(bytes(thumbnail)).decode("ascii")
 
 
@@ -474,16 +513,16 @@ class IdentityListModel(QAbstractListModel):
       ``enabled`` (bool), ``labeled`` (bool; false = auto-harvested/unlabeled).
     """
 
-    IdRole         = Qt.ItemDataRole.UserRole + 1
-    NameRole       = Qt.ItemDataRole.UserRole + 2
-    ThumbnailRole  = Qt.ItemDataRole.UserRole + 3
-    EnabledRole    = Qt.ItemDataRole.UserRole + 4
-    LabeledRole    = Qt.ItemDataRole.UserRole + 5
-    ThumbnailsRole = Qt.ItemDataRole.UserRole + 6   # list of candidate photo URIs
+    IdRole = Qt.ItemDataRole.UserRole + 1
+    NameRole = Qt.ItemDataRole.UserRole + 2
+    ThumbnailRole = Qt.ItemDataRole.UserRole + 3
+    EnabledRole = Qt.ItemDataRole.UserRole + 4
+    LabeledRole = Qt.ItemDataRole.UserRole + 5
+    ThumbnailsRole = Qt.ItemDataRole.UserRole + 6  # list of candidate photo URIs
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._records: list[Any] = []   # list[IdentityRecord]
+        self._records: list[Any] = []  # list[IdentityRecord]
 
     def rowCount(self, parent: QModelIndex | None = None) -> int:  # type: ignore[override]
         if parent is not None and parent.isValid():
@@ -492,25 +531,33 @@ class IdentityListModel(QAbstractListModel):
 
     def roleNames(self) -> dict[int, QByteArray]:
         return {
-            self.IdRole:         QByteArray(b"identityId"),
-            self.NameRole:       QByteArray(b"identityName"),
-            self.ThumbnailRole:  QByteArray(b"thumbnail"),
-            self.EnabledRole:    QByteArray(b"enabled"),
-            self.LabeledRole:    QByteArray(b"labeled"),
+            self.IdRole: QByteArray(b"identityId"),
+            self.NameRole: QByteArray(b"identityName"),
+            self.ThumbnailRole: QByteArray(b"thumbnail"),
+            self.EnabledRole: QByteArray(b"enabled"),
+            self.LabeledRole: QByteArray(b"labeled"),
             self.ThumbnailsRole: QByteArray(b"thumbnails"),
         }
 
-    def data(self, index: QModelIndex | QPersistentModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+    def data(
+        self, index: QModelIndex | QPersistentModelIndex, role: int = Qt.ItemDataRole.DisplayRole
+    ) -> Any:
         if not index.isValid() or index.row() >= len(self._records):
             return None
         rec = self._records[index.row()]
         match role:
-            case self.IdRole:        return rec.id
-            case self.NameRole:      return rec.name
-            case self.ThumbnailRole: return _thumbnail_data_uri(getattr(rec, "thumbnail", None))
-            case self.EnabledRole:   return bool(getattr(rec, "enabled", True))
-            case self.LabeledRole:   return bool(getattr(rec, "labeled", True))
-            case self.ThumbnailsRole: return _thumbnails_data_uris(getattr(rec, "thumbnails", None))
+            case self.IdRole:
+                return rec.id
+            case self.NameRole:
+                return rec.name
+            case self.ThumbnailRole:
+                return _thumbnail_data_uri(getattr(rec, "thumbnail", None))
+            case self.EnabledRole:
+                return bool(getattr(rec, "enabled", True))
+            case self.LabeledRole:
+                return bool(getattr(rec, "labeled", True))
+            case self.ThumbnailsRole:
+                return _thumbnails_data_uris(getattr(rec, "thumbnails", None))
         return None
 
     def _index_of(self, identity_id: str) -> int:
@@ -526,9 +573,16 @@ class IdentityListModel(QAbstractListModel):
         if i >= 0:
             self._records[i] = rec
             idx = self.index(i)
-            self.dataChanged.emit(idx, idx, [
-                self.NameRole, self.ThumbnailRole, self.EnabledRole, self.LabeledRole,
-            ])
+            self.dataChanged.emit(
+                idx,
+                idx,
+                [
+                    self.NameRole,
+                    self.ThumbnailRole,
+                    self.EnabledRole,
+                    self.LabeledRole,
+                ],
+            )
             return
         row = len(self._records)
         self.beginInsertRows(QModelIndex(), row, row)
@@ -542,10 +596,17 @@ class IdentityListModel(QAbstractListModel):
             return
         self._records[i] = rec
         idx = self.index(i)
-        self.dataChanged.emit(idx, idx, [
-            self.NameRole, self.ThumbnailRole, self.EnabledRole, self.LabeledRole,
-            self.ThumbnailsRole,
-        ])
+        self.dataChanged.emit(
+            idx,
+            idx,
+            [
+                self.NameRole,
+                self.ThumbnailRole,
+                self.EnabledRole,
+                self.LabeledRole,
+                self.ThumbnailsRole,
+            ],
+        )
 
     def remove_identity(self, identity_id: str) -> bool:
         for i, rec in enumerate(self._records):
@@ -579,7 +640,7 @@ class IdentityListModel(QAbstractListModel):
 class LayoutListModel(QAbstractListModel):
     """Flat list of Layout records for the Layout manager panel."""
 
-    IdRole   = Qt.ItemDataRole.UserRole + 1
+    IdRole = Qt.ItemDataRole.UserRole + 1
     NameRole = Qt.ItemDataRole.UserRole + 2
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -593,17 +654,21 @@ class LayoutListModel(QAbstractListModel):
 
     def roleNames(self) -> dict[int, QByteArray]:
         return {
-            self.IdRole:   QByteArray(b"layoutId"),
+            self.IdRole: QByteArray(b"layoutId"),
             self.NameRole: QByteArray(b"layoutName"),
         }
 
-    def data(self, index: QModelIndex | QPersistentModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+    def data(
+        self, index: QModelIndex | QPersistentModelIndex, role: int = Qt.ItemDataRole.DisplayRole
+    ) -> Any:
         if not index.isValid() or index.row() >= len(self._layouts):
             return None
         lo = self._layouts[index.row()]
         match role:
-            case self.IdRole:   return lo.id
-            case self.NameRole: return lo.name
+            case self.IdRole:
+                return lo.id
+            case self.NameRole:
+                return lo.name
         return None
 
     def add_layout(self, layout: Any) -> None:
@@ -653,40 +718,40 @@ class EngineClient(QObject):
     """
 
     # ── signals → QML ────────────────────────────────────────────────────────
-    cameraAdded      = Signal(str)     # camera_id
-    cameraRemoved    = Signal(str)     # camera_id
-    telemetryUpdated = Signal(str)     # camera_id
-    configChanged    = Signal(str)     # camera_id
+    cameraAdded = Signal(str)  # camera_id
+    cameraRemoved = Signal(str)  # camera_id
+    telemetryUpdated = Signal(str)  # camera_id
+    configChanged = Signal(str)  # camera_id
     identitiesChanged = Signal()
-    layoutsChanged   = Signal()
-    themeChanged     = Signal(str)     # "dark"|"light"|"system"
-    featuresChanged  = Signal()        # global subsystem switches changed
-    detectorModelTierChanged = Signal() # persisted detector model tier changed
-    overlaysChanged  = Signal()        # which on-video overlays are shown changed
+    layoutsChanged = Signal()
+    themeChanged = Signal(str)  # "dark"|"light"|"system"
+    featuresChanged = Signal()  # global subsystem switches changed
+    detectorModelTierChanged = Signal()  # persisted detector model tier changed
+    overlaysChanged = Signal()  # which on-video overlays are shown changed
     startupProgressChanged = Signal()  # startup active/phase/counts changed
     optionalComponentsChanged = Signal()  # optional model/dependency prompt state
-    targetChanged    = Signal(str)     # camera_id — the tracked target changed
-    trackingChanged  = Signal(str)     # camera_id — tracking on/off changed
-    errorOccurred    = Signal(str)     # human-readable message
+    targetChanged = Signal(str)  # camera_id — the tracked target changed
+    trackingChanged = Signal(str)  # camera_id — tracking on/off changed
+    errorOccurred = Signal(str)  # human-readable message
 
     # ── engine lifecycle (FROZEN — other agents bind to these exact names) ─────
-    engineStateChanged = Signal()      # engineRunning / engineEp changed
+    engineStateChanged = Signal()  # engineRunning / engineEp changed
 
     # ── frame-source bridge (GUI thread connects these to ShmFrameSource) ──
     # Emitted when a worker's preview shm becomes available / goes away so the
     # app can attach/detach the camera tiles' ShmFrameSource on the GUI thread.
     providerAttachRequested = Signal(str, str, int, int)  # camera_id, shm_name, w, h
-    providerDetachRequested = Signal(str)                  # camera_id
+    providerDetachRequested = Signal(str)  # camera_id
 
     # ── internal: marshals worker-thread telemetry onto the GUI thread ─────────
     _telemetryArrived = Signal(object)  # TelemetryMsg
     # ── internal: marshals a worker-thread harvested identity onto the GUI thread
-    _identityArrived = Signal(object)   # IdentityRecord
+    _identityArrived = Signal(object)  # IdentityRecord
     _startupProgressArrived = Signal(object)  # dict payload
 
     def __init__(
         self,
-        store: "ConfigStore | None" = None,
+        store: ConfigStore | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -738,19 +803,23 @@ class EngineClient(QObject):
         # connection guarantees the slot (which mutates the Qt model) runs on the
         # thread that owns this QObject, never on the worker thread.
         self._telemetryArrived.connect(
-            self._on_telemetry_main, Qt.ConnectionType.QueuedConnection,
+            self._on_telemetry_main,
+            Qt.ConnectionType.QueuedConnection,
         )
         # Same pattern for worker-thread identity harvests.
         self._identityArrived.connect(
-            self._on_identity_main, Qt.ConnectionType.QueuedConnection,
+            self._on_identity_main,
+            Qt.ConnectionType.QueuedConnection,
         )
         self._startupProgressArrived.connect(
-            self._on_startup_progress_main, Qt.ConnectionType.QueuedConnection,
+            self._on_startup_progress_main,
+            Qt.ConnectionType.QueuedConnection,
         )
 
         # Periodically forget auto-harvested "Person N" identities that haven't
         # been seen for a while, so their track-ID numbers don't pile up forever.
         from PySide6.QtCore import QTimer
+
         self._expire_timer = QTimer(self)
         self._expire_timer.timeout.connect(self._expire_unlabeled_identities)
         self._expire_timer.start(_UNLABELED_SWEEP_MS)
@@ -874,7 +943,8 @@ class EngineClient(QObject):
         self._identity_service = service
 
     def set_supervisor_factory(
-        self, factory: Callable[[EngineClient], Any] | None,
+        self,
+        factory: Callable[[EngineClient], Any] | None,
     ) -> None:
         """Inject a factory ``(engine_client) -> supervisor`` used by startEngine.
 
@@ -1097,7 +1167,11 @@ class EngineClient(QObject):
     # ── frame-provider bridge (called from the supervisor / worker side) ───────
 
     def request_provider_attach(
-        self, camera_id: str, shm_name: str, width: int, height: int,
+        self,
+        camera_id: str,
+        shm_name: str,
+        width: int,
+        height: int,
     ) -> None:
         """Ask the GUI thread to attach the frame provider for *camera_id*.
 
@@ -1116,8 +1190,11 @@ class EngineClient(QObject):
     @Slot(str, str, str, result=str)
     @Slot(str, str, str, str, result=str)
     def addCamera(
-        self, source_uri: str, display_name: str,
-        unique_id: str = "", source_label: str = "",
+        self,
+        source_uri: str,
+        display_name: str,
+        unique_id: str = "",
+        source_label: str = "",
     ) -> str:
         from autoptz.config.models import CameraConfig, SourceConfig
 
@@ -1147,7 +1224,9 @@ class EngineClient(QObject):
             id=camera_id,
             name=name,
             source=SourceConfig(
-                type=source_type, address=source_uri, unique_id=uid,
+                type=source_type,
+                address=source_uri,
+                unique_id=uid,
                 source_label=source_label,
             ),
         )
@@ -1163,11 +1242,13 @@ class EngineClient(QObject):
         if self._store:
             self._store.save_camera(cam_config)
 
-        self._enqueue(AddCameraCmd(
-            camera_id=camera_id,
-            source_uri=source_uri,
-            display_name=name,
-        ))
+        self._enqueue(
+            AddCameraCmd(
+                camera_id=camera_id,
+                source_uri=source_uri,
+                display_name=name,
+            )
+        )
         self.cameraAdded.emit(camera_id)
         self._persist_camera_order()
         return camera_id
@@ -1226,17 +1307,23 @@ class EngineClient(QObject):
         rec.camera_config = new_cfg
         rec.display_name = new_cfg.name
 
-        self._model._notify_camera(camera_id, [
-            CameraListModel.DisplayNameRole, CameraListModel.PresetsRole,
-        ])
+        self._model._notify_camera(
+            camera_id,
+            [
+                CameraListModel.DisplayNameRole,
+                CameraListModel.PresetsRole,
+            ],
+        )
 
         if self._store:
             self._store.save_camera_debounced(new_cfg)
 
-        self._enqueue(UpdateCameraConfigCmd(
-            camera_id=camera_id,
-            config=json.loads(new_cfg.model_dump_json()),
-        ))
+        self._enqueue(
+            UpdateCameraConfigCmd(
+                camera_id=camera_id,
+                config=json.loads(new_cfg.model_dump_json()),
+            )
+        )
         self.configChanged.emit(camera_id)
 
     # ── tracking control ──────────────────────────────────────────────────────
@@ -1258,11 +1345,13 @@ class EngineClient(QObject):
             # An explicit box-click supersedes identity targeting; clear the stored
             # identity target so the pickers don't show a stale name.
             if rec.camera_config is not None:
-                new_target = rec.camera_config.target.model_copy(update={
-                    "mode": "manual", "identity_id": None,
-                })
-                rec.camera_config = rec.camera_config.model_copy(
-                    update={"target": new_target})
+                new_target = rec.camera_config.target.model_copy(
+                    update={
+                        "mode": "manual",
+                        "identity_id": None,
+                    }
+                )
+                rec.camera_config = rec.camera_config.model_copy(update={"target": new_target})
                 if self._store:
                     self._store.save_camera_debounced(rec.camera_config)
             self._model._notify_camera(camera_id, [CameraListModel.TargetTrackIdRole])
@@ -1275,11 +1364,13 @@ class EngineClient(QObject):
         if rec is not None:
             rec.target_track_id = None
             if rec.camera_config is not None:
-                new_target = rec.camera_config.target.model_copy(update={
-                    "mode": "off", "identity_id": None,
-                })
-                rec.camera_config = rec.camera_config.model_copy(
-                    update={"target": new_target})
+                new_target = rec.camera_config.target.model_copy(
+                    update={
+                        "mode": "off",
+                        "identity_id": None,
+                    }
+                )
+                rec.camera_config = rec.camera_config.model_copy(update={"target": new_target})
                 if self._store:
                     self._store.save_camera_debounced(rec.camera_config)
             self._model._notify_camera(camera_id, [CameraListModel.TargetTrackIdRole])
@@ -1334,12 +1425,14 @@ class EngineClient(QObject):
 
     @Slot(str, float, float, float)
     def ptzNudge(self, camera_id: str, pan: float, tilt: float, zoom: float) -> None:
-        self._enqueue(PtzNudgeCmd(
-            camera_id=camera_id,
-            pan_speed=pan,
-            tilt_speed=tilt,
-            zoom_speed=zoom,
-        ))
+        self._enqueue(
+            PtzNudgeCmd(
+                camera_id=camera_id,
+                pan_speed=pan,
+                tilt_speed=tilt,
+                zoom_speed=zoom,
+            )
+        )
 
     @Slot(str, str)
     def ptzGoToPreset(self, camera_id: str, preset_name: str) -> None:
@@ -1396,7 +1489,11 @@ class EngineClient(QObject):
     @Slot(str, int, str)
     @Slot(str, int, str, str)
     def savePtzPreset(
-        self, camera_id: str, slot: int, label: str = "", thumbnail: str = "",
+        self,
+        camera_id: str,
+        slot: int,
+        label: str = "",
+        thumbnail: str = "",
     ) -> None:
         """Store the camera's current PTZ position into hardware preset *slot*.
 
@@ -1429,10 +1526,12 @@ class EngineClient(QObject):
         self._model._notify_camera(camera_id, [CameraListModel.PresetsRole])
         # Mirror the new config to the running worker so its PTZ config stays in
         # sync (matches the path other config setters use).
-        self._enqueue(UpdateCameraConfigCmd(
-            camera_id=camera_id,
-            config=json.loads(new_cfg.model_dump_json()),
-        ))
+        self._enqueue(
+            UpdateCameraConfigCmd(
+                camera_id=camera_id,
+                config=json.loads(new_cfg.model_dump_json()),
+            )
+        )
         self.configChanged.emit(camera_id)
 
     @Slot(str, int)
@@ -1620,10 +1719,12 @@ class EngineClient(QObject):
         self._layout_model.add_layout(layout)
         self.layoutsChanged.emit()
 
-        self._enqueue(SaveLayoutCmd(
-            layout_name=layout_name,
-            tiles=[json.loads(t.model_dump_json()) for t in tiles],
-        ))
+        self._enqueue(
+            SaveLayoutCmd(
+                layout_name=layout_name,
+                tiles=[json.loads(t.model_dump_json()) for t in tiles],
+            )
+        )
 
     @Slot(str)
     def loadLayout(self, layout_id: str) -> None:
@@ -1658,8 +1759,12 @@ class EngineClient(QObject):
     @Slot(str, str, int)
     @Slot(str, str, int, float, float)
     def enrollIdentity(
-        self, camera_id: str, identity_name: str, track_id: int,
-        click_x: float | None = None, click_y: float | None = None,
+        self,
+        camera_id: str,
+        identity_name: str,
+        track_id: int,
+        click_x: float | None = None,
+        click_y: float | None = None,
     ) -> None:
         """Register a new identity and send enrollment command to engine."""
         from autoptz.config.models import IdentityRecord
@@ -1675,7 +1780,9 @@ class EngineClient(QObject):
         if self._identity_service is not None:
             try:
                 self._identity_service.enroll(
-                    identity_name.strip(), None, identity_id=identity_id,
+                    identity_name.strip(),
+                    None,
+                    identity_id=identity_id,
                 )
             except Exception:  # noqa: BLE001
                 log.debug("identity_service.enroll failed", exc_info=True)
@@ -1687,20 +1794,26 @@ class EngineClient(QObject):
         self._identity_model.add_identity(identity)
         self.identitiesChanged.emit()
 
-        self._enqueue(EnrollIdentityCmd(
-            camera_id=camera_id,
-            identity_name=identity_name.strip(),
-            identity_id=identity_id,
-            track_id=track_id,
-            click_x=click_x,
-            click_y=click_y,
-        ))
+        self._enqueue(
+            EnrollIdentityCmd(
+                camera_id=camera_id,
+                identity_name=identity_name.strip(),
+                identity_id=identity_id,
+                track_id=track_id,
+                click_x=click_x,
+                click_y=click_y,
+            )
+        )
 
     @Slot(str, str, int)
     @Slot(str, str, int, float, float)
     def assignTrackToIdentity(
-        self, camera_id: str, identity_id: str, track_id: int,
-        click_x: float | None = None, click_y: float | None = None,
+        self,
+        camera_id: str,
+        identity_id: str,
+        track_id: int,
+        click_x: float | None = None,
+        click_y: float | None = None,
     ) -> None:
         """Bind a clicked track's face to an EXISTING identity (click-to-assign).
 
@@ -1714,14 +1827,16 @@ class EngineClient(QObject):
             if ident.get("id") == identity_id:
                 name = ident.get("name", "")
                 break
-        self._enqueue(EnrollIdentityCmd(
-            camera_id=camera_id,
-            identity_name=name,
-            identity_id=identity_id,
-            track_id=track_id,
-            click_x=click_x,
-            click_y=click_y,
-        ))
+        self._enqueue(
+            EnrollIdentityCmd(
+                camera_id=camera_id,
+                identity_name=name,
+                identity_id=identity_id,
+                track_id=track_id,
+                click_x=click_x,
+                click_y=click_y,
+            )
+        )
 
     @Slot(str)
     def deleteIdentity(self, identity_id: str) -> None:
@@ -1744,12 +1859,15 @@ class EngineClient(QObject):
 
         if self._store:
             from datetime import UTC, datetime
+
             for identity in self._store.load_identities():
                 if identity.id == identity_id:
-                    updated = identity.model_copy(update={
-                        "name": new_name.strip(),
-                        "updated_at": datetime.now(UTC).replace(tzinfo=None),
-                    })
+                    updated = identity.model_copy(
+                        update={
+                            "name": new_name.strip(),
+                            "updated_at": datetime.now(UTC).replace(tzinfo=None),
+                        }
+                    )
                     self._store.save_identity(updated)
                     break
 
@@ -1763,9 +1881,13 @@ class EngineClient(QObject):
                 log.debug("identity_service.rename failed", exc_info=True)
 
         self.identitiesChanged.emit()
-        self._enqueue(RenameIdentityCmd(
-            camera_id=None, identity_id=identity_id, new_name=new_name.strip(),
-        ))
+        self._enqueue(
+            RenameIdentityCmd(
+                camera_id=None,
+                identity_id=identity_id,
+                new_name=new_name.strip(),
+            )
+        )
 
     @Slot(str, str)
     def labelIdentity(self, identity_id: str, name: str) -> None:
@@ -1791,18 +1913,26 @@ class EngineClient(QObject):
             rec = self._identity_model.get(identity_id)
             if rec is None:
                 return
-            updated = rec.model_copy(update={
-                "name": clean, "labeled": True, "enabled": True,
-            })
+            updated = rec.model_copy(
+                update={
+                    "name": clean,
+                    "labeled": True,
+                    "enabled": True,
+                }
+            )
             if self._store:
                 self._store.save_identity(updated)
 
         self._identity_model.update_identity(updated)
         self.identitiesChanged.emit()
         # A label is a rename in the persisted-command sense for the engine side.
-        self._enqueue(RenameIdentityCmd(
-            camera_id=None, identity_id=identity_id, new_name=clean,
-        ))
+        self._enqueue(
+            RenameIdentityCmd(
+                camera_id=None,
+                identity_id=identity_id,
+                new_name=clean,
+            )
+        )
 
     @Slot(str, str, int)
     def registerIdentity(self, identity_id: str, name: str, thumbnail_index: int) -> None:
@@ -1838,9 +1968,13 @@ class EngineClient(QObject):
 
         self._identity_model.update_identity(updated)
         self.identitiesChanged.emit()
-        self._enqueue(RenameIdentityCmd(
-            camera_id=None, identity_id=identity_id, new_name=clean,
-        ))
+        self._enqueue(
+            RenameIdentityCmd(
+                camera_id=None,
+                identity_id=identity_id,
+                new_name=clean,
+            )
+        )
 
     @Slot(str, int)
     def setProfileThumbnail(self, identity_id: str, index: int) -> None:
@@ -1985,10 +2119,12 @@ class EngineClient(QObject):
             if keep is None or drop is None:
                 return
             blobs = list(keep.embeddings) + list(drop.embeddings)
-            merged = keep.model_copy(update={
-                "embeddings": blobs,
-                "thumbnail": keep.thumbnail or drop.thumbnail,
-            })
+            merged = keep.model_copy(
+                update={
+                    "embeddings": blobs,
+                    "thumbnail": keep.thumbnail or drop.thumbnail,
+                }
+            )
             if self._store and getattr(merged, "labeled", True):
                 self._store.save_identity(merged)
                 self._store.delete_identity(drop_id)
@@ -2009,10 +2145,12 @@ class EngineClient(QObject):
         rec = self._model.get_record(camera_id)
         if rec is not None and rec.camera_config is not None:
             rec.target_track_id = None
-            new_target = rec.camera_config.target.model_copy(update={
-                "mode": "identity" if ident else "off",
-                "identity_id": ident,
-            })
+            new_target = rec.camera_config.target.model_copy(
+                update={
+                    "mode": "identity" if ident else "off",
+                    "identity_id": ident,
+                }
+            )
             new_cfg = rec.camera_config.model_copy(update={"target": new_target})
             rec.camera_config = new_cfg
             if self._store:
@@ -2060,6 +2198,7 @@ class EngineClient(QObject):
         results: list[dict[str, Any]] = []
         try:
             from autoptz.engine.discovery.usb import enumerate_cameras  # type: ignore
+
             devices = enumerate_cameras()
         except Exception:  # noqa: BLE001 — import or runtime failure → fallback
             log.debug("scanUSBCameras: enumerate_cameras unavailable; using fallback")
@@ -2097,21 +2236,20 @@ class EngineClient(QObject):
                 if unique_id:
                     self._usb_unique_ids[uri] = unique_id
                 self._usb_source_labels[uri] = source_label
-                in_use = (
-                    (unique_id and unique_id in active_uids)
-                    or uri in active_uris
+                in_use = (unique_id and unique_id in active_uids) or uri in active_uris
+                results.append(
+                    {
+                        "name": name,
+                        "uri": uri,
+                        "unique_id": unique_id,
+                        "in_use": bool(in_use),
+                        "is_continuity": bool(dev.get("is_continuity")),
+                        # Friendly source kind ("Built-in" / "Continuity Camera" /
+                        # "External" / "USB") for the picker to show instead of the
+                        # opaque usb://N uri.
+                        "source_label": str(dev.get("source_label") or "USB"),
+                    }
                 )
-                results.append({
-                    "name": name,
-                    "uri": uri,
-                    "unique_id": unique_id,
-                    "in_use": bool(in_use),
-                    "is_continuity": bool(dev.get("is_continuity")),
-                    # Friendly source kind ("Built-in" / "Continuity Camera" /
-                    # "External" / "USB") for the picker to show instead of the
-                    # opaque usb://N uri.
-                    "source_label": str(dev.get("source_label") or "USB"),
-                })
             return results
 
         # Fallback: enumeration backend could not even be imported.  Return an
@@ -2122,8 +2260,10 @@ class EngineClient(QObject):
     def scanNDISources(self) -> list[dict[str, str]]:
         """Return discovered NDI sources. Requires cyndilib; returns [] if unavailable."""
         try:
-            from cyndilib.finder import Finder  # type: ignore[import]
             import time
+
+            from cyndilib.finder import Finder  # type: ignore[import]
+
             finder = Finder()
             finder.open()
             time.sleep(2.0)
@@ -2157,7 +2297,8 @@ class EngineClient(QObject):
             from autoptz.engine.runtime.diagnostics import collect_services
 
             rows = collect_services(
-                engine_running=self._engine_running, engine_ep=self._engine_ep,
+                engine_running=self._engine_running,
+                engine_ep=self._engine_ep,
             )
             self._merge_live_service_rows(rows)
             return rows
@@ -2198,12 +2339,18 @@ class EngineClient(QObject):
         if switch is not None:
             state = str(_obj_field(switch, "state", "idle"))
             if state != "idle":
-                rows.append({
-                    "key": "model_switch",
-                    "name": "Detector switch",
-                    "state": "warn" if state == "warming" else "off" if state == "failed" else "ok",
-                    "detail": _switch_detail(switch),
-                })
+                rows.append(
+                    {
+                        "key": "model_switch",
+                        "name": "Detector switch",
+                        "state": "warn"
+                        if state == "warming"
+                        else "off"
+                        if state == "failed"
+                        else "ok",
+                        "detail": _switch_detail(switch),
+                    }
+                )
 
     @Slot(result="QVariant")
     def systemMetrics(self) -> dict[str, Any]:
@@ -2289,7 +2436,7 @@ class EngineClient(QObject):
         if target.startswith("file://"):
             from PySide6.QtCore import QUrl
 
-            target = QUrl(target).toLocalFile() or target[len("file://"):]
+            target = QUrl(target).toLocalFile() or target[len("file://") :]
         try:
             from pathlib import Path
 
@@ -2354,7 +2501,7 @@ class EngineClient(QObject):
     @Slot(object)
     def _on_identity_main(self, record: Any) -> None:
         """Apply a harvested/updated identity on the owning (GUI) thread."""
-        self._identity_model.add_identity(record)   # upserts by id
+        self._identity_model.add_identity(record)  # upserts by id
         self.identitiesChanged.emit()
 
     # ── command drain (called from engine supervisor) ─────────────────────────

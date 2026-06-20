@@ -7,6 +7,7 @@ Degrades gracefully with a clear ImportError if cyndilib is absent.
 NDI PTZ does not expose absolute pan/tilt position queries;
 get_position() always returns None.
 """
+
 from __future__ import annotations
 
 import logging
@@ -21,6 +22,7 @@ log = logging.getLogger(__name__)
 def _require_cyndilib() -> Any:
     try:
         import cyndilib
+
         return cyndilib
     except ImportError as exc:
         raise ImportError(

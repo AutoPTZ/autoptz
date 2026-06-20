@@ -6,6 +6,7 @@ passed safely between threads and processes without defensive copying.
 Cameras are addressed by stable UUID (`CameraConfig.id`) everywhere — never
 by list position or a "current active" global.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -15,6 +16,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _new_id() -> str:
     return str(uuid.uuid4())
@@ -26,26 +28,29 @@ def _now() -> datetime:
 
 # ── Hardware / EP prefs ───────────────────────────────────────────────────────
 
+
 class HardwarePrefs(BaseModel, frozen=True):
-    force_ep: str | None = None        # "CoreMLExecutionProvider", etc.; None = auto
+    force_ep: str | None = None  # "CoreMLExecutionProvider", etc.; None = auto
     model_tier: Literal["nano", "small", "medium", "large"] = "nano"
     max_workers: int = Field(default=4, ge=1, le=32)
 
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
 
+
 class ThemeConfig(BaseModel, frozen=True):
     name: Literal["dark", "light", "system"] = "dark"
-    accent: str = "#3d9bff"            # hex colour token
+    accent: str = "#3d9bff"  # hex colour token
 
 
 # ── Source ────────────────────────────────────────────────────────────────────
 
+
 class SourceConfig(BaseModel, frozen=True):
     type: Literal["usb", "rtsp", "onvif", "ndi"] = "usb"
-    address: str = ""                  # index (USB), URL (RTSP/ONVIF), name (NDI)
-    unique_id: str | None = None       # stable device id (USB: AVFoundation uniqueID)
-    source_label: str = ""             # friendly kind ("Built-in"/"Continuity Camera"/…)
+    address: str = ""  # index (USB), URL (RTSP/ONVIF), name (NDI)
+    unique_id: str | None = None  # stable device id (USB: AVFoundation uniqueID)
+    source_label: str = ""  # friendly kind ("Built-in"/"Continuity Camera"/…)
     username: str = ""
     password: str = ""
     substream: bool = False
@@ -54,6 +59,7 @@ class SourceConfig(BaseModel, frozen=True):
 
 # ── Reconnect ─────────────────────────────────────────────────────────────────
 
+
 class ReconnectConfig(BaseModel, frozen=True):
     backoff_initial_s: float = Field(default=1.0, gt=0.0)
     backoff_max_s: float = Field(default=30.0, gt=0.0)
@@ -61,6 +67,7 @@ class ReconnectConfig(BaseModel, frozen=True):
 
 
 # ── Tracking ──────────────────────────────────────────────────────────────────
+
 
 class TrackingConfig(BaseModel, frozen=True):
     tracker: Literal["botsort", "deepocsort", "bytetrack"] = "botsort"
@@ -87,17 +94,13 @@ class TrackingConfig(BaseModel, frozen=True):
     # person.  See ``AIM_REGION_FRACTION`` for the actual fractions used by the
     # controller.  (True arm/leg exclusion would need pose keypoints; this is the
     # pragmatic bbox-fraction approximation.)
-    aim_region: Literal["face", "head_shoulders", "upper_body", "full_body"] = (
-        "upper_body"
-    )
+    aim_region: Literal["face", "head_shoulders", "upper_body", "full_body"] = "upper_body"
     # Unified "Framing" preset — the single user-facing control that drives BOTH
     # where the camera aims (``aim_region``) and how tightly it zooms
     # (``ptz.zoom_framing``).  The 4 names line up 1:1 with both legacy controls,
     # so consumers read ``framing`` directly and map through the matching constant
     # (``AIM_REGION_FRACTION`` for aim, the controller's zoom targets for zoom).
-    framing: Literal["face", "head_shoulders", "upper_body", "full_body"] = (
-        "upper_body"
-    )
+    framing: Literal["face", "head_shoulders", "upper_body", "full_body"] = "upper_body"
     # Whether pose-aware aiming ignores arms/limbs and tracks the torso, or uses
     # the whole detection silhouette. Torso is the default because it prevents an
     # extended arm from pulling the PTZ aim point away from the person.
@@ -112,14 +115,15 @@ class TrackingConfig(BaseModel, frozen=True):
 # of the box (0.0 = top edge, 1.0 = bottom edge).  Consumed by the camera worker's
 # ``_track_error`` to decide where inside the detection the PTZ should centre.
 AIM_REGION_FRACTION: dict[str, float] = {
-    "face": 0.10,           # head / face
+    "face": 0.10,  # head / face
     "head_shoulders": 0.22,
-    "upper_body": 0.38,     # head + torso, robust to arm/leg motion (default)
-    "full_body": 0.50,      # geometric centre (legacy behaviour)
+    "upper_body": 0.38,  # head + torso, robust to arm/leg motion (default)
+    "full_body": 0.50,  # geometric centre (legacy behaviour)
 }
 
 
 # ── PTZ ───────────────────────────────────────────────────────────────────────
+
 
 class PanTiltZoomLimits(BaseModel, frozen=True):
     pan_min: float = -1.0
@@ -137,7 +141,7 @@ ZoomFraming = Literal["face", "head_shoulders", "upper_body", "full_body", "wide
 
 _LEGACY_ZOOM_FRAMING: dict[str, str] = {
     "tight": "head_shoulders",  # tightest legacy framing → head & shoulders
-    "medium": "upper_body",     # legacy medium → upper body (≈0.45, same target)
+    "medium": "upper_body",  # legacy medium → upper body (≈0.45, same target)
     # "wide" maps to itself (still a valid value)
 }
 
@@ -285,13 +289,15 @@ class PTZPreset(BaseModel, frozen=True):
 
 # ── Target / framing intent ───────────────────────────────────────────────────
 
+
 class TargetConfig(BaseModel, frozen=True):
     mode: Literal["identity", "manual", "off"] = "off"
     identity_id: str | None = None
-    default_on_start: int | None = None   # preset idx to recall on startup
+    default_on_start: int | None = None  # preset idx to recall on startup
 
 
 # ── Camera ────────────────────────────────────────────────────────────────────
+
 
 class CameraConfig(BaseModel, frozen=True):
     id: str = Field(default_factory=_new_id)
@@ -313,6 +319,7 @@ class CameraConfig(BaseModel, frozen=True):
 
 
 # ── Layout ────────────────────────────────────────────────────────────────────
+
 
 class TilePlacement(BaseModel, frozen=True):
     camera_id: str
@@ -338,6 +345,7 @@ class Layout(BaseModel, frozen=True):
 
 
 # ── Identity ──────────────────────────────────────────────────────────────────
+
 
 class IdentityRecord(BaseModel, frozen=True):
     id: str = Field(default_factory=_new_id)
@@ -386,6 +394,4 @@ class AppConfig(BaseModel, frozen=True):
 
     def without_camera(self, camera_id: str) -> AppConfig:
         """Return a new AppConfig with the given camera removed."""
-        return self.model_copy(
-            update={"cameras": [c for c in self.cameras if c.id != camera_id]}
-        )
+        return self.model_copy(update={"cameras": [c for c in self.cameras if c.id != camera_id]})

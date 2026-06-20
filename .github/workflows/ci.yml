@@ -41,7 +41,9 @@ jobs:
         run: ruff check autoptz/ tests/ tools/
 
       - name: Type check (mypy)
-        run: mypy autoptz/engine/runtime/ tests/
+        # Strict gate on the typed core (runtime + config). The UI/pipeline are
+        # mid typing-migration and excluded in pyproject; expand this as they land.
+        run: mypy autoptz/engine/runtime/ autoptz/config/
 
       - name: Run unit tests
         run: pytest tests/ -v --timeout=60

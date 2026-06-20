@@ -16,6 +16,7 @@ palette + stylesheet whenever the appearance changes.
 On-video HUD colors (``VIDEO_*``) and status colors are CONSTANT (drawn by
 ``QPainter``) so overlays stay readable on the dark video scrim in any mode.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -68,32 +69,33 @@ def _icon_url(name: str, color: str, svg_tpl: str) -> str:
         log.debug("icon write failed", exc_info=True)
         return ""
 
+
 # ── brand + status constants (do NOT flip with light/dark) ─────────────────────
 ACCENT_FALLBACK = "#2563eb"
-ACCENT_TEXT     = "#ffffff"
+ACCENT_TEXT = "#ffffff"
 
 TRACKING = "#22c55e"
-TARGET   = "#4ade80"
-WARNING  = "#fb923c"
-LOST     = "#f97316"
-ERROR    = "#ef4444"
-BBOX     = "#4dd0e1"
+TARGET = "#4ade80"
+WARNING = "#fb923c"
+LOST = "#f97316"
+ERROR = "#ef4444"
+BBOX = "#4dd0e1"
 
 # Semantic aliases for destructive UI (delete / remove / discard).  A single
 # source of truth so every "danger" affordance reads the same — paired with the
 # global ``QPushButton[danger="true"]`` rule and the DangerButton/IconButton
 # components in widgets/common.py.
-DANGER       = ERROR
+DANGER = ERROR
 DANGER_HOVER = QColor(ERROR).lighter(112).name()
 # Face-detection box + pose-skeleton overlay colours (drawn on the video scrim).
-FACE_BOX = "#f59e0b"   # amber — distinct from the cyan person box / green target
-POSE     = "#38bdf8"   # sky-blue skeleton
+FACE_BOX = "#f59e0b"  # amber — distinct from the cyan person box / green target
+POSE = "#38bdf8"  # sky-blue skeleton
 
-VIDEO_TEXT    = "#ffffff"
+VIDEO_TEXT = "#ffffff"
 VIDEO_SUBTEXT = "#cbd5e1"
-VIDEO_SCRIM   = QColor(15, 15, 18, 204)
+VIDEO_SCRIM = QColor(15, 15, 18, 204)
 
-RADIUS   = 6
+RADIUS = 6
 RADIUS_L = 10
 
 # Live UI-scale multiplier (rebound by ThemeController.apply); widgets and the
@@ -124,22 +126,36 @@ class Palette:
 
 # Lighter than near-black so surfaces read as panels with visible separation.
 DARK = Palette(
-    background="#1b1b20", surface="#232329", surface_alt="#2c2c34",
-    surface_hov="#383842", sidebar_bg="#17171b", border="#3c3c48",
-    border_hov="#52525f", text="#edeef2", subtext="#b0b2c0", muted="#7c7e8e",
+    background="#1b1b20",
+    surface="#232329",
+    surface_alt="#2c2c34",
+    surface_hov="#383842",
+    sidebar_bg="#17171b",
+    border="#3c3c48",
+    border_hov="#52525f",
+    text="#edeef2",
+    subtext="#b0b2c0",
+    muted="#7c7e8e",
 )
 # Darker text/borders than a flat gray so panels read as distinct surfaces and
 # secondary text is actually legible (the old light mode was "too gray").
 LIGHT = Palette(
-    background="#eceef2", surface="#ffffff", surface_alt="#e2e4ea",
-    surface_hov="#d5d8e1", sidebar_bg="#dde0e7", border="#bcbecb",
-    border_hov="#9a9caf", text="#14151c", subtext="#3f4150", muted="#6a6c7b",
+    background="#eceef2",
+    surface="#ffffff",
+    surface_alt="#e2e4ea",
+    surface_hov="#d5d8e1",
+    sidebar_bg="#dde0e7",
+    border="#bcbecb",
+    border_hov="#9a9caf",
+    text="#14151c",
+    subtext="#3f4150",
+    muted="#6a6c7b",
 )
 
 # Live globals (rebound by ThemeController.apply); widgets read these.
 CURRENT: Palette = DARK
 ACCENT: QColor = QColor(ACCENT_FALLBACK)
-SELECTION: str = "#2c3550"   # muted accent-tinted selection background
+SELECTION: str = "#2c3550"  # muted accent-tinted selection background
 
 
 def _mix(c1: QColor, c2: QColor, t: float) -> QColor:
@@ -167,8 +183,10 @@ def resolve_mode(app: object, mode: str) -> str:
 def system_accent(app: object) -> QColor:
     try:
         hi = app.palette().color(QPalette.ColorRole.Highlight)  # type: ignore[attr-defined]
-        if hi.isValid() and (max(hi.red(), hi.green(), hi.blue())
-                             - min(hi.red(), hi.green(), hi.blue())) > 24:
+        if (
+            hi.isValid()
+            and (max(hi.red(), hi.green(), hi.blue()) - min(hi.red(), hi.green(), hi.blue())) > 24
+        ):
             return hi
     except Exception:  # noqa: BLE001
         pass
@@ -198,8 +216,11 @@ def build_qpalette(pal: Palette, accent: QColor, selection: QColor) -> QPalette:
     p.setColor(QPalette.ColorRole.Link, accent)
 
     disabled = QColor(pal.muted)
-    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text,
-                 QPalette.ColorRole.ButtonText):
+    for role in (
+        QPalette.ColorRole.WindowText,
+        QPalette.ColorRole.Text,
+        QPalette.ColorRole.ButtonText,
+    ):
         p.setColor(QPalette.ColorGroup.Disabled, role, disabled)
     return p
 
@@ -406,9 +427,9 @@ def _round_popup_window(win: object, margin: int) -> None:
         return
     try:
         win.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)  # type: ignore[attr-defined]
-        win.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)            # type: ignore[attr-defined]
-        win.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)         # type: ignore[attr-defined]
-        win.setContentsMargins(margin, margin, margin, margin)               # type: ignore[attr-defined]
+        win.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)  # type: ignore[attr-defined]
+        win.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)  # type: ignore[attr-defined]
+        win.setContentsMargins(margin, margin, margin, margin)  # type: ignore[attr-defined]
     except Exception:  # noqa: BLE001
         log.debug("round popup window failed", exc_info=True)
 
@@ -421,7 +442,7 @@ def _fade_popup_window(win: object) -> None:
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)
-        setattr(win, "_autoptz_popup_fade_anim", anim)
+        win._autoptz_popup_fade_anim = anim
         win.setWindowOpacity(0.0)  # type: ignore[attr-defined]
         anim.start()
     except Exception:  # noqa: BLE001
@@ -551,7 +572,7 @@ class ThemeController(QObject):
             font = self._app.font()  # type: ignore[attr-defined]
             font.setPointSizeF(self._base_point * self._scale)
             self._app.setFont(font)  # type: ignore[attr-defined]
-            self._app.setPalette(build_qpalette(pal, self._accent, selection))      # type: ignore[attr-defined]
+            self._app.setPalette(build_qpalette(pal, self._accent, selection))  # type: ignore[attr-defined]
             self._app.setStyleSheet(build_stylesheet(pal, self._accent, selection))  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             log.debug("Failed to apply theme", exc_info=True)

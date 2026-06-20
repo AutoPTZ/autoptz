@@ -1,9 +1,11 @@
 """Shared widgets for the native UI: collapsible groups, cost chips, helpers."""
+
 from __future__ import annotations
 
 import base64
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPixmap
@@ -32,7 +34,7 @@ def animate_widget_visibility(widget: QWidget, visible: bool, *, duration: int =
     target = bool(visible)
     if getattr(widget, "_autoptz_fade_target", None) == target:
         return
-    setattr(widget, "_autoptz_fade_target", target)
+    widget._autoptz_fade_target = target
 
     effect = widget.graphicsEffect()
     if not isinstance(effect, QGraphicsOpacityEffect):
@@ -67,8 +69,9 @@ def animate_widget_visibility(widget: QWidget, visible: bool, *, duration: int =
             widget.setVisible(target)
 
     anim.finished.connect(_finish)
-    setattr(widget, "_autoptz_fade_anim", anim)
+    widget._autoptz_fade_anim = anim
     anim.start()
+
 
 # ── theme reactivity ──────────────────────────────────────────────────────────
 
@@ -312,9 +315,7 @@ class CollapsibleGroup(QWidget):
 
     def _on_toggle(self, checked: bool) -> None:
         self._expanded = checked
-        self._toggle.setArrowType(
-            Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
-        )
+        self._toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
         self._height_anim.stop()
         natural = self._natural_height()
         current = max(0, self._content.height() if self._content.isVisible() else 0)
@@ -362,8 +363,11 @@ def data_uri_to_pixmap(uri: str, size: int = 56, circular: bool = True) -> QPixm
         return None
 
     pm = QPixmap.fromImage(
-        img.scaled(QSize(size, size), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                   Qt.TransformationMode.SmoothTransformation)
+        img.scaled(
+            QSize(size, size),
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
     )
     # center-crop to square
     if pm.width() != size or pm.height() != size:
@@ -395,7 +399,9 @@ def letter_avatar(text: str, size: int = 56) -> QPixmap:
     p.setPen(Qt.PenStyle.NoPen)
     p.drawEllipse(0, 0, size, size)
     p.setPen(QColor(T.CURRENT.text))
-    f = p.font(); f.setPixelSize(int(size * 0.42)); f.setBold(True)
+    f = p.font()
+    f.setPixelSize(int(size * 0.42))
+    f.setBold(True)
     p.setFont(f)
     ch = (text.strip()[:1] or "?").upper()
     p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, ch)

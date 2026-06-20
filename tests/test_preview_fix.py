@@ -7,22 +7,21 @@ writer appears, with no re-attach and no manual retry.
 All tests are headless and mock PyObjC; the shm tests use real (small) shared
 memory segments that are explicitly cleaned up.
 """
+
 from __future__ import annotations
 
 import sys
 import time
 import types
 import uuid
-from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
-
 import PySide6  # noqa: F401
 
 
 def _cleanup_shm(name: str) -> None:
     from multiprocessing.shared_memory import SharedMemory
+
     for n in (name, f"{name}__idx"):
         try:
             s = SharedMemory(name=n, create=False)
@@ -147,8 +146,8 @@ class TestWorkerEagerShm:
                 pass
 
         from autoptz.config.models import CameraConfig, SourceConfig
-        cfg = CameraConfig(id=cid, name="C",
-                           source=SourceConfig(type="usb", address="usb://0"))
+
+        cfg = CameraConfig(id=cid, name="C", source=SourceConfig(type="usb", address="usb://0"))
         worker = CameraWorker(cid, cfg, lambda m: None, frame_source=_Src())
         worker.start()
         try:
@@ -180,7 +179,11 @@ class TestEnumerateCameras:
         assert [c["index"] for c in cams] == [0, 2]
         for cam in cams:
             assert set(cam.keys()) == {
-                "name", "unique_id", "index", "is_continuity", "source_label",
+                "name",
+                "unique_id",
+                "index",
+                "is_continuity",
+                "source_label",
             }
             assert cam["unique_id"] is None
             assert cam["is_continuity"] is False
@@ -241,8 +244,11 @@ class TestEnumerateCameras:
         cams = usb.enumerate_cameras()
         assert len(cams) == 2
         assert cams[0] == {
-            "name": "FaceTime HD Camera", "unique_id": "0xABC",
-            "index": 0, "is_continuity": False, "source_label": "Built-in",
+            "name": "FaceTime HD Camera",
+            "unique_id": "0xABC",
+            "index": 0,
+            "is_continuity": False,
+            "source_label": "Built-in",
         }
         assert cams[1]["name"] == "Steven's iPhone"
         assert cams[1]["unique_id"] == "0xDEF"

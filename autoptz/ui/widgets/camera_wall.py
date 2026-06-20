@@ -6,6 +6,7 @@ column count is chosen so each cell stays close to 16:9 (never a tall single
 column for multiple cameras), and tracks the selected camera (emitting
 ``cameraSelected`` so the Properties / Camera Info panels can follow it).
 """
+
 from __future__ import annotations
 
 import json
@@ -50,7 +51,10 @@ _LAYOUT_PRESETS: list[tuple[str, str]] = [
 ]
 # preset key → (columns, minimum rows)
 _PRESET_DIMS: dict[str, tuple[int, int]] = {
-    "2x2": (2, 2), "3x2": (3, 2), "2x3": (2, 3), "3x3": (3, 3),
+    "2x2": (2, 2),
+    "3x2": (3, 2),
+    "2x3": (2, 3),
+    "3x3": (3, 3),
 }
 _DEFAULT_LAYOUT = "auto"
 _WALL_MARGIN = 6
@@ -99,9 +103,9 @@ class _EmptyCameraSlot(QWidget):
 class CameraWall(QWidget):
     """Grid of live camera tiles with selection + an empty state."""
 
-    cameraSelected = Signal(str)        # camera_id (or "" when none)
-    cameraInfoRequested = Signal(str)   # camera_id — open Camera Info for it
-    addCameraRequested = Signal()       # empty fixed-grid slot clicked
+    cameraSelected = Signal(str)  # camera_id (or "" when none)
+    cameraInfoRequested = Signal(str)  # camera_id — open Camera Info for it
+    addCameraRequested = Signal()  # empty fixed-grid slot clicked
 
     def __init__(self, client: Any, frame_source: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -355,8 +359,11 @@ class CameraWall(QWidget):
         if index is None:
             self._insert_line.hide()
             return
-        order = [cid for cid in _camera_ids(self._client)
-                 if cid in self._tiles and cid != self._drag_camera_id]
+        order = [
+            cid
+            for cid in _camera_ids(self._client)
+            if cid in self._tiles and cid != self._drag_camera_id
+        ]
         if not order:
             self._insert_line.hide()
             return

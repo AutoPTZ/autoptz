@@ -6,6 +6,7 @@ widgets grouped in collapsible sections, and writes back debounced via
 with a tooltip so the user can see what's expensive.  A compact manual PTZ pad
 nudges the camera; Remove deletes it (with confirmation).
 """
+
 from __future__ import annotations
 
 import base64
@@ -48,8 +49,8 @@ from autoptz.ui.widgets.joystick import JoystickPad
 log = logging.getLogger(__name__)
 
 _NUDGE = 0.6
-_PRESET_COUNT = 6           # quick-recall slots shown as tiles in the PTZ section
-_PRESET_THUMB = 84          # preset tile thumbnail edge (px)
+_PRESET_COUNT = 6  # quick-recall slots shown as tiles in the PTZ section
+_PRESET_THUMB = 84  # preset tile thumbnail edge (px)
 
 # Friendly labels for the unified Framing control (value → caption shown to user).
 _FRAMING_CHOICES = [
@@ -73,10 +74,10 @@ _TRACKER_HELP = {
 # Plain-English cost notes shown as tooltips next to the chips.
 _COST_HELP = {
     "detect_interval": "How often the detector runs. Every frame (1) is heaviest; "
-                       "higher values skip frames and cost far less CPU.",
+    "higher values skip frames and cost far less CPU.",
     "tracker": "\n".join(_TRACKER_HELP.values()),
     "reid": "Appearance re-identification recovers a target after occlusion — "
-            "accurate but the most expensive option (runs an extra model).",
+    "accurate but the most expensive option (runs an extra model).",
     "face_confirm": "Confirms identity with face recognition — moderate extra cost.",
 }
 
@@ -92,9 +93,9 @@ class _PresetTile(QWidget):
       Clear menu.
     """
 
-    recallRequested = Signal(int)   # slot index
-    saveRequested = Signal(int)     # slot index
-    clearRequested = Signal(int)    # slot index
+    recallRequested = Signal(int)  # slot index
+    saveRequested = Signal(int)  # slot index
+    clearRequested = Signal(int)  # slot index
 
     def __init__(self, slot: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -137,7 +138,9 @@ class _PresetTile(QWidget):
 
     def set_state(self, *, occupied: bool, label: str, thumbnail: str | None) -> None:
         self._occupied = bool(occupied)
-        pm = data_uri_to_pixmap(thumbnail, size=_PRESET_THUMB, circular=False) if thumbnail else None
+        pm = (
+            data_uri_to_pixmap(thumbnail, size=_PRESET_THUMB, circular=False) if thumbnail else None
+        )
         if pm is not None and not pm.isNull():
             self._thumb.setPixmap(
                 pm.scaled(
@@ -150,16 +153,21 @@ class _PresetTile(QWidget):
         else:
             self._thumb.setPixmap(QPixmap())
             self._thumb.setText(f"{self.slot + 1}" if occupied else "＋")
-        self._caption.setText(label if (occupied and label) else
-                              ("Preset" if occupied else "Empty"))
+        self._caption.setText(
+            label if (occupied and label) else ("Preset" if occupied else "Empty")
+        )
         self.setToolTip(
-            (f"Preset {self.slot + 1}" + (f" — “{label}”" if label else "") +
-             ": click to recall, ⋯ to overwrite/clear.")
-            if occupied else
-            f"Preset {self.slot + 1} (empty): click to save the current view."
+            (
+                f"Preset {self.slot + 1}"
+                + (f" — “{label}”" if label else "")
+                + ": click to recall, ⋯ to overwrite/clear."
+            )
+            if occupied
+            else f"Preset {self.slot + 1} (empty): click to save the current view."
         )
         self.setProperty("occupied", self._occupied)
-        self.style().unpolish(self); self.style().polish(self)
+        self.style().unpolish(self)
+        self.style().polish(self)
         self.restyle()
 
     def restyle(self) -> None:
@@ -196,14 +204,14 @@ class _PresetTile(QWidget):
     def _open_menu(self) -> None:
         menu = QMenu(self)
         if self._occupied:
-            menu.addAction("Overwrite (save current view)",
-                           lambda: self.saveRequested.emit(self.slot))
+            menu.addAction(
+                "Overwrite (save current view)", lambda: self.saveRequested.emit(self.slot)
+            )
             menu.addAction("Recall", lambda: self.recallRequested.emit(self.slot))
             menu.addSeparator()
             menu.addAction("Clear", lambda: self.clearRequested.emit(self.slot))
         else:
-            menu.addAction("Save current view here",
-                           lambda: self.saveRequested.emit(self.slot))
+            menu.addAction("Save current view here", lambda: self.saveRequested.emit(self.slot))
         menu.exec(self.mapToGlobal(self._menu_btn.geometry().bottomLeft()))
 
 
@@ -237,8 +245,8 @@ class PropertiesPanel(QWidget):
         # Per-widget styled elements that bake T.CURRENT/T.ERROR colors at build
         # time are collected here so :meth:`_restyle_all` can re-apply them on a
         # Light/Dark switch (otherwise they keep the previous palette's colors).
-        self._muted_captions: list[QLabel] = []   # muted "caption" labels
-        self._ro_values: list[QLabel] = []        # read-only primary-text values
+        self._muted_captions: list[QLabel] = []  # muted "caption" labels
+        self._ro_values: list[QLabel] = []  # read-only primary-text values
 
         self._empty = QLabel("Select a camera to edit its settings")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -285,8 +293,11 @@ class PropertiesPanel(QWidget):
         # Reflect target changes made elsewhere (e.g. clicking a recognized person
         # on the video) in the "Track person" dropdown.
         _connect(self._client, "targetChanged", self._on_external_target_changed)
-        _connect(self._client, "trackingChanged", lambda cid: self._sync_track_state()
-                 if cid == self._camera_id else None)
+        _connect(
+            self._client,
+            "trackingChanged",
+            lambda cid: self._sync_track_state() if cid == self._camera_id else None,
+        )
         _connect(self._client, "telemetryUpdated", lambda *_: self._on_telemetry())
         # Re-grey Mode▸Stable live when the global ReID feature is toggled.
         _connect(self._client, "featuresChanged", self._refresh_reid_gating)
@@ -341,46 +352,68 @@ class PropertiesPanel(QWidget):
             "cheaper to decode; slightly less detail for detection."
         )
         self._substream.toggled.connect(self._schedule)
-        self._substream_holder = _with_chip(self._substream, HelpBadge(
-            "Pulls the camera's lower-resolution sub-stream (IP cameras only). "
-            "Much cheaper to decode and keeps the UI responsive; detection loses "
-            "a little detail on small/distant people."
-        ))
+        self._substream_holder = _with_chip(
+            self._substream,
+            HelpBadge(
+                "Pulls the camera's lower-resolution sub-stream (IP cameras only). "
+                "Much cheaper to decode and keeps the UI responsive; detection loses "
+                "a little detail on small/distant people."
+            ),
+        )
         gf.addRow("", self._substream_holder)
-        gf.addRow("Frame rate", _with_chip(self._build_fps_row(), HelpBadge(
-            "Frames per second requested from the camera. Higher is smoother for "
-            "tracking but costs more CPU/GPU; the slider's max is the source's "
-            "detected hardware ceiling, and changes apply live."
-        )))
+        gf.addRow(
+            "Frame rate",
+            _with_chip(
+                self._build_fps_row(),
+                HelpBadge(
+                    "Frames per second requested from the camera. Higher is smoother for "
+                    "tracking but costs more CPU/GPU; the slider's max is the source's "
+                    "detected hardware ceiling, and changes apply live."
+                ),
+            ),
+        )
         g.add_widget(_wrap(gf))
         self._col.addWidget(g)
 
         # Detection
         d = CollapsibleGroup("Detection", expanded=False)
         df = _form()
-        self._quality = QComboBox(); self._quality.addItems(["auto", "high", "balanced", "low"])
+        self._quality = QComboBox()
+        self._quality.addItems(["auto", "high", "balanced", "low"])
         self._quality.setToolTip(
             "Minimum detection quality. Higher quality finds smaller/partly-hidden "
             "people but costs more; “auto” adapts to load."
         )
         self._quality.currentTextChanged.connect(self._schedule)
-        df.addRow("Quality floor", _with_chip(self._quality, HelpBadge(
-            "Minimum detection quality. Higher levels find smaller or partly "
-            "hidden people but cost more CPU; “auto” adapts the floor to the "
-            "current load."
-        )))
+        df.addRow(
+            "Quality floor",
+            _with_chip(
+                self._quality,
+                HelpBadge(
+                    "Minimum detection quality. Higher levels find smaller or partly "
+                    "hidden people but cost more CPU; “auto” adapts the floor to the "
+                    "current load."
+                ),
+            ),
+        )
         # Live readout of what "auto" is actually resolving to right now (and why).
         self._quality_effective = QLabel("")
         self._quality_effective.setWordWrap(True)
         self._muted_captions.append(self._quality_effective)
         df.addRow("", self._quality_effective)
-        self._detect_interval = QSpinBox(); self._detect_interval.setRange(1, 30)
+        self._detect_interval = QSpinBox()
+        self._detect_interval.setRange(1, 30)
         self._detect_interval.valueChanged.connect(self._schedule)
         self._detect_chip = CostChip("heavy")
         self._detect_chip.setToolTip(_COST_HELP["detect_interval"])
-        df.addRow("Detect every N frames", _with_chip(
-            self._detect_interval, self._detect_chip, HelpBadge(_COST_HELP["detect_interval"]),
-        ))
+        df.addRow(
+            "Detect every N frames",
+            _with_chip(
+                self._detect_interval,
+                self._detect_chip,
+                HelpBadge(_COST_HELP["detect_interval"]),
+            ),
+        )
         # Live readout of the *effective* cadence when the engine auto-adjusts it.
         self._detect_effective = QLabel("")
         self._detect_effective.setWordWrap(True)
@@ -395,17 +428,25 @@ class PropertiesPanel(QWidget):
         self._overlay_boxes: dict[str, QCheckBox] = {}
         cur_ov = _safe(lambda: self._client.overlays(), {}) or {}
         for key, label, tip in (
-            ("detection", "Detection boxes",
-             "Show a box around every detected person."),
-            ("faces", "Face boxes",
-             "Show face-recognition boxes with the matched name "
-             "(needs Face recognition enabled in Services)."),
-            ("pose", "Pose skeleton",
-             "Draw the selected person's body skeleton — shows for whoever you "
-             "click/track (needs Pose enabled in Services)."),
-            ("prediction", "Motion prediction",
-             "Debug overlay: draw predicted target motion/ghost box. Off by "
-             "default so the target overlay stays one true box plus PTZ aim dot."),
+            ("detection", "Detection boxes", "Show a box around every detected person."),
+            (
+                "faces",
+                "Face boxes",
+                "Show face-recognition boxes with the matched name "
+                "(needs Face recognition enabled in Services).",
+            ),
+            (
+                "pose",
+                "Pose skeleton",
+                "Draw the selected person's body skeleton — shows for whoever you "
+                "click/track (needs Pose enabled in Services).",
+            ),
+            (
+                "prediction",
+                "Motion prediction",
+                "Debug overlay: draw predicted target motion/ghost box. Off by "
+                "default so the target overlay stays one true box plus PTZ aim dot.",
+            ),
         ):
             cb = QCheckBox(label)
             cb.setChecked(bool(cur_ov.get(key, key == "detection")))
@@ -439,11 +480,17 @@ class PropertiesPanel(QWidget):
             "is detected."
         )
         self._target_combo.currentIndexChanged.connect(self._on_target_changed)
-        tf.addRow("Track person", _with_chip(self._target_combo, HelpBadge(
-            "Lock tracking to a registered person — the camera follows them "
-            "whenever they're recognized. Choose “— Anyone —” to follow whoever "
-            "is detected. Register people in the Identities panel."
-        )))
+        tf.addRow(
+            "Track person",
+            _with_chip(
+                self._target_combo,
+                HelpBadge(
+                    "Lock tracking to a registered person — the camera follows them "
+                    "whenever they're recognized. Choose “— Anyone —” to follow whoever "
+                    "is detected. Register people in the Identities panel."
+                ),
+            ),
+        )
         self._tracking_mode = QComboBox()
         for value, caption in _TRACKING_MODE_CHOICES:
             self._tracking_mode.addItem(caption, value)
@@ -454,24 +501,37 @@ class PropertiesPanel(QWidget):
         )
         self._tracking_mode.currentIndexChanged.connect(self._schedule)
         self._tracking_mode.currentIndexChanged.connect(self._refresh_reid_gating)
-        tf.addRow("Mode", _with_chip(self._tracking_mode, HelpBadge(
-            "Stable is best for crowded scenes and uses ReID for person-level "
-            "recovery (toggle ReID in Services). Responsive is lower latency and "
-            "better for solo scenes, but can switch bodies more easily."
-        )))
+        tf.addRow(
+            "Mode",
+            _with_chip(
+                self._tracking_mode,
+                HelpBadge(
+                    "Stable is best for crowded scenes and uses ReID for person-level "
+                    "recovery (toggle ReID in Services). Responsive is lower latency and "
+                    "better for solo scenes, but can switch bodies more easily."
+                ),
+            ),
+        )
         # Caption shown when Stable is picked but the global ReID feature is off.
         self._mode_caption = QLabel("")
         self._mode_caption.setWordWrap(True)
         self._muted_captions.append(self._mode_caption)
         tf.addRow("", self._mode_caption)
-        self._tracker = QComboBox(); self._tracker.addItems(["botsort", "deepocsort", "bytetrack"])
+        self._tracker = QComboBox()
+        self._tracker.addItems(["botsort", "deepocsort", "bytetrack"])
         self._tracker.setToolTip(_COST_HELP["tracker"])
         self._tracker.currentTextChanged.connect(self._schedule)
         self._tracker.currentTextChanged.connect(self._refresh_tracker_tip)
-        self._tracker_chip = CostChip("medium"); self._tracker_chip.setToolTip(_COST_HELP["tracker"])
-        tf.addRow("Tracker", _with_chip(
-            self._tracker, self._tracker_chip, HelpBadge(_COST_HELP["tracker"]),
-        ))
+        self._tracker_chip = CostChip("medium")
+        self._tracker_chip.setToolTip(_COST_HELP["tracker"])
+        tf.addRow(
+            "Tracker",
+            _with_chip(
+                self._tracker,
+                self._tracker_chip,
+                HelpBadge(_COST_HELP["tracker"]),
+            ),
+        )
         # Unified "Framing" control — one dropdown that drives BOTH where the
         # camera centers (aim) AND how tight it zooms.  Replaces the old separate
         # "Aim at" + "Zoom framing" dropdowns.
@@ -499,54 +559,88 @@ class PropertiesPanel(QWidget):
             "Off: the shot widens to include outstretched arms."
         )
         self._ignore_arms.toggled.connect(self._schedule)
-        tf.addRow("", _with_chip(self._ignore_arms, HelpBadge(
-            "Builds on “Frame on”: choose whether arms are ignored for steadier "
-            "framing, or included so reaching out widens the shot. The aim circle "
-            "always stays on the body either way."
-        )))
+        tf.addRow(
+            "",
+            _with_chip(
+                self._ignore_arms,
+                HelpBadge(
+                    "Builds on “Frame on”: choose whether arms are ignored for steadier "
+                    "framing, or included so reaching out widens the shot. The aim circle "
+                    "always stays on the body either way."
+                ),
+            ),
+        )
         # ReID is no longer a per-camera checkbox: it's the global "reid" feature
         # (Services) combined with the per-camera Mode above ("Stable" uses it).
         self._face = QCheckBox("Confirm with face recognition")
         self._face.toggled.connect(self._schedule)
-        self._face_chip = CostChip("medium"); self._face_chip.setToolTip(_COST_HELP["face_confirm"])
-        tf.addRow("", _with_chip(
-            self._face, self._face_chip, HelpBadge(_COST_HELP["face_confirm"]),
-        ))
+        self._face_chip = CostChip("medium")
+        self._face_chip.setToolTip(_COST_HELP["face_confirm"])
+        tf.addRow(
+            "",
+            _with_chip(
+                self._face,
+                self._face_chip,
+                HelpBadge(_COST_HELP["face_confirm"]),
+            ),
+        )
         tr.add_widget(_wrap(tf))
         self._col.addWidget(tr)
 
         # PTZ
         pz = CollapsibleGroup("PTZ", expanded=False)
         pf = _form()
-        self._backend = QComboBox(); self._backend.addItems(["auto", "ndi", "visca_ip", "visca_usb", "onvif"])
+        self._backend = QComboBox()
+        self._backend.addItems(["auto", "ndi", "visca_ip", "visca_usb", "onvif"])
         self._backend.setToolTip(
             "How PTZ move commands reach the camera. “auto” probes NDI → ONVIF → "
             "VISCA-IP; pick a specific one if you know your camera."
         )
         self._backend.currentTextChanged.connect(self._schedule)
-        pf.addRow("Backend", _with_chip(self._backend, HelpBadge(
-            "How PTZ move commands reach the camera. “auto” probes NDI → ONVIF → "
-            "VISCA-IP; pick a specific protocol if you already know what your "
-            "camera speaks."
-        )))
-        self._ptz_address = QLineEdit(); self._ptz_address.editingFinished.connect(self._schedule)
-        self._ptz_address.setToolTip("Host:port (IP backends) or serial port (VISCA-USB). Leave blank for auto.")
-        pf.addRow("Address", _with_chip(self._ptz_address, HelpBadge(
-            "Where to send PTZ commands: host:port for IP backends (NDI / ONVIF / "
-            "VISCA-IP) or the serial port for VISCA-USB. Leave blank to let the "
-            "backend auto-discover."
-        )))
+        pf.addRow(
+            "Backend",
+            _with_chip(
+                self._backend,
+                HelpBadge(
+                    "How PTZ move commands reach the camera. “auto” probes NDI → ONVIF → "
+                    "VISCA-IP; pick a specific protocol if you already know what your "
+                    "camera speaks."
+                ),
+            ),
+        )
+        self._ptz_address = QLineEdit()
+        self._ptz_address.editingFinished.connect(self._schedule)
+        self._ptz_address.setToolTip(
+            "Host:port (IP backends) or serial port (VISCA-USB). Leave blank for auto."
+        )
+        pf.addRow(
+            "Address",
+            _with_chip(
+                self._ptz_address,
+                HelpBadge(
+                    "Where to send PTZ commands: host:port for IP backends (NDI / ONVIF / "
+                    "VISCA-IP) or the serial port for VISCA-USB. Leave blank to let the "
+                    "backend auto-discover."
+                ),
+            ),
+        )
         self._auto_zoom = QCheckBox("Auto-zoom to frame the subject")
         self._auto_zoom.setToolTip(
             "Let the controller zoom in/out to keep the chosen Framing "
             "(set in the Tracking section)."
         )
         self._auto_zoom.toggled.connect(self._schedule)
-        pf.addRow("", _with_chip(self._auto_zoom, HelpBadge(
-            "Lets the controller zoom in and out automatically to keep the "
-            "subject at the chosen Framing tightness (set in the Tracking "
-            "section). Turn off to hold a fixed zoom."
-        )))
+        pf.addRow(
+            "",
+            _with_chip(
+                self._auto_zoom,
+                HelpBadge(
+                    "Lets the controller zoom in and out automatically to keep the "
+                    "subject at the chosen Framing tightness (set in the Tracking "
+                    "section). Turn off to hold a fixed zoom."
+                ),
+            ),
+        )
         pz.add_widget(_wrap(pf))
         pz.add_widget(self._build_ptz_controls())
         pz.add_widget(self._build_presets())
@@ -585,83 +679,168 @@ class PropertiesPanel(QWidget):
             return holder, s, val
 
         gh, self._kp, self._kp_val = _slider(
-            10, 150, "How hard the camera corrects toward the subject.")
+            10, 150, "How hard the camera corrects toward the subject."
+        )
         self._kp.valueChanged.connect(
-            lambda v: (self._kp_val.setText(f"{v / 100:.2f}"), self._schedule()))
-        af.addRow("Gain", _with_chip(gh, HelpBadge(
-            "Proportional gain (Kp). Higher reacts faster but can overshoot or "
-            "oscillate; lower is calmer but slower to catch up.")))
+            lambda v: (self._kp_val.setText(f"{v / 100:.2f}"), self._schedule())
+        )
+        af.addRow(
+            "Gain",
+            _with_chip(
+                gh,
+                HelpBadge(
+                    "Proportional gain (Kp). Higher reacts faster but can overshoot or "
+                    "oscillate; lower is calmer but slower to catch up."
+                ),
+            ),
+        )
 
         sh, self._smoothing, self._smoothing_val = _slider(
-            0, 100, "Higher = smoother but laggier; lower = snappier.")
+            0, 100, "Higher = smoother but laggier; lower = snappier."
+        )
         self._smoothing.valueChanged.connect(
-            lambda v: (self._smoothing_val.setText(f"{v}%"), self._schedule()))
-        af.addRow("Smoothing", _with_chip(sh, HelpBadge(
-            "Aim smoothing. Higher rejects jitter but adds lag; lower is more "
-            "responsive but jumpier.")))
+            lambda v: (self._smoothing_val.setText(f"{v}%"), self._schedule())
+        )
+        af.addRow(
+            "Smoothing",
+            _with_chip(
+                sh,
+                HelpBadge(
+                    "Aim smoothing. Higher rejects jitter but adds lag; lower is more "
+                    "responsive but jumpier."
+                ),
+            ),
+        )
 
         lh, self._lead, self._lead_val = _slider(
-            0, 50, "How far ahead the camera anticipates motion.")
+            0, 50, "How far ahead the camera anticipates motion."
+        )
         self._lead.valueChanged.connect(
-            lambda v: (self._lead_val.setText(f"{v * 10} ms"), self._schedule()))
-        af.addRow("Prediction", _with_chip(lh, HelpBadge(
-            "Lead time: project the subject's motion forward so the camera leads "
-            "rather than trails. 0 = follow only.")))
+            lambda v: (self._lead_val.setText(f"{v * 10} ms"), self._schedule())
+        )
+        af.addRow(
+            "Prediction",
+            _with_chip(
+                lh,
+                HelpBadge(
+                    "Lead time: project the subject's motion forward so the camera leads "
+                    "rather than trails. 0 = follow only."
+                ),
+            ),
+        )
 
         self._safe_zone = QCheckBox("Framing box (hold still while centered)")
         self._safe_zone.toggled.connect(self._schedule)
-        af.addRow("", _with_chip(self._safe_zone, HelpBadge(
-            "Draw an adjustable centre box on the tile; the PTZ stays still while "
-            "the subject is inside it and only moves to keep them within it. Drag "
-            "inside the box to move it, or drag its handles to resize it.")))
+        af.addRow(
+            "",
+            _with_chip(
+                self._safe_zone,
+                HelpBadge(
+                    "Draw an adjustable centre box on the tile; the PTZ stays still while "
+                    "the subject is inside it and only moves to keep them within it. Drag "
+                    "inside the box to move it, or drag its handles to resize it."
+                ),
+            ),
+        )
 
         xh, self._safe_x, self._safe_x_val = _slider(
-            -90, 90, "Horizontal centre of the framing box; 0 is frame centre.")
+            -90, 90, "Horizontal centre of the framing box; 0 is frame centre."
+        )
         self._safe_x.valueChanged.connect(
-            lambda v: (self._safe_x_val.setText(_signed_pct(v)), self._schedule_framing()))
-        af.addRow("Box X", _with_chip(xh, HelpBadge(
-            "Move the framing box left or right. This changes the target settle "
-            "point, not just the drawing: tracking holds still around this offset.")))
+            lambda v: (self._safe_x_val.setText(_signed_pct(v)), self._schedule_framing())
+        )
+        af.addRow(
+            "Box X",
+            _with_chip(
+                xh,
+                HelpBadge(
+                    "Move the framing box left or right. This changes the target settle "
+                    "point, not just the drawing: tracking holds still around this offset."
+                ),
+            ),
+        )
 
         yh, self._safe_y, self._safe_y_val = _slider(
-            -90, 90, "Vertical centre of the framing box; positive is higher.")
+            -90, 90, "Vertical centre of the framing box; positive is higher."
+        )
         self._safe_y.valueChanged.connect(
-            lambda v: (self._safe_y_val.setText(_signed_pct(v)), self._schedule_framing()))
-        af.addRow("Box Y", _with_chip(yh, HelpBadge(
-            "Move the framing box up or down. Positive values place the hold-still "
-            "region higher in the frame.")))
+            lambda v: (self._safe_y_val.setText(_signed_pct(v)), self._schedule_framing())
+        )
+        af.addRow(
+            "Box Y",
+            _with_chip(
+                yh,
+                HelpBadge(
+                    "Move the framing box up or down. Positive values place the hold-still "
+                    "region higher in the frame."
+                ),
+            ),
+        )
 
         center = QPushButton("Center")
         center.setToolTip("Reset Box X and Box Y to the exact frame center.")
         center.clicked.connect(self._center_framing_box)
-        af.addRow("", _with_chip(center, HelpBadge(
-            "Sets the framing box centre to exact 0 / 0. Tile dragging also snaps "
-            "each axis to exact center when it is within 4%."
-        )))
+        af.addRow(
+            "",
+            _with_chip(
+                center,
+                HelpBadge(
+                    "Sets the framing box centre to exact 0 / 0. Tile dragging also snaps "
+                    "each axis to exact center when it is within 4%."
+                ),
+            ),
+        )
 
         wh, self._safe_w, self._safe_w_val = _slider(
-            3, 90, "Half-width of the framing box as a fraction of the frame.")
+            3, 90, "Half-width of the framing box as a fraction of the frame."
+        )
         self._safe_w.valueChanged.connect(
-            lambda v: (self._safe_w_val.setText(f"{v}%"), self._schedule_framing()))
-        af.addRow("Box width", _with_chip(wh, HelpBadge(
-            "How wide the framing box is, as a fraction of the frame's half-width. "
-            "Also adjustable by dragging the box on the tile.")))
+            lambda v: (self._safe_w_val.setText(f"{v}%"), self._schedule_framing())
+        )
+        af.addRow(
+            "Box width",
+            _with_chip(
+                wh,
+                HelpBadge(
+                    "How wide the framing box is, as a fraction of the frame's half-width. "
+                    "Also adjustable by dragging the box on the tile."
+                ),
+            ),
+        )
 
         hh, self._safe_h, self._safe_h_val = _slider(
-            3, 90, "Half-height of the framing box as a fraction of the frame.")
+            3, 90, "Half-height of the framing box as a fraction of the frame."
+        )
         self._safe_h.valueChanged.connect(
-            lambda v: (self._safe_h_val.setText(f"{v}%"), self._schedule_framing()))
-        af.addRow("Box height", _with_chip(hh, HelpBadge(
-            "How tall the framing box is, as a fraction of the frame's half-height. "
-            "Also adjustable by dragging the box on the tile.")))
+            lambda v: (self._safe_h_val.setText(f"{v}%"), self._schedule_framing())
+        )
+        af.addRow(
+            "Box height",
+            _with_chip(
+                hh,
+                HelpBadge(
+                    "How tall the framing box is, as a fraction of the frame's half-height. "
+                    "Also adjustable by dragging the box on the tile."
+                ),
+            ),
+        )
 
         rh, self._safe_round, self._safe_round_val = _slider(
-            0, 100, "Corner roundness of the framing region (0 = rectangle, 100 = oval).")
+            0, 100, "Corner roundness of the framing region (0 = rectangle, 100 = oval)."
+        )
         self._safe_round.valueChanged.connect(
-            lambda v: (self._safe_round_val.setText(f"{v}%"), self._schedule_framing()))
-        af.addRow("Roundness", _with_chip(rh, HelpBadge(
-            "Shape of the framing region: 0% is a sharp rectangle, 100% a full "
-            "oval. Tune it to whatever frames your subject best.")))
+            lambda v: (self._safe_round_val.setText(f"{v}%"), self._schedule_framing())
+        )
+        af.addRow(
+            "Roundness",
+            _with_chip(
+                rh,
+                HelpBadge(
+                    "Shape of the framing region: 0% is a sharp rectangle, 100% a full "
+                    "oval. Tune it to whatever frames your subject best."
+                ),
+            ),
+        )
 
         adv.add_widget(_wrap(af))
         return adv
@@ -672,17 +851,21 @@ class PropertiesPanel(QWidget):
         outer = QVBoxLayout(holder)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
-        head = QHBoxLayout(); head.setContentsMargins(0, 0, 0, 0); head.setSpacing(6)
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(6)
         cap = QLabel("Manual control")
         self._muted_captions.append(cap)
         head.addWidget(cap)
-        head.addWidget(HelpBadge(
-            "Drive the camera by hand: drag the joystick or hold a D-pad arrow "
-            "(including the diagonals) to pan/tilt, hold ＋/－ to zoom — release to "
-            "stop. ⌂ recalls Home, ☰ opens the camera's menu. The same controls "
-            "are on each camera tile (hover the top-right corner). Tracking pauses "
-            "while you nudge."
-        ))
+        head.addWidget(
+            HelpBadge(
+                "Drive the camera by hand: drag the joystick or hold a D-pad arrow "
+                "(including the diagonals) to pan/tilt, hold ＋/－ to zoom — release to "
+                "stop. ⌂ recalls Home, ☰ opens the camera's menu. The same controls "
+                "are on each camera tile (hover the top-right corner). Tracking pauses "
+                "while you nudge."
+            )
+        )
         head.addStretch(1)
         outer.addLayout(head)
         row = QHBoxLayout()
@@ -719,9 +902,14 @@ class PropertiesPanel(QWidget):
         grid.setSpacing(4)
         # (label, row, col, (pan, tilt, zoom)) — row 0 top; centre (1,1) is empty.
         dirs = [
-            ("↖", 0, 0, (-1, 1, 0)), ("↑", 0, 1, (0, 1, 0)), ("↗", 0, 2, (1, 1, 0)),
-            ("←", 1, 0, (-1, 0, 0)),                          ("→", 1, 2, (1, 0, 0)),
-            ("↙", 2, 0, (-1, -1, 0)), ("↓", 2, 1, (0, -1, 0)), ("↘", 2, 2, (1, -1, 0)),
+            ("↖", 0, 0, (-1, 1, 0)),
+            ("↑", 0, 1, (0, 1, 0)),
+            ("↗", 0, 2, (1, 1, 0)),
+            ("←", 1, 0, (-1, 0, 0)),
+            ("→", 1, 2, (1, 0, 0)),
+            ("↙", 2, 0, (-1, -1, 0)),
+            ("↓", 2, 1, (0, -1, 0)),
+            ("↘", 2, 2, (1, -1, 0)),
         ]
         for text, r, c, vec in dirs:
             b = QPushButton(text)
@@ -824,15 +1012,19 @@ class PropertiesPanel(QWidget):
         outer = QVBoxLayout(holder)
         outer.setContentsMargins(0, 8, 0, 0)
         outer.setSpacing(4)
-        head = QHBoxLayout(); head.setContentsMargins(0, 0, 0, 0); head.setSpacing(6)
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(6)
         cap = QLabel("Presets")
         self._muted_captions.append(cap)
         head.addWidget(cap)
-        head.addWidget(HelpBadge(
-            "Saved camera views. Click an occupied preset to recall it. Use a "
-            "tile's ⋯ menu (or click an empty tile) to save the current view, "
-            "overwrite, or clear it. Saving captures a snapshot thumbnail."
-        ))
+        head.addWidget(
+            HelpBadge(
+                "Saved camera views. Click an occupied preset to recall it. Use a "
+                "tile's ⋯ menu (or click an empty tile) to save the current view, "
+                "overwrite, or clear it. Saving captures a snapshot thumbnail."
+            )
+        )
         head.addStretch(1)
         outer.addLayout(head)
 
@@ -892,7 +1084,9 @@ class PropertiesPanel(QWidget):
         slots = self._preset_slots()
         existing = (slots.get(int(slot)) or {}).get("label", "")
         label, ok = QInputDialog.getText(
-            self, "Save preset", f"Label for preset {int(slot) + 1}:",
+            self,
+            "Save preset",
+            f"Label for preset {int(slot) + 1}:",
             text=existing or f"Preset {int(slot) + 1}",
         )
         if not ok:
@@ -912,9 +1106,14 @@ class PropertiesPanel(QWidget):
         """Clear a slot by saving an empty preset (label="", no thumbnail)."""
         if not self._camera_id:
             return
-        if QMessageBox.question(
-            self, "Clear preset", f"Clear preset {int(slot) + 1}?",
-        ) != QMessageBox.StandardButton.Yes:
+        if (
+            QMessageBox.question(
+                self,
+                "Clear preset",
+                f"Clear preset {int(slot) + 1}?",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
             return
         try:
             self._client.savePtzPreset(self._camera_id, int(slot), "", "")
@@ -964,7 +1163,9 @@ class PropertiesPanel(QWidget):
     def _on_config_changed(self, camera_id: str) -> None:
         if camera_id == self._camera_id:
             # Re-pull just the preset state (cheap; avoids clobbering edits in flight).
-            self._cfg = _safe(lambda: self._client.getCameraConfig(self._camera_id), self._cfg) or self._cfg
+            self._cfg = (
+                _safe(lambda: self._client.getCameraConfig(self._camera_id), self._cfg) or self._cfg
+            )
             self._refresh_presets()
             # Mirror framing changes made on the tile (drag-resize) into the sliders.
             self._sync_framing_sliders()
@@ -980,7 +1181,9 @@ class PropertiesPanel(QWidget):
         col = QVBoxLayout(holder)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(2)
-        top = QHBoxLayout(); top.setContentsMargins(0, 0, 0, 0); top.setSpacing(8)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(8)
         self._fps = QSlider(Qt.Orientation.Horizontal)
         self._fps.setRange(1, 60)
         self._fps.setTracking(False)
@@ -1005,9 +1208,7 @@ class PropertiesPanel(QWidget):
 
     def _restyle_fps_measured(self) -> None:
         """Theme-aware styling for the measured-fps caption (re-runs on switch)."""
-        self._fps_measured.setStyleSheet(
-            f"color: {T.CURRENT.muted}; font-size: {T.fs(11)}px;"
-        )
+        self._fps_measured.setStyleSheet(f"color: {T.CURRENT.muted}; font-size: {T.fs(11)}px;")
 
     def _fps_cap(self) -> int:
         """The slider max: trusted hardware cap, else current requested rate.
@@ -1025,9 +1226,15 @@ class PropertiesPanel(QWidget):
         configured = int(round(float(src.get("fps", 30) or 30)))
         measured = 0
         if self._camera_id:
-            measured = int(round(_safe(
-                lambda: float(self._client.cameraModel.get_record(self._camera_id).fps), 0.0,
-            ) or 0.0))
+            measured = int(
+                round(
+                    _safe(
+                        lambda: float(self._client.cameraModel.get_record(self._camera_id).fps),
+                        0.0,
+                    )
+                    or 0.0
+                )
+            )
         return max(1, min(120, max(30, configured, measured)))
 
     def _has_trusted_fps_cap(self) -> bool:
@@ -1084,7 +1291,8 @@ class PropertiesPanel(QWidget):
             # Unified Framing: prefer ``tracking.framing``; fall back to the legacy
             # ``aim_region`` so an un-migrated config still selects sensibly.
             _set_combo_data(
-                self._framing, tr.get("framing") or tr.get("aim_region") or "upper_body",
+                self._framing,
+                tr.get("framing") or tr.get("aim_region") or "upper_body",
             )
             self._ignore_arms.setChecked((tr.get("aim_body_mode") or "torso") == "torso")
             self._face.setChecked(bool(tr.get("face_confirm", False)))
@@ -1172,13 +1380,15 @@ class PropertiesPanel(QWidget):
         """Push ONLY the framing-box fields so the tile oval tracks the sliders live."""
         if not self._camera_id:
             return
-        patch = {"ptz": {
-            "safe_zone_x": self._safe_x.value() / 100.0,
-            "safe_zone_y": self._safe_y.value() / 100.0,
-            "safe_zone_w": self._safe_w.value() / 100.0,
-            "safe_zone_h": self._safe_h.value() / 100.0,
-            "safe_zone_roundness": self._safe_round.value() / 100.0,
-        }}
+        patch = {
+            "ptz": {
+                "safe_zone_x": self._safe_x.value() / 100.0,
+                "safe_zone_y": self._safe_y.value() / 100.0,
+                "safe_zone_w": self._safe_w.value() / 100.0,
+                "safe_zone_h": self._safe_h.value() / 100.0,
+                "safe_zone_roundness": self._safe_round.value() / 100.0,
+            }
+        }
         # Keep the panel's cached cfg in sync so a later full push doesn't revert it.
         if isinstance(self._cfg, dict):
             self._cfg.setdefault("ptz", {})
@@ -1233,17 +1443,21 @@ class PropertiesPanel(QWidget):
     def _refresh_cost_chips(self) -> None:
         di = self._detect_interval.value()
         _restyle_chip(self._detect_chip, "heavy" if di <= 2 else "medium" if di <= 5 else "light")
-        _restyle_chip(self._tracker_chip,
-                      "light" if self._tracker.currentText() == "bytetrack" else "medium")
+        _restyle_chip(
+            self._tracker_chip, "light" if self._tracker.currentText() == "bytetrack" else "medium"
+        )
         self._face_chip.setVisible(self._face.isChecked())
 
     def _push(self) -> None:
         if not self._camera_id or not self._cfg:
             return
         cfg = dict(self._cfg)
-        cfg.setdefault("source", {}); cfg["source"] = dict(cfg["source"])
-        cfg.setdefault("tracking", {}); cfg["tracking"] = dict(cfg["tracking"])
-        cfg.setdefault("ptz", {}); cfg["ptz"] = dict(cfg["ptz"])
+        cfg.setdefault("source", {})
+        cfg["source"] = dict(cfg["source"])
+        cfg.setdefault("tracking", {})
+        cfg["tracking"] = dict(cfg["tracking"])
+        cfg.setdefault("ptz", {})
+        cfg["ptz"] = dict(cfg["ptz"])
         cfg["name"] = self._name.text().strip() or cfg.get("name", "Camera")
         cfg["source"]["substream"] = (
             self._substream.isChecked() if _source_supports_substream(cfg["source"]) else False
@@ -1341,8 +1555,7 @@ class PropertiesPanel(QWidget):
         eff = int(getattr(qs, "detect_interval", base) or base) if qs is not None else base
         if eff and eff != base:
             self._detect_effective.setText(
-                f"effective: every {eff} frame{'s' if eff != 1 else ''} "
-                "(auto-adjusted under load)"
+                f"effective: every {eff} frame{'s' if eff != 1 else ''} (auto-adjusted under load)"
             )
             self._detect_effective.setToolTip(reason)
             self._detect_effective.setVisible(True)
@@ -1374,7 +1587,8 @@ class PropertiesPanel(QWidget):
         if not self._camera_id:
             return
         m = _safe(
-            lambda: float(self._client.cameraModel.get_record(self._camera_id).fps), 0.0,
+            lambda: float(self._client.cameraModel.get_record(self._camera_id).fps),
+            0.0,
         )
         if m <= 0:
             self._fps_measured.setText("measured: —")
@@ -1385,8 +1599,7 @@ class PropertiesPanel(QWidget):
         # of leaving the operator to wonder why "30" runs at 15.
         if requested >= 1.0 and m < requested * 0.8 and (requested - m) >= 3.0:
             text += (
-                f" — source tops out near {m:.0f}; lower the rate or this is the "
-                "hardware ceiling"
+                f" — source tops out near {m:.0f}; lower the rate or this is the hardware ceiling"
                 if self._has_trusted_fps_cap()
                 else f" — source isn't reaching {requested:.0f} fps"
             )
@@ -1496,9 +1709,14 @@ class PropertiesPanel(QWidget):
         if not self._camera_id:
             return
         name = self._name.text() or self._camera_id
-        if QMessageBox.question(
-            self, "Remove Camera", f"Remove “{name}”?",
-        ) == QMessageBox.StandardButton.Yes:
+        if (
+            QMessageBox.question(
+                self,
+                "Remove Camera",
+                f"Remove “{name}”?",
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
             self._client.removeCamera(self._camera_id)
 
 
@@ -1567,6 +1785,7 @@ def _set_combo_data(combo: QComboBox, value: str) -> None:
 
 def _short(addr: str) -> str:
     import re
+
     return re.sub(r"(\w+://)[^@/]*@", r"\1", str(addr or "—")) or "—"
 
 

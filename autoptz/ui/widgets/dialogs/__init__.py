@@ -1,4 +1,5 @@
 """Modal dialogs for the native UI."""
+
 from __future__ import annotations
 
 from autoptz.ui.widgets.dialogs.about import AboutDialog

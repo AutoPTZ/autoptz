@@ -17,6 +17,7 @@ Wiring that is reused verbatim from the engine layer:
   * the in-app log bridge (``LogListModel`` + ``QtLogHandler``).
   * worker preview frames over shared memory, now painted by the camera tiles.
 """
+
 from __future__ import annotations
 
 import logging
@@ -166,6 +167,7 @@ def run(argv: list[str] | None = None) -> int:
     # the engine defaults to STOPPED until auto-start fires below.
     def _make_supervisor(engine_client: EngineClient):  # noqa: ANN202
         from autoptz.engine.supervisor import Supervisor
+
         return Supervisor(engine_client, store=store)
 
     client.set_supervisor_factory(_make_supervisor)
@@ -179,7 +181,8 @@ def run(argv: list[str] | None = None) -> int:
         Qt.ConnectionType.QueuedConnection,
     )
     client.providerDetachRequested.connect(
-        frames.detach, Qt.ConnectionType.QueuedConnection,
+        frames.detach,
+        Qt.ConnectionType.QueuedConnection,
     )
 
     # GUI-thread command pump: drains EngineClient commands to workers.  Safe
@@ -198,7 +201,10 @@ def run(argv: list[str] | None = None) -> int:
     # ── theme + window ─────────────────────────────────────────────────────────
     theme = ThemeController(app, client)
     window = MainWindow(
-        client, log_model=log_model, frame_source=frames, theme=theme,
+        client,
+        log_model=log_model,
+        frame_source=frames,
+        theme=theme,
     )
     window.show()
 
@@ -223,6 +229,7 @@ def run(argv: list[str] | None = None) -> int:
     # Restore the last on/off state (default ON) and start after the window is
     # shown and exposed so the first paint happens before heavy ingest/ML work.
     if bool(store.get_setting("engine_running", True)):
+
         class _CameraAccessBridge(QObject):
             resolved = Signal(bool)
 

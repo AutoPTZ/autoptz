@@ -1,11 +1,10 @@
 """Unit tests for autoptz.engine.runtime.inference."""
+
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 from autoptz.engine.runtime.inference import (
     EP,

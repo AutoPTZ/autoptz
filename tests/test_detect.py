@@ -3,9 +3,11 @@
 All tests use synthetic ONNX models (built with onnx.helper) or mocked ORT
 sessions — no real model files or hardware required.
 """
+
 from __future__ import annotations
 
 import numpy as np
+import onnx  # noqa: F401
 import pytest
 
 from autoptz.engine.pipeline.detect import (
@@ -21,10 +23,8 @@ from autoptz.engine.pipeline.detect import (
     make_synthetic_detector_session,
 )
 
-import onnx  # noqa: F401
-
-
 # ── Fixtures ───────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def synthetic_session():
@@ -44,6 +44,7 @@ def black_frame():
 
 
 # ── BBox ──────────────────────────────────────────────────────────────────────
+
 
 class TestBBox:
     def test_properties(self) -> None:
@@ -83,6 +84,7 @@ class TestBBox:
 
 
 # ── Letterbox ─────────────────────────────────────────────────────────────────
+
 
 class TestLetterbox:
     def test_square_frame_unchanged_ratio(self) -> None:
@@ -146,6 +148,7 @@ class TestToOrigCoords:
 
 # ── NMS ───────────────────────────────────────────────────────────────────────
 
+
 class TestNMS:
     def test_no_boxes(self) -> None:
         assert _nms(np.empty((0, 4), np.float32), np.empty(0, np.float32)) == []
@@ -178,6 +181,7 @@ class TestNMS:
 
 # ── _parse_raw_output ─────────────────────────────────────────────────────────
 
+
 class TestParseRawOutput:
     INPUT_SIZE = 640
 
@@ -189,7 +193,7 @@ class TestParseRawOutput:
         raw = np.zeros((1, 3, 6), dtype=np.float32)
         raw[0, 0] = [10, 10, 100, 200, 0.9, 0]
         raw[0, 1] = [200, 10, 300, 200, 0.8, 0]
-        raw[0, 2] = [0, 0, 0, 0, 0.05, 0]   # below floor
+        raw[0, 2] = [0, 0, 0, 0, 0.05, 0]  # below floor
         result = self._parse(raw, floor=0.1)
         assert result.shape[1] == 6
         assert len(result) == 2
@@ -232,6 +236,7 @@ class TestParseRawOutput:
 
 # ── PersonDetector ────────────────────────────────────────────────────────────
 
+
 class TestPersonDetector:
     def test_detect_returns_two_persons(self, synthetic_session, black_frame) -> None:
         det = PersonDetector(_session=synthetic_session, conf_threshold=0.5)
@@ -270,7 +275,7 @@ class TestPersonDetector:
     def test_high_conf_threshold_filters_weak(self) -> None:
         session = make_synthetic_detector_session(
             detections=[
-                (10, 10, 100, 200, 0.3),   # below threshold
+                (10, 10, 100, 200, 0.3),  # below threshold
                 (200, 10, 300, 200, 0.9),  # above threshold
             ]
         )
@@ -288,13 +293,14 @@ class TestPersonDetector:
         det = PersonDetector(_session=synthetic_session, detect_interval=2)
         det.detect(black_frame)  # frame 1
         det.detect(black_frame)  # frame 2 → skip
-        det.reset()              # count back to 0
+        det.reset()  # count back to 0
         # Next call is frame 1 again → should detect
         results = det.detect(black_frame)
         assert len(results) > 0
 
 
 # ── detections_to_numpy ───────────────────────────────────────────────────────
+
 
 class TestDetectionsToNumpy:
     def test_empty(self) -> None:
@@ -325,6 +331,7 @@ class TestDetectionsToNumpy:
 
 
 # ── make_synthetic_detector_session ───────────────────────────────────────────
+
 
 class TestMakeSyntheticSession:
     def test_default_detections(self) -> None:

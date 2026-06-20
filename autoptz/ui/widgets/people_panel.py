@@ -10,6 +10,7 @@ Wired to the existing identity CRUD on EngineClient: ``registerIdentity``
 ``setProfileThumbnail`` (change profile photo), and ``removeIdentityPhoto``
 (prune a single captured shot).
 """
+
 from __future__ import annotations
 
 import logging
@@ -168,8 +169,9 @@ class PeoplePanel(QWidget):
             for rec in recognized:
                 self._recognized_box.addWidget(self._recognized_card(rec))
         else:
-            self._recognized_box.addWidget(_empty("No unnamed faces — start the engine and "
-                                                  "point a camera at someone"))
+            self._recognized_box.addWidget(
+                _empty("No unnamed faces — start the engine and point a camera at someone")
+            )
 
         n = len(registered)
         u = len(recognized)
@@ -185,9 +187,17 @@ class PeoplePanel(QWidget):
             n = self._model.rowCount()
         except Exception:  # noqa: BLE001
             return reg, rec
-        roles = {name: _role(self._model, name) for name in
-                 ("identityId", "identityName", "thumbnail", "enabled", "labeled",
-                  "thumbnails")}
+        roles = {
+            name: _role(self._model, name)
+            for name in (
+                "identityId",
+                "identityName",
+                "thumbnail",
+                "enabled",
+                "labeled",
+                "thumbnails",
+            )
+        }
         for i in range(n):
             idx = self._model.index(i, 0)
             row = {
@@ -207,12 +217,11 @@ class PeoplePanel(QWidget):
         card, row = _card(selected=rec["id"] in self._merge_selected)
         row.addWidget(_avatar(rec["thumb"], rec["name"]))
 
-        mid = QVBoxLayout(); mid.setSpacing(6)
+        mid = QVBoxLayout()
+        mid.setSpacing(6)
         name = QLineEdit(rec["name"])
         name.setStyleSheet("font-weight: 700;")
-        name.editingFinished.connect(
-            lambda i=rec["id"], w=name: self._rename(i, w.text())
-        )
+        name.editingFinished.connect(lambda i=rec["id"], w=name: self._rename(i, w.text()))
         mid.addWidget(name)
 
         # Captured shots as a deletable strip: each shot carries its own small remove
@@ -222,15 +231,18 @@ class PeoplePanel(QWidget):
             mid.addWidget(strip)
 
         # Readable, labelled action buttons (icon + text) — Photos / Merge / Delete.
-        controls = QHBoxLayout(); controls.setSpacing(6)
+        controls = QHBoxLayout()
+        controls.setSpacing(6)
         controls.addWidget(self._photos_button(rec["id"]))
         if self._can_merge:
             controls.addWidget(self._merge_button(rec["id"]))
-        controls.addWidget(self._delete_button(
-            "Delete",
-            lambda *_a, i=rec["id"], nm=rec["name"]: self._delete(i, nm),
-            tip="Delete this person",
-        ))
+        controls.addWidget(
+            self._delete_button(
+                "Delete",
+                lambda *_a, i=rec["id"], nm=rec["name"]: self._delete(i, nm),
+                tip="Delete this person",
+            )
+        )
         controls.addStretch(1)
         mid.addLayout(controls)
         row.addLayout(mid, 1)
@@ -239,7 +251,8 @@ class PeoplePanel(QWidget):
     def _recognized_card(self, rec: dict) -> QWidget:
         card, row = _card(selected=rec["id"] in self._merge_selected)
         row.addWidget(_avatar(rec["thumb"], rec["name"]))
-        mid = QVBoxLayout(); mid.setSpacing(6)
+        mid = QVBoxLayout()
+        mid.setSpacing(6)
         label = QLabel(rec["name"] or "Unnamed face")
         label.setStyleSheet("font-weight: 700;")
         mid.addWidget(label)
@@ -253,7 +266,8 @@ class PeoplePanel(QWidget):
         hint.setStyleSheet(f"color: {T.CURRENT.muted}; font-size: 11px;")
         mid.addWidget(hint)
 
-        controls = QHBoxLayout(); controls.setSpacing(6)
+        controls = QHBoxLayout()
+        controls.setSpacing(6)
         register = AccentButton("Register…")
         # A normal-sized button — let it size to its text rather than stretch the
         # whole row width (the previous ``addWidget(register, 1)`` made it huge).
@@ -262,8 +276,9 @@ class PeoplePanel(QWidget):
         # the bound identity id survives (otherwise ``i`` became ``False`` and the
         # dialog registered against a nonexistent record → silent no-op).
         register.clicked.connect(
-            lambda *_a, i=rec["id"], nm=rec["name"], ph=rec["thumbs"]:
-            self._open_register(i, nm, ph)
+            lambda *_a, i=rec["id"], nm=rec["name"], ph=rec["thumbs"]: self._open_register(
+                i, nm, ph
+            )
         )
         controls.addWidget(register)
         # Let recognized faces join a merge too (combine duplicates, or fold into
@@ -271,10 +286,12 @@ class PeoplePanel(QWidget):
         if self._can_merge:
             controls.addWidget(self._merge_button(rec["id"]))
         controls.addStretch(1)
-        controls.addWidget(self._discard_button(
-            lambda *_a, i=rec["id"]: self._client.deleteIdentity(i),
-            tip="Remove this unregistered face",
-        ))
+        controls.addWidget(
+            self._discard_button(
+                lambda *_a, i=rec["id"]: self._client.deleteIdentity(i),
+                tip="Remove this unregistered face",
+            )
+        )
         mid.addLayout(controls)
         row.addLayout(mid, 1)
         return card
@@ -282,7 +299,10 @@ class PeoplePanel(QWidget):
     # ── shared card affordances ────────────────────────────────────────────────
 
     def _photo_strip(
-        self, identity_id: str, thumbs: list[str], primary: str = "",
+        self,
+        identity_id: str,
+        thumbs: list[str],
+        primary: str = "",
     ) -> QWidget | None:
         """A strip of captured shots, each with its own small remove button.
 
@@ -316,16 +336,19 @@ class PeoplePanel(QWidget):
         return strip
 
     def _photo_chip(
-        self, identity_id: str, uri: str, index: int, total: int, primary: str,
+        self,
+        identity_id: str,
+        uri: str,
+        index: int,
+        total: int,
+        primary: str,
     ) -> QWidget:
         """One captured shot with a corner remove button for just this photo."""
         chip = QFrame()
         chip.setFixedSize(38, 38)
         # The profile photo gets an accent ring so it's distinguishable.
         ring = T.ACCENT_FALLBACK if (primary and uri == primary) else T.CURRENT.border
-        chip.setStyleSheet(
-            f"QFrame {{ border: 1px solid {ring}; border-radius: 6px; }}"
-        )
+        chip.setStyleSheet(f"QFrame {{ border: 1px solid {ring}; border-radius: 6px; }}")
         wrap = QVBoxLayout(chip)
         wrap.setContentsMargins(0, 0, 0, 0)
 
@@ -340,8 +363,9 @@ class PeoplePanel(QWidget):
         x = IconButton("x", tip="Remove this photo", danger=True, size=16, parent=chip)
         x.move(38 - x.width(), 0)
         x.clicked.connect(
-            lambda *_a, i=identity_id, idx=index, last=(total <= 1):
-            self._remove_photo(i, idx, last)
+            lambda *_a, i=identity_id, idx=index, last=(total <= 1): self._remove_photo(
+                i, idx, last
+            )
         )
         return chip
 
@@ -367,11 +391,11 @@ class PeoplePanel(QWidget):
         """Open the full photo manager (review all / add / set profile / delete)."""
         btn = QPushButton("Photos")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setToolTip("Review every photo, add one, pick the profile picture, or "
-                       "remove a bad shot.")
+        btn.setToolTip(
+            "Review every photo, add one, pick the profile picture, or remove a bad shot."
+        )
         btn.clicked.connect(
-            lambda *_a, i=identity_id:
-            PersonDetailDialog(self._client, i, parent=self).exec()
+            lambda *_a, i=identity_id: PersonDetailDialog(self._client, i, parent=self).exec()
         )
         return btn
 
@@ -385,15 +409,25 @@ class PeoplePanel(QWidget):
 
     def _open_register(self, identity_id: str, name: str, photo_uris: list[str]) -> None:
         RegisterPersonDialog(
-            self._client, identity_id, photo_uris, name=name, register=True, parent=self,
+            self._client,
+            identity_id,
+            photo_uris,
+            name=name,
+            register=True,
+            parent=self,
         ).exec()
 
     def _remove_photo(self, identity_id: str, index: int, last: bool) -> None:
         """Prune a single captured photo (confirm only when it's the last one)."""
-        if last and QMessageBox.question(
-            self, "Remove last photo",
-            "This is the only captured photo. Remove it anyway?",
-        ) != QMessageBox.StandardButton.Yes:
+        if (
+            last
+            and QMessageBox.question(
+                self,
+                "Remove last photo",
+                "This is the only captured photo. Remove it anyway?",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
             return
         self._client.removeIdentityPhoto(identity_id, index)
 
@@ -402,8 +436,10 @@ class PeoplePanel(QWidget):
             self._client.renameIdentity(identity_id, name.strip())
 
     def _delete(self, identity_id: str, name: str) -> None:
-        if QMessageBox.question(self, "Delete person", f"Delete “{name or 'this person'}”?") \
-                == QMessageBox.StandardButton.Yes:
+        if (
+            QMessageBox.question(self, "Delete person", f"Delete “{name or 'this person'}”?")
+            == QMessageBox.StandardButton.Yes
+        ):
             self._client.deleteIdentity(identity_id)
 
     def _clear_all_recognized(self) -> None:
@@ -411,10 +447,14 @@ class PeoplePanel(QWidget):
         if not ids:
             return
         n = len(ids)
-        if QMessageBox.question(
-            self, "Clear recognized faces",
-            f"Discard {n} unregistered face{'s' if n != 1 else ''}?",
-        ) == QMessageBox.StandardButton.Yes:
+        if (
+            QMessageBox.question(
+                self,
+                "Clear recognized faces",
+                f"Discard {n} unregistered face{'s' if n != 1 else ''}?",
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
             for identity_id in ids:
                 self._client.deleteIdentity(identity_id)
 
@@ -436,8 +476,7 @@ class PeoplePanel(QWidget):
         # Prefer keeping a registered (named) identity so a merge into a named
         # person folds the rest in rather than the reverse.
         reg = {r["id"] for r in self._snapshot()[0]}
-        keep = next((i for i in self._merge_selected if i in reg),
-                    self._merge_selected[0])
+        keep = next((i for i in self._merge_selected if i in reg), self._merge_selected[0])
         for drop in self._merge_selected:
             if drop != keep:
                 self._client.mergeIdentities(keep, drop)

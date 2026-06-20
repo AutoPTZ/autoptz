@@ -33,6 +33,7 @@ The build logic mirrors what :mod:`autoptz.engine.camera_worker` did per-worker
 via :class:`~autoptz.engine.runtime.models.ModelManager`); the worker keeps that
 per-worker fallback for tests/fakes that do not inject a pool.
 """
+
 from __future__ import annotations
 
 import logging
@@ -265,8 +266,13 @@ class InferencePool:
                     "ts": time.time(),
                     "error": "",
                 }
-            log.info("inference pool: detector switched %s -> %s (model=%s, ep=%s)",
-                     old[0], to_tier, self.detector_model_path, self.detector_ep)
+            log.info(
+                "inference pool: detector switched %s -> %s (model=%s, ep=%s)",
+                old[0],
+                to_tier,
+                self.detector_model_path,
+                self.detector_ep,
+            )
             return True
         except Exception as exc:  # noqa: BLE001
             (
@@ -287,8 +293,13 @@ class InferencePool:
                     "ts": time.time(),
                     "error": str(exc),
                 }
-            log.warning("inference pool: detector switch %s -> %s failed; kept %s",
-                        old[0], to_tier, old[0], exc_info=True)
+            log.warning(
+                "inference pool: detector switch %s -> %s failed; kept %s",
+                old[0],
+                to_tier,
+                old[0],
+                exc_info=True,
+            )
             return False
 
     def _build_detector(self) -> Any | None:
@@ -317,8 +328,7 @@ class InferencePool:
             model_path = manager.ensure_detector(tier=self._detector_tier)
         except Exception:  # noqa: BLE001 — model bootstrap must never break startup
             self._detector_error = f"Model '{self._detector_tier}' resolution failed."
-            log.warning("inference pool: detector model resolution failed.",
-                        exc_info=True)
+            log.warning("inference pool: detector model resolution failed.", exc_info=True)
             return None
         if model_path is None:
             self._detector_error = (
@@ -335,15 +345,15 @@ class InferencePool:
             self._detector_ep = detector.ep
             self._detector_model_path = str(model_path)
             self._detector_error = ""
-            log.info("inference pool: shared detector ready (model=%s, ep=%s)",
-                     model_path, detector.ep)
+            log.info(
+                "inference pool: shared detector ready (model=%s, ep=%s)", model_path, detector.ep
+            )
             return detector
         except Exception:  # noqa: BLE001
             self._detector_error = (
                 f"Model '{self._detector_tier}' loaded but the detector failed to init."
             )
-            log.warning("inference pool: detector init failed; live-preview-only.",
-                        exc_info=True)
+            log.warning("inference pool: detector init failed; live-preview-only.", exc_info=True)
             return None
 
     # ── face recogniser ───────────────────────────────────────────────────────────
@@ -373,8 +383,9 @@ class InferencePool:
             recognizer = FaceRecognizer()
             return _LockedFace(recognizer, self._face_call_lock)
         except Exception:  # noqa: BLE001 — face stack must never break startup
-            log.warning("inference pool: face recogniser init failed; "
-                        "identity features off.", exc_info=True)
+            log.warning(
+                "inference pool: face recogniser init failed; identity features off.", exc_info=True
+            )
             return None
 
     # ── pose estimator ─────────────────────────────────────────────────────────────
@@ -410,8 +421,7 @@ class InferencePool:
             estimator = PoseEstimator()
             return _LockedPose(estimator, self._pose_call_lock)
         except Exception:  # noqa: BLE001 — pose must never break startup
-            log.debug("inference pool: pose estimator init failed; bbox aim only.",
-                      exc_info=True)
+            log.debug("inference pool: pose estimator init failed; bbox aim only.", exc_info=True)
             return None
 
 

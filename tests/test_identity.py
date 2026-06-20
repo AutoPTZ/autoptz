@@ -10,6 +10,7 @@ with fakes — no model download, no network, no GPU.  They cover:
 - the FROZEN IdentityListModel roles incl. the base64 ``thumbnail`` data URI
 - graceful no-op when insightface is absent (FaceRecognizer disabled)
 """
+
 from __future__ import annotations
 
 import base64
@@ -60,11 +61,13 @@ def _vec(seed: int, dim: int = 512) -> np.ndarray:
 
 def _make_store(tmp_path: Path):
     from autoptz.config.store import ConfigStore
+
     return ConfigStore(db_path=tmp_path / "identity.db", debounce_s=0)
 
 
 def _make_service(tmp_path: Path | None = None):
     from autoptz.engine.identity.service import IdentityService
+
     store = _make_store(tmp_path) if tmp_path else None
     return IdentityService(store), store
 
@@ -159,9 +162,9 @@ class TestFaceRecognizer:
         # instead of being re-harvested as a duplicate.
         service, _ = _make_service()
         emb = _vec(7)
-        u = service.add_unlabeled(emb)              # disabled by policy
+        u = service.add_unlabeled(emb)  # disabled by policy
         rec = FaceRecognizer(_app=_FakeApp(), match_threshold=0.35)
-        assert rec.match(emb, service) is None      # enabled-only: skipped
+        assert rec.match(emb, service) is None  # enabled-only: skipped
         m = rec.match(emb, service, include_disabled=True)
         assert m is not None and m.identity_id == u.id
 
@@ -185,8 +188,8 @@ class TestFaceRecognizer:
 
     def test_matchable_identities_includes_disabled(self):
         service, _ = _make_service()
-        service.add_unlabeled(_vec(42))             # disabled
-        en = service.enroll("Bob", _vec(43))        # enabled
+        service.add_unlabeled(_vec(42))  # disabled
+        en = service.enroll("Bob", _vec(43))  # enabled
         assert {r.id for r in service.matchable_identities()} == {
             r.id for r in service.all_identities()
         }
@@ -226,14 +229,16 @@ class TestIdentityServiceCRUD:
         old = _now() - timedelta(seconds=120)
         # Age the stale unlabeled + the labeled record into the past.
         service._records[stale.id] = service._records[stale.id].model_copy(
-            update={"updated_at": old})
+            update={"updated_at": old}
+        )
         service._records[labeled.id] = service._records[labeled.id].model_copy(
-            update={"updated_at": old})
+            update={"updated_at": old}
+        )
 
         removed = service.expire_unlabeled(60)
         assert stale.id in removed
-        assert service.get(stale.id) is None      # stale unlabeled forgotten
-        assert service.get(fresh.id) is not None   # recent unlabeled kept
+        assert service.get(stale.id) is None  # stale unlabeled forgotten
+        assert service.get(fresh.id) is not None  # recent unlabeled kept
         assert service.get(labeled.id) is not None  # named identity never expires
 
     def test_expire_unlabeled_zero_age_is_noop(self):
@@ -287,8 +292,9 @@ class TestIdentityServiceCRUD:
         assert merged is not None
         assert merged.id == keep.id
         # keep now matches drop's old embedding too
-        assert service.best_score(keep.id, embedding_from_bytes(drop.embeddings[0])) \
-            == pytest.approx(1.0, abs=1e-5)
+        assert service.best_score(
+            keep.id, embedding_from_bytes(drop.embeddings[0])
+        ) == pytest.approx(1.0, abs=1e-5)
         # drop's thumbnail inherited (keep had none)
         assert merged.thumbnail == b"thumb"
         # drop is gone
@@ -307,7 +313,7 @@ class TestIdentityServiceCRUD:
             service.add_embedding(rec.id, _vec(24 + n), thumbnail=f"p{n}".encode())
         cur = service.get(rec.id)
         assert cur.thumbnails == [b"p0", b"p1", b"p2"]
-        assert cur.thumbnail == b"p0"            # first accrued photo is profile
+        assert cur.thumbnail == b"p0"  # first accrued photo is profile
         # Drop the middle (non-profile) photo: only it goes, profile unchanged.
         assert service.remove_thumbnail(rec.id, 1) is True
         cur = service.get(rec.id)
@@ -339,7 +345,7 @@ class TestIdentityServiceCRUD:
         # Thumbnails and embeddings are NOT index-aligned — pruning a photo must
         # not drop any recognition template.
         service, _ = _make_service()
-        rec = service.enroll("Alice", _vec(29))            # 1 embedding
+        rec = service.enroll("Alice", _vec(29))  # 1 embedding
         service.add_embedding(rec.id, _vec(30), thumbnail=b"a")  # +1 embedding, +photo
         before = len(service.get(rec.id).embeddings)
         assert service.remove_thumbnail(rec.id, 0) is True
@@ -348,8 +354,8 @@ class TestIdentityServiceCRUD:
     def test_remove_thumbnail_out_of_range_returns_false(self):
         service, _ = _make_service()
         rec = service.enroll("Alice", _vec(31))
-        assert service.remove_thumbnail(rec.id, 0) is False        # no photos
-        assert service.remove_thumbnail("nope", 0) is False         # no identity
+        assert service.remove_thumbnail(rec.id, 0) is False  # no photos
+        assert service.remove_thumbnail("nope", 0) is False  # no identity
 
     def test_remove_thumbnail_persists_for_labeled(self, tmp_path):
         service, store = _make_service(tmp_path)
@@ -365,13 +371,14 @@ class TestIdentityServiceCRUD:
         # The explicit single-photo store path: removing a row re-packs the
         # remaining photos' idx so they stay contiguous.
         from autoptz.config.models import IdentityRecord
+
         store = _make_store(tmp_path)
         rec = IdentityRecord(name="Alice", thumbnails=[b"a", b"b", b"c"])
         store.save_identity(rec)
         assert store.delete_identity_photo(rec.id, 1) is True
         reloaded = {i.id: i for i in store.load_identities()}[rec.id]
         assert reloaded.thumbnails == [b"a", b"c"]
-        assert store.delete_identity_photo(rec.id, 5) is False   # out of range
+        assert store.delete_identity_photo(rec.id, 5) is False  # out of range
 
 
 # ── retention policy: labeled-only persisted ─────────────────────────────────
@@ -380,8 +387,8 @@ class TestIdentityServiceCRUD:
 class TestRetentionPolicy:
     def test_labeled_persists_unlabeled_does_not(self, tmp_path):
         service, store = _make_service(tmp_path)
-        service.enroll("Alice", _vec(30))          # labeled → persisted
-        service.add_unlabeled(_vec(31))            # unlabeled → memory only
+        service.enroll("Alice", _vec(30))  # labeled → persisted
+        service.add_unlabeled(_vec(31))  # unlabeled → memory only
         persisted = store.load_identities()
         assert len(persisted) == 1
         assert persisted[0].name == "Alice"
@@ -400,9 +407,10 @@ class TestRetentionPolicy:
         service.add_unlabeled(_vec(34))
         # Simulate "restart": a fresh service over the same store.
         from autoptz.engine.identity.service import IdentityService
+
         fresh = IdentityService(store)
         names = sorted(r.name for r in fresh.all_identities())
-        assert names == ["Alice"]   # unlabeled "Person N" is gone
+        assert names == ["Alice"]  # unlabeled "Person N" is gone
 
     def test_enabled_roundtrips_through_store(self, tmp_path):
         service, store = _make_service(tmp_path)
@@ -429,25 +437,27 @@ class _FakeReIDBackend:
 class TestBodyReID:
     def test_absent_backend_is_graceful(self):
         from autoptz.engine.pipeline.reid import BodyReID
+
         r = BodyReID(weights=Path("does-not-exist.pt"))
         # boxmot present but weights/network missing → disabled, no raise
         assert r.embed([(0, 0, 10, 10)], np.zeros((20, 20, 3), np.uint8)).size == 0
 
     def test_recover_picks_best_match_with_hysteresis(self):
         from autoptz.engine.pipeline.reid import BodyReID
+
         target = _vec(40)
         interloper = _vec(41)
         backend = _FakeReIDBackend([interloper, target])
         r = BodyReID(_backend=backend, threshold_hi=0.7, threshold_lo=0.4)
         r.set_target(target)
-        feats = r.embed([(0, 0, 5, 5), (5, 5, 9, 9)],
-                        np.zeros((10, 10, 3), np.uint8))
+        feats = r.embed([(0, 0, 5, 5), (5, 5, 9, 9)], np.zeros((10, 10, 3), np.uint8))
         result = r.recover(feats)
         assert result.matched is True
-        assert result.best_index == 1   # the target crop, not the interloper
+        assert result.best_index == 1  # the target crop, not the interloper
 
     def test_recover_no_template_returns_unmatched(self):
         from autoptz.engine.pipeline.reid import BodyReID, ReIDResult
+
         r = BodyReID(_backend=_FakeReIDBackend([_vec(42)]))
         res = r.recover(np.atleast_2d(_vec(42)))
         assert isinstance(res, ReIDResult)
@@ -460,12 +470,14 @@ class TestBodyReID:
 class TestIdentityListModelRoles:
     def test_role_names(self):
         from autoptz.ui.engine_client import IdentityListModel
+
         m = IdentityListModel()
         names = {bytes(v).decode() for v in m.roleNames().values()}
         assert {"identityId", "identityName", "thumbnail", "enabled", "labeled"} <= names
 
     def test_thumbnail_role_is_base64_data_uri(self):
         from autoptz.ui.engine_client import IdentityListModel
+
         png = b"\x89PNG\r\n\x1a\n_fake_png_bytes"
         rec = IdentityRecord(name="Alice", thumbnail=png)
         m = IdentityListModel()
@@ -478,12 +490,14 @@ class TestIdentityListModelRoles:
 
     def test_thumbnail_empty_when_absent(self):
         from autoptz.ui.engine_client import IdentityListModel
+
         m = IdentityListModel()
         m.add_identity(IdentityRecord(name="Alice"))
         assert m.data(m.index(0), IdentityListModel.ThumbnailRole) == ""
 
     def test_enabled_and_labeled_roles(self):
         from autoptz.ui.engine_client import IdentityListModel
+
         m = IdentityListModel()
         m.add_identity(IdentityRecord(name="P1", enabled=False, labeled=False))
         idx = m.index(0)
@@ -492,6 +506,7 @@ class TestIdentityListModelRoles:
 
     def test_add_identity_upserts_by_id(self):
         from autoptz.ui.engine_client import IdentityListModel
+
         m = IdentityListModel()
         rec = IdentityRecord(name="Person 1", enabled=False, labeled=False)
         m.add_identity(rec)
@@ -506,6 +521,7 @@ class TestIdentityListModelRoles:
 
 def _make_client(tmp_path=None):
     from autoptz.ui.engine_client import EngineClient
+
     if tmp_path:
         store = _make_store(tmp_path)
         return EngineClient(store=store), store
@@ -517,6 +533,7 @@ def qapp():
     import sys
 
     from PySide6.QtCore import QCoreApplication
+
     app = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
     yield app
 
@@ -524,15 +541,20 @@ def qapp():
 class TestEngineClientIdentityAPI:
     def test_has_frozen_slots(self, qapp):
         client, _ = _make_client()
-        for name in ("setTargetIdentity", "labelIdentity",
-                     "mergeIdentities", "setIdentityEnabled",
-                     "enrollIdentity", "renameIdentity", "deleteIdentity"):
+        for name in (
+            "setTargetIdentity",
+            "labelIdentity",
+            "mergeIdentities",
+            "setIdentityEnabled",
+            "enrollIdentity",
+            "renameIdentity",
+            "deleteIdentity",
+        ):
             assert hasattr(client, name), name
 
     def test_push_identity_adds_to_model(self, qapp):
         client, _ = _make_client()
-        rec = IdentityRecord(name="Person 1", enabled=False, labeled=False,
-                             thumbnail=b"png")
+        rec = IdentityRecord(name="Person 1", enabled=False, labeled=False, thumbnail=b"png")
         client.push_identity(rec)
         assert client._identity_model.rowCount() == 1
         m = client._identity_model
@@ -561,8 +583,7 @@ class TestEngineClientIdentityAPI:
     def test_merge_identities_removes_drop(self, qapp):
         client, _ = _make_client()
         a = IdentityRecord(name="A", embeddings=[embedding_to_bytes(_vec(50))])
-        b = IdentityRecord(name="B", embeddings=[embedding_to_bytes(_vec(51))],
-                           thumbnail=b"t")
+        b = IdentityRecord(name="B", embeddings=[embedding_to_bytes(_vec(51))], thumbnail=b"t")
         client.push_identity(a)
         client.push_identity(b)
         client.mergeIdentities(a.id, b.id)
@@ -571,6 +592,7 @@ class TestEngineClientIdentityAPI:
 
     def test_set_target_identity_enqueues_command(self, qapp):
         from autoptz.engine.runtime.messages import CmdKind
+
         client, _ = _make_client()
         cid = client.addCamera("usb://0", "Cam")
         client.drain_commands()
@@ -618,6 +640,7 @@ class _StubTrack:
 
     def __init__(self, track_id, bbox):
         from autoptz.engine.runtime.messages import BBox
+
         self.track_id = track_id
         self.bbox = BBox(x1=bbox[0], y1=bbox[1], x2=bbox[2], y2=bbox[3])
         self.identity = None
@@ -628,6 +651,7 @@ class _StubTrack:
 class TestWorkerAutoHarvest:
     def _worker(self, service, recognizer, harvested):
         from autoptz.engine.camera_worker import CameraWorker, _FaceStack
+
         w = CameraWorker(
             "cam-test-1234abcd",
             _worker_config(),
@@ -651,7 +675,7 @@ class TestWorkerAutoHarvest:
         # one unlabeled identity harvested + pushed
         assert len(harvested) == 1
         assert harvested[0].labeled is False
-        assert harvested[0].thumbnail is not None   # cv2 present → PNG crop
+        assert harvested[0].thumbnail is not None  # cv2 present → PNG crop
         assert service.unlabeled_identities()
 
     def test_matched_face_annotates_track_identity(self):
@@ -703,10 +727,12 @@ class TestWorkerAutoHarvest:
         target_emb = _vec(610)
         wrong_emb = _vec(611)
         ident = service.enroll("Alice", None, identity_id="id-click")
-        app = _FakeApp([
-            _FakeFace((260, 170, 320, 240), wrong_emb),
-            _FakeFace((350, 250, 430, 340), target_emb),
-        ])
+        app = _FakeApp(
+            [
+                _FakeFace((260, 170, 320, 240), wrong_emb),
+                _FakeFace((350, 250, 430, 340), target_emb),
+            ]
+        )
         rec = FaceRecognizer(_app=app, match_threshold=0.99)
         w = self._worker(service, rec, [])
         track = _StubTrack(7, (240, 140, 450, 380))
@@ -734,7 +760,7 @@ class TestWorkerAutoHarvest:
 
     def test_disabled_recognizer_is_noop(self):
         service, _ = _make_service()
-        rec = FaceRecognizer()   # insightface absent → unavailable
+        rec = FaceRecognizer()  # insightface absent → unavailable
         harvested = []
         w = self._worker(service, rec, harvested)
         track = _StubTrack(1, (0, 0, 100, 200))

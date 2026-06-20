@@ -14,6 +14,7 @@ an unreachable device is logged and yields ``None`` (manual PTZ then no-ops and
 auto control is simply disabled).  ``None``/``""``/``auto`` with nothing probable
 also returns ``None``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -61,8 +62,12 @@ def build_backend(ptz: PTZConfig, *, ndi_source: Any | None = None) -> PTZBacken
         if backend == "onvif":
             return _build_onvif(ptz)
     except Exception:  # noqa: BLE001 - factory must never raise into the engine
-        log.warning("PTZ backend %r build failed (addr=%r); PTZ disabled.",
-                    backend, ptz.address, exc_info=True)
+        log.warning(
+            "PTZ backend %r build failed (addr=%r); PTZ disabled.",
+            backend,
+            ptz.address,
+            exc_info=True,
+        )
         return None
 
     log.warning("Unknown PTZ backend %r; PTZ disabled.", backend)
@@ -113,8 +118,7 @@ def _build_ndi(ptz: PTZConfig, *, ndi_source: Any | None) -> PTZBackend | None:
     try:
         backend = NDIPTZBackend(ndi_source)
     except Exception:  # noqa: BLE001 - cyndilib missing / NDI runtime absent
-        log.warning("NDI PTZ unavailable (cyndilib/runtime missing); PTZ disabled.",
-                    exc_info=True)
+        log.warning("NDI PTZ unavailable (cyndilib/runtime missing); PTZ disabled.", exc_info=True)
         return None
     log.info("PTZ backend: NDI PTZ")
     return backend

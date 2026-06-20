@@ -9,6 +9,7 @@ Pipeline per tick:
 Coast-on-loss: when track_active goes False, hold last velocity for
 coast_window_ms, then stop and enter SEARCHING state.
 """
+
 from __future__ import annotations
 
 import math
@@ -41,7 +42,7 @@ _ZOOM_FRAMING_TARGETS = {
 }
 _DEFAULT_ZOOM_FRAMING_TARGET = 0.45  # == upper_body
 _ZOOM_HYSTERESIS = 0.05  # ±5 % of frame height before zoom moves
-_POWER = 1.5             # response-curve exponent (ease-in: gentle near zero)
+_POWER = 1.5  # response-curve exponent (ease-in: gentle near zero)
 
 
 # ── one-euro filter ───────────────────────────────────────────────────────────
@@ -118,9 +119,9 @@ def _shape(x: float) -> float:
 
 
 class ControllerState(Enum):
-    IDLE = auto()       # no target assigned
-    TRACKING = auto()   # active PD loop
-    COASTING = auto()   # target LOST; holding last velocity for coast_window
+    IDLE = auto()  # no target assigned
+    TRACKING = auto()  # active PD loop
+    COASTING = auto()  # target LOST; holding last velocity for coast_window
     SEARCHING = auto()  # coast expired; stopped and waiting for re-ID
 
 

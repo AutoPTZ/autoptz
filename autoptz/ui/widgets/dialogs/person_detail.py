@@ -13,6 +13,7 @@ It also explains the automatic enrichment: the engine keeps gathering fresh shot
 on its own while the person is on camera, so the gallery improves over time
 without any manual work.
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,8 +44,8 @@ from autoptz.ui.widgets.common import (
 
 log = logging.getLogger(__name__)
 
-_COLS = 3          # photos per row in the grid
-_THUMB = 132       # photo cell edge (px)
+_COLS = 3  # photos per row in the grid
+_THUMB = 132  # photo cell edge (px)
 
 
 class PersonDetailDialog(QDialog):
@@ -108,8 +109,10 @@ class PersonDetailDialog(QDialog):
 
     def _snapshot(self) -> tuple[str, str, list[str]]:
         """Return (name, profile_uri, all_photo_uris) for this identity."""
-        roles = {n: _role(self._model, n) for n in
-                 ("identityId", "identityName", "thumbnail", "thumbnails")}
+        roles = {
+            n: _role(self._model, n)
+            for n in ("identityId", "identityName", "thumbnail", "thumbnails")
+        }
         try:
             n = self._model.rowCount()
         except Exception:  # noqa: BLE001
@@ -131,8 +134,10 @@ class PersonDetailDialog(QDialog):
         self._title.setText(f"Photos — {name or 'this person'}  ·  {len(thumbs)}")
         _clear(self._grid)
         if not thumbs:
-            empty = QLabel("No photos yet. Add one, or let the engine capture some "
-                           "while the person is on camera.")
+            empty = QLabel(
+                "No photos yet. Add one, or let the engine capture some "
+                "while the person is on camera."
+            )
             empty.setWordWrap(True)
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setStyleSheet(f"color: {T.CURRENT.muted}; padding: 24px;")
@@ -141,16 +146,15 @@ class PersonDetailDialog(QDialog):
         for i, uri in enumerate(thumbs):
             self._grid.addWidget(
                 self._photo_cell(uri, i, is_profile=bool(profile) and uri == profile),
-                i // _COLS, i % _COLS,
+                i // _COLS,
+                i % _COLS,
             )
 
     def _photo_cell(self, uri: str, index: int, *, is_profile: bool) -> QWidget:
         cell = QFrame()
         ring = T.ACCENT_FALLBACK if is_profile else T.CURRENT.border
         width = 2 if is_profile else 1
-        cell.setStyleSheet(
-            f"QFrame {{ border: {width}px solid {ring}; border-radius: 8px; }}"
-        )
+        cell.setStyleSheet(f"QFrame {{ border: {width}px solid {ring}; border-radius: 8px; }}")
         lay = QVBoxLayout(cell)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(4)
@@ -168,21 +172,22 @@ class PersonDetailDialog(QDialog):
         row.setSpacing(6)
         if is_profile:
             badge = QLabel("● Profile")
-            badge.setStyleSheet(
-                f"color: {T.ACCENT_FALLBACK}; font-size: 11px; font-weight: 700;")
+            badge.setStyleSheet(f"color: {T.ACCENT_FALLBACK}; font-size: 11px; font-weight: 700;")
             row.addWidget(badge)
         else:
             setp = QPushButton("Set profile")
             setp.setCursor(Qt.CursorShape.PointingHandCursor)
             setp.setToolTip("Make this the profile picture")
             setp.clicked.connect(
-                lambda *_a, idx=index: self._client.setProfileThumbnail(self._identity_id, idx))
+                lambda *_a, idx=index: self._client.setProfileThumbnail(self._identity_id, idx)
+            )
             row.addWidget(setp)
         row.addStretch(1)
         # The single, consistent delete affordance (small icon, red on hover).
         rm = IconButton("x", tip="Remove this photo", danger=True, size=24)
         rm.clicked.connect(
-            lambda *_a, idx=index: self._client.removeIdentityPhoto(self._identity_id, idx))
+            lambda *_a, idx=index: self._client.removeIdentityPhoto(self._identity_id, idx)
+        )
         row.addWidget(rm)
         lay.addLayout(row)
         return cell
@@ -191,7 +196,8 @@ class PersonDetailDialog(QDialog):
 
     def _add_photo(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Add Photo", "", "Images (*.png *.jpg *.jpeg *.bmp *.webp)")
+            self, "Add Photo", "", "Images (*.png *.jpg *.jpeg *.bmp *.webp)"
+        )
         if not path:
             return
         img = QImage(path)
@@ -199,8 +205,12 @@ class PersonDetailDialog(QDialog):
             return
         # Downscale large imports so the stored thumbnail stays modest.
         if max(img.width(), img.height()) > 480:
-            img = img.scaled(480, 480, Qt.AspectRatioMode.KeepAspectRatio,
-                             Qt.TransformationMode.SmoothTransformation)
+            img = img.scaled(
+                480,
+                480,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         uri = _image_to_png_data_uri(img)
         if uri:
             self._client.addIdentityPhoto(self._identity_id, uri)

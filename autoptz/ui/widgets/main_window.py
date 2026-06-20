@@ -9,6 +9,7 @@ Continuity-Camera index shuffle never confuses the naming/checks) plus NDI and
 Panel object names are stable so a later phase can persist/restore the dock
 layout with ``saveState()``/``restoreState()``.
 """
+
 from __future__ import annotations
 
 import base64
@@ -144,7 +145,12 @@ class MainWindow(QMainWindow):
 
         specs = [
             ("properties", "Properties", self._properties, Qt.DockWidgetArea.LeftDockWidgetArea),
-            ("camera_info", "Camera Info", self._camera_info, Qt.DockWidgetArea.RightDockWidgetArea),
+            (
+                "camera_info",
+                "Camera Info",
+                self._camera_info,
+                Qt.DockWidgetArea.RightDockWidgetArea,
+            ),
             ("people", "People", self._people, Qt.DockWidgetArea.RightDockWidgetArea),
             ("services", "Services", self._services, Qt.DockWidgetArea.RightDockWidgetArea),
             ("logs", "Logs", self._logs, Qt.DockWidgetArea.BottomDockWidgetArea),
@@ -167,14 +173,14 @@ class MainWindow(QMainWindow):
         # Section tabs ride the TOP of the right-side dock group (OBS-style),
         # not the default bottom plain-text strip.  A targeted objectName lets
         # us give that QTabBar a clean segmented-button look in _style_section_tabs.
-        self.setTabPosition(Qt.DockWidgetArea.RightDockWidgetArea,
-                            QTabWidget.TabPosition.North)
+        self.setTabPosition(Qt.DockWidgetArea.RightDockWidgetArea, QTabWidget.TabPosition.North)
         self._style_section_tabs()
 
         # Sensible first-run proportions (a saved layout overrides these later).
         self.resizeDocks(
             [self._docks["properties"], self._docks["camera_info"]],
-            [330, 360], Qt.Orientation.Horizontal,
+            [330, 360],
+            Qt.Orientation.Horizontal,
         )
         self.resizeDocks([self._docks["logs"]], [200], Qt.Orientation.Vertical)
 
@@ -227,15 +233,24 @@ class MainWindow(QMainWindow):
         # and go, not only on engine start/stop.
         engine.aboutToShow.connect(self._refresh_engine_state)
         self._act_start = _action(
-            self, "Start", self._client.startEngine, "Ctrl+E",
+            self,
+            "Start",
+            self._client.startEngine,
+            "Ctrl+E",
             "Start the detection/tracking engine and open all enabled cameras.",
         )
         self._act_stop = _action(
-            self, "Stop", self._client.stopEngine, "Ctrl+Shift+E",
+            self,
+            "Stop",
+            self._client.stopEngine,
+            "Ctrl+Shift+E",
             "Stop the engine and release all cameras.",
         )
         self._act_restart = _action(
-            self, "Restart", self._client.restartEngine, "Ctrl+Shift+R",
+            self,
+            "Restart",
+            self._client.restartEngine,
+            "Ctrl+Shift+R",
             "Restart the engine — re-applies model and execution-provider settings.",
         )
         engine.addAction(self._act_start)
@@ -243,7 +258,10 @@ class MainWindow(QMainWindow):
         engine.addAction(self._act_restart)
         engine.addSeparator()
         self._act_stop_tracking = _action(
-            self, "Stop All Tracking", self._stop_all_tracking, "Ctrl+Shift+T",
+            self,
+            "Stop All Tracking",
+            self._stop_all_tracking,
+            "Ctrl+Shift+T",
             "Turn off person tracking on every camera at once. Cameras keep "
             "streaming; only the auto-follow is disabled.",
         )
@@ -264,9 +282,11 @@ class MainWindow(QMainWindow):
         group = QActionGroup(self)
         group.setExclusive(True)
         current = _safe(lambda: str(self._client.themeMode), "dark")
-        tips = {"system": "Follow the OS light/dark setting.",
-                "dark": "Dark broadcast palette (easiest on the eyes).",
-                "light": "Light palette for bright rooms."}
+        tips = {
+            "system": "Follow the OS light/dark setting.",
+            "dark": "Dark broadcast palette (easiest on the eyes).",
+            "light": "Light palette for bright rooms.",
+        }
         for mode, label in (("system", "System"), ("dark", "Dark"), ("light", "Light")):
             act = QAction(label, self, checkable=True)
             act.setChecked(mode == current)
@@ -282,14 +302,14 @@ class MainWindow(QMainWindow):
         overlays.setToolTipsVisible(True)
         cur = _safe(lambda: self._client.overlays(), {}) or {}
         for key, label, tip in (
-            ("detection", "Detection boxes",
-             "Show a box around every detected person."),
-            ("faces", "Face boxes",
-             "Show face-recognition boxes with the matched name."),
-            ("pose", "Pose skeleton",
-             "Draw the tracked person's body skeleton."),
-            ("prediction", "Motion prediction",
-             "Debug overlay: draw the target prediction ghost/lead indicator."),
+            ("detection", "Detection boxes", "Show a box around every detected person."),
+            ("faces", "Face boxes", "Show face-recognition boxes with the matched name."),
+            ("pose", "Pose skeleton", "Draw the tracked person's body skeleton."),
+            (
+                "prediction",
+                "Motion prediction",
+                "Debug overlay: draw the target prediction ghost/lead indicator.",
+            ),
         ):
             act = QAction(label, self, checkable=True)
             act.setChecked(bool(cur.get(key, key == "detection")))
@@ -314,8 +334,11 @@ class MainWindow(QMainWindow):
         scale.setToolTipsVisible(True)
         self._scale_group = QActionGroup(self)
         self._scale_group.setExclusive(True)
-        steps = getattr(self._theme, "SCALE_STEPS", (0.9, 1.0, 1.1, 1.25, 1.5)) \
-            if self._theme is not None else (1.0,)
+        steps = (
+            getattr(self._theme, "SCALE_STEPS", (0.9, 1.0, 1.1, 1.25, 1.5))
+            if self._theme is not None
+            else (1.0,)
+        )
         for s in steps:
             act = QAction(f"{round(s * 100)}%", self, checkable=True)
             act.setToolTip("Scale all text and controls by this amount.")
@@ -365,6 +388,7 @@ class MainWindow(QMainWindow):
         pointer landed on the Rescan item.
         """
         from PySide6.QtGui import QCursor
+
         if isinstance(anchor, QWidget):
             self._cameras_menu_anchor = anchor.mapToGlobal(anchor.rect().bottomLeft())
         elif getattr(self, "_cameras_menu_anchor", None) is None:
@@ -406,30 +430,41 @@ class MainWindow(QMainWindow):
                     "Local USB / built-in webcam. Lowest latency; CPU cost scales "
                     "with resolution and frame rate."
                 )
-            act.toggled.connect(
-                lambda checked, d=dev: self._toggle_usb_camera(d, checked)
-            )
+            act.toggled.connect(lambda checked, d=dev: self._toggle_usb_camera(d, checked))
             usb.addAction(act)
         usb.addSeparator()
-        usb.addAction(_action(
-            self, "Rescan", self._rescan_usb, tip="Re-probe connected USB cameras.",
-        ))
+        usb.addAction(
+            _action(
+                self,
+                "Rescan",
+                self._rescan_usb,
+                tip="Re-probe connected USB cameras.",
+            )
+        )
 
         menu.addSeparator()
         ndi = menu.addMenu("NDI Sources")
         ndi.setToolTipsVisible(True)
-        ndi.addAction(_action(
-            self, "Scan for NDI Sources…", self._scan_ndi,
-            tip="Discover NDI network video sources on the LAN. Network-dependent "
+        ndi.addAction(
+            _action(
+                self,
+                "Scan for NDI Sources…",
+                self._scan_ndi,
+                tip="Discover NDI network video sources on the LAN. Network-dependent "
                 "and heavier to decode than USB.",
-        ))
+            )
+        )
 
         menu.addSeparator()
-        menu.addAction(_action(
-            self, "Add Network Camera…", self._add_network_camera,
-            tip="Add an RTSP / ONVIF IP camera by URL. Decoding a network stream "
+        menu.addAction(
+            _action(
+                self,
+                "Add Network Camera…",
+                self._add_network_camera,
+                tip="Add an RTSP / ONVIF IP camera by URL. Decoding a network stream "
                 "uses more CPU than a local USB camera.",
-        ))
+            )
+        )
 
     # ── camera actions ───────────────────────────────────────────────────────────
 
@@ -440,7 +475,10 @@ class MainWindow(QMainWindow):
             # Pass the uniqueID straight through (the menu knows it for this exact
             # device) so selection never depends on a scan-cache lookup by uri.
             self._client.addCamera(
-                uri, dev.get("name", ""), unique_id, dev.get("source_label", ""),
+                uri,
+                dev.get("name", ""),
+                unique_id,
+                dev.get("source_label", ""),
             )
         else:
             cid = self._find_camera(uri, unique_id)
@@ -467,6 +505,7 @@ class MainWindow(QMainWindow):
 
     def _scan_ndi(self) -> None:
         from PySide6.QtWidgets import QInputDialog
+
         sources = _safe(lambda: self._client.scanNDISources(), []) or []
         if not sources:
             self.statusBar().showMessage("No NDI sources found (cyndilib not installed?)", 5000)
@@ -506,6 +545,7 @@ class MainWindow(QMainWindow):
 
     def _save_layout(self) -> None:
         from PySide6.QtWidgets import QInputDialog
+
         name, ok = QInputDialog.getText(self, "Save Layout", "Layout name:")
         if not ok or not name.strip():
             return
@@ -530,8 +570,7 @@ class MainWindow(QMainWindow):
                 log.debug("recall layout failed", exc_info=True)
         # restoreState can rebuild the dock tab bar; keep tabs at the top with
         # the segmented look, and re-suppress the redundant section title bars.
-        self.setTabPosition(Qt.DockWidgetArea.RightDockWidgetArea,
-                            QTabWidget.TabPosition.North)
+        self.setTabPosition(Qt.DockWidgetArea.RightDockWidgetArea, QTabWidget.TabPosition.North)
         self._style_section_tabs()
         self._install_section_title_bars()
 
@@ -547,7 +586,8 @@ class MainWindow(QMainWindow):
 
     def _build_status_bar(self) -> None:
         self._status = StatusBar(
-            self._client, logs_toggle=self._toggle_logs,
+            self._client,
+            logs_toggle=self._toggle_logs,
             cameras_popup=self._open_cameras_menu,
         )
         self.statusBar().addPermanentWidget(self._status, 1)
@@ -598,9 +638,7 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 log.debug("stop tracking failed for %s", cid, exc_info=True)
         if stopped:
-            self.statusBar().showMessage(
-                f"Stopped tracking on {stopped} camera(s).", 4000
-            )
+            self.statusBar().showMessage(f"Stopped tracking on {stopped} camera(s).", 4000)
 
     # ── engine state ───────────────────────────────────────────────────────────
 
@@ -684,8 +722,7 @@ class MainWindow(QMainWindow):
                 log.debug("restoreState failed", exc_info=True)
             # restoreState can rebuild the right-side tab bar; re-assert the
             # top segmented look.
-            self.setTabPosition(Qt.DockWidgetArea.RightDockWidgetArea,
-                                QTabWidget.TabPosition.North)
+            self.setTabPosition(Qt.DockWidgetArea.RightDockWidgetArea, QTabWidget.TabPosition.North)
             self._style_section_tabs()
         self._clear_minimized_state()
         if not self._has_visible_window_frame():
@@ -705,7 +742,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         try:
             self._client.setSetting(
-                "win_geometry", bytes(self.saveGeometry().toBase64()).decode("ascii"),
+                "win_geometry",
+                bytes(self.saveGeometry().toBase64()).decode("ascii"),
             )
             self._client.setSetting("win_state", self._encode_state())
         except Exception:  # noqa: BLE001
@@ -743,8 +781,11 @@ class MainWindow(QMainWindow):
 
 
 def _action(
-    parent: QWidget, text: str, slot: Any,
-    shortcut: str | None = None, tip: str | None = None,
+    parent: QWidget,
+    text: str,
+    slot: Any,
+    shortcut: str | None = None,
+    tip: str | None = None,
 ) -> QAction:
     act = QAction(text, parent)
     act.triggered.connect(lambda _checked=False: slot())

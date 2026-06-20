@@ -4,6 +4,7 @@ Wraps a pyserial connection to any Sony/compatible VISCA camera (EVI-D100, etc.)
 Normalized [-1, 1] pan/tilt/zoom maps to VISCA speed bytes 0x01–0x18 / 0x01–0x14 / 0x01–0x07.
 Presets are native VISCA memory commands (81 01 04 3F 01/02 MM FF).
 """
+
 from __future__ import annotations
 
 import logging

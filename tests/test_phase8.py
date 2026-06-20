@@ -4,10 +4,10 @@ These tests run headless (no QML engine) and verify the Python side of
 Phase 8 — EngineClient slots, model CRUD, ConfigStore integration,
 and new command types — without requiring a live Qt application.
 """
+
 from __future__ import annotations
 
 import json
-import time
 import uuid
 from pathlib import Path
 
@@ -18,24 +18,24 @@ from autoptz.engine.runtime.messages import (
     DeleteIdentityCmd,
     DeleteLayoutCmd,
     EnrollIdentityCmd,
-    PtzSavePresetCmd,
     RenameIdentityCmd,
     SaveLayoutCmd,
-    SetLayoutCmd,
     UpdateCameraConfigCmd,
 )
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def make_store(tmp_path: Path):
     from autoptz.config.store import ConfigStore
+
     return ConfigStore(db_path=tmp_path / "test.db", debounce_s=0)
 
 
 def make_client(tmp_path: Path | None = None):
     """Return an EngineClient with an in-memory (or tmp) ConfigStore."""
     from autoptz.ui.engine_client import EngineClient
+
     if tmp_path:
         store = make_store(tmp_path)
         return EngineClient(store=store), store
@@ -43,6 +43,7 @@ def make_client(tmp_path: Path | None = None):
 
 
 # ── UpdateCameraConfigCmd ─────────────────────────────────────────────────────
+
 
 class TestUpdateCameraConfigCmd:
     def test_kind(self):
@@ -60,6 +61,7 @@ class TestUpdateCameraConfigCmd:
 
 
 # ── EnrollIdentityCmd ─────────────────────────────────────────────────────────
+
 
 class TestEnrollIdentityCmd:
     def test_identity_id_field(self):
@@ -84,6 +86,7 @@ class TestEnrollIdentityCmd:
 
 # ── New command kinds ─────────────────────────────────────────────────────────
 
+
 class TestNewCommandKinds:
     def test_delete_identity(self):
         cmd = DeleteIdentityCmd(camera_id=None, identity_id="abc")
@@ -105,6 +108,7 @@ class TestNewCommandKinds:
 
 
 # ── EngineClient — no store ───────────────────────────────────────────────────
+
 
 class TestEngineClientNoStore:
     def test_add_camera_creates_config(self):
@@ -219,6 +223,7 @@ class TestEngineClientNoStore:
 
 # ── EngineClient identity management ─────────────────────────────────────────
 
+
 class TestIdentityManagement:
     def test_enroll_adds_to_model(self):
         client, _ = make_client()
@@ -298,10 +303,11 @@ class TestIdentityManagement:
         iid = client._identity_model.get_all()[0].id
         client.renameIdentity(iid, "")
         recs = client._identity_model.get_all()
-        assert recs[0].name == "Alice"   # unchanged
+        assert recs[0].name == "Alice"  # unchanged
 
 
 # ── EngineClient layout management ───────────────────────────────────────────
+
 
 class TestLayoutManagement:
     def test_save_layout_adds_to_model(self):
@@ -371,6 +377,7 @@ class TestLayoutManagement:
 
 
 # ── ConfigStore integration (with real DB) ───────────────────────────────────
+
 
 class TestConfigStoreIntegration:
     def test_add_camera_persists(self, tmp_path):
@@ -478,10 +485,12 @@ class TestConfigStoreIntegration:
 
 # ── IdentityListModel ─────────────────────────────────────────────────────────
 
+
 class TestIdentityListModel:
     def test_add_and_count(self):
         from autoptz.config.models import IdentityRecord
         from autoptz.ui.engine_client import IdentityListModel
+
         m = IdentityListModel()
         m.add_identity(IdentityRecord(name="Alice"))
         assert m.rowCount() == 1
@@ -489,6 +498,7 @@ class TestIdentityListModel:
     def test_remove(self):
         from autoptz.config.models import IdentityRecord
         from autoptz.ui.engine_client import IdentityListModel
+
         m = IdentityListModel()
         rec = IdentityRecord(name="Alice")
         m.add_identity(rec)
@@ -499,6 +509,7 @@ class TestIdentityListModel:
     def test_rename(self):
         from autoptz.config.models import IdentityRecord
         from autoptz.ui.engine_client import IdentityListModel
+
         m = IdentityListModel()
         rec = IdentityRecord(name="Alice")
         m.add_identity(rec)
@@ -508,10 +519,12 @@ class TestIdentityListModel:
 
 # ── LayoutListModel ───────────────────────────────────────────────────────────
 
+
 class TestLayoutListModel:
     def test_add_and_remove(self):
         from autoptz.config.models import Layout
         from autoptz.ui.engine_client import LayoutListModel
+
         m = LayoutListModel()
         lo = Layout(name="Stage")
         m.add_layout(lo)
@@ -522,6 +535,7 @@ class TestLayoutListModel:
     def test_no_duplicate(self):
         from autoptz.config.models import Layout
         from autoptz.ui.engine_client import LayoutListModel
+
         m = LayoutListModel()
         lo = Layout(name="Stage")
         m.add_layout(lo)
@@ -531,6 +545,7 @@ class TestLayoutListModel:
     def test_get_layout(self):
         from autoptz.config.models import Layout
         from autoptz.ui.engine_client import LayoutListModel
+
         m = LayoutListModel()
         lo = Layout(name="Stage")
         m.add_layout(lo)

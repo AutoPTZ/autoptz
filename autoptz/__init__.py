@@ -1,4 +1,5 @@
 """AutoPTZ — AI-driven PTZ camera tracking."""
+
 from __future__ import annotations
 
 #: Canonical version string. This is the single source of truth; ``pyproject.toml``

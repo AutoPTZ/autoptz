@@ -19,6 +19,7 @@ Keypoint indexing follows COCO-17 (the layout YOLO-pose / RTMPose emit)::
 
 so :data:`TORSO_KEYPOINTS` names the four points we actually use.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -74,7 +75,9 @@ def _avg_point(points: list[Keypoint]) -> tuple[float, float] | None:
 
 
 def _confident(
-    kps: Keypoints, indices: tuple[int, ...], min_conf: float,
+    kps: Keypoints,
+    indices: tuple[int, ...],
+    min_conf: float,
 ) -> list[Keypoint]:
     """Return the keypoints at *indices* that exist and clear *min_conf*."""
     out: list[Keypoint] = []
@@ -87,14 +90,16 @@ def _confident(
 
 
 def shoulder_midpoint(
-    kps: Keypoints, min_conf: float = DEFAULT_KP_CONF,
+    kps: Keypoints,
+    min_conf: float = DEFAULT_KP_CONF,
 ) -> tuple[float, float] | None:
     """Midpoint of the (confident) shoulders, or ``None`` if neither is usable."""
     return _avg_point(_confident(kps, (KP_LEFT_SHOULDER, KP_RIGHT_SHOULDER), min_conf))
 
 
 def hip_midpoint(
-    kps: Keypoints, min_conf: float = DEFAULT_KP_CONF,
+    kps: Keypoints,
+    min_conf: float = DEFAULT_KP_CONF,
 ) -> tuple[float, float] | None:
     """Midpoint of the (confident) hips, or ``None`` if neither is usable."""
     return _avg_point(_confident(kps, (KP_LEFT_HIP, KP_RIGHT_HIP), min_conf))
@@ -150,7 +155,8 @@ def torso_aim_point(
 
 
 def head_point(
-    kps: Keypoints, min_conf: float = DEFAULT_KP_CONF,
+    kps: Keypoints,
+    min_conf: float = DEFAULT_KP_CONF,
 ) -> tuple[float, float] | None:
     """Best head-centre estimate from real landmarks: nose → eyes → ears → None."""
     for group in KP_HEAD_GROUPS:
@@ -261,7 +267,8 @@ def body_aim_point(
 
 
 def subject_height_from_pose(
-    kps: Keypoints, min_conf: float = DEFAULT_KP_CONF,
+    kps: Keypoints,
+    min_conf: float = DEFAULT_KP_CONF,
 ) -> float | None:
     """Return a **stable** subject-height span (pixels), or ``None``.
 

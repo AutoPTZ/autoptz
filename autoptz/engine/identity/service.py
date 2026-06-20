@@ -29,6 +29,7 @@ Thread-safety
 A re-entrant lock guards the gallery so the camera worker thread (harvesting +
 matching) and the GUI thread (CRUD via EngineClient) can share one service.
 """
+
 from __future__ import annotations
 
 import logging
@@ -97,9 +98,7 @@ class IdentityService:
     def reload(self) -> None:
         """Reload labeled identities from the store, preserving unlabeled ones."""
         with self._lock:
-            unlabeled = {
-                rid: rec for rid, rec in self._records.items() if not rec.labeled
-            }
+            unlabeled = {rid: rec for rid, rec in self._records.items() if not rec.labeled}
             self._records = {}
             self._templates = {}
             for rec in self._store.load():
@@ -131,10 +130,7 @@ class IdentityService:
     def enabled_identities(self) -> list[IdentityRecord]:
         """Identities the engine should actively match (enabled + has templates)."""
         with self._lock:
-            return [
-                r for r in self._records.values()
-                if r.enabled and self._templates.get(r.id)
-            ]
+            return [r for r in self._records.values() if r.enabled and self._templates.get(r.id)]
 
     def matchable_identities(self) -> list[IdentityRecord]:
         """Every identity with templates — enabled or not, labeled or not.
@@ -146,17 +142,16 @@ class IdentityService:
         recognition.
         """
         with self._lock:
-            return [
-                r for r in self._records.values()
-                if self._templates.get(r.id)
-            ]
+            return [r for r in self._records.values() if self._templates.get(r.id)]
 
     def get(self, identity_id: str) -> IdentityRecord | None:
         with self._lock:
             return self._records.get(identity_id)
 
     def best_score(
-        self, identity_id: str, embedding: NDArray[np.floating],
+        self,
+        identity_id: str,
+        embedding: NDArray[np.floating],
     ) -> float:
         """Max cosine similarity of *embedding* against an identity's templates."""
         with self._lock:
@@ -207,9 +202,7 @@ class IdentityService:
         with self._lock:
             self._auto_counter += 1
             name = f"Person {self._auto_counter}"
-            embeddings = (
-                [embedding_to_bytes(embedding)] if embedding is not None else []
-            )
+            embeddings = [embedding_to_bytes(embedding)] if embedding is not None else []
             rec = IdentityRecord(
                 name=name,
                 embeddings=embeddings,
@@ -243,9 +236,7 @@ class IdentityService:
             ]
             update: dict[str, object] = {"embeddings": blobs, "updated_at": _now()}
             if thumbnail is not None:
-                photos = (list(rec.thumbnails) + [thumbnail])[
-                    -_MAX_THUMBNAILS_PER_IDENTITY:
-                ]
+                photos = (list(rec.thumbnails) + [thumbnail])[-_MAX_THUMBNAILS_PER_IDENTITY:]
                 update["thumbnails"] = photos
                 if not rec.thumbnail:
                     update["thumbnail"] = thumbnail
@@ -287,9 +278,12 @@ class IdentityService:
             rec = self._records.get(identity_id)
             if rec is None or not (0 <= index < len(rec.thumbnails)):
                 return False
-            updated = rec.model_copy(update={
-                "thumbnail": rec.thumbnails[index], "updated_at": _now(),
-            })
+            updated = rec.model_copy(
+                update={
+                    "thumbnail": rec.thumbnails[index],
+                    "updated_at": _now(),
+                }
+            )
             self._index(updated)
             self._store.save(updated)
             self._bump()
@@ -319,7 +313,8 @@ class IdentityService:
                 photos = list(rec.thumbnails)
                 removed = photos.pop(index)
                 update: dict[str, object] = {
-                    "thumbnails": photos, "updated_at": _now(),
+                    "thumbnails": photos,
+                    "updated_at": _now(),
                 }
                 # Repair the profile photo if it pointed at the removed shot:
                 # the next remaining photo takes over (or None when empty).
@@ -332,13 +327,18 @@ class IdentityService:
                 return True
         except Exception:  # noqa: BLE001
             log.warning(
-                "remove_thumbnail failed for %s[%s]", identity_id, index,
+                "remove_thumbnail failed for %s[%s]",
+                identity_id,
+                index,
                 exc_info=True,
             )
             return False
 
     def label(
-        self, identity_id: str, name: str, thumbnail_index: int | None = None,
+        self,
+        identity_id: str,
+        name: str,
+        thumbnail_index: int | None = None,
     ) -> IdentityRecord | None:
         """Promote an unlabeled identity → named + enabled + persisted.
 
@@ -362,7 +362,7 @@ class IdentityService:
                 update["thumbnail"] = rec.thumbnails[thumbnail_index]
             updated = rec.model_copy(update=update)
             self._index(updated)
-            self._store.save(updated)   # now persisted (labeled)
+            self._store.save(updated)  # now persisted (labeled)
             self._bump()
             return updated
 
@@ -385,9 +385,12 @@ class IdentityService:
             rec = self._records.get(identity_id)
             if rec is None:
                 return False
-            updated = rec.model_copy(update={
-                "enabled": bool(enabled), "updated_at": _now(),
-            })
+            updated = rec.model_copy(
+                update={
+                    "enabled": bool(enabled),
+                    "updated_at": _now(),
+                }
+            )
             self._index(updated)
             self._store.save(updated)
             self._bump()
@@ -443,19 +446,17 @@ class IdentityService:
             drop = self._records.get(drop_id)
             if keep is None or drop is None:
                 return None
-            blobs = (list(keep.embeddings) + list(drop.embeddings))[
-                -_MAX_EMBEDDINGS_PER_IDENTITY:
-            ]
+            blobs = (list(keep.embeddings) + list(drop.embeddings))[-_MAX_EMBEDDINGS_PER_IDENTITY:]
             thumbnail = keep.thumbnail or drop.thumbnail
-            photos = (list(keep.thumbnails) + list(drop.thumbnails))[
-                -_MAX_THUMBNAILS_PER_IDENTITY:
-            ]
-            merged = keep.model_copy(update={
-                "embeddings": blobs,
-                "thumbnail": thumbnail,
-                "thumbnails": photos,
-                "updated_at": _now(),
-            })
+            photos = (list(keep.thumbnails) + list(drop.thumbnails))[-_MAX_THUMBNAILS_PER_IDENTITY:]
+            merged = keep.model_copy(
+                update={
+                    "embeddings": blobs,
+                    "thumbnail": thumbnail,
+                    "thumbnails": photos,
+                    "updated_at": _now(),
+                }
+            )
             self._index(merged)
             self._records.pop(drop_id, None)
             self._templates.pop(drop_id, None)

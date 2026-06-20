@@ -16,6 +16,7 @@ Platform notes
 Callbacks receive ``("added"|"removed", USBDevice)`` and are fired from the
 discovery thread — do not do heavy work in them.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -72,12 +73,13 @@ def _suppressed_stderr():
 class USBDevice:
     """Immutable description of one USB camera seen by OpenCV."""
 
-    index: int             # VideoCapture index
-    path: str = ""         # device path on Linux, empty on other platforms
-    display_name: str = "" # best-effort name (platform-specific)
+    index: int  # VideoCapture index
+    path: str = ""  # device path on Linux, empty on other platforms
+    display_name: str = ""  # best-effort name (platform-specific)
 
 
 # ── Platform helpers ──────────────────────────────────────────────────────────
+
 
 def _cv2_backend_for_probe() -> int:
     system = platform.system()
@@ -130,10 +132,13 @@ def _display_name(index: int) -> str:
     if platform.system() != "Linux":
         return ""
     import subprocess  # noqa: PLC0415
+
     try:
         result = subprocess.run(
             ["v4l2-ctl", "--device", f"/dev/video{index}", "--info"],
-            capture_output=True, text=True, timeout=1.0,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
         )
         for line in result.stdout.splitlines():
             if "Card type" in line:
@@ -164,12 +169,16 @@ def _probed_fallback_cameras() -> list[dict]:
     try:
         indices = sorted(_probe_indices())
     except Exception:  # noqa: BLE001 — probing must never raise
-        log.debug("camera index probe failed; returning no devices.",
-                  exc_info=True)
+        log.debug("camera index probe failed; returning no devices.", exc_info=True)
         return []
     return [
-        {"name": f"Camera {i}", "unique_id": None, "index": i,
-         "is_continuity": False, "source_label": "USB"}
+        {
+            "name": f"Camera {i}",
+            "unique_id": None,
+            "index": i,
+            "is_continuity": False,
+            "source_label": "USB",
+        }
         for i in indices
     ]
 
@@ -224,10 +233,10 @@ def _enumerate_macos_cameras() -> list[dict] | None:
     # expose every constant (e.g. Continuity Camera), so probe defensively.
     type_names = [
         "AVCaptureDeviceTypeBuiltInWideAngleCamera",
-        "AVCaptureDeviceTypeExternalUnknown",   # legacy external USB cameras
-        "AVCaptureDeviceTypeExternal",          # macOS 14+ external cameras
+        "AVCaptureDeviceTypeExternalUnknown",  # legacy external USB cameras
+        "AVCaptureDeviceTypeExternal",  # macOS 14+ external cameras
         "AVCaptureDeviceTypeContinuityCamera",  # iPhone Continuity Camera
-        "AVCaptureDeviceTypeDeskViewCamera",    # Continuity Desk View
+        "AVCaptureDeviceTypeDeskViewCamera",  # Continuity Desk View
     ]
     device_types = []
     for name in type_names:
@@ -240,21 +249,20 @@ def _enumerate_macos_cameras() -> list[dict] | None:
 
     try:
         media_type = AVFoundation.AVMediaTypeVideo
-        session = (
-            AVFoundation.AVCaptureDeviceDiscoverySession
-            .discoverySessionWithDeviceTypes_mediaType_position_(
-                device_types, media_type,
-                AVFoundation.AVCaptureDevicePositionUnspecified,
-            )
+        session = AVFoundation.AVCaptureDeviceDiscoverySession.discoverySessionWithDeviceTypes_mediaType_position_(
+            device_types,
+            media_type,
+            AVFoundation.AVCaptureDevicePositionUnspecified,
         )
         devices = session.devices()
     except Exception:  # noqa: BLE001 — any AVFoundation runtime error
-        log.debug("AVFoundation discovery session failed; falling back.",
-                  exc_info=True)
+        log.debug("AVFoundation discovery session failed; falling back.", exc_info=True)
         return None
 
     continuity_const = getattr(
-        AVFoundation, "AVCaptureDeviceTypeContinuityCamera", None,
+        AVFoundation,
+        "AVCaptureDeviceTypeContinuityCamera",
+        None,
     )
 
     cameras: list[dict] = []
@@ -284,13 +292,15 @@ def _enumerate_macos_cameras() -> list[dict] | None:
         # Keep ``name`` the raw AVFoundation ``localizedName`` (FROZEN contract) —
         # the UI layer (``scanUSBCameras``) is what appends a Continuity label, so
         # suffixing here would double it.  ``is_continuity`` carries the flag.
-        cameras.append({
-            "name": name,
-            "unique_id": unique_id,
-            "index": index,
-            "is_continuity": is_continuity,
-            "source_label": _macos_source_label(AVFoundation, dev, is_continuity),
-        })
+        cameras.append(
+            {
+                "name": name,
+                "unique_id": unique_id,
+                "index": index,
+                "is_continuity": is_continuity,
+                "source_label": _macos_source_label(AVFoundation, dev, is_continuity),
+            }
+        )
     return cameras
 
 
@@ -318,8 +328,7 @@ def enumerate_cameras() -> list[dict]:
         try:
             cams = _enumerate_macos_cameras()
         except Exception:  # noqa: BLE001 — enumeration must never raise
-            log.debug("macOS camera enumeration raised; falling back.",
-                      exc_info=True)
+            log.debug("macOS camera enumeration raised; falling back.", exc_info=True)
             cams = None
         if cams is not None:
             return cams
@@ -351,6 +360,7 @@ def cameras_by_unique_id() -> dict[str, dict]:
 
 # ── Discovery ─────────────────────────────────────────────────────────────────
 
+
 class USBDiscovery:
     """Continuously monitors USB cameras via polling (all platforms).
 
@@ -380,9 +390,7 @@ class USBDiscovery:
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run, name="usb-discovery", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="usb-discovery", daemon=True)
         self._thread.start()
         log.info("USBDiscovery started (poll_interval=%.1f s)", self._poll_interval)
 
@@ -415,9 +423,7 @@ class USBDiscovery:
             monitor.start()
             self._udev_monitor = monitor
 
-            observer_thread = threading.Thread(
-                target=self._udev_loop, name="usb-udev", daemon=True
-            )
+            observer_thread = threading.Thread(target=self._udev_loop, name="usb-udev", daemon=True)
             observer_thread.start()
             log.debug("USBDiscovery: pyudev observer active")
         except ImportError:

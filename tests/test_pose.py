@@ -9,6 +9,7 @@ actually declares, and feeds ORT a tensor of exactly that size.
 
 No real model is needed — a tiny fake ORT session stands in.
 """
+
 from __future__ import annotations
 
 import numpy as np

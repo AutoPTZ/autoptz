@@ -2,6 +2,7 @@
 
 Uses a MockBackend throughout; no real hardware needed.
 """
+
 from __future__ import annotations
 
 import time
@@ -133,15 +134,15 @@ class TestViscaHelpers:
 
     def test_pantilt_cmd_full_right_up(self) -> None:
         cmd = visca_pantilt_cmd(1.0, 1.0)
-        assert cmd[4] == 0x18   # max pan speed
-        assert cmd[5] == 0x14   # max tilt speed
-        assert cmd[6] == 0x02   # right
-        assert cmd[7] == 0x01   # up
+        assert cmd[4] == 0x18  # max pan speed
+        assert cmd[5] == 0x14  # max tilt speed
+        assert cmd[6] == 0x02  # right
+        assert cmd[7] == 0x01  # up
 
     def test_pantilt_cmd_full_left_down(self) -> None:
         cmd = visca_pantilt_cmd(-1.0, -1.0)
-        assert cmd[6] == 0x01   # left
-        assert cmd[7] == 0x02   # down
+        assert cmd[6] == 0x01  # left
+        assert cmd[7] == 0x02  # down
 
     def test_pantilt_speed_clamped(self) -> None:
         # speed must be at least 0x01 for moving, at most 0x18 pan / 0x14 tilt
@@ -150,12 +151,12 @@ class TestViscaHelpers:
 
     def test_zoom_tele(self) -> None:
         cmd = visca_zoom_cmd(1.0)
-        assert cmd[4] & 0xF0 == 0x20   # tele nibble
+        assert cmd[4] & 0xF0 == 0x20  # tele nibble
         assert 0x01 <= cmd[4] & 0x0F <= 0x07
 
     def test_zoom_wide(self) -> None:
         cmd = visca_zoom_cmd(-1.0)
-        assert cmd[4] & 0xF0 == 0x30   # wide nibble
+        assert cmd[4] & 0xF0 == 0x30  # wide nibble
 
     def test_zoom_stop(self) -> None:
         cmd = visca_zoom_cmd(0.0)
@@ -291,8 +292,13 @@ class TestControllerMath:
     def test_shifted_safe_zone_suppresses_error_around_box_center(self) -> None:
         ctrl = PTZController(
             MockBackend(),
-            _cfg(safe_zone_enabled=True, safe_zone_x=0.3, safe_zone_y=-0.2,
-                 safe_zone_w=0.1, safe_zone_h=0.1),
+            _cfg(
+                safe_zone_enabled=True,
+                safe_zone_x=0.3,
+                safe_zone_y=-0.2,
+                safe_zone_w=0.1,
+                safe_zone_h=0.1,
+            ),
         )
         pan, tilt, _ = ctrl.step((0.34, -0.24), (0.0, 0.0), 0.45, True, t=0.0)
         assert pan == pytest.approx(0.0, abs=1e-6)
@@ -301,8 +307,13 @@ class TestControllerMath:
     def test_shifted_safe_zone_tracks_relative_to_box_center(self) -> None:
         ctrl = PTZController(
             MockBackend(),
-            _cfg(safe_zone_enabled=True, safe_zone_x=0.3, safe_zone_y=0.0,
-                 safe_zone_w=0.05, safe_zone_h=0.05),
+            _cfg(
+                safe_zone_enabled=True,
+                safe_zone_x=0.3,
+                safe_zone_y=0.0,
+                safe_zone_w=0.05,
+                safe_zone_h=0.05,
+            ),
         )
         pan, _, _ = ctrl.step((0.6, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
         assert pan > 0.0

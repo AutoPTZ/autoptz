@@ -28,6 +28,7 @@ Reported metrics
 - ``avg_tracks``    Average active (non-REMOVED) tracks per frame.
 - ``occlusion_recoveries`` Tracks re-detected after ≥ 1 frame of LOST state.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -173,7 +174,10 @@ def run_clip(
                 if tid not in all_ids_seen:
                     # New ID — check if it overlaps a previous track (heuristic ID switch)
                     for prev_id, prev_bb in list(prev_bboxes.items()):
-                        if prev_id not in {tx.track_id for tx in active} and _iou(bb, prev_bb) > iou_thr:
+                        if (
+                            prev_id not in {tx.track_id for tx in active}
+                            and _iou(bb, prev_bb) > iou_thr
+                        ):
                             id_switches += 1
                             break
                     all_ids_seen.add(tid)
@@ -199,7 +203,10 @@ def run_clip(
                 fps_so_far = frame_num / sum(total_times) if total_times else 0.0
                 log.info(
                     "frame=%d  ids=%d  switches=%d  fps=%.1f",
-                    frame_num, len(all_ids_seen), id_switches, fps_so_far,
+                    frame_num,
+                    len(all_ids_seen),
+                    id_switches,
+                    fps_so_far,
                 )
 
     except KeyboardInterrupt:
@@ -213,8 +220,7 @@ def run_clip(
     avg_det_fps = (1.0 / (sum(det_times) / len(det_times))) if det_times else 0.0
     avg_total_fps = frame_num / sum(total_times) if total_times else 0.0
     stable_tracks = sum(
-        1 for rec in id_records.values()
-        if (rec["last"] - rec["first"]) >= min_track_frames
+        1 for rec in id_records.values() if (rec["last"] - rec["first"]) >= min_track_frames
     )
 
     metrics = {
@@ -232,6 +238,7 @@ def run_clip(
 
 def _annotate(frame: np.ndarray, tracks: list) -> None:
     from autoptz.engine.pipeline.track import TrackState  # noqa: PLC0415
+
     _COLOURS = {
         TrackState.CONFIRMED: (0, 220, 0),
         TrackState.TENTATIVE: (200, 200, 0),
@@ -242,8 +249,16 @@ def _annotate(frame: np.ndarray, tracks: list) -> None:
         colour = _COLOURS.get(t.state, (128, 128, 128))
         cv2.rectangle(frame, (x1, y1), (x2, y2), colour, 2)
         label = f"#{t.track_id} {t.state.value[0].upper()} {t.conf:.2f}"
-        cv2.putText(frame, label, (x1, max(y1 - 6, 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            label,
+            (x1, max(y1 - 6, 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            colour,
+            1,
+            cv2.LINE_AA,
+        )
 
 
 def _print_report(metrics: dict[str, float], path: str) -> None:
@@ -269,24 +284,42 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("video", help="Path to input video file")
     parser.add_argument("--model", help="YOLO26 ONNX model path")
-    parser.add_argument("--synthetic", action="store_true",
-                        help="Use synthetic constant-output model (no model file needed)")
-    parser.add_argument("--tracker", default="botsort",
-                        choices=["botsort", "deepocsort", "bytetrack"],
-                        help="BoxMOT tracker (default: botsort)")
-    parser.add_argument("--detect-interval", type=int, default=1,
-                        help="Run detection every N frames (default: 1)")
-    parser.add_argument("--conf", type=float, default=0.25,
-                        help="Confidence threshold (default: 0.25)")
-    parser.add_argument("--input-size", type=int, default=640,
-                        help="Model input size in pixels (default: 640)")
-    parser.add_argument("--min-track-s", type=float, default=1.0,
-                        help="Min seconds for a track to count as stable (default: 1.0)")
-    parser.add_argument("--iou-thr", type=float, default=0.5,
-                        help="IoU threshold for ID-switch detection (default: 0.5)")
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="Use synthetic constant-output model (no model file needed)",
+    )
+    parser.add_argument(
+        "--tracker",
+        default="botsort",
+        choices=["botsort", "deepocsort", "bytetrack"],
+        help="BoxMOT tracker (default: botsort)",
+    )
+    parser.add_argument(
+        "--detect-interval", type=int, default=1, help="Run detection every N frames (default: 1)"
+    )
+    parser.add_argument(
+        "--conf", type=float, default=0.25, help="Confidence threshold (default: 0.25)"
+    )
+    parser.add_argument(
+        "--input-size", type=int, default=640, help="Model input size in pixels (default: 640)"
+    )
+    parser.add_argument(
+        "--min-track-s",
+        type=float,
+        default=1.0,
+        help="Min seconds for a track to count as stable (default: 1.0)",
+    )
+    parser.add_argument(
+        "--iou-thr",
+        type=float,
+        default=0.5,
+        help="IoU threshold for ID-switch detection (default: 0.5)",
+    )
     parser.add_argument("--output", help="Write annotated video to this path")
-    parser.add_argument("--max-frames", type=int, default=None,
-                        help="Stop after N frames (useful for quick checks)")
+    parser.add_argument(
+        "--max-frames", type=int, default=None, help="Stop after N frames (useful for quick checks)"
+    )
 
     args = parser.parse_args(argv)
 
