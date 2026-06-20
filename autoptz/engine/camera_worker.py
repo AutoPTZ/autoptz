@@ -602,7 +602,7 @@ def _build_detect_stack(config: CameraConfig) -> _DetectStack | None:
             tracker_type=config.tracking.tracker,
             coast_window=config.tracking.coast_window_ms / 1000.0,
         )
-        _log_detector_ready_once(model_path, detector.ep)
+        _log_detector_ready_once(model_path, f"{detector.ep} ({detector.precision})")
         return _DetectStack(detector=detector, tracker=tracker, ep=detector.ep)
     except Exception:  # noqa: BLE001
         log.warning("Detector/tracker init failed; live-preview-only.", exc_info=True)

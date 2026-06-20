@@ -173,6 +173,22 @@ def _wants_fp16(prefs: HardwarePrefs | None) -> bool:
     return prefs is None or prefs.precision != "fp32"
 
 
+def effective_precision(ep: EP | str, prefs: HardwarePrefs | None = None) -> str:
+    """Return "fp16"/"fp32" actually used for *ep* under (env-resolved) prefs.
+
+    Accelerator EPs (CoreML/TensorRT/CUDA/DirectML/OpenVINO) run FP16 unless the
+    user forced fp32; the CPU EP is always FP32. Lets the UI show configured →
+    effective precision without querying the live session.
+    """
+    prefs = _resolve_prefs(prefs)
+    if isinstance(ep, str):
+        try:
+            ep = EP(ep)
+        except ValueError:
+            return "fp32"
+    return "fp16" if (ep in _ACCELERATED_EPS and _wants_fp16(prefs)) else "fp32"
+
+
 def _provider_options(ep: EP, prefs: HardwarePrefs | None) -> dict[str, object]:
     """Per-EP acceleration options. Empty dict = provider defaults."""
     if ep is EP.COREML:

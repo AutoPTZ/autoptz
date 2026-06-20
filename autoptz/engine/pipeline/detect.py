@@ -312,6 +312,13 @@ class PersonDetector:
     def ep(self) -> str:
         return str(self._session.get_providers()[0])
 
+    @property
+    def precision(self) -> str:
+        """Effective inference precision ("fp16"/"fp32") for the active EP."""
+        from autoptz.engine.runtime.inference import effective_precision
+
+        return effective_precision(self.ep)
+
     def detect(self, frame: NDArray[np.uint8]) -> list[Detection]:
         """Run detection on *frame* (BGR H×W×3).
 
