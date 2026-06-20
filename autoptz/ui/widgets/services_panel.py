@@ -47,12 +47,17 @@ _FEATURE_TOGGLES = (
      "Testing override: disable face matching for this session."),
     ("pose", "Pose",
      "Testing override: disable pose keypoints for this session."),
+    ("reid", "ReID (stable tracking)",
+     "Master switch for appearance ReID. A camera only uses it when this is on "
+     "AND its tracking Mode is “Stable”. Turn it off to disable Stable mode "
+     "everywhere. Resets to on each launch."),
 )
 
 _DETECTOR_TIERS = (
     ("auto", "Auto"),
     ("fast", "Fast / Nano"),
     ("balanced", "Balanced / Small"),
+    ("medium", "Medium"),
 )
 
 
@@ -116,8 +121,9 @@ class ServicesPanel(QWidget):
         for value, label in _DETECTOR_TIERS:
             self._detector_tier.addItem(label, value)
         self._detector_tier.setToolTip(
-            "Choose detector model tier for testing. Takes effect the next time "
-            "the shared detector is built."
+            "Choose the shared detector model tier. When the engine is running, "
+            "AutoPTZ builds the new detector in the background and swaps it in "
+            "when ready; the active state is shown in diagnostics."
         )
         self._detector_tier.currentIndexChanged.connect(self._on_detector_tier_changed)
         tier_row.addWidget(tier_label)

@@ -5,7 +5,7 @@ import base64
 import logging
 from typing import Any, Callable
 
-from PySide6.QtCore import QEasingCurve, QEvent, QParallelAnimationGroup, QPropertyAnimation, QSize, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -281,59 +281,67 @@ class CollapsibleGroup(QWidget):
         outer.addWidget(self._toggle)
 
         self._content = QWidget(self)
-        self._content_opacity = QGraphicsOpacityEffect(self._content)
-        self._content_opacity.setOpacity(1.0 if expanded else 0.0)
-        self._content.setGraphicsEffect(self._content_opacity)
         self.body = QVBoxLayout(self._content)
         self.body.setContentsMargins(T.fs(12), T.fs(10), T.fs(12), T.fs(12))
         self.body.setSpacing(T.fs(8))
+        # Let the maximumHeight animation drive the size all the way to 0 — without
+        # an explicit 0 minimum the content's minimumSizeHint floors the shrink and
+        # the last frame snaps to 0, which reads as the "jumping" jitter.
+        self._content.setMinimumHeight(0)
         self._content.setVisible(expanded)
         self._content.setMaximumHeight(_QWIDGETSIZE_MAX if expanded else 0)
         outer.addWidget(self._content)
-        self._anim = QParallelAnimationGroup(self)
         self._height_anim = QPropertyAnimation(self._content, b"maximumHeight", self)
-        self._fade_anim = QPropertyAnimation(self._content_opacity, b"opacity", self)
-        for anim in (self._height_anim, self._fade_anim):
-            anim.setDuration(_ANIM_MS)
-            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-            self._anim.addAnimation(anim)
-        self._anim.finished.connect(self._on_anim_finished)
+        self._height_anim.setDuration(_ANIM_MS)
+        self._height_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._height_anim.finished.connect(self._on_anim_finished)
+
+    def _natural_height(self) -> int:
+        """Accurate expanded height, including height-for-width (word-wrap) content.
+
+        ``sizeHint().height()`` is width-independent and under-reports wrapped
+        labels, so the expand animation would stop short and then *snap* to the
+        real height on finish — the "jump".  Prefer the layout's
+        ``heightForWidth`` at the content's actual width when available."""
+        lay = self._content.layout()
+        width = self._content.width() or self.width()
+        hfw = -1
+        if lay is not None and lay.hasHeightForWidth() and width > 0:
+            hfw = lay.heightForWidth(width)
+        return max(1, self._content.sizeHint().height(), hfw)
 
     def _on_toggle(self, checked: bool) -> None:
         self._expanded = checked
         self._toggle.setArrowType(
             Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
         )
-        self._anim.stop()
-        natural = max(1, self._content.sizeHint().height())
+        self._height_anim.stop()
+        natural = self._natural_height()
+        current = max(0, self._content.height() if self._content.isVisible() else 0)
         if checked:
             self._content.setVisible(True)
-            self._content.setMaximumHeight(0)
-            self._content_opacity.setOpacity(0.0)
-            self._height_anim.setStartValue(0)
+            self._content.setMaximumHeight(current)
+            self._height_anim.setStartValue(current)
             self._height_anim.setEndValue(natural)
-            self._fade_anim.setStartValue(0.0)
-            self._fade_anim.setEndValue(1.0)
         else:
-            self._content.setMaximumHeight(self._content.height() or natural)
-            self._height_anim.setStartValue(self._content.maximumHeight())
+            start = current or min(self._content.maximumHeight(), natural)
+            self._content.setMaximumHeight(start)
+            self._height_anim.setStartValue(start)
             self._height_anim.setEndValue(0)
-            self._fade_anim.setStartValue(float(self._content_opacity.opacity()))
-            self._fade_anim.setEndValue(0.0)
-        self._anim.start()
+        self._height_anim.start()
 
     def _on_anim_finished(self) -> None:
         if self._expanded:
             self._content.setVisible(True)
             self._content.setMaximumHeight(_QWIDGETSIZE_MAX)
-            self._content_opacity.setOpacity(1.0)
         else:
-            self._content_opacity.setOpacity(0.0)
             self._content.setMaximumHeight(0)
             self._content.setVisible(False)
 
     def add_widget(self, w: QWidget) -> None:
         self.body.addWidget(w)
+        if self._expanded:
+            self._content.setMaximumHeight(_QWIDGETSIZE_MAX)
 
 
 # ── thumbnails ──────────────────────────────────────────────────────────────────

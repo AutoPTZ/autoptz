@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -139,6 +141,12 @@ class InferencePool:
         self._detector: Any | None = None
         self._detector_built = False
         self._detector_ep = ""
+        self._detector_model_path = ""
+        # Reason the detector couldn't be built ("" = fine / not yet tried),
+        # surfaced to the UI so a silent live-preview-only fall-back is visible.
+        self._detector_error = ""
+        self._switch_lock = threading.Lock()
+        self._switch_state: dict[str, Any] | None = None
 
         self._face: _LockedFace | None = None
         self._face_built = False
@@ -170,6 +178,119 @@ class InferencePool:
         """Active ORT EP of the shared detector ("" until built / on failure)."""
         return self._detector_ep
 
+    @property
+    def detector_error(self) -> str:
+        """Why the shared detector failed to build ("" = built or not tried)."""
+        return self._detector_error
+
+    @property
+    def detector_tier(self) -> str:
+        """User-facing tier of the active shared detector."""
+        return self._detector_tier
+
+    @property
+    def detector_model_path(self) -> str:
+        """Path of the active shared detector model, if known."""
+        return self._detector_model_path
+
+    @property
+    def detector_model_name(self) -> str:
+        """Filename of the active shared detector model, if known."""
+        if not self._detector_model_path:
+            return ""
+        return Path(self._detector_model_path).name
+
+    def switch_state(self) -> dict[str, Any] | None:
+        """Return the current/last detector hot-swap state for telemetry."""
+        with self._switch_lock:
+            return dict(self._switch_state) if self._switch_state else None
+
+    def switch_detector_tier(self, tier: str, *, reason: str = "") -> bool:
+        """Build a replacement detector and atomically swap it in on success.
+
+        Existing workers keep using the old detector until the supervisor asks
+        them to refresh after this returns True. On failure the old detector and
+        its metadata are restored.
+        """
+        to_tier = str(tier or "auto").strip().lower() or "auto"
+        old = (
+            self._detector_tier,
+            self._detector,
+            self._detector_built,
+            self._detector_ep,
+            self._detector_model_path,
+        )
+        if to_tier == old[0] and self._detector_built:
+            with self._switch_lock:
+                self._switch_state = {
+                    "kind": "detector",
+                    "state": "active",
+                    "from_value": old[0],
+                    "to_value": to_tier,
+                    "active_value": old[0],
+                    "reason": reason or "Detector already active.",
+                    "ts": time.time(),
+                    "error": "",
+                }
+            return True
+
+        with self._switch_lock:
+            self._switch_state = {
+                "kind": "detector",
+                "state": "warming",
+                "from_value": old[0],
+                "to_value": to_tier,
+                "active_value": old[0],
+                "reason": reason or f"Switching detector to {to_tier}.",
+                "ts": time.time(),
+                "error": "",
+            }
+
+        try:
+            with self._build_lock:
+                self._detector_tier = to_tier
+                detector = self._build_detector()
+                if detector is None:
+                    raise RuntimeError(f"detector tier {to_tier!r} unavailable")
+                self._detector = detector
+                self._detector_built = True
+            with self._switch_lock:
+                self._switch_state = {
+                    "kind": "detector",
+                    "state": "active",
+                    "from_value": old[0],
+                    "to_value": to_tier,
+                    "active_value": to_tier,
+                    "reason": reason or f"Switched detector to {to_tier}.",
+                    "ts": time.time(),
+                    "error": "",
+                }
+            log.info("inference pool: detector switched %s -> %s (model=%s, ep=%s)",
+                     old[0], to_tier, self.detector_model_path, self.detector_ep)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            (
+                self._detector_tier,
+                self._detector,
+                self._detector_built,
+                self._detector_ep,
+                self._detector_model_path,
+            ) = old
+            with self._switch_lock:
+                self._switch_state = {
+                    "kind": "detector",
+                    "state": "failed",
+                    "from_value": old[0],
+                    "to_value": to_tier,
+                    "active_value": old[0],
+                    "reason": reason or f"Kept detector {old[0]}.",
+                    "ts": time.time(),
+                    "error": str(exc),
+                }
+            log.warning("inference pool: detector switch %s -> %s failed; kept %s",
+                        old[0], to_tier, old[0], exc_info=True)
+            return False
+
     def _build_detector(self) -> Any | None:
         """Resolve the model + build the shared PersonDetector; ``None`` on failure.
 
@@ -182,20 +303,28 @@ class InferencePool:
         try:
             from autoptz.engine.camera_worker import detection_runtime_available
         except Exception:  # noqa: BLE001
+            self._detector_error = "Detection runtime (onnxruntime/opencv) unavailable."
             return None
         if not detection_runtime_available():
+            self._detector_error = "Detection runtime (onnxruntime/opencv) unavailable."
             log.debug("inference pool: detection runtime unavailable; no detector.")
             return None
 
         try:
             from autoptz.engine.runtime.models import default_manager
 
-            model_path = default_manager().ensure_detector(tier=self._detector_tier)
+            manager = default_manager()
+            model_path = manager.ensure_detector(tier=self._detector_tier)
         except Exception:  # noqa: BLE001 — model bootstrap must never break startup
+            self._detector_error = f"Model '{self._detector_tier}' resolution failed."
             log.warning("inference pool: detector model resolution failed.",
                         exc_info=True)
             return None
         if model_path is None:
+            self._detector_error = (
+                manager.last_error
+                or f"Model '{self._detector_tier}' unavailable (live-preview-only)."
+            )
             log.debug("inference pool: no detector model; live-preview-only.")
             return None
 
@@ -204,10 +333,15 @@ class InferencePool:
 
             detector = PersonDetector(model_path=model_path)
             self._detector_ep = detector.ep
+            self._detector_model_path = str(model_path)
+            self._detector_error = ""
             log.info("inference pool: shared detector ready (model=%s, ep=%s)",
                      model_path, detector.ep)
             return detector
         except Exception:  # noqa: BLE001
+            self._detector_error = (
+                f"Model '{self._detector_tier}' loaded but the detector failed to init."
+            )
             log.warning("inference pool: detector init failed; live-preview-only.",
                         exc_info=True)
             return None

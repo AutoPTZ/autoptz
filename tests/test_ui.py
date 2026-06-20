@@ -51,6 +51,15 @@ class TestAboutLinks:
         assert LINKEDIN_URL == "https://www.linkedin.com/in/stevenson-chittumuri/"
 
 
+class TestCameraTileHelpers:
+    def test_framing_snap_threshold(self, qapp) -> None:
+        from autoptz.ui.widgets.camera_tile import _snap_center_axis
+
+        assert _snap_center_axis(0.039) == 0.0
+        assert _snap_center_axis(-0.04) == 0.0
+        assert _snap_center_axis(0.041) == pytest.approx(0.041)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CameraRecord
 # ─────────────────────────────────────────────────────────────────────────────
@@ -377,6 +386,35 @@ class TestEngineClient:
             assert c2.getDetectorModelTier() == "balanced"
         finally:
             store2.close()
+
+    def test_overlay_prediction_toggle_persists(self, qapp, tmp_path) -> None:
+        from autoptz.config.store import ConfigStore
+        from autoptz.ui.engine_client import EngineClient
+
+        db = tmp_path / "cfg.db"
+        store = ConfigStore(db_path=db, debounce_s=0)
+        c = EngineClient(store=store)
+        assert c.overlays()["prediction"] is False
+        c.setOverlay("prediction", True)
+        assert c.overlays()["prediction"] is True
+        c.setOverlay("unknown", True)
+        assert "unknown" not in c.overlays()
+        store.close()
+
+        store2 = ConfigStore(db_path=db, debounce_s=0)
+        c2 = EngineClient(store=store2)
+        try:
+            assert c2.overlays()["prediction"] is True
+        finally:
+            store2.close()
+
+    def test_set_target_fps_enqueues_single_fps_command(self, qapp) -> None:
+        c = _client(qapp)
+        cid = c.addCamera("usb://0", "Cam")
+        c.drain_commands()
+        c.setTargetFps(cid, 30.0)
+        kinds = [cmd.kind.value for cmd in c.drain_commands()]
+        assert kinds == ["set_target_fps"]
 
     def test_set_target(self, qapp) -> None:
         c = _client(qapp)

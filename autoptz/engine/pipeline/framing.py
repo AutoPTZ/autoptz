@@ -25,10 +25,22 @@ from dataclasses import dataclass
 
 # COCO-17 keypoint indices for the torso anchors we rely on.  Documented here so
 # pose.py and any test can share the same constants without re-deriving them.
+KP_NOSE = 0
+KP_LEFT_EYE = 1
+KP_RIGHT_EYE = 2
+KP_LEFT_EAR = 3
+KP_RIGHT_EAR = 4
 KP_LEFT_SHOULDER = 5
 KP_RIGHT_SHOULDER = 6
 KP_LEFT_HIP = 11
 KP_RIGHT_HIP = 12
+
+# Head landmarks, in fallback order (nose is the best single head point).
+KP_HEAD_GROUPS: tuple[tuple[int, ...], ...] = (
+    (KP_NOSE,),
+    (KP_LEFT_EYE, KP_RIGHT_EYE),
+    (KP_LEFT_EAR, KP_RIGHT_EAR),
+)
 
 # Minimum keypoint confidence to trust a single point in the aim math.  Below
 # this the point is treated as missing (the helpers fall back to whatever points
@@ -135,6 +147,117 @@ def torso_aim_point(
         return ((sx + hx) * 0.5, (sy + hy) * 0.5)
     # upper_body (default) and any unknown bias → shoulder midpoint.
     return (sx, sy)
+
+
+def head_point(
+    kps: Keypoints, min_conf: float = DEFAULT_KP_CONF,
+) -> tuple[float, float] | None:
+    """Best head-centre estimate from real landmarks: nose → eyes → ears → None."""
+    for group in KP_HEAD_GROUPS:
+        pts = _confident(kps, group, min_conf)
+        if pts:
+            return _avg_point(pts)
+    return None
+
+
+_HEAD_INDICES = (KP_NOSE, KP_LEFT_EYE, KP_RIGHT_EYE, KP_LEFT_EAR, KP_RIGHT_EAR)
+_SHOULDER_INDICES = (KP_LEFT_SHOULDER, KP_RIGHT_SHOULDER)
+_HIP_INDICES = (KP_LEFT_HIP, KP_RIGHT_HIP)
+
+
+def _mean_conf(kps: Keypoints, indices: tuple[int, ...], min_conf: float) -> float:
+    """Mean confidence of the usable keypoints at *indices* (0.0 if none)."""
+    pts = _confident(kps, indices, min_conf)
+    if not pts:
+        return 0.0
+    return min(1.0, sum(p.conf for p in pts) / len(pts))
+
+
+def body_aim_point(
+    kps: Keypoints,
+    *,
+    framing: str = "upper_body",
+    min_conf: float = DEFAULT_KP_CONF,
+) -> tuple[tuple[float, float] | None, float]:
+    """Landmark-precise aim point **and a 0–1 confidence**, in frame pixels.
+
+    Unlike :func:`torso_aim_point` (which lifts above the shoulders by a guessed
+    fraction of the torso span), this uses the *real* head keypoints
+    (nose/eyes/ears) so the framing regions map to anatomy:
+
+    - ``face``           → the head itself
+    - ``head_shoulders`` → neck = midpoint(head, shoulders)
+    - ``upper_body``     → chest = shoulders nudged ~20 % toward the hips
+    - ``full_body``      → person centre = the hips (≈ a standing body's
+      mid-height / the bbox centre)
+
+    The horizontal anchor is the shoulder centre (steadiest), falling back to the
+    head then the hips.  The returned confidence reflects whether the landmarks a
+    region *actually needs* are present, so the caller can **blend** this with the
+    bounding-box anchor (high conf → trust pose, low conf → lean on the box)
+    without hard-switching.  Crucially each region returns **0 confidence when its
+    defining landmark is missing** — so ``full_body`` without confident hips falls
+    back to the stable bbox centre instead of snapping up to the shoulders (the
+    "jumping near upper body" bug).  Returns ``(None, 0.0)`` when nothing usable.
+    """
+    shoulders = shoulder_midpoint(kps, min_conf)
+    hips = hip_midpoint(kps, min_conf)
+    head = head_point(kps, min_conf)
+    sh_conf = _mean_conf(kps, _SHOULDER_INDICES, min_conf)
+    hip_conf = _mean_conf(kps, _HIP_INDICES, min_conf)
+    head_conf = _mean_conf(kps, _HEAD_INDICES, min_conf)
+
+    # Horizontal anchor: shoulders are the most stable, then head, then hips.
+    if shoulders is not None:
+        ax = shoulders[0]
+    elif head is not None:
+        ax = head[0]
+    elif hips is not None:
+        ax = hips[0]
+    else:
+        return None, 0.0
+
+    def _first_y(*candidates: tuple[float, float] | None) -> float | None:
+        for c in candidates:
+            if c is not None:
+                return c[1]
+        return None
+
+    if framing == "face":
+        ay = _first_y(head, shoulders, hips)
+        conf = head_conf if head is not None else 0.0
+    elif framing == "head_shoulders":
+        if head is not None and shoulders is not None:
+            ay = (head[1] + shoulders[1]) * 0.5
+            conf = (head_conf + sh_conf) * 0.5
+        else:
+            ay = _first_y(head, shoulders, hips)
+            conf = (head_conf if head is not None else sh_conf) * 0.7
+    elif framing == "full_body":
+        # Centre of the person ≈ the hips (mid-height of a standing body, ~the
+        # bbox centre).  Gate strictly on the hips: without them, conf 0 so the
+        # fused dot uses the stable bbox centre rather than jumping to the
+        # shoulders.
+        if hips is not None:
+            ay = hips[1]
+            conf = hip_conf
+        else:
+            ay = _first_y(shoulders, head)
+            conf = 0.0
+    else:  # upper_body (default) → chest, a touch below the shoulder line
+        if shoulders is not None and hips is not None:
+            ay = shoulders[1] + (hips[1] - shoulders[1]) * 0.20
+            conf = sh_conf
+        elif shoulders is not None:
+            ay = shoulders[1]
+            conf = sh_conf
+        else:
+            ay = _first_y(head, hips)
+            conf = head_conf if head is not None else 0.0
+
+    if ay is None:
+        return None, 0.0
+    return (ax, ay), max(0.0, min(1.0, conf))
 
 
 def subject_height_from_pose(

@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from autoptz.ui import theme as T
 from autoptz.ui.widgets.common import (
+    AccentButton,
     IconButton,
     data_uri_to_pixmap,
     on_theme_changed,
@@ -66,7 +67,7 @@ class PersonDetailDialog(QDialog):
         col.addWidget(self._title)
 
         hint = QLabel(
-            "Click a photo to make it the profile picture, or ✕ to remove it. The "
+            "Click a photo to make it the profile picture, or use its remove button. The "
             "engine also gathers fresh shots automatically while the person is on "
             "camera, so this gallery keeps improving on its own."
         )
@@ -85,8 +86,7 @@ class PersonDetailDialog(QDialog):
         col.addWidget(scroll, 1)
 
         controls = QHBoxLayout()
-        add = QPushButton("➕  Add photo…")
-        add.setProperty("accent", True)
+        add = AccentButton("Add photo...")
         add.setToolTip("Import an image file as a profile/gallery photo for this person.")
         add.clicked.connect(self._add_photo)
         controls.addWidget(add)
@@ -180,7 +180,7 @@ class PersonDetailDialog(QDialog):
             row.addWidget(setp)
         row.addStretch(1)
         # The single, consistent delete affordance (small icon, red on hover).
-        rm = IconButton("🗑", tip="Remove this photo", danger=True, size=24)
+        rm = IconButton("x", tip="Remove this photo", danger=True, size=24)
         rm.clicked.connect(
             lambda *_a, idx=index: self._client.removeIdentityPhoto(self._identity_id, idx))
         row.addWidget(rm)

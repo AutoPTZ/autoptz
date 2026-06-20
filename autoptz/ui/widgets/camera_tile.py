@@ -55,6 +55,7 @@ _NUDGE_SPEED = 0.65
 _FB_HANDLE_HIT = 11.0
 _FB_MIN = 0.03
 _FB_MAX = 0.9
+_FB_CENTER_SNAP = 0.04
 # The 8 resize handles, as (name, x-sign, y-sign) where sign ∈ {-1,0,1} relative
 # to the box centre.  Corners drive both axes; edges drive one.
 _FB_HANDLES = (
@@ -74,8 +75,8 @@ _POSE_EDGES = (
     (11, 13), (13, 15), (12, 14), (14, 16),
     (0, 1), (0, 2), (1, 3), (2, 4), (0, 5), (0, 6),
 )
-# Arm limbs (shoulder→elbow→wrist) — drawn dimmed when "Ignore arms" is on, so
-# the skeleton visibly reflects that the aim/zoom is disregarding them.
+# Arm limbs (shoulder→elbow→wrist) — hidden when "Ignore arms" is on, so the
+# skeleton visibly reflects that the aim/zoom is disregarding them.
 _POSE_ARM_EDGES = frozenset({(5, 7), (7, 9), (6, 8), (8, 10)})
 _POSE_ARM_JOINTS = frozenset({7, 8, 9, 10})  # elbows + wrists
 _POSE_MIN_CONF = 0.3
@@ -85,11 +86,15 @@ _POSE_MIN_CONF = 0.3
 # avoids the "too smooth but not true" look caused by endless per-paint EMA.
 _BOX_INTERP_S = 0.09
 _BOX_JUMP_FRAC = 0.22
-# Motion-prediction indicator: how many frames ahead to project the velocity for
-# the lead arrow + ghost box, and the minimum motion (px) before it's drawn.
-_PREDICT_LEAD_FRAMES = 8.0
-_PREDICT_MIN_PX = 5.0
-_PREDICT_SMOOTH_A = 0.18
+# Motion-prediction indicator: how far ahead (seconds) to project the aim-point
+# velocity for the lead arrow + ghost box, plus gates that keep it calm.  Working
+# in seconds (not frames) makes the lead frame-rate independent; the persistence
+# + min-speed gates stop it flicking on detection jitter.
+_PREDICT_LEAD_S = 0.30          # project the aim ~0.3 s ahead
+_PREDICT_SMOOTH_A = 0.20        # EMA weight on the normalized aim velocity
+_PREDICT_MIN_SPEED = 0.05       # min normalized speed (fraction/s) before drawing
+_PREDICT_PERSIST = 3            # consecutive moving frames required before drawing
+_PREDICT_MIN_PX = 6.0           # and a floor in painted px so it never micro-jitters
 _PREDICT_MAX_BOX_FACTOR = 0.85
 _REORDER_DRAG_PX = 8.0
 
@@ -125,14 +130,19 @@ class CameraTile(QWidget):
         self._fb_drag: str | None = None
         self._fb_live: tuple[float, float] | None = None
         self._fb_center_live: tuple[float, float] | None = None
+        self._fb_move_offset: tuple[float, float] | None = None
         self._empty_press_pos: QPointF | None = None
         self._empty_press_global: object | None = None
         self._reorder_dragging = False
         # Per-track interpolation state. Each entry stores the previous drawn box,
         # latest telemetry box, telemetry sequence, and transition start time.
         self._box_smooth: dict[int, dict[str, Any]] = {}
-        # Per-track smoothed prediction velocity (normalized fraction/frame).
-        self._pred_smooth: dict[int, tuple[float, float]] = {}
+        # Motion-prediction state, all in normalized [0,1] frame space so it's
+        # resolution- and zoom-independent.  Driven by the framing-aware aim
+        # point (not the raw detection box) so it stays calm and on-body.
+        self._pred_smooth: dict[int, tuple[float, float]] = {}   # smoothed vel /s
+        self._pred_prev: dict[int, tuple[float, float, float, int]] = {}  # ax, ay, ts, seq
+        self._pred_hits: dict[int, int] = {}  # consecutive frames of real motion
         self._target_choices: list[tuple[str, str]] = [("Anyone", "")]
         self._hover = False
 
@@ -729,10 +739,14 @@ class CameraTile(QWidget):
         if r.width() < 8 or r.height() < 8:
             return
         hw, hh = self._fb_live or self._framing_extents(self._record()) or (0.15, 0.22)
-        x = (pos.x() - r.center().x()) / (r.width() / 2.0)
-        y = -((pos.y() - r.center().y()) / (r.height() / 2.0))
+        off_x, off_y = self._fb_move_offset or (0.0, 0.0)
+        center = QPointF(pos.x() + off_x, pos.y() + off_y)
+        x = (center.x() - r.center().x()) / (r.width() / 2.0)
+        y = -((center.y() - r.center().y()) / (r.height() / 2.0))
         x = max(-1.0 + hw, min(1.0 - hw, x))
         y = max(-1.0 + hh, min(1.0 - hh, y))
+        x = _snap_center_axis(x)
+        y = _snap_center_axis(y)
         self._fb_center_live = (x, y)
         self.update()
 
@@ -743,6 +757,7 @@ class CameraTile(QWidget):
         rec = self._record()
         hw, hh = self._fb_live or self._framing_extents(rec) or (0.15, 0.22)
         cx, cy = self._fb_center_live or self._framing_center(rec)
+        cx, cy = _snap_center_axis(cx), _snap_center_axis(cy)
         try:
             self._client.updateCameraConfigPatch(
                 self.camera_id,
@@ -758,6 +773,7 @@ class CameraTile(QWidget):
         self._fb_drag = None
         self._fb_live = None
         self._fb_center_live = None
+        self._fb_move_offset = None
 
     def _map_bbox(self, bbox: dict[str, float]) -> QRectF:
         """Normalized (0–1) bbox → widget pixels within the painted video rect."""
@@ -807,27 +823,72 @@ class CameraTile(QWidget):
             src.height() + (dst.height() - src.height()) * a,
         )
 
+    @staticmethod
+    def _normalized_aim(t: dict[str, Any]) -> tuple[float, float]:
+        """The track's framing-aware aim point in normalized [0,1] frame space.
+
+        Falls back to the detection-box centre when no aim telemetry is present
+        (pose off / non-target), so the prediction still has an anchor."""
+        aim = t.get("aim")
+        if isinstance(aim, dict) and aim.get("x") is not None and aim.get("y") is not None:
+            return float(aim.get("x", 0.5)), float(aim.get("y", 0.5))
+        bb = t.get("bbox") or {}
+        cx = (float(bb.get("x1", 0.0)) + float(bb.get("x2", 0.0))) * 0.5
+        cy = (float(bb.get("y1", 0.0)) + float(bb.get("y2", 0.0))) * 0.5
+        return cx, cy
+
     def _paint_prediction(self, p: QPainter, t: dict[str, Any], rect: QRectF,
-                          color: QColor, origin: QPointF | None = None) -> None:
+                          color: QColor, origin: QPointF | None = None,
+                          seq: int = 0) -> None:
         """Draw the motion-prediction indicator: a lead arrow + a ghost box.
 
-        Uses the engine's per-track velocity (normalized fraction/frame) projected
-        ``_PREDICT_LEAD_FRAMES`` ahead, so the operator can SEE the camera is
-        anticipating where the subject is heading (not just trailing them)."""
+        Driven by the framing-aware *aim point* (engine-smoothed, normalized),
+        projected ``_PREDICT_LEAD_S`` seconds ahead — not the raw detection box.
+        It only appears after the subject has been moving for a few frames, so it
+        glides ahead of a walking person instead of flicking on every detection
+        or ID switch.  Because it follows the aim point, the Frame-on setting
+        moves it just like the reticle.
+
+        Velocity is resampled only when the telemetry ``seq`` advances, so the
+        faster repaint timer can't dilute the motion estimate with zero-delta
+        samples between engine frames."""
         if bool(t.get("lost")):
             return
         tid = t.get("track_id")
-        raw_vx = float(t.get("vx", 0.0) or 0.0)
-        raw_vy = float(t.get("vy", 0.0) or 0.0)
-        prev = self._pred_smooth.get(tid, (0.0, 0.0))
-        a = _PREDICT_SMOOTH_A
-        vx = prev[0] + (raw_vx - prev[0]) * a
-        vy = prev[1] + (raw_vy - prev[1]) * a
-        self._pred_smooth[tid] = (vx, vy)
 
+        ax, ay = self._normalized_aim(t)
+        now = time.monotonic()
+        prev = self._pred_prev.get(tid)
+        if prev is None:
+            self._pred_prev[tid] = (ax, ay, now, seq)
+            return
+        px, py, pts, pseq = prev
+        if seq != pseq:
+            # A genuinely new engine sample → update the velocity estimate.
+            self._pred_prev[tid] = (ax, ay, now, seq)
+            dt = now - pts
+            if dt <= 1e-3 or dt > 0.5:
+                # First frame, or a long gap (paused / occluded) — don't trust Δ.
+                self._pred_hits[tid] = 0
+                return
+            a = _PREDICT_SMOOTH_A
+            svx, svy = self._pred_smooth.get(tid, (0.0, 0.0))
+            svx += ((ax - px) / dt - svx) * a   # normalized fraction/s
+            svy += ((ay - py) / dt - svy) * a
+            self._pred_smooth[tid] = (svx, svy)
+            # Persistence gate: only draw once motion is real and sustained.
+            speed = (svx * svx + svy * svy) ** 0.5
+            self._pred_hits[tid] = (self._pred_hits.get(tid, 0) + 1
+                                    if speed >= _PREDICT_MIN_SPEED else 0)
+        # else: a repaint between engine frames — reuse the last velocity/hits.
+
+        if self._pred_hits.get(tid, 0) < _PREDICT_PERSIST:
+            return
+
+        svx, svy = self._pred_smooth.get(tid, (0.0, 0.0))
         r = self._painted_rect
-        dx = vx * r.width() * _PREDICT_LEAD_FRAMES
-        dy = vy * r.height() * _PREDICT_LEAD_FRAMES
+        dx = svx * _PREDICT_LEAD_S * r.width()
+        dy = svy * _PREDICT_LEAD_S * r.height()
         if (dx * dx + dy * dy) < _PREDICT_MIN_PX * _PREDICT_MIN_PX:
             return
         import math
@@ -862,7 +923,7 @@ class CameraTile(QWidget):
         try:
             return self._client.overlays()
         except Exception:  # noqa: BLE001
-            return {"detection": True, "faces": False, "pose": False}
+            return {"detection": True, "faces": False, "pose": False, "prediction": False}
 
     def _on_overlays_changed(self) -> None:
         self._overlays = self._read_overlays()
@@ -878,6 +939,8 @@ class CameraTile(QWidget):
         ids = {t.get("track_id") for t in tracks}
         self._box_smooth = {k: v for k, v in self._box_smooth.items() if k in ids}
         self._pred_smooth = {k: v for k, v in self._pred_smooth.items() if k in ids}
+        self._pred_prev = {k: v for k, v in self._pred_prev.items() if k in ids}
+        self._pred_hits = {k: v for k, v in self._pred_hits.items() if k in ids}
         target = None
         for t in tracks:
             if t.get("is_target"):
@@ -918,8 +981,7 @@ class CameraTile(QWidget):
         """Draw the target's COCO-17 pose skeleton (sky-blue), if available.
 
         When the camera's aim body mode is "torso" (Ignore arms), the arm limbs
-        are drawn dimmed + dashed so the skeleton visibly shows what the aim/zoom
-        is disregarding — tying the "Ignore arms" toggle to the pose on screen.
+        and joints are hidden so the overlay matches the aim/zoom source.
         """
         kps = _pose(rec)
         if len(kps) < 17:
@@ -933,27 +995,27 @@ class CameraTile(QWidget):
         ]
         ignore_arms = _ignore_arms(rec)
         solid = QPen(QColor(T.POSE), 2)
-        dim_color = QColor(T.POSE); dim_color.setAlphaF(0.32)
-        dim = QPen(dim_color, 1.4, Qt.PenStyle.DashLine)
         p.save()
         for a, b in _POSE_EDGES:
             if a < len(pts) and b < len(pts):
+                if ignore_arms and (a, b) in _POSE_ARM_EDGES:
+                    continue
                 xa, ya, ca = pts[a]
                 xb, yb, cb = pts[b]
                 if ca >= _POSE_MIN_CONF and cb >= _POSE_MIN_CONF:
-                    arm = (a, b) in _POSE_ARM_EDGES
-                    p.setPen(dim if (ignore_arms and arm) else solid)
+                    p.setPen(solid)
                     p.drawLine(QPointF(xa, ya), QPointF(xb, yb))
         p.setPen(Qt.PenStyle.NoPen)
         for i, (x, y, c) in enumerate(pts):
             if c >= _POSE_MIN_CONF:
-                p.setBrush(dim_color if (ignore_arms and i in _POSE_ARM_JOINTS)
-                           else QColor(T.POSE))
+                if ignore_arms and i in _POSE_ARM_JOINTS:
+                    continue
+                p.setBrush(QColor(T.POSE))
                 p.drawEllipse(QPointF(x, y), 2.5, 2.5)
         p.restore()
 
     def _paint_box(self, p: QPainter, t: dict[str, Any], seq: int) -> None:
-        rect = self._smoothed_rect(t.get("track_id"), self._map_bbox(t.get("bbox", {})), seq)
+        rect = self._map_bbox(t.get("bbox", {}))
         if rect.width() < 2 or rect.height() < 2:
             return
         p.save()
@@ -968,7 +1030,7 @@ class CameraTile(QWidget):
         p.restore()
 
     def _paint_target(self, p: QPainter, t: dict[str, Any], live: bool, seq: int) -> None:
-        rect = self._smoothed_rect(t.get("track_id"), self._map_bbox(t.get("bbox", {})), seq)
+        rect = self._map_bbox(t.get("bbox", {}))
         if rect.width() < 2 or rect.height() < 2:
             return
         lost = bool(t.get("lost"))
@@ -983,21 +1045,18 @@ class CameraTile(QWidget):
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(rect)
-        if not lost:
-            self._draw_brackets(p, rect, accent)
-            # Motion-prediction indicator (only meaningful while actively following).
-            if live:
-                self._paint_prediction(p, t, rect, accent, self._target_aim_point(t, rect))
-        # pulsing reticle at centre (tinted to the state)
+        if not lost and live and self._overlays.get("prediction", False):
+            self._paint_prediction(p, t, rect, accent,
+                                   self._target_aim_point(t, rect), seq)
+        # PTZ aim dot (telemetry-smoothed aim point, not raw bbox/body debug).
         aim_pt = self._target_aim_point(t, rect)
         cx, cy = aim_pt.x(), aim_pt.y()
-        phase = (time.monotonic() % 1.1) / 1.1
-        radius = 10 + 5 * (1 - abs(0.5 - phase) * 2)
         ring = QColor(accent); ring.setAlphaF(0.8)
-        p.setPen(QPen(ring, 1.5))
-        p.drawEllipse(QPointF(cx, cy), radius, radius)
-        p.drawLine(QPointF(cx - 6, cy), QPointF(cx + 6, cy))
-        p.drawLine(QPointF(cx, cy - 6), QPointF(cx, cy + 6))
+        p.setPen(QPen(ring, 2.0))
+        p.setBrush(QColor(accent))
+        p.drawEllipse(QPointF(cx, cy), 4.5, 4.5)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(QPointF(cx, cy), 9.0, 9.0)
         # lock label — its pill matches the state; "searching" while coasting.
         conf = t.get("confidence")
         ident = t.get("identity") or f"ID {t.get('track_id', '?')}"
@@ -1157,6 +1216,7 @@ class CameraTile(QWidget):
         self._empty_press_pos = None
         self._empty_press_global = None
         self._reorder_dragging = False
+        self._fb_move_offset = None
         if event.button() == Qt.MouseButton.LeftButton:
             # Grabbing a framing-box handle (only when this tile is selected and
             # the press lands on a handle) starts a resize and takes priority over
@@ -1166,6 +1226,19 @@ class CameraTile(QWidget):
                 self._fb_drag = handle
                 self._fb_live = self._framing_extents(self._record())
                 self._fb_center_live = self._framing_center(self._record())
+                event.accept()
+                return
+            if self._framing_move_hit(event.position(), self._record()):
+                self._fb_drag = "move"
+                self._fb_live = self._framing_extents(self._record())
+                self._fb_center_live = self._framing_center(self._record())
+                box = self._framing_box_rect(self._record())
+                if box is not None:
+                    self._fb_move_offset = (
+                        box.center().x() - event.position().x(),
+                        box.center().y() - event.position().y(),
+                    )
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 event.accept()
                 return
             track_id, is_target = self._hit_test_track(event.position())
@@ -1184,18 +1257,10 @@ class CameraTile(QWidget):
                 self._refresh_overlay_state()
                 event.accept()
                 return
-            if self._framing_move_hit(event.position(), self._record()):
-                self._fb_drag = "move"
-                self._fb_live = self._framing_extents(self._record())
-                self._fb_center_live = self._framing_center(self._record())
-                self.setCursor(Qt.CursorShape.ClosedHandCursor)
-                event.accept()
-                return
-            else:
-                self._empty_press_pos = QPointF(event.position())
-                self._empty_press_global = event.globalPosition().toPoint()
-                event.accept()
-                return
+            self._empty_press_pos = QPointF(event.position())
+            self._empty_press_global = event.globalPosition().toPoint()
+            event.accept()
+            return
         else:
             # Non-left (e.g. right-click for the menu): select, never toggle off.
             self.selectExclusiveRequested.emit(self.camera_id)
@@ -1355,8 +1420,9 @@ class CameraTile(QWidget):
         click = self._normalized_video_point(click_pos)
         track_box = track.get("bbox", {})
         face_box = self._face_bbox_for_preview(rec, track_box, click)
-        crop_box = face_box or _upper_body_bbox(track_box)
-        return self._crop_preview(img, crop_box, pad=0.28 if face_box else 0.10)
+        # No detected face → frame the head region, not the whole person/frame.
+        crop_box = face_box or _head_bbox(track_box)
+        return self._crop_preview(img, crop_box, pad=0.28 if face_box else 0.18)
 
     def _face_bbox_for_preview(
         self,
@@ -1635,6 +1701,12 @@ def _ignore_arms(rec: Any) -> bool:
         return True
 
 
+def _snap_center_axis(value: float) -> float:
+    """Snap a framing center axis to exact zero within the 4% threshold."""
+    value = float(value)
+    return 0.0 if abs(value) <= _FB_CENTER_SNAP else value
+
+
 def _norm_bbox_contains(box: dict[str, float], x: float, y: float) -> bool:
     return (
         float(box.get("x1", 0.0)) <= x <= float(box.get("x2", 0.0))
@@ -1648,6 +1720,21 @@ def _upper_body_bbox(box: dict[str, float]) -> dict[str, float]:
     x2 = float(box.get("x2", 0.0))
     y2 = float(box.get("y2", 0.0))
     return {"x1": x1, "y1": y1, "x2": x2, "y2": y1 + (y2 - y1) * 0.62}
+
+
+def _head_bbox(box: dict[str, float]) -> dict[str, float]:
+    """Approximate the head/face region from a person box (no face detection).
+
+    Top ~30% of the box, narrowed to the central ~70% horizontally, so the
+    enroll preview frames *this person's* face rather than the whole frame when
+    the subject fills the view and no face box is available."""
+    x1 = float(box.get("x1", 0.0))
+    y1 = float(box.get("y1", 0.0))
+    x2 = float(box.get("x2", 0.0))
+    y2 = float(box.get("y2", 0.0))
+    cx = (x1 + x2) * 0.5
+    half_w = (x2 - x1) * 0.35
+    return {"x1": cx - half_w, "y1": y1, "x2": cx + half_w, "y2": y1 + (y2 - y1) * 0.30}
 
 
 def _rect_close(a: QRectF, b: QRectF) -> bool:

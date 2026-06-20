@@ -44,7 +44,7 @@ class TrackInfo(BaseModel):
     # matches PTZ control instead of the geometric box center.
     aim_x: float | None = None
     aim_y: float | None = None
-    aim_source: str = ""  # "pose", "bbox", "silhouette", or ""
+    aim_source: str = ""  # "pose", "fused", "bbox", "silhouette", or ""
 
 
 class FaceBox(BaseModel):
@@ -80,6 +80,74 @@ class HealthState(str, Enum):
 class HealthInfo(BaseModel):
     state: HealthState = HealthState.OK
     last_error: str | None = None
+
+
+class RuntimeServiceInfo(BaseModel):
+    """One configured/runtime service row for transparent diagnostics."""
+
+    key: str = ""
+    name: str = ""
+    scope: str = "camera"  # "global" or "camera"
+    configured: str = ""
+    enabled: bool = True
+    active: bool = False
+    state: str = "idle"  # active / disabled / warming / stale / idle
+    detail: str = ""
+    model: str = ""
+    tier: str = ""
+    backend: str = ""
+    ep: str = ""
+    confidence: str = ""
+
+
+class StageTimingInfo(BaseModel):
+    """Rolling runtime timing for a stage such as ingest/detect/track/face."""
+
+    key: str = ""
+    name: str = ""
+    status: str = "idle"  # active / disabled / warming / stale / idle
+    last_ms: float = 0.0
+    avg_ms: float = 0.0
+    p95_ms: float = 0.0
+    cadence: str = ""
+    fresh: bool = False
+    age_ms: float = 0.0
+    budget_pct: float = 0.0
+    detail: str = ""
+
+
+class QualityStateInfo(BaseModel):
+    """Effective adaptive quality state and operator-facing reason."""
+
+    floor: str = "auto"
+    active: str = "auto"
+    reason: str = ""
+    detector_tier: str = ""
+    detector_model: str = ""
+    tracker: str = ""
+    detect_interval: int = 1
+
+
+class SwitchStateInfo(BaseModel):
+    """Current or most-recent hot-swap state for detector/tracker changes."""
+
+    kind: str = ""
+    state: str = "idle"  # idle / warming / active / failed / rolled_back
+    from_value: str = ""
+    to_value: str = ""
+    active_value: str = ""
+    reason: str = ""
+    ts: float = 0.0
+    error: str = ""
+
+
+class RuntimeEventInfo(BaseModel):
+    """Recent runtime event shown in diagnostics/history."""
+
+    ts: float = Field(default_factory=time.time)
+    kind: str = ""
+    level: str = "info"
+    message: str = ""
 
 
 class TelemetryMsg(BaseModel):
@@ -122,6 +190,19 @@ class TelemetryMsg(BaseModel):
     # readings are not reported as caps, so the UI does not present them as the
     # camera's real maximum.
     source_fps_cap: float = 0.0
+    # Effective requested capture/inference rate and derived frame budget. These
+    # make "30 fps ≈ 33 ms/frame" explicit in diagnostics instead of overloading
+    # vague load labels.
+    target_fps: float = 0.0
+    frame_budget_ms: float = 0.0
+    # Layered runtime transparency. These are additive: older UI paths keep using
+    # the scalar ms/model fields, newer diagnostics read the structured rows.
+    runtime_services: list[RuntimeServiceInfo] = Field(default_factory=list)
+    stage_timings: list[StageTimingInfo] = Field(default_factory=list)
+    quality_state: QualityStateInfo = Field(default_factory=QualityStateInfo)
+    model_switch: SwitchStateInfo | None = None
+    tracker_switch: SwitchStateInfo | None = None
+    runtime_events: list[RuntimeEventInfo] = Field(default_factory=list)
     tracks: list[TrackInfo] = Field(default_factory=list)
     # Optional overlay payloads — populated only when the matching subsystem ran
     # this tick (faces a few Hz, pose for the single target).  The UI draws them

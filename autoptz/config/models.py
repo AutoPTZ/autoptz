@@ -64,12 +64,14 @@ class ReconnectConfig(BaseModel, frozen=True):
 
 class TrackingConfig(BaseModel, frozen=True):
     tracker: Literal["botsort", "deepocsort", "bytetrack"] = "botsort"
-    # User-facing target-retention policy. ``stable`` prefers identity/appearance
-    # evidence before rebinding a selected target after occlusion/crossing;
-    # ``responsive`` follows the freshest track with less hysteresis.
+    # User-facing target-retention policy and the single per-camera ReID control.
+    # ``stable`` uses appearance ReID (gated by the global "reid" feature) to hold
+    # the selected target through occlusions/crossings; ``responsive`` follows the
+    # freshest track with no ReID hold and less delay.  (Replaces the old separate
+    # ``reid_enabled`` flag, which contradicted this mode; legacy configs that
+    # still carry ``reid_enabled`` simply ignore it.)
     tracking_mode: Literal["stable", "responsive"] = "stable"
     detect_interval: int = Field(default=1, ge=1, le=30)
-    reid_enabled: bool = False
     # Appearance (OSNet) re-acquisition thresholds.  ``hi`` enters a recovery
     # lock, ``lo`` maintains it (hysteresis).  Tuned down from the original
     # 0.70/0.45 — body crops rarely clear 0.70, so recovery used to never fire;

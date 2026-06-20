@@ -44,6 +44,11 @@ from autoptz.engine.runtime.messages import (
     HealthState,
     PoseKeypoint,
     PTZState,
+    QualityStateInfo,
+    RuntimeEventInfo,
+    RuntimeServiceInfo,
+    StageTimingInfo,
+    SwitchStateInfo,
     TelemetryMsg,
     TrackInfo,
 )
@@ -69,6 +74,10 @@ _MANUAL_OVERRIDE_WINDOW_S = 1.5
 # region (per docs/03 §3.8), not every frame.  Period in seconds.
 _FACE_INTERVAL_S = 0.25
 _FACE_TTL_S = 0.12
+_STAGE_WINDOW = 60
+_STAGE_FRESH_S = 2.0
+_EVENT_MAX = 12
+_FPS_LOG_DELTA = 0.25
 
 # ── auto-harvest quality gates ───────────────────────────────────────────────────
 # Auto-harvesting a NEW "Person N" is deliberately strict so the user rarely has
@@ -123,18 +132,6 @@ _REID_INTERVAL_S = 0.25
 # smoothing so noisy keypoint regression doesn't jitter the framing.
 _POSE_AIM_ALPHA = 0.4
 
-# Map the unified ``tracking.framing`` preset onto a pose torso bias (see
-# framing.torso_aim_point).  face→head/shoulders, upper_body→shoulders,
-# full_body→shoulder↔hip midpoint.  The four names line up 1:1 with the
-# AIM_REGION_FRACTION keys, so the same value drives both the bbox-fallback aim
-# fraction and the pose torso anchor.
-_AIM_REGION_POSE_BIAS: dict[str, str] = {
-    "face": "face",
-    "head_shoulders": "head_shoulders",
-    "upper_body": "upper_body",
-    "full_body": "full_body",
-}
-
 # Default feature switches — every subsystem on until the supervisor pushes a
 # narrower set via ``set_features``.
 _DEFAULT_FEATURES: dict[str, bool] = {
@@ -142,6 +139,9 @@ _DEFAULT_FEATURES: dict[str, bool] = {
     "tracking": True,
     "face_recognition": True,
     "pose": True,
+    # Global master switch for appearance ReID. A camera only runs ReID when this
+    # is on AND its tracking_mode is "stable" (see ``_reid_active``).
+    "reid": True,
 }
 
 
@@ -196,17 +196,20 @@ class _AdapterFrameSource:
 
     def __init__(self, adapter: Any) -> None:
         self._adapter = adapter
-        self._last_read_t = 0.0
+        # Next wall-clock instant a read should fire (monotonic seconds). 0.0 =
+        # cadence not yet started / needs a resync on the next read.
+        self._next_deadline = 0.0
 
     def open(self) -> bool:
-        return bool(self._adapter._open())
+        ok = bool(self._adapter._open())
+        # Restart the pacing cadence cleanly after every (re)connect so a stall
+        # gap doesn't leave a stale deadline that bursts catch-up frames.
+        self._next_deadline = 0.0
+        return ok
 
     def read(self) -> NDArray[np.uint8] | None:
         self._pace_read()
-        frame = self._adapter._read_frame()
-        if frame is not None:
-            self._last_read_t = time.monotonic()
-        return frame
+        return self._adapter._read_frame()
 
     def close(self) -> None:
         try:
@@ -219,15 +222,44 @@ class _AdapterFrameSource:
         fn = getattr(self._adapter, "set_target_fps", None)
         if callable(fn):
             fn(fps)
+        # Re-anchor the cadence so the new rate takes effect from the next frame
+        # rather than inheriting the old deadline.
+        self._next_deadline = 0.0
 
     def _pace_read(self) -> None:
-        """Throttle worker-owned direct reads to the adapter's target fps."""
+        """Pace worker-owned reads to the adapter's target fps with a deadline
+        accumulator.
+
+        The previous implementation slept a full ``1/target`` period measured
+        from when the *previous read completed*, then ``_read_frame`` blocked
+        again waiting for the next hardware frame — the two stacked and roughly
+        halved the delivered rate (slider 30 → ~15, 15 → ~10).
+
+        Instead we advance a fixed ``next_deadline`` by one period each frame and
+        only sleep until that instant.  A read that blocks (OpenCV) or the rest
+        of the worker loop absorbs into the period instead of adding to it: when
+        the target meets/exceeds the source rate we never sleep and the hardware
+        paces us; when the target is lower we throttle down to exactly it.
+        """
         target = float(getattr(self._adapter, "_target_fps", 0.0) or 0.0)
-        if target <= 0.0 or self._last_read_t <= 0.0:
+        if target <= 0.0:
+            self._next_deadline = 0.0
             return
-        wait = (1.0 / max(1.0, target)) - (time.monotonic() - self._last_read_t)
+        period = 1.0 / max(1.0, target)
+        now = time.monotonic()
+        if self._next_deadline <= 0.0:
+            # First frame after (re)connect or rate change: anchor from now.
+            self._next_deadline = now + period
+            return
+        wait = self._next_deadline - now
         if wait > 0.001:
             time.sleep(wait)
+            now = self._next_deadline
+        self._next_deadline += period
+        # If we've fallen more than a period behind (slow read / stall / paused
+        # worker), resync to the present so we don't fire a burst of frames.
+        if self._next_deadline < now - period:
+            self._next_deadline = now + period
 
     def source_fps_cap(self) -> float | None:
         """Return the adapter's detected hardware fps ceiling, or ``None``."""
@@ -547,8 +579,9 @@ def _build_detect_stack(config: CameraConfig) -> _DetectStack | None:
         # at update() time, so the tracker runs motion-only (robust).  Appearance
         # ReID instead lives in a separate, gated recovery layer
         # (``_maybe_reid_recover`` + ``pipeline.reid.BodyReID``): when
-        # ``config.tracking.reid_enabled`` is on it re-binds the target onto the
-        # right track after an occlusion.  Identity stability also comes from
+        # ``_reid_active`` (global "reid" feature + stable mode) it re-binds the
+        # target onto the right track after an occlusion.  Identity stability
+        # also comes from
         # face-recognition de-duplication in ``_maybe_identify`` (one person → one
         # identity regardless of track-ID churn).
         tracker = Tracker(
@@ -684,8 +717,13 @@ class CameraWorker:
         self._last_pose_overlay_frame_id = 0
         self._last_pose_emitted_frame_id = -1
         self._aim_smoother: Any | None = None  # framing.AimSmoother (lazy)
+        self._last_aim_framing = ""             # Frame-on at the last aim tick
+        # Per-frame memo of the fused aim so _track_error (called by both the PTZ
+        # loop and the aim-dot annotation each tick) advances the smoother once.
+        self._aim_cache: tuple[float, int, tuple[float, float], float,
+                               float, float, str] | None = None
 
-        # ── appearance ReID recovery (lazy, gated on tracking.reid_enabled) ───────
+        # ── appearance ReID recovery (lazy, gated on _reid_active) ────────────────
         # OSNet body-appearance matcher used to re-bind the target onto the right
         # track after an occlusion (built lazily; ``_reid_probed`` stops us from
         # re-attempting a failed/missing-boxmot build every tick).  The template is
@@ -752,6 +790,9 @@ class CameraWorker:
         self._detect: _DetectStack | None = None
         self._pooled_detector = False
         self._detect_frame_index = 0
+        # Last detections, re-fed to the tracker on detector-skip frames (when
+        # detect_interval > 1) so tracks don't age out into "no boxes".
+        self._last_detections: list[Any] = []
 
         self._seq = 0
         self._fps = 0.0
@@ -766,6 +807,7 @@ class CameraWorker:
         # Per-frame processing latency (ingest read + detect + track wall time)
         # in milliseconds, published in telemetry for the live stats overlay.
         self._latency_ms = 0.0
+        self._inference_ms = 0.0
         self._ingest_ms = 0.0
         self._detect_ms = 0.0
         self._track_ms = 0.0
@@ -773,6 +815,17 @@ class CameraWorker:
         # executed (both are throttled, so they hold between runs).
         self._face_ms = 0.0
         self._pose_ms = 0.0
+        self._stage_samples: dict[str, deque[float]] = {
+            key: deque(maxlen=_STAGE_WINDOW)
+            for key in ("ingest", "detect", "track", "face", "pose", "reid")
+        }
+        self._stage_last_t: dict[str, float] = {}
+        self._runtime_events: deque[RuntimeEventInfo] = deque(maxlen=_EVENT_MAX)
+        self._tracker_switch: SwitchStateInfo | None = None
+        self._last_applied_fps: float | None = None
+        self._quality_active = "auto"
+        self._quality_reason = "Auto quality monitoring."
+        self._quality_interval = max(1, int(getattr(config.tracking, "detect_interval", 1) or 1))
 
         # Periodic diagnostics bookkeeping: when the next dropped-frame summary
         # is due (monotonic seconds) and the count last reported, so we only log
@@ -877,6 +930,11 @@ class CameraWorker:
         """
         self._pool = pool
 
+    def refresh_detector_from_pool(self) -> None:
+        """Point this worker at the pool's current detector after a hot-swap."""
+        with self._cmd_lock:
+            self._cmd_queue.append(("refresh_detector", None))
+
     def set_inference_start_paused(self, paused: bool) -> None:
         """Pause/release heavy inference startup while preview/capture opens."""
         if paused:
@@ -979,6 +1037,8 @@ class CameraWorker:
                 self._track_identity[int(track_id)] = (identity_id, name, 1.0)
         elif kind == "update_config":
             prev_fps = getattr(self.config.source, "fps", None)
+            prev_tracker = getattr(self.config.tracking, "tracker", "")
+            prev_mode = getattr(self.config.tracking, "tracking_mode", "stable")
             self.config = payload
             # Apply an fps change from a full-config push live too, so the UI's
             # fps slider takes effect whether it routes through updateCameraConfig
@@ -986,6 +1046,18 @@ class CameraWorker:
             new_fps = getattr(payload.source, "fps", None)
             if new_fps is not None and new_fps != prev_fps:
                 self._apply_target_fps(float(new_fps))
+            new_tracker = getattr(payload.tracking, "tracker", "")
+            if new_tracker and new_tracker != prev_tracker:
+                self._rebuild_tracker(prev_tracker, new_tracker, reason="setting changed")
+            new_mode = getattr(payload.tracking, "tracking_mode", "stable")
+            if new_mode != prev_mode:
+                # Mode now drives ReID: stable holds via ReID, responsive doesn't.
+                self._reset_reid()
+                self._add_event(
+                    "reid",
+                    f"Tracking mode set to {new_mode}: ReID "
+                    f"{'on' if new_mode == 'stable' else 'off'} for this camera.",
+                )
             # Push the new PTZ tuning to the live controller (gains, lead time,
             # smoothing, safe zone, loss-recovery) without an engine restart.  The
             # controller was built with the *old* cfg, so this keeps it current.
@@ -998,6 +1070,8 @@ class CameraWorker:
                               self.camera_id, exc_info=True)
         elif kind == "set_target_fps":
             self._apply_target_fps(float(payload))
+        elif kind == "refresh_detector":
+            self._refresh_detector_from_pool()
         elif kind == "save_ptz_preset":
             self._save_ptz_preset(int(payload))
         elif kind == "recall_ptz_preset":
@@ -1022,10 +1096,101 @@ class CameraWorker:
             return
         try:
             fn(fps)
-            log.info("camera_id=%s target fps set live to %.0f", self.camera_id, fps)
+            if (
+                self._last_applied_fps is None
+                or abs(self._last_applied_fps - float(fps)) >= _FPS_LOG_DELTA
+            ):
+                log.debug("camera_id=%s target fps set live to %.0f", self.camera_id, fps)
+                self._add_event("fps", f"FPS cap set to {fps:.0f}.")
+            self._last_applied_fps = float(fps)
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s set_target_fps failed", self.camera_id,
                       exc_info=True)
+
+    def _refresh_detector_from_pool(self) -> None:
+        """Replace the detector pointer with the pool's active detector."""
+        pool = self._pool
+        if pool is None:
+            return
+        try:
+            detector = pool.detector()
+        except Exception:  # noqa: BLE001
+            log.debug("camera_id=%s detector refresh from pool failed",
+                      self.camera_id, exc_info=True)
+            return
+        if detector is None:
+            self._add_event("detector", "Detector refresh failed; kept current model.",
+                            level="warning")
+            return
+        if self._detect is None:
+            self._detect = self._build_detect_stack_pooled()
+        elif self._pooled_detector:
+            self._detect.detector = detector
+            self._detect.ep = getattr(detector, "ep", "") or getattr(pool, "detector_ep", "")
+        self._ep = getattr(detector, "ep", "") or getattr(pool, "detector_ep", "")
+        model = getattr(pool, "detector_model_name", "") or getattr(pool, "detector_tier", "")
+        self._add_event("detector", f"Detector active: {model or self._ep or 'shared model'}.")
+
+    def _rebuild_tracker(self, old: str, new: str, *, reason: str = "") -> None:
+        """Apply a tracker backend change live, preserving identity targeting."""
+        now = time.time()
+        self._tracker_switch = SwitchStateInfo(
+            kind="tracker",
+            state="warming",
+            from_value=str(old or ""),
+            to_value=str(new or ""),
+            active_value=str(old or ""),
+            reason=reason or "Tracker setting changed.",
+            ts=now,
+        )
+        try:
+            from autoptz.engine.pipeline.track import Tracker
+
+            tracker = Tracker(
+                tracker_type=new,
+                coast_window=self.config.tracking.coast_window_ms / 1000.0,
+            )
+            if self._detect is None:
+                self._detect = self._build_detect_stack_pooled() or _build_detect_stack(self.config)
+            if self._detect is not None:
+                self._detect.tracker = tracker
+            # Manual track ids are backend-local and may not survive a rebuild.
+            # Identity targeting stays and will reacquire on the next face/ReID hit.
+            if self._target_identity_id is None:
+                self._target_track_id = None
+            self._track_identity.clear()
+            self._reset_pose_aim()
+            self._reset_reid()
+            self._tracker_switch = SwitchStateInfo(
+                kind="tracker",
+                state="active",
+                from_value=str(old or ""),
+                to_value=str(new or ""),
+                active_value=str(new or ""),
+                reason=reason or "Tracker setting changed.",
+                ts=time.time(),
+            )
+            if self._target_identity_id:
+                msg = f"Tracker switched to {new}; identity target will reacquire when seen."
+            else:
+                msg = f"Tracker switched to {new}; manual target cleared."
+            self._add_event("tracker", msg)
+            log.info("camera_id=%s tracker switched %s -> %s", self.camera_id, old, new)
+        except Exception as exc:  # noqa: BLE001
+            self._tracker_switch = SwitchStateInfo(
+                kind="tracker",
+                state="failed",
+                from_value=str(old or ""),
+                to_value=str(new or ""),
+                active_value=str(old or ""),
+                reason=reason or "Tracker setting changed.",
+                ts=time.time(),
+                error=str(exc),
+            )
+            self._add_event("tracker", f"Tracker switch to {new} failed; kept {old}.",
+                            level="warning")
+            log.warning("camera_id=%s tracker switch %s -> %s failed",
+                        self.camera_id, old, new, exc_info=True)
 
     def _save_ptz_preset(self, slot: int) -> None:
         """Store the current position into the backend's hardware preset *slot*.
@@ -1230,13 +1395,25 @@ class CameraWorker:
 
     # ── appearance ReID recovery ─────────────────────────────────────────────────
 
-    def _ensure_reid(self) -> Any | None:
-        """Lazily build the OSNet ReID matcher when enabled (None if unavailable).
+    def _reid_active(self) -> bool:
+        """Whether appearance ReID should run for this camera right now.
 
-        Gated on ``tracking.reid_enabled``; degrades gracefully to ``None`` when
+        Unified control: the global ``reid`` feature must be on AND the camera's
+        ``tracking_mode`` must be ``stable`` ("hold the target through crossings").
+        ``responsive`` follows the freshest detection with no ReID hold.
+        """
+        return (
+            self._feature("reid")
+            and getattr(self.config.tracking, "tracking_mode", "stable") == "stable"
+        )
+
+    def _ensure_reid(self) -> Any | None:
+        """Lazily build the OSNet ReID matcher when active (None if unavailable).
+
+        Gated on :meth:`_reid_active`; degrades gracefully to ``None`` when
         boxmot/torch/weights are absent so motion-only tracking still works.
         """
-        if not getattr(self.config.tracking, "reid_enabled", False):
+        if not self._reid_active():
             return None
         if self._reid is None and not self._reid_probed:
             self._reid_probed = True
@@ -1353,40 +1530,47 @@ class CameraWorker:
         if w <= 0 or h <= 0:
             return (0.0, 0.0), 0.0
 
+        # Per-frame memo: _track_error runs for BOTH the PTZ loop and the aim-dot
+        # annotation each tick — compute once so the fused-aim smoother advances a
+        # single step per frame (double-stepping doubled the speed/jitter).
+        if now is not None and self._aim_cache is not None:
+            c_now, c_tid, c_err, c_height, c_ax, c_ay, c_src = self._aim_cache
+            if c_now == now and c_tid == track.track_id:
+                if track.is_target:
+                    track.aim_x, track.aim_y, track.aim_source = c_ax, c_ay, c_src
+                return c_err, c_height
+
         bb = track.bbox
         bbox_height = (bb.y2 - bb.y1) / h
         # Arms toggle: "torso" ignores arms (steady pose-torso zoom span); any
         # other value ("full_silhouette") includes arms → zoom to the full box.
         ignore_arms = getattr(self.config.tracking, "aim_body_mode", "torso") == "torso"
+        framing_name = _resolve_framing(self.config.tracking)
 
-        aim: tuple[float, float] | None = None
-        subject_height = 0.0
-        aim_source = ""
+        # ── bbox anchor — always available (centre-x, framing fraction down) ─────
+        ax_bbox = (bb.x1 + bb.x2) * 0.5
+        ay_bbox = bb.y1 + (bb.y2 - bb.y1) * AIM_REGION_FRACTION.get(framing_name, 0.5)
+        ax, ay = ax_bbox, ay_bbox
+        subject_height = bbox_height
+        aim_source = "bbox"
 
+        # ── pose anchor (landmark-precise) FUSED with the bbox by confidence ─────
+        # No hard switch: the dot rides the body when pose is strong and leans on
+        # the box when it isn't, so it never snaps between the two.  now is None for
+        # pure-bbox callers / unit tests (deterministic, un-smoothed).
         if now is not None:
-            pose_aim, torso_height = self._pose_aim(track, frame, now)
-            if pose_aim is not None:
-                aim = pose_aim
-                aim_source = "pose"
-                # Zoom source follows the arms toggle; fall back to the box height
-                # when the torso span isn't available so we never zoom to "0".
+            pose_anchor, pose_conf, torso_height = self._pose_aim(track, frame, now)
+            if pose_anchor is not None and pose_conf > 0.0:
+                w_pose = max(0.0, min(1.0, pose_conf))
+                ax = w_pose * pose_anchor[0] + (1.0 - w_pose) * ax_bbox
+                ay = w_pose * pose_anchor[1] + (1.0 - w_pose) * ay_bbox
+                aim_source = ("pose" if w_pose >= 0.66
+                              else "fused" if w_pose >= 0.25 else "bbox")
                 subject_height = (
-                    torso_height if (ignore_arms and torso_height > 0.0)
-                    else bbox_height
+                    torso_height if (ignore_arms and torso_height > 0.0) else bbox_height
                 )
-
-        if aim is None:
-            # ── Fallback: bbox-based math (region applies in both arm modes) ────
-            ax = (bb.x1 + bb.x2) * 0.5
-            # Vertical aim point: fraction down from the box top per the unified
-            # ``framing`` region (default upper_body=0.38 → head+torso;
-            # full_body=0.50 = geometric centre).
-            frac = AIM_REGION_FRACTION.get(_resolve_framing(self.config.tracking), 0.5)
-            ay = bb.y1 + (bb.y2 - bb.y1) * frac
-            subject_height = bbox_height
-            aim_source = "bbox"
-        else:
-            ax, ay = aim
+            # Smooth the fused point: stable when still, snappy on a Frame-on change.
+            ax, ay = self._smooth_aim((ax, ay), track, framing_name, float(max(w, h)))
 
         if track.is_target:
             track.aim_x = float(ax)
@@ -1398,7 +1582,48 @@ class CameraWorker:
         ex = max(-1.0, min(1.0, ex))
         ey = max(-1.0, min(1.0, ey))
         subject_height = max(0.0, min(1.0, subject_height))
+        if now is not None:
+            self._aim_cache = (now, track.track_id, (ex, ey), subject_height,
+                               float(ax), float(ay), aim_source)
         return (ex, ey), subject_height
+
+    def _smooth_aim(
+        self, point: tuple[float, float], track: TrackInfo,
+        framing_name: str, frame_extent: float,
+    ) -> tuple[float, float]:
+        """EMA-smooth the fused aim point in pixel space.
+
+        Stable when the subject is still, quicker when they move, and it **snaps**
+        to the new anchor when the operator changes Frame-on (so the adjustment is
+        visible).  A small size-scaled deadband rejects sub-pixel keypoint jitter
+        without hiding real moves."""
+        try:
+            from autoptz.engine.pipeline import framing
+        except Exception:  # noqa: BLE001
+            return point
+        if self._aim_smoother is None:
+            self._aim_smoother = framing.AimSmoother(alpha=_POSE_AIM_ALPHA)
+        # Frame-on changed → jump to the new region rather than easing slowly.
+        if framing_name != self._last_aim_framing:
+            self._last_aim_framing = framing_name
+            self._aim_smoother.reset()
+        speed = 0.0
+        try:
+            vx = float(getattr(track, "vx", 0.0) or 0.0)
+            vy = float(getattr(track, "vy", 0.0) or 0.0)
+            speed = (vx * vx + vy * vy) ** 0.5
+        except Exception:  # noqa: BLE001
+            pass
+        self._aim_smoother._alpha = 0.20 if speed < 3.0 else 0.6
+        prev = self._aim_smoother.value
+        if prev is not None and speed < 3.0:
+            px, py = prev
+            rx, ry = point
+            deadband = max(2.0, min(12.0, frame_extent * 0.006))
+            if (rx - px) ** 2 + (ry - py) ** 2 <= deadband * deadband:
+                point = prev
+        out = self._aim_smoother.update(point)
+        return out if out is not None else point
 
     def _annotate_target_aim(
         self, tracks: list[TrackInfo], frame: NDArray[np.uint8] | None, now: float,
@@ -1419,27 +1644,28 @@ class CameraWorker:
 
     def _pose_aim(
         self, track: TrackInfo, frame: NDArray[np.uint8], now: float,
-    ) -> tuple[tuple[float, float] | None, float]:
-        """Return ((aim_x, aim_y) | None, subject_height_fraction) from pose.
+    ) -> tuple[tuple[float, float] | None, float, float]:
+        """Return ``(raw_anchor | None, confidence, subject_height_fraction)``.
 
-        Lazily builds the pose estimator the first time tracking needs an aim
-        point.  Re-estimates keypoints at most every ``_POSE_INTERVAL_S`` for the
-        active target, reusing the last keypoints in between.  Returns
-        ``(None, 0.0)`` whenever pose is unavailable or not confident, so the
-        caller keeps the bbox-based math.  Never raises.
+        The *raw* (un-smoothed) landmark anchor and a 0–1 confidence, so the
+        caller (:meth:`_track_error`) can **blend** it with the bbox anchor and
+        smooth the fused result.  Lazily builds the pose estimator; re-estimates
+        keypoints at most every ``_POSE_INTERVAL_S`` for the active target,
+        reusing the last keypoints in between.  ``(None, 0.0, 0.0)`` whenever pose
+        is unavailable/not confident.  Never raises.
         """
         if not self._feature("pose"):
-            return None, 0.0
+            return None, 0.0, 0.0
         pose = self._ensure_pose()
         if pose is None or not getattr(pose, "available", False):
-            return None, 0.0
+            return None, 0.0, 0.0
 
         try:
             from autoptz.engine.pipeline import framing
         except Exception:  # noqa: BLE001
-            return None, 0.0
+            return None, 0.0, 0.0
 
-        h = frame.shape[0]
+        h, w = frame.shape[:2]
         bb = track.bbox
         bbox = (bb.x1, bb.y1, bb.x2, bb.y2)
 
@@ -1456,6 +1682,7 @@ class CameraWorker:
             pose_t0 = time.perf_counter()
             kps = pose.estimate(frame, bbox)
             self._pose_ms = (time.perf_counter() - pose_t0) * 1000.0
+            self._record_stage("pose", self._pose_ms)
             self._last_pose_t = now
             if kps is not None:
                 self._pose_keypoints = kps
@@ -1470,29 +1697,17 @@ class CameraWorker:
 
         kps = self._pose_keypoints
         if not kps:
-            return None, 0.0
+            return None, 0.0, 0.0
 
-        bias = _AIM_REGION_POSE_BIAS.get(
-            _resolve_framing(self.config.tracking), "upper_body",
+        raw_aim, conf = framing.body_aim_point(
+            kps, framing=_resolve_framing(self.config.tracking),
         )
-        raw_aim = framing.torso_aim_point(kps, bias=bias)
         if raw_aim is None:
-            return None, 0.0
-
-        if self._aim_smoother is None:
-            self._aim_smoother = framing.AimSmoother(alpha=_POSE_AIM_ALPHA)
-        try:
-            vx = float(getattr(track, "vx", 0.0) or 0.0)
-            vy = float(getattr(track, "vy", 0.0) or 0.0)
-            speed = (vx * vx + vy * vy) ** 0.5
-            self._aim_smoother._alpha = 0.25 if speed < 3.0 else 0.65
-        except Exception:  # noqa: BLE001
-            pass
-        aim = self._aim_smoother.update(raw_aim)
+            return None, 0.0, 0.0
 
         span = framing.subject_height_from_pose(kps)
         subject_height = (span / h) if (span is not None and h > 0) else 0.0
-        return aim, subject_height
+        return raw_aim, float(conf), subject_height
 
     def _maybe_estimate_pose_overlay(
         self, tracks: list[TrackInfo], frame: NDArray[np.uint8] | None, now: float,
@@ -1627,6 +1842,7 @@ class CameraWorker:
             now = time.monotonic()
 
             if frame is not None:
+                self._record_stage("ingest", ingest_ms)
                 if last_health is HealthState.RECONNECTING:
                     log.info("camera_id=%s frame source recovered", self.camera_id)
                 self._record_frame_dims(frame)
@@ -1644,7 +1860,7 @@ class CameraWorker:
 
                 self._ingest_ms = ingest_ms
                 # Latency = capture read + the latest inference detect+track cost.
-                self._latency_ms = ingest_ms + self._detect_ms
+                self._latency_ms = ingest_ms + self._inference_ms
 
                 elapsed = now - fps_window_start
                 if elapsed >= 1.0:
@@ -1710,11 +1926,12 @@ class CameraWorker:
 
             detect_t0 = time.perf_counter()
             tracks = self._maybe_track(frame)
-            self._detect_ms = (time.perf_counter() - detect_t0) * 1000.0
+            self._inference_ms = (time.perf_counter() - detect_t0) * 1000.0
 
             # Appearance ReID: refresh the target template while it's visible and
             # re-bind it onto the right track after an occlusion (throttled; no-op
-            # unless tracking.reid_enabled and boxmot is available).
+            # unless _reid_active — global reid feature + stable mode — and boxmot
+            # is available).
             self._maybe_reid_recover(tracks, frame, now)
 
             # Estimate pose for the selected person so the pose overlay shows the
@@ -1730,6 +1947,7 @@ class CameraWorker:
             face_dt = (time.perf_counter() - face_t0) * 1000.0
             if face_dt > 0.5:
                 self._face_ms = face_dt
+                self._record_stage("face", face_dt)
 
             # Auto PTZ control (suspended during a manual-override window).  Lock
             # the backend so a concurrent telemetry position read can't interleave.
@@ -2094,18 +2312,29 @@ class CameraWorker:
         try:
             _t0 = time.perf_counter()
             self._detect_frame_index += 1
-            interval = max(1, int(getattr(self.config.tracking, "detect_interval", 1) or 1))
+            interval = self._effective_detect_interval()
             should_detect = (
                 not self._pooled_detector
                 or (self._detect_frame_index - 1) % interval == 0
             )
-            detections = self._detect.detector.detect(frame) if should_detect else []
-            detections = self._filter_small_detections(detections, frame)
+            if should_detect:
+                detections = self._detect.detector.detect(frame)
+                detections = self._filter_small_detections(detections, frame)
+                self._last_detections = detections
+            else:
+                # On detector-skip frames re-feed the previous detections so the
+                # boxmot tracker keeps the person alive between detect frames.
+                # Feeding [] here ages tracks out within a frame or two, which is
+                # why quality floor "low"/"balanced" (interval 3/2) looked like
+                # "no detection no matter how close".
+                detections = self._last_detections
             _t1 = time.perf_counter()
             tracks = self._detect.tracker.update(detections, frame, fps=max(1.0, self._fps))
             _t2 = time.perf_counter()
             self._detect_ms = (_t1 - _t0) * 1000.0
             self._track_ms = (_t2 - _t1) * 1000.0
+            self._record_stage("detect", self._detect_ms)
+            self._record_stage("track", self._track_ms)
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s detect/track failed", self.camera_id, exc_info=True)
             return []
@@ -2550,6 +2779,76 @@ class CameraWorker:
             log.debug("camera_id=%s identity callback raised", self.camera_id,
                       exc_info=True)
 
+    def _add_event(self, kind: str, message: str, *, level: str = "info") -> None:
+        """Append a recent runtime event for diagnostics/history."""
+        self._runtime_events.append(RuntimeEventInfo(
+            kind=str(kind or "runtime"),
+            level=str(level or "info"),
+            message=str(message),
+        ))
+
+    def _record_stage(self, key: str, ms: float) -> None:
+        """Remember a stage measurement for last/avg/p95 diagnostics."""
+        if ms < 0:
+            return
+        samples = self._stage_samples.setdefault(key, deque(maxlen=_STAGE_WINDOW))
+        samples.append(float(ms))
+        self._stage_last_t[key] = time.monotonic()
+
+    def _target_fps(self) -> float:
+        return max(1.0, float(getattr(self.config.source, "fps", 0.0) or 0.0))
+
+    def _frame_budget_ms(self) -> float:
+        return 1000.0 / self._target_fps()
+
+    def _stage_avg(self, key: str) -> float:
+        samples = self._stage_samples.get(key)
+        if not samples:
+            return 0.0
+        return float(sum(samples) / len(samples))
+
+    def _effective_detect_interval(self) -> int:
+        """Return the actual detector cadence after quality policy is applied."""
+        base = max(1, int(getattr(self.config.tracking, "detect_interval", 1) or 1))
+        floor = str(getattr(self.config.tracking, "quality_floor", "auto") or "auto")
+        if floor == "low":
+            self._quality_active = "low"
+            self._quality_reason = "Manual low quality floor: relaxed detector cadence."
+            self._quality_interval = max(base, 3)
+            return self._quality_interval
+        if floor == "balanced":
+            self._quality_active = "balanced"
+            self._quality_reason = "Manual balanced quality floor."
+            self._quality_interval = max(base, 2)
+            return self._quality_interval
+        if floor == "high":
+            self._quality_active = "high"
+            self._quality_reason = "Manual high quality floor."
+            self._quality_interval = base
+            return self._quality_interval
+
+        budget = self._frame_budget_ms()
+        cost = sum(self._stage_avg(k) for k in ("detect", "track", "face", "pose"))
+        ratio = cost / budget if budget > 0 else 0.0
+        if ratio >= 0.95:
+            interval = max(base, 4)
+            active = "low"
+            reason = "Auto quality: runtime cost is over frame budget; detector cadence relaxed."
+        elif ratio >= 0.75:
+            interval = max(base, 2)
+            active = "balanced"
+            reason = "Auto quality: runtime cost is near frame budget; detector cadence balanced."
+        else:
+            interval = base
+            active = "balanced"
+            reason = "Auto quality: latency headroom stable."
+        if interval != self._quality_interval or active != self._quality_active:
+            self._add_event("quality", reason)
+        self._quality_interval = interval
+        self._quality_active = active
+        self._quality_reason = reason
+        return interval
+
     # ── telemetry ───────────────────────────────────────────────────────────────
 
     def _pose_overlay(self) -> list[PoseKeypoint]:
@@ -2574,6 +2873,247 @@ class CameraWorker:
         return [PoseKeypoint(x=float(k.x), y=float(k.y), conf=float(k.conf))
                 for k in kps]
 
+    def _stage_status(self, key: str, *, enabled: bool, available: bool = True) -> str:
+        if not enabled:
+            return "disabled"
+        if not available:
+            return "idle"
+        samples = self._stage_samples.get(key)
+        if not samples:
+            return "warming"
+        age = time.monotonic() - self._stage_last_t.get(key, 0.0)
+        return "active" if age <= _STAGE_FRESH_S else "stale"
+
+    def _stage_row(
+        self,
+        key: str,
+        name: str,
+        *,
+        status: str,
+        cadence: str = "",
+        detail: str = "",
+    ) -> StageTimingInfo:
+        samples = list(self._stage_samples.get(key, ()))
+        last = float(samples[-1]) if samples else 0.0
+        avg = float(sum(samples) / len(samples)) if samples else 0.0
+        if samples:
+            ordered = sorted(samples)
+            p95 = float(ordered[min(len(ordered) - 1, int(0.95 * (len(ordered) - 1)))])
+        else:
+            p95 = 0.0
+        last_t = self._stage_last_t.get(key, 0.0)
+        age_ms = (time.monotonic() - last_t) * 1000.0 if last_t else 0.0
+        budget = self._frame_budget_ms()
+        return StageTimingInfo(
+            key=key,
+            name=name,
+            status=status,
+            last_ms=last,
+            avg_ms=avg,
+            p95_ms=p95,
+            cadence=cadence,
+            fresh=bool(last_t and status == "active"),
+            age_ms=age_ms,
+            budget_pct=(avg / budget * 100.0) if budget > 0 else 0.0,
+            detail=detail,
+        )
+
+    def _stage_timings(self) -> list[StageTimingInfo]:
+        detection_on = self._feature("detection")
+        tracking_on = self._feature("tracking")
+        face_on = self._feature("face_recognition")
+        pose_on = self._feature("pose")
+        detect_interval = self._effective_detect_interval()
+        return [
+            self._stage_row(
+                "ingest", "Ingest",
+                status=self._stage_status("ingest", enabled=True, available=self._source is not None),
+                cadence="every frame",
+            ),
+            self._stage_row(
+                "detect", "Detector",
+                status=self._stage_status("detect", enabled=detection_on, available=self._detect is not None),
+                cadence=f"every {detect_interval} frame{'s' if detect_interval != 1 else ''}",
+            ),
+            self._stage_row(
+                "track", "Tracker",
+                status=self._stage_status(
+                    "track", enabled=detection_on and tracking_on, available=self._detect is not None,
+                ),
+                cadence="every inference frame",
+            ),
+            self._stage_row(
+                "face", "Face",
+                status=self._stage_status(
+                    "face", enabled=face_on, available=self._face is not None,
+                ),
+                cadence=f"{1.0 / _FACE_INTERVAL_S:.0f} Hz",
+            ),
+            self._stage_row(
+                "pose", "Pose",
+                status=self._stage_status(
+                    "pose", enabled=pose_on, available=self._pose is not None or not self._pose_probed,
+                ),
+                cadence=f"{1.0 / _POSE_INTERVAL_S:.0f} Hz target-only",
+            ),
+        ]
+
+    def _runtime_services(self) -> list[RuntimeServiceInfo]:
+        pool = self._pool
+        detector_model = (
+            str(getattr(pool, "detector_model_name", "") or "")
+            if pool is not None else ""
+        )
+        detector_tier = (
+            str(getattr(pool, "detector_tier", "") or "")
+            if pool is not None else ""
+        )
+        detector_ep = self._ep or (
+            str(getattr(pool, "detector_ep", "") or "") if pool is not None else ""
+        )
+        detector_error = (
+            str(getattr(pool, "detector_error", "") or "") if pool is not None else ""
+        )
+        cap = self._source_fps_cap()
+        target_fps = self._target_fps()
+        tracking = self.config.tracking
+        ignore_arms = getattr(tracking, "aim_body_mode", "torso") == "torso"
+        # When detection is on but no detector built and the pool knows why, show
+        # "failed" + the reason instead of a generic disabled/idle state — so a
+        # silent model fall-back doesn't read as "the tier doesn't exist".
+        det_enabled = self._feature("detection")
+        det_available = self._detect is not None
+        det_failed = det_enabled and not det_available and bool(detector_error)
+        return [
+            RuntimeServiceInfo(
+                key="detector",
+                name="Detector",
+                scope="global" if pool is not None else "camera",
+                configured=str(getattr(tracking, "quality_floor", "auto")),
+                enabled=det_enabled,
+                active=bool(det_enabled and det_available),
+                state="failed" if det_failed else self._stage_status(
+                    "detect", enabled=det_enabled, available=det_available),
+                detail=detector_error if det_failed
+                else (detector_model or "per-camera detector"),
+                model=detector_model,
+                tier=detector_tier,
+                ep=detector_ep,
+            ),
+            RuntimeServiceInfo(
+                key="tracker",
+                name="Tracker",
+                configured=str(getattr(tracking, "tracker", "")),
+                enabled=self._feature("tracking"),
+                active=bool(self._feature("tracking") and self._detect is not None),
+                state=self._stage_status("track", enabled=self._feature("tracking"),
+                                         available=self._detect is not None),
+                backend=str(getattr(tracking, "tracker", "")),
+                detail="manual targets clear on rebuild; identity targets reacquire",
+            ),
+            self._reid_service_row(tracking),
+            RuntimeServiceInfo(
+                key="face",
+                name="Face",
+                configured="on" if getattr(tracking, "face_confirm", False) else "off",
+                enabled=self._feature("face_recognition"),
+                active=bool(self._feature("face_recognition") and self._face is not None),
+                state=self._stage_status("face", enabled=self._feature("face_recognition"),
+                                         available=self._face is not None),
+                detail="recognition and identity reacquire",
+            ),
+            RuntimeServiceInfo(
+                key="pose",
+                name="Pose",
+                configured="on",
+                enabled=self._feature("pose"),
+                active=bool(self._feature("pose") and self._pose is not None),
+                state=self._stage_status("pose", enabled=self._feature("pose"),
+                                         available=self._pose is not None or not self._pose_probed),
+                detail="PTZ aim point" if self._feature("pose") else "disabled",
+            ),
+            RuntimeServiceInfo(
+                key="framing",
+                name="Framing",
+                configured=str(getattr(tracking, "framing", "upper_body")),
+                enabled=bool(getattr(self.config.ptz, "safe_zone_enabled", True)),
+                active=bool(getattr(self.config.ptz, "safe_zone_enabled", True)),
+                state="active" if getattr(self.config.ptz, "safe_zone_enabled", True) else "disabled",
+                detail="ignore arms" if ignore_arms else "include arms",
+            ),
+            RuntimeServiceInfo(
+                key="fps",
+                name="FPS cap",
+                configured=f"{target_fps:.0f} fps",
+                enabled=True,
+                active=True,
+                state="active",
+                detail=(f"trusted source cap {cap:.0f} fps" if cap else "source cap unknown"),
+                confidence="trusted" if cap else "unknown",
+            ),
+        ]
+
+    def _reid_service_row(self, tracking: Any) -> RuntimeServiceInfo:
+        """ReID status with the resolved on/off state and a plain reason.
+
+        ReID is unified under two controls: the global ``reid`` feature and the
+        per-camera ``tracking_mode`` (stable uses it, responsive doesn't).  This
+        row reports the *effective* state so it never contradicts the menu."""
+        feature_on = self._feature("reid")
+        mode = getattr(tracking, "tracking_mode", "stable")
+        wants_reid = mode == "stable"
+        if not feature_on:
+            state, detail = "disabled", "ReID feature off (Services)"
+        elif not wants_reid:
+            state, detail = "off", "Responsive mode — no ReID hold"
+        elif self._reid is not None and getattr(self._reid, "available", False):
+            state, detail = "active", "holding target through crossings"
+        elif self._reid_probed:
+            state, detail = "failed", "ReID model unavailable (boxmot/torch)"
+        else:
+            state, detail = "warming", "stable mode — ReID will engage on lock"
+        return RuntimeServiceInfo(
+            key="reid",
+            name="ReID",
+            configured=f"{mode} · {'on' if feature_on else 'off'}",
+            enabled=bool(feature_on and wants_reid),
+            active=bool(self._reid is not None and getattr(self._reid, "available", False)),
+            state=state,
+            detail=detail,
+        )
+
+    def _quality_state(self) -> QualityStateInfo:
+        tracking = self.config.tracking
+        pool = self._pool
+        floor = str(getattr(tracking, "quality_floor", "auto") or "auto")
+        tier = str(getattr(pool, "detector_tier", "") or "") if pool is not None else ""
+        model = str(getattr(pool, "detector_model_name", "") or "") if pool is not None else ""
+        switch = self._model_switch_info()
+        if switch is not None and switch.state == "warming":
+            reason = switch.reason or f"Switching to {switch.to_value}."
+        else:
+            reason = self._quality_reason
+        return QualityStateInfo(
+            floor=floor,
+            active=self._quality_active if floor == "auto" else floor,
+            reason=reason,
+            detector_tier=tier,
+            detector_model=model,
+            tracker=str(getattr(tracking, "tracker", "")),
+            detect_interval=self._quality_interval,
+        )
+
+    def _model_switch_info(self) -> SwitchStateInfo | None:
+        pool = self._pool
+        state_fn = getattr(pool, "switch_state", None) if pool is not None else None
+        if not callable(state_fn):
+            return None
+        try:
+            state = state_fn()
+        except Exception:  # noqa: BLE001
+            return None
+        return SwitchStateInfo(**state) if state else None
+
     def _emit_telemetry(
         self,
         *,
@@ -2597,6 +3137,14 @@ class CameraWorker:
             pose_ms=self._pose_ms,
             streaming=self._frame_w > 0,
             source_fps_cap=self._source_fps_cap(),
+            target_fps=self._target_fps(),
+            frame_budget_ms=self._frame_budget_ms(),
+            runtime_services=self._runtime_services(),
+            stage_timings=self._stage_timings(),
+            quality_state=self._quality_state(),
+            model_switch=self._model_switch_info(),
+            tracker_switch=self._tracker_switch,
+            runtime_events=list(self._runtime_events),
             tracks=tracks,
             faces=self._fresh_faces_for_telemetry(tracks),
             pose=self._pose_overlay(),

@@ -71,6 +71,7 @@ def test_detector_tier_maps_to_expected_weights() -> None:
     assert detector_model_for_tier("auto") == "yolo11n.pt"
     assert detector_model_for_tier("fast") == "yolo11n.pt"
     assert detector_model_for_tier("balanced") == "yolo11s.pt"
+    assert detector_model_for_tier("medium") == "yolo11m.pt"
     assert detector_model_for_tier("bogus") == "yolo11n.pt"
 
 

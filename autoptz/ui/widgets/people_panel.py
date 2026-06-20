@@ -213,7 +213,7 @@ class PeoplePanel(QWidget):
         )
         mid.addWidget(name)
 
-        # Captured shots as a deletable strip: each shot carries its own small ✕
+        # Captured shots as a deletable strip: each shot carries its own small remove
         # so the user can prune a bad/odd-angle photo individually.
         strip = self._photo_strip(rec["id"], rec["thumbs"], rec["thumb"])
         if strip is not None:
@@ -225,7 +225,7 @@ class PeoplePanel(QWidget):
         if self._can_merge:
             controls.addWidget(self._merge_button(rec["id"]))
         controls.addWidget(self._delete_button(
-            "🗑  Delete",
+            "Delete",
             lambda *_a, i=rec["id"], nm=rec["name"]: self._delete(i, nm),
             tip="Delete this person",
         ))
@@ -282,9 +282,9 @@ class PeoplePanel(QWidget):
     def _photo_strip(
         self, identity_id: str, thumbs: list[str], primary: str = "",
     ) -> QWidget | None:
-        """A strip of captured shots, each with its own small ``✕`` delete badge.
+        """A strip of captured shots, each with its own small remove button.
 
-        Clicking a shot's ``✕`` prunes THAT photo via
+        Clicking a shot's remove button prunes THAT photo via
         ``removeIdentityPhoto(id, index)`` (confirmed only when it is the last
         remaining shot, which effectively clears the person's photos).  Returns
         ``None`` when the identity has no captured shots.
@@ -316,7 +316,7 @@ class PeoplePanel(QWidget):
     def _photo_chip(
         self, identity_id: str, uri: str, index: int, total: int, primary: str,
     ) -> QWidget:
-        """One captured shot with a corner ``✕`` that deletes just this photo."""
+        """One captured shot with a corner remove button for just this photo."""
         chip = QFrame()
         chip.setFixedSize(38, 38)
         # The profile photo gets an accent ring so it's distinguishable.
@@ -335,19 +335,8 @@ class PeoplePanel(QWidget):
         img.setAlignment(Qt.AlignmentFlag.AlignCenter)
         wrap.addWidget(img)
 
-        # Floating delete badge in the top-right corner of the thumbnail — a small
-        # scrim-backed ✕ that turns red on hover (consistent with IconButton).
-        x = QPushButton("✕", chip)
-        x.setFixedSize(15, 15)
-        x.setCursor(Qt.CursorShape.PointingHandCursor)
-        x.setToolTip("Remove this photo")
-        x.setStyleSheet(
-            f"QPushButton {{ background: {T.VIDEO_SCRIM.name()}; color: {T.VIDEO_TEXT};"
-            f" border: none; border-radius: 7px; font-size: 9px; font-weight: 700;"
-            f" padding: 0px; }}"
-            f"QPushButton:hover {{ background: {T.DANGER}; color: {T.ACCENT_TEXT}; }}"
-        )
-        x.move(38 - 15, 0)
+        x = IconButton("x", tip="Remove this photo", danger=True, size=16, parent=chip)
+        x.move(38 - x.width(), 0)
         x.clicked.connect(
             lambda *_a, i=identity_id, idx=index, last=(total <= 1):
             self._remove_photo(i, idx, last)
@@ -374,7 +363,7 @@ class PeoplePanel(QWidget):
 
     def _photos_button(self, identity_id: str) -> QPushButton:
         """Open the full photo manager (review all / add / set profile / delete)."""
-        btn = QPushButton("🖼  Photos")
+        btn = QPushButton("Photos")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setToolTip("Review every photo, add one, pick the profile picture, or "
                        "remove a bad shot.")
@@ -386,7 +375,7 @@ class PeoplePanel(QWidget):
 
     def _discard_button(self, slot: Any, *, tip: str) -> IconButton:
         """The single icon delete affordance for unregistered faces."""
-        btn = IconButton("🗑", tip=tip, danger=True, size=28)
+        btn = IconButton("x", tip=tip, danger=True, size=28)
         btn.clicked.connect(slot)
         return btn
 

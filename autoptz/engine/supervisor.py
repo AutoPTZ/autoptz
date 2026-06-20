@@ -354,6 +354,47 @@ class Supervisor:
         except Exception:  # noqa: BLE001
             return ""
 
+    def switch_detector_model_tier(self, tier: str, *, reason: str = "") -> None:
+        """Hot-swap the shared detector model without stopping workers.
+
+        The build runs on a background thread. The old detector remains active
+        until the pool reports a successful swap, then each worker refreshes its
+        detect stack to point at the new shared detector while keeping its own
+        tracker state unless the tracker itself changed.
+        """
+        if not self._running:
+            return
+        pool = self._ensure_inference_pool()
+        if pool is None or not hasattr(pool, "switch_detector_tier"):
+            return
+
+        def _swap() -> None:
+            try:
+                ok = bool(pool.switch_detector_tier(
+                    tier,
+                    reason=reason or f"Operator selected detector tier {tier}.",
+                ))
+            except Exception:  # noqa: BLE001
+                log.warning("detector tier switch to %s failed", tier, exc_info=True)
+                return
+            if not ok:
+                return
+            with self._lock:
+                workers = list(self._workers.values())
+            for worker in workers:
+                refresh = getattr(worker, "refresh_detector_from_pool", None)
+                if callable(refresh):
+                    try:
+                        refresh()
+                    except Exception:  # noqa: BLE001
+                        log.debug("worker detector refresh failed", exc_info=True)
+
+        threading.Thread(
+            target=_swap,
+            name=f"detector-swap-{str(tier or 'auto')}",
+            daemon=True,
+        ).start()
+
     @property
     def worker_count(self) -> int:
         with self._lock:

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import warnings
 
 log = logging.getLogger(__name__)
 
@@ -83,13 +84,19 @@ def run(argv: list[str] | None = None) -> int:
 
     # ── in-app logging viewer ──────────────────────────────────────────────────
     # A ring-buffered model fed by a logging.Handler on the root logger; the Logs
-    # panel binds to it.  INFO by default so the console is informative; the
-    # console's level control can raise it to DEBUG for the full pipeline log.
+    # panel binds to it.  INFO by default in-app, while existing stderr/terminal
+    # handlers stay at WARNING so development launches are not spammed.
     log_model = LogListModel()
     log_handler = QtLogHandler(log_model)
-    logging.getLogger().addHandler(log_handler)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(log_handler)
+    log_handler.setLevel(logging.INFO)
     client.set_log_bridge(log_model, log_handler)
-    logging.getLogger().setLevel(logging.INFO)
+    root_logger.setLevel(logging.INFO)
+    for handler in root_logger.handlers:
+        if handler is not log_handler:
+            handler.setLevel(logging.WARNING)
+    warnings.filterwarnings("ignore", category=FutureWarning, module=r"insightface(\.|$)")
 
     # ── engine wiring ──────────────────────────────────────────────────────────
     # The supervisor is created lazily on first start (defers heavy ML imports);

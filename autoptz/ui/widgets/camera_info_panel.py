@@ -100,9 +100,22 @@ class CameraInfoPanel(QWidget):
         ("Tracking", ["Following", "Match", "Lock", "People in view"]),
         ("Identity", ["Display name", "Source", "Address"]),
         ("Stream", ["Resolution", "Live fps", "Health", "Dropped frames"]),
-        ("Performance", ["Ingest", "Detect", "Track", "Face", "Latency", "Load"]),
+        ("Runtime", [
+            "Target fps", "Frame budget", "Runtime load", "Setting cost",
+            "Quality floor", "Quality active", "Quality reason",
+        ]),
+        ("Models", [
+            "Detector model", "Detector tier", "Model switch",
+            "Tracker backend", "Tracker switch",
+        ]),
+        ("Services", [
+            "Detector service", "Tracker service", "ReID", "Face", "Pose", "Framing",
+        ]),
+        ("Performance", [
+            "Ingest", "Detector stage", "Tracker stage", "Face stage", "Pose stage",
+            "Latency",
+        ]),
         ("PTZ", ["Backend"]),
-        ("Detection", ["Quality floor", "Tracker", "Detect interval"]),
         ("Engine", ["Inference EP"]),
     ]
 
@@ -117,9 +130,17 @@ class CameraInfoPanel(QWidget):
         "Stream": "Live video health: current resolution, measured frames per "
                   "second, an overall health flag, and how many frames have been "
                   "dropped.",
-        "Performance": "Per-stage processing time — ingest, detection, and "
-                       "tracking — plus end-to-end latency and an overall Load "
-                       "estimate (Light / Medium / Heavy vs the frame budget).",
+        "Runtime": "Effective runtime choices: FPS budget, load against that "
+                   "budget, active quality level, and the reason for the current "
+                   "auto/manual setting.",
+        "Models": "The shared detector model and per-camera tracker backend in "
+                  "effect, including any current or recent switch.",
+        "Services": "Enabled/active service state for this selected camera. "
+                    "Disabled or stale services keep their last-known timing "
+                    "ghosted instead of pretending they are 0 ms.",
+        "Performance": "Per-stage processing time. Rows show last + rolling "
+                       "average by default, with Disabled/Stale labels when a "
+                       "service is off or no longer fresh.",
         "PTZ": "The pan/tilt/zoom backend in use for this camera (NDI, ONVIF, "
                "VISCA-IP/USB, or auto).",
         "Detection": "The detection settings in effect: quality floor, the "
@@ -201,15 +222,13 @@ class CameraInfoPanel(QWidget):
             "Address",
             str(src.get("unique_id")) if usb_with_uid else _sanitize(src.get("address", "")),
         )
-        self._set("Quality floor", track_cfg.get("quality_floor", "—"))
-        self._set("Tracker", track_cfg.get("tracker", "—"))
-        self._set("Detect interval", str(track_cfg.get("detect_interval", "—")))
         self._set("Backend", ptz_cfg.get("backend", "auto"))
+        self._set("Tracker backend", track_cfg.get("tracker", "—"))
 
         if not running or rec is None:
-            for k in ("Following", "Match", "Lock", "People in view", "Resolution",
-                      "Live fps", "Health", "Dropped frames", "Ingest", "Detect",
-                      "Track", "Face", "Latency", "Load", "Inference EP"):
+            for k in self._vals:
+                if k in {"Display name", "Source", "Address", "Backend", "Tracker backend"}:
+                    continue
                 self._set(k, "engine stopped" if not running else "—",
                           color=T.CURRENT.muted)
             return
@@ -236,14 +255,59 @@ class CameraInfoPanel(QWidget):
                   color=T.TRACKING if health == "ok" else T.ERROR if health == "error" else T.WARNING)
         self._set("Dropped frames", str(getattr(rec, "dropped_frames", 0)))
 
-        # Performance — per-stage latency (Phase 4 telemetry); falls back to "—".
-        self._set("Ingest", _ms(tel, "ingest_ms"))
-        self._set("Detect", _ms(tel, "detect_ms"))
-        self._set("Track", _ms(tel, "track_ms"))
-        self._set("Face", _ms(tel, "face_ms"))
+        target_fps = float(getattr(tel, "target_fps", 0.0) or src.get("fps", 30.0) or 30.0)
+        budget_ms = float(getattr(tel, "frame_budget_ms", 0.0) or (1000.0 / max(1.0, target_fps)))
+        self._set("Target fps", f"{target_fps:.0f} fps")
+        self._set("Frame budget", f"{budget_ms:.1f} ms/frame")
+        self._set("Runtime load", *_runtime_load(tel, budget_ms))
+        self._set("Setting cost", _setting_cost(tel), color=T.CURRENT.subtext)
+
+        qs = getattr(tel, "quality_state", None)
+        floor = _field(qs, "floor", track_cfg.get("quality_floor", "—"))
+        active = _field(qs, "active", "—")
+        self._set("Quality floor", floor)
+        # Surface the effective detector cadence alongside the active level, and
+        # flag (amber) when "auto" is actively scaling away from the floor — so
+        # the operator can SEE the system adapting rather than guessing.
+        active_txt = str(active)
+        interval = _field(qs, "detect_interval", None)
+        try:
+            n = int(interval)
+            active_txt += f" · detect every {n} frame{'s' if n != 1 else ''}"
+        except (TypeError, ValueError):
+            pass
+        diverged = (
+            str(floor) == "auto"
+            and str(active) not in ("auto", "—", "")
+        )
+        self._set("Quality active", active_txt,
+                  color=T.WARNING if diverged else None)
+        self._set("Quality reason", _field(qs, "reason", "—"), color=T.CURRENT.subtext)
+        self._set("Detector model", _field(qs, "detector_model", "—") or "—")
+        self._set("Detector tier", _field(qs, "detector_tier", "—") or "—")
+        self._set("Model switch", _switch_text(getattr(tel, "model_switch", None)),
+                  color=_switch_color(getattr(tel, "model_switch", None)))
+        self._set("Tracker switch", _switch_text(getattr(tel, "tracker_switch", None)),
+                  color=_switch_color(getattr(tel, "tracker_switch", None)))
+
+        for key, label in (
+            ("detector", "Detector service"),
+            ("tracker", "Tracker service"),
+            ("reid", "ReID"),
+            ("face", "Face"),
+            ("pose", "Pose"),
+            ("framing", "Framing"),
+        ):
+            text, color = _service_text(tel, key)
+            self._set(label, text, color=color)
+
+        self._set("Ingest", *_stage_text(tel, "ingest", "ingest_ms"))
+        self._set("Detector stage", *_stage_text(tel, "detect", "detect_ms"))
+        self._set("Tracker stage", *_stage_text(tel, "track", "track_ms"))
+        self._set("Face stage", *_stage_text(tel, "face", "face_ms"))
+        self._set("Pose stage", *_stage_text(tel, "pose", "pose_ms"))
         lat = int(getattr(rec, "latency_ms", 0) or 0)
         self._set("Latency", f"{lat} ms" if lat > 0 else "—")
-        self._set("Load", *_load_estimate(lat, float(src.get("fps", 30.0) or 30.0)))
 
         ep = (_safe(lambda: self._client.engineEp, "") or "—").replace("ExecutionProvider", "")
         self._set("Inference EP", ep)
@@ -272,16 +336,106 @@ def _ms(tel: Any, attr: str) -> str:
     return "—"
 
 
-def _load_estimate(latency_ms: int, target_fps: float) -> tuple[str, str]:
-    if latency_ms <= 0 or target_fps <= 0:
+def _runtime_load(tel: Any, budget_ms: float) -> tuple[str, str]:
+    latency_ms = float(getattr(tel, "latency_ms", 0.0) or 0.0)
+    if latency_ms <= 0 or budget_ms <= 0:
         return "—", T.CURRENT.muted
-    budget = 1000.0 / target_fps
-    ratio = latency_ms / budget
-    if ratio < 0.5:
-        return "Light", T.TRACKING
-    if ratio < 0.85:
-        return "Medium", T.WARNING
-    return "Heavy", T.ERROR
+    ratio = latency_ms / budget_ms
+    text = f"{ratio * 100:.0f}% of frame budget"
+    if ratio < 0.65:
+        return text, T.TRACKING
+    if ratio < 0.95:
+        return text, T.WARNING
+    return text, T.ERROR
+
+
+def _setting_cost(tel: Any) -> str:
+    rows = list(getattr(tel, "stage_timings", []) or [])
+    total = 0.0
+    for row in rows:
+        if _field(row, "key", "") in {"detect", "track", "face", "pose"}:
+            total += float(_field(row, "avg_ms", 0.0) or 0.0)
+    return f"{total:.1f} ms avg ML/tracking" if total > 0 else "—"
+
+
+def _stage_text(tel: Any, key: str, fallback_attr: str) -> tuple[str, str | None]:
+    row = _find_by_key(getattr(tel, "stage_timings", []) or [], key)
+    if row is None:
+        return _ms(tel, fallback_attr), None
+    status = str(_field(row, "status", "idle"))
+    last = float(_field(row, "last_ms", 0.0) or 0.0)
+    avg = float(_field(row, "avg_ms", 0.0) or 0.0)
+    cadence = str(_field(row, "cadence", "") or "")
+    text = f"{last:.1f} ms  avg {avg:.1f}"
+    if cadence:
+        text += f"  {cadence}"
+    if status in {"disabled", "stale", "warming", "idle"}:
+        text = f"{status.title()} · {text}"
+    color = T.CURRENT.muted if status in {"disabled", "stale", "idle"} else None
+    if status == "warming":
+        color = T.WARNING
+    return text, color
+
+
+def _service_text(tel: Any, key: str) -> tuple[str, str | None]:
+    row = _find_by_key(getattr(tel, "runtime_services", []) or [], key)
+    if row is None:
+        return "—", T.CURRENT.muted
+    state = str(_field(row, "state", "idle"))
+    detail = str(_field(row, "detail", "") or "")
+    model = str(_field(row, "model", "") or _field(row, "backend", "") or "")
+    text = state.title()
+    if model:
+        text += f" · {model}"
+    if detail:
+        text += f" · {detail}"
+    color = (
+        T.ERROR if state == "failed"
+        else T.TRACKING if state == "active"
+        else T.WARNING if state == "warming"
+        else T.CURRENT.muted
+    )
+    return text, color
+
+
+def _switch_text(sw: Any) -> str:
+    if sw is None:
+        return "—"
+    state = str(_field(sw, "state", "idle"))
+    to_value = str(_field(sw, "to_value", "") or _field(sw, "active_value", "") or "")
+    reason = str(_field(sw, "reason", "") or "")
+    text = state.title()
+    if to_value:
+        text += f" · {to_value}"
+    if reason:
+        text += f" · {reason}"
+    return text
+
+
+def _switch_color(sw: Any) -> str | None:
+    state = str(_field(sw, "state", "idle")) if sw is not None else "idle"
+    if state == "failed":
+        return T.ERROR
+    if state == "warming":
+        return T.WARNING
+    if state == "active":
+        return T.TRACKING
+    return T.CURRENT.muted
+
+
+def _field(obj: Any, name: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _find_by_key(rows: list[Any], key: str) -> Any | None:
+    for row in rows:
+        if _field(row, "key", "") == key:
+            return row
+    return None
 
 
 def _sanitize(addr: str) -> str:

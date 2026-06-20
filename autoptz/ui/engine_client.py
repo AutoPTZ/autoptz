@@ -66,6 +66,39 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+
+def _obj_field(obj: Any, name: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _find_runtime_row(rows: Any, key: str) -> Any | None:
+    for row in rows or []:
+        if _obj_field(row, "key", "") == key:
+            return row
+    return None
+
+
+def _switch_detail(switch: Any) -> str:
+    state = str(_obj_field(switch, "state", "idle"))
+    to_value = str(_obj_field(switch, "to_value", "") or "")
+    active = str(_obj_field(switch, "active_value", "") or "")
+    reason = str(_obj_field(switch, "reason", "") or "")
+    error = str(_obj_field(switch, "error", "") or "")
+    parts = [state]
+    if to_value:
+        parts.append(f"to {to_value}")
+    if active and active != to_value:
+        parts.append(f"active {active}")
+    if reason:
+        parts.append(reason)
+    if error:
+        parts.append(error)
+    return " · ".join(parts)
+
 # Auto-harvested ("Person N") identities not seen for this long are forgotten, so
 # their track-ID numbers don't accumulate; swept on this cadence.
 _UNLABELED_MAX_AGE_S = 90.0
@@ -686,6 +719,7 @@ class EngineClient(QObject):
             "tracking": True,
             "face_recognition": True,
             "pose": True,
+            "reid": True,
         }
         self._detector_model_tier: str = "auto"
 
@@ -1038,7 +1072,12 @@ class EngineClient(QObject):
 
     # Default visibility for each overlay layer; detection boxes on, the heavier
     # diagnostic layers off until the operator asks for them.
-    _OVERLAY_DEFAULTS = {"detection": True, "faces": False, "pose": False}
+    _OVERLAY_DEFAULTS = {
+        "detection": True,
+        "faces": False,
+        "pose": False,
+        "prediction": False,
+    }
 
     def overlays(self) -> dict[str, bool]:
         """Return which on-video overlays are enabled (persisted, with defaults)."""
@@ -1278,13 +1317,6 @@ class EngineClient(QObject):
             if self._store:
                 self._store.save_camera_debounced(new_cfg)
             self._enqueue(SetTargetFpsCmd(camera_id=camera_id, fps=applied))
-            # Also push the new config so the running worker re-paces live even
-            # before the supervisor routes the dedicated SetTargetFpsCmd: the
-            # worker's update_config handler applies an fps change immediately.
-            self._enqueue(UpdateCameraConfigCmd(
-                camera_id=camera_id,
-                config=json.loads(new_cfg.model_dump_json()),
-            ))
         else:
             self._enqueue(SetTargetFpsCmd(camera_id=camera_id, fps=max(1.0, float(fps))))
 
@@ -1421,14 +1453,15 @@ class EngineClient(QObject):
 
     # ── session-only feature switches + detector model tier ────────────────────
 
-    _FEATURE_KEYS = ("detection", "tracking", "face_recognition", "pose")
+    _FEATURE_KEYS = ("detection", "tracking", "face_recognition", "pose", "reid")
 
     @Slot(result="QVariant")
     def features(self) -> dict[str, bool]:
         """Return the session-only ML-subsystem switches (all default True).
 
-        Keys: ``detection``, ``tracking``, ``face_recognition``, ``pose``.
-        These do not persist; they are testing overrides that reset each launch.
+        Keys: ``detection``, ``tracking``, ``face_recognition``, ``pose``,
+        ``reid``.  These do not persist; they are testing/runtime overrides that
+        reset each launch.
         """
         return {k: bool(self._features.get(k, True)) for k in self._FEATURE_KEYS}
 
@@ -1436,9 +1469,9 @@ class EngineClient(QObject):
     def setFeatureEnabled(self, name: str, enabled: bool) -> None:
         """Enable/disable a global subsystem for this session.
 
-        ``name`` is one of ``detection``/``tracking``/``face_recognition``/``pose``.
-        Broadcasts a :class:`SetFeaturesCmd` so every worker turns the subsystem
-        on/off without a restart, but does not persist across app launches.
+        ``name`` is one of ``detection``/``tracking``/``face_recognition``/``pose``/
+        ``reid``.  Broadcasts a :class:`SetFeaturesCmd` so every worker turns the
+        subsystem on/off without a restart, but does not persist across launches.
         """
         if name not in self._FEATURE_KEYS:
             return
@@ -1475,11 +1508,23 @@ class EngineClient(QObject):
         self._detector_model_tier = normalized
         self.setSetting("detector_model_tier", normalized)
         self.detectorModelTierChanged.emit()
+        sup = self._supervisor
+        switch = getattr(sup, "switch_detector_model_tier", None)
+        if self._engine_running and callable(switch):
+            try:
+                switch(
+                    normalized,
+                    reason=f"Operator selected detector model tier {normalized}.",
+                )
+            except Exception:  # noqa: BLE001
+                log.debug("detector hot-swap request failed", exc_info=True)
 
     @staticmethod
     def _normalize_detector_model_tier(tier: Any) -> str:
         value = str(tier or "auto").strip().lower()
-        return value if value in {"auto", "fast", "balanced"} else "auto"
+        aliases = {"nano": "fast", "small": "balanced"}
+        value = aliases.get(value, value)
+        return value if value in {"auto", "fast", "balanced", "medium"} else "auto"
 
     # ── optional component setup / ignore state ─────────────────────────────
 
@@ -2111,12 +2156,54 @@ class EngineClient(QObject):
         try:
             from autoptz.engine.runtime.diagnostics import collect_services
 
-            return collect_services(
+            rows = collect_services(
                 engine_running=self._engine_running, engine_ep=self._engine_ep,
             )
+            self._merge_live_service_rows(rows)
+            return rows
         except Exception:  # noqa: BLE001
             log.debug("serviceStatus failed", exc_info=True)
             return []
+
+    def _merge_live_service_rows(self, rows: list[dict[str, str]]) -> None:
+        """Overlay latest telemetry runtime state onto static service probes."""
+        live = None
+        for cid in self._model.camera_ids():
+            rec = self._model.get_record(cid)
+            tel = getattr(rec, "telemetry", None) if rec is not None else None
+            if tel is not None and getattr(tel, "runtime_services", None):
+                live = tel
+                break
+        if live is None:
+            return
+        detector = _find_runtime_row(getattr(live, "runtime_services", []), "detector")
+        if detector is not None:
+            model = _obj_field(detector, "model", "") or _obj_field(detector, "detail", "")
+            tier = _obj_field(detector, "tier", "")
+            ep = _obj_field(detector, "ep", "")
+            state = _obj_field(detector, "state", "idle")
+            detail = "active"
+            if tier:
+                detail += f" tier {tier}"
+            if model:
+                detail += f" · {model}"
+            if ep:
+                detail += f" · {str(ep).replace('ExecutionProvider', '')}"
+            for row in rows:
+                if row.get("key") == "detector":
+                    row["state"] = "ok" if state == "active" else "warn"
+                    row["detail"] = detail
+                    break
+        switch = getattr(live, "model_switch", None)
+        if switch is not None:
+            state = str(_obj_field(switch, "state", "idle"))
+            if state != "idle":
+                rows.append({
+                    "key": "model_switch",
+                    "name": "Detector switch",
+                    "state": "warn" if state == "warming" else "off" if state == "failed" else "ok",
+                    "detail": _switch_detail(switch),
+                })
 
     @Slot(result="QVariant")
     def systemMetrics(self) -> dict[str, Any]:

@@ -10,10 +10,13 @@ import math
 from autoptz.engine.pipeline.framing import (
     KP_LEFT_HIP,
     KP_LEFT_SHOULDER,
+    KP_NOSE,
     KP_RIGHT_HIP,
     KP_RIGHT_SHOULDER,
     AimSmoother,
     Keypoint,
+    body_aim_point,
+    head_point,
     hip_midpoint,
     shoulder_midpoint,
     subject_height_from_pose,
@@ -166,3 +169,62 @@ class TestAimSmoother:
             last = s.update((100.0, 100.0))
         assert math.isclose(last[0], 100.0, abs_tol=1e-3)
         assert math.isclose(last[1], 100.0, abs_tol=1e-3)
+
+
+# A standing person WITH a head landmark (nose at y=40, above the shoulders).
+_STANDING_HEAD = _pose(
+    ls=(170.0, 100.0, 0.9),
+    rs=(230.0, 100.0, 0.9),
+    lh=(180.0, 300.0, 0.9),
+    rh=(220.0, 300.0, 0.9),
+)
+_STANDING_HEAD[KP_NOSE] = Keypoint(200.0, 40.0, 0.9)
+
+
+class TestHeadPoint:
+    def test_nose_is_preferred(self) -> None:
+        assert head_point(_STANDING_HEAD) == (200.0, 40.0)
+
+    def test_none_without_head_landmarks(self) -> None:
+        assert head_point(_STANDING) is None  # no nose/eyes/ears
+
+
+class TestBodyAimPoint:
+    """Landmark-precise, framing-aware anchor used by the fused aim dot."""
+
+    def test_regions_are_distinct_and_ordered_top_to_bottom(self) -> None:
+        ys = {}
+        for fr in ("face", "head_shoulders", "upper_body", "full_body"):
+            pt, conf = body_aim_point(_STANDING_HEAD, framing=fr)
+            assert pt is not None and conf > 0.0
+            ys[fr] = pt[1]
+        # Higher on the body (smaller y) for tighter framings.
+        assert ys["face"] < ys["head_shoulders"] < ys["upper_body"] < ys["full_body"]
+
+    def test_face_is_the_head(self) -> None:
+        pt, _ = body_aim_point(_STANDING_HEAD, framing="face")
+        assert pt == (200.0, 40.0)
+
+    def test_full_body_is_person_centre_hips(self) -> None:
+        # Person centre ≈ the hips (stable, ≈ the bbox centre), NOT the torso
+        # midpoint (which sits too high / above the true centre).
+        pt, _ = body_aim_point(_STANDING_HEAD, framing="full_body")
+        assert pt == (200.0, 300.0)
+
+    def test_full_body_zero_conf_without_hips(self) -> None:
+        # Hips gone → don't trust pose for the person centre; conf 0 so the caller
+        # falls back to the stable bbox centre instead of jumping to the shoulders.
+        no_hips = _pose(ls=(170.0, 100.0, 0.9), rs=(230.0, 100.0, 0.9))
+        no_hips[KP_NOSE] = Keypoint(200.0, 40.0, 0.9)
+        _pt, conf = body_aim_point(no_hips, framing="full_body")
+        assert conf == 0.0
+
+    def test_confidence_zero_when_region_landmarks_missing(self) -> None:
+        # No head landmarks → "face" can't be confidently located → conf 0 so the
+        # caller leans entirely on the bbox anchor.
+        _pt, conf = body_aim_point(_STANDING, framing="face")
+        assert conf == 0.0
+
+    def test_none_when_no_usable_keypoints(self) -> None:
+        pt, conf = body_aim_point([_LOW] * 17, framing="upper_body")
+        assert pt is None and conf == 0.0

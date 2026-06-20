@@ -36,6 +36,13 @@ def main(argv: list[str] | None = None) -> int:
              "…/AutoPTZ/models).",
     )
     parser.add_argument(
+        "--tier",
+        choices=("all", "auto", "fast", "balanced", "medium"),
+        default="all",
+        help="Which detector tier(s) to fetch (default: all, so the Balanced "
+             "and Medium tiers work offline too).",
+    )
+    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable debug logging.",
@@ -49,21 +56,38 @@ def main(argv: list[str] | None = None) -> int:
     log = logging.getLogger("fetch_models")
 
     # Import lazily so --help works without the engine package importable.
-    from autoptz.engine.runtime.models import ModelManager
+    from autoptz.engine.runtime.models import detector_model_for_tier, ModelManager
 
     mgr = ModelManager(cache_dir=args.cache_dir)
     log.info("Model cache dir: %s", mgr.cache_dir)
 
-    path = mgr.ensure_detector()
-    if path is None:
-        log.error(
-            "Could not obtain a detector model. Ensure `ultralytics` is "
-            "installed and you have network access, then retry.",
-        )
-        return 1
+    # Resolve the requested tier(s) to their distinct weight files so we don't
+    # export the same .pt twice (auto and fast both map to yolo11n).
+    tiers = ("auto", "fast", "balanced", "medium") if args.tier == "all" else (args.tier,)
+    seen_models: set[str] = set()
+    ok_any = False
+    failed: list[str] = []
+    for tier in tiers:
+        model_pt = detector_model_for_tier(tier)
+        if model_pt in seen_models:
+            continue
+        seen_models.add(model_pt)
+        log.info("Fetching detector tier %r (%s)…", tier, model_pt)
+        path = mgr.ensure_detector(tier=tier)
+        if path is None:
+            failed.append(f"{tier} ({model_pt}): {mgr.last_error or 'unavailable'}")
+            log.error("  → FAILED: %s", mgr.last_error or "unavailable")
+        else:
+            ok_any = True
+            log.info("  → ready: %s", path)
 
-    log.info("Detector model ready: %s", path)
-    return 0
+    if failed:
+        log.error(
+            "Some tiers could not be fetched (need `ultralytics` installed + "
+            "network access, or set AUTOPTZ_MODEL_URL):\n  - %s",
+            "\n  - ".join(failed),
+        )
+    return 0 if ok_any and not failed else (0 if ok_any else 1)
 
 
 if __name__ == "__main__":

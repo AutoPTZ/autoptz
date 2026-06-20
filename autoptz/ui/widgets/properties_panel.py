@@ -123,10 +123,11 @@ class _PresetTile(QWidget):
         # ⋯ overflow menu pinned to the thumbnail's top-right corner.
         self._menu_btn = QPushButton("⋯", self._thumb)
         self._menu_btn.setObjectName("presetMenuBtn")
-        self._menu_btn.setFixedSize(18, 18)
+        _menu_sz = T.fs(18)
+        self._menu_btn.setFixedSize(_menu_sz, _menu_sz)
         self._menu_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._menu_btn.setCursor(Qt.CursorShape.ArrowCursor)
-        self._menu_btn.move(_PRESET_THUMB - 20, 2)
+        self._menu_btn.move(_PRESET_THUMB - _menu_sz - 2, 2)
         self._menu_btn.clicked.connect(self._open_menu)
 
         self.restyle()
@@ -285,6 +286,8 @@ class PropertiesPanel(QWidget):
         _connect(self._client, "trackingChanged", lambda cid: self._sync_track_state()
                  if cid == self._camera_id else None)
         _connect(self._client, "telemetryUpdated", lambda *_: self._on_telemetry())
+        # Re-grey Mode▸Stable live when the global ReID feature is toggled.
+        _connect(self._client, "featuresChanged", self._refresh_reid_gating)
         # Re-render preset tiles when this camera's config changes (e.g. after a
         # save/clear writes the new ``preset_slots`` back asynchronously).
         _connect(self._client, "configChanged", self._on_config_changed)
@@ -364,6 +367,11 @@ class PropertiesPanel(QWidget):
             "hidden people but cost more CPU; “auto” adapts the floor to the "
             "current load."
         )))
+        # Live readout of what "auto" is actually resolving to right now (and why).
+        self._quality_effective = QLabel("")
+        self._quality_effective.setWordWrap(True)
+        self._muted_captions.append(self._quality_effective)
+        df.addRow("", self._quality_effective)
         self._detect_interval = QSpinBox(); self._detect_interval.setRange(1, 30)
         self._detect_interval.valueChanged.connect(self._schedule)
         self._detect_chip = CostChip("heavy")
@@ -371,6 +379,11 @@ class PropertiesPanel(QWidget):
         df.addRow("Detect every N frames", _with_chip(
             self._detect_interval, self._detect_chip, HelpBadge(_COST_HELP["detect_interval"]),
         ))
+        # Live readout of the *effective* cadence when the engine auto-adjusts it.
+        self._detect_effective = QLabel("")
+        self._detect_effective.setWordWrap(True)
+        self._muted_captions.append(self._detect_effective)
+        df.addRow("", self._detect_effective)
         d.add_widget(_wrap(df))
         self._col.addWidget(d)
 
@@ -388,6 +401,9 @@ class PropertiesPanel(QWidget):
             ("pose", "Pose skeleton",
              "Draw the selected person's body skeleton — shows for whoever you "
              "click/track (needs Pose enabled in Services)."),
+            ("prediction", "Motion prediction",
+             "Debug overlay: draw predicted target motion/ghost box. Off by "
+             "default so the target overlay stays one true box plus PTZ aim dot."),
         ):
             cb = QCheckBox(label)
             cb.setChecked(bool(cur_ov.get(key, key == "detection")))
@@ -407,7 +423,7 @@ class PropertiesPanel(QWidget):
         self._track_btn = QPushButton("Track")
         self._track_btn.setObjectName("trackToggleBtn")
         self._track_btn.setCheckable(True)
-        self._track_btn.setMinimumHeight(34)
+        self._track_btn.setMinimumHeight(T.fs(34))
         self._track_btn.setToolTip(
             "Master on/off for detection-driven PTZ tracking on this camera."
         )
@@ -430,15 +446,22 @@ class PropertiesPanel(QWidget):
         for value, caption in _TRACKING_MODE_CHOICES:
             self._tracking_mode.addItem(caption, value)
         self._tracking_mode.setToolTip(
-            "Stable holds the selected person through crossings using ReID when "
-            "available. Responsive follows fresher detections with less delay."
+            "Stable holds the selected person through crossings using appearance "
+            "ReID (needs the ReID feature on in Services). Responsive follows the "
+            "freshest detection with no ReID hold and less delay."
         )
         self._tracking_mode.currentIndexChanged.connect(self._schedule)
+        self._tracking_mode.currentIndexChanged.connect(self._refresh_reid_gating)
         tf.addRow("Mode", _with_chip(self._tracking_mode, HelpBadge(
-            "Stable is best for crowded scenes and requires ReID for full "
-            "person-level recovery. Responsive is lower latency and better for "
-            "solo scenes, but can switch bodies more easily."
+            "Stable is best for crowded scenes and uses ReID for person-level "
+            "recovery (toggle ReID in Services). Responsive is lower latency and "
+            "better for solo scenes, but can switch bodies more easily."
         )))
+        # Caption shown when Stable is picked but the global ReID feature is off.
+        self._mode_caption = QLabel("")
+        self._mode_caption.setWordWrap(True)
+        self._muted_captions.append(self._mode_caption)
+        tf.addRow("", self._mode_caption)
         self._tracker = QComboBox(); self._tracker.addItems(["botsort", "deepocsort", "bytetrack"])
         self._tracker.setToolTip(_COST_HELP["tracker"])
         self._tracker.currentTextChanged.connect(self._schedule)
@@ -479,12 +502,8 @@ class PropertiesPanel(QWidget):
             "framing, or included so reaching out widens the shot. The aim circle "
             "always stays on the body either way."
         )))
-        self._reid = QCheckBox("Enable ReID (occlusion recovery)")
-        self._reid.toggled.connect(self._schedule)
-        self._reid_chip = CostChip("heavy"); self._reid_chip.setToolTip(_COST_HELP["reid"])
-        tf.addRow("", _with_chip(
-            self._reid, self._reid_chip, HelpBadge(_COST_HELP["reid"]),
-        ))
+        # ReID is no longer a per-camera checkbox: it's the global "reid" feature
+        # (Services) combined with the per-camera Mode above ("Stable" uses it).
         self._face = QCheckBox("Confirm with face recognition")
         self._face.toggled.connect(self._schedule)
         self._face_chip = CostChip("medium"); self._face_chip.setToolTip(_COST_HELP["face_confirm"])
@@ -610,6 +629,14 @@ class PropertiesPanel(QWidget):
             "Move the framing box up or down. Positive values place the hold-still "
             "region higher in the frame.")))
 
+        center = QPushButton("Center")
+        center.setToolTip("Reset Box X and Box Y to the exact frame center.")
+        center.clicked.connect(self._center_framing_box)
+        af.addRow("", _with_chip(center, HelpBadge(
+            "Sets the framing box centre to exact 0 / 0. Tile dragging also snaps "
+            "each axis to exact center when it is within 4%."
+        )))
+
         wh, self._safe_w, self._safe_w_val = _slider(
             3, 90, "Half-width of the framing box as a fraction of the frame.")
         self._safe_w.valueChanged.connect(
@@ -697,7 +724,7 @@ class PropertiesPanel(QWidget):
         for text, r, c, vec in dirs:
             b = QPushButton(text)
             b.setObjectName("ptzPadBtn")
-            b.setFixedSize(38, 34)
+            b.setFixedSize(T.fs(38), T.fs(34))
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.pressed.connect(lambda v=vec: self._nudge(*v))
             b.released.connect(lambda: self._nudge(0, 0, 0))
@@ -719,7 +746,7 @@ class PropertiesPanel(QWidget):
             (self._zoom_out, (0, 0, -1), "Zoom out (hold)"),
         ):
             b.setObjectName("ptzZoomBtn")
-            b.setFixedSize(38, 34)
+            b.setFixedSize(T.fs(38), T.fs(34))
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setToolTip(tip)
             b.pressed.connect(lambda v=vec: self._nudge(*v))
@@ -738,13 +765,13 @@ class PropertiesPanel(QWidget):
         actions.setSpacing(6)
         self._home_btn = QPushButton("⌂  Home")
         self._home_btn.setObjectName("ptzActionBtn")
-        self._home_btn.setMinimumHeight(28)
+        self._home_btn.setMinimumHeight(T.fs(28))
         self._home_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._home_btn.setToolTip("Recall the camera's home position.")
         self._home_btn.clicked.connect(self._ptz_home)
         self._menu_btn = QPushButton("☰  Menu")
         self._menu_btn.setObjectName("ptzActionBtn")
-        self._menu_btn.setMinimumHeight(28)
+        self._menu_btn.setMinimumHeight(T.fs(28))
         self._menu_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._menu_btn.setToolTip("Open the camera's on-screen menu (if supported).")
         self._menu_btn.clicked.connect(self._ptz_menu)
@@ -945,8 +972,7 @@ class PropertiesPanel(QWidget):
 
         The slider's max tracks the source's *detected* hardware fps ceiling
         (``client.source_fps_cap``) when known, and moving it applies the new
-        rate live via ``client.setTargetFps`` (immediate) on top of the debounced
-        config push.
+        rate live via ``client.setTargetFps`` on release/keyboard changes.
         """
         holder = QWidget()
         col = QVBoxLayout(holder)
@@ -955,11 +981,13 @@ class PropertiesPanel(QWidget):
         top = QHBoxLayout(); top.setContentsMargins(0, 0, 0, 0); top.setSpacing(8)
         self._fps = QSlider(Qt.Orientation.Horizontal)
         self._fps.setRange(1, 60)
+        self._fps.setTracking(False)
         self._fps.setToolTip(
             "Frames per second to request from the camera. Higher is smoother for "
             "tracking but uses more CPU/GPU; the cap reflects the source's "
             "detected hardware maximum. Changes apply live."
         )
+        self._fps.sliderMoved.connect(self._set_fps_value_label)
         self._fps.valueChanged.connect(self._on_fps_changed)
         self._fps_value = QLabel("30 fps")
         self._fps_value.setMinimumWidth(48)
@@ -980,10 +1008,11 @@ class PropertiesPanel(QWidget):
         )
 
     def _fps_cap(self) -> int:
-        """The slider's max: the detected hardware ceiling, else a 60/120 fallback.
+        """The slider max: trusted hardware cap, else current requested rate.
 
-        Falls back to the source-type heuristic (USB 60, networked 120) only when
-        the engine hasn't yet reported a real cap for this camera.
+        When AVFoundation/OpenCV reports a real source ceiling we trust it. When
+        the cap is still unknown, do not invent a USB 60 fps range for a 30 fps
+        camera; expose the configured/measured neighborhood instead.
         """
         cap = 0.0
         if self._camera_id:
@@ -991,7 +1020,13 @@ class PropertiesPanel(QWidget):
         if cap and cap >= 1.0:
             return int(round(cap))
         src = (self._cfg.get("source", {}) or {}) if self._cfg else {}
-        return 60 if src.get("type", "usb") == "usb" else 120
+        configured = int(round(float(src.get("fps", 30) or 30)))
+        measured = 0
+        if self._camera_id:
+            measured = int(round(_safe(
+                lambda: float(self._client.cameraModel.get_record(self._camera_id).fps), 0.0,
+            ) or 0.0))
+        return max(1, min(120, max(30, configured, measured)))
 
     def _has_trusted_fps_cap(self) -> bool:
         if not self._camera_id:
@@ -1050,7 +1085,6 @@ class PropertiesPanel(QWidget):
                 self._framing, tr.get("framing") or tr.get("aim_region") or "upper_body",
             )
             self._ignore_arms.setChecked((tr.get("aim_body_mode") or "torso") == "torso")
-            self._reid.setChecked(bool(tr.get("reid_enabled", False)))
             self._face.setChecked(bool(tr.get("face_confirm", False)))
             _set_combo(self._backend, pz.get("backend", "auto"))
             self._ptz_address.setText(pz.get("address") or "")
@@ -1087,6 +1121,31 @@ class PropertiesPanel(QWidget):
         finally:
             self._loading = False
         self._refresh_cost_chips()
+        self._refresh_reid_gating()
+
+    def _refresh_reid_gating(self) -> None:
+        """Grey Mode▸Stable when the global ReID feature is off, and caption why.
+
+        Stable mode depends on the ReID feature (Services). When it's off, Stable
+        can't hold via ReID, so we disable the option and note that a still-stored
+        Stable selection behaves like Responsive until ReID is turned back on."""
+        reid_on = bool((_safe(lambda: self._client.features(), {}) or {}).get("reid", True))
+        idx = self._tracking_mode.findData("stable")
+        model = self._tracking_mode.model()
+        item = model.item(idx) if (idx >= 0 and hasattr(model, "item")) else None
+        if item is not None:
+            item.setEnabled(reid_on)
+            item.setToolTip("" if reid_on else "Enable ReID in Services to use Stable")
+        cur = self._tracking_mode.currentData()
+        if not reid_on and cur == "stable":
+            self._mode_caption.setText(
+                "Stable needs the ReID feature (off in Services) — acting as "
+                "Responsive until it's turned on."
+            )
+            self._mode_caption.setVisible(True)
+        else:
+            self._mode_caption.clear()
+            self._mode_caption.setVisible(False)
 
     def _schedule(self) -> None:
         if self._loading or not self._camera_id:
@@ -1127,6 +1186,17 @@ class PropertiesPanel(QWidget):
         except Exception:  # noqa: BLE001
             log.debug("framing live push failed", exc_info=True)
 
+    def _center_framing_box(self) -> None:
+        """Reset framing-box X/Y to exact center and persist immediately."""
+        if self._loading:
+            return
+        for slider, label in ((self._safe_x, self._safe_x_val), (self._safe_y, self._safe_y_val)):
+            slider.blockSignals(True)
+            slider.setValue(0)
+            slider.blockSignals(False)
+            label.setText(_signed_pct(0))
+        self._push_framing()
+
     def _sync_framing_sliders(self) -> None:
         """Mirror the framing box config into the sliders (e.g. after a tile drag)."""
         pz = (self._cfg or {}).get("ptz") or {}
@@ -1163,7 +1233,6 @@ class PropertiesPanel(QWidget):
         _restyle_chip(self._detect_chip, "heavy" if di <= 2 else "medium" if di <= 5 else "light")
         _restyle_chip(self._tracker_chip,
                       "light" if self._tracker.currentText() == "bytetrack" else "medium")
-        self._reid_chip.setVisible(self._reid.isChecked())
         self._face_chip.setVisible(self._face.isChecked())
 
     def _push(self) -> None:
@@ -1192,7 +1261,6 @@ class PropertiesPanel(QWidget):
         cfg["tracking"]["aim_body_mode"] = (
             "torso" if self._ignore_arms.isChecked() else "full_silhouette"
         )
-        cfg["tracking"]["reid_enabled"] = self._reid.isChecked()
         cfg["tracking"]["face_confirm"] = self._face.isChecked()
         cfg["ptz"]["backend"] = self._backend.currentText()
         cfg["ptz"]["address"] = self._ptz_address.text().strip() or None
@@ -1235,13 +1303,50 @@ class PropertiesPanel(QWidget):
             self._client.setTargetFps(self._camera_id, float(value))
         except Exception:  # noqa: BLE001
             log.debug("setTargetFps failed", exc_info=True)
-        # …and still schedule the debounced full-config push.
-        self._schedule()
 
     def _on_telemetry(self) -> None:
         """Per-tick UI refresh driven by ``telemetryUpdated``."""
         self._update_measured_fps()
+        self._update_effective_detection()
         self._sync_track_state()
+
+    def _update_effective_detection(self) -> None:
+        """Echo what the engine is *actually* doing next to the configured values.
+
+        When the user picks ``auto`` quality or the engine relaxes the detector
+        cadence under load, show the resolved value (and the reason, on hover) so
+        the auto-scaling stays transparent instead of looking like the control
+        does nothing."""
+        if not self._camera_id:
+            return
+        rec = _safe(lambda: self._client.cameraModel.get_record(self._camera_id), None)
+        tel = getattr(rec, "telemetry", None) if rec is not None else None
+        qs = getattr(tel, "quality_state", None) if tel is not None else None
+
+        # Quality floor: when "auto", surface the level it's resolving to + why.
+        active = str(getattr(qs, "active", "") or "") if qs is not None else ""
+        reason = str(getattr(qs, "reason", "") or "") if qs is not None else ""
+        if self._quality.currentText() == "auto" and active and active != "auto":
+            self._quality_effective.setText(f"auto → currently {active}")
+            self._quality_effective.setToolTip(reason)
+            self._quality_effective.setVisible(True)
+        else:
+            self._quality_effective.clear()
+            self._quality_effective.setVisible(False)
+
+        # Detect-every: surface the effective cadence when the engine overrides it.
+        base = self._detect_interval.value()
+        eff = int(getattr(qs, "detect_interval", base) or base) if qs is not None else base
+        if eff and eff != base:
+            self._detect_effective.setText(
+                f"effective: every {eff} frame{'s' if eff != 1 else ''} "
+                "(auto-adjusted under load)"
+            )
+            self._detect_effective.setToolTip(reason)
+            self._detect_effective.setVisible(True)
+        else:
+            self._detect_effective.clear()
+            self._detect_effective.setVisible(False)
 
     def _sync_track_state(self) -> None:
         """Reflect the camera's *live* tracking on/off in the toggle button.
@@ -1269,7 +1374,21 @@ class PropertiesPanel(QWidget):
         m = _safe(
             lambda: float(self._client.cameraModel.get_record(self._camera_id).fps), 0.0,
         )
-        self._fps_measured.setText(f"measured: {m:.1f} fps" if m > 0 else "measured: —")
+        if m <= 0:
+            self._fps_measured.setText("measured: —")
+            return
+        requested = float(self._fps.value())
+        text = f"measured: {m:.1f} fps"
+        # When the camera can't reach the requested rate, say so plainly instead
+        # of leaving the operator to wonder why "30" runs at 15.
+        if requested >= 1.0 and m < requested * 0.8 and (requested - m) >= 3.0:
+            text += (
+                f" — source tops out near {m:.0f}; lower the rate or this is the "
+                "hardware ceiling"
+                if self._has_trusted_fps_cap()
+                else f" — source isn't reaching {requested:.0f} fps"
+            )
+        self._fps_measured.setText(text)
         # The hardware cap can arrive after load (it rides telemetry); raise the
         # slider's ceiling to the real maximum once it's known.
         cap = self._fps_cap()

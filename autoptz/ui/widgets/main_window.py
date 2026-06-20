@@ -284,6 +284,8 @@ class MainWindow(QMainWindow):
              "Show face-recognition boxes with the matched name."),
             ("pose", "Pose skeleton",
              "Draw the tracked person's body skeleton."),
+            ("prediction", "Motion prediction",
+             "Debug overlay: draw the target prediction ghost/lead indicator."),
         ):
             act = QAction(label, self, checkable=True)
             act.setChecked(bool(cur.get(key, key == "detection")))

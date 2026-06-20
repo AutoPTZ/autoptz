@@ -89,7 +89,7 @@ class TestAdapterFrameSourceFpsLimit:
 
         class Adapter:
             def __init__(self) -> None:
-                self._target_fps = 30.0
+                self._target_fps = 10.0  # period = 0.1s
                 self.reads = 0
 
             def _read_frame(self):
@@ -114,14 +114,24 @@ class TestAdapterFrameSourceFpsLimit:
 
         adapter = Adapter()
         source = _AdapterFrameSource(adapter)
-        assert source.read() is not None
 
-        source.set_target_fps(10.0)
-        now[0] += 0.02
+        # Deadline accumulator: the first read anchors the cadence (no sleep),
+        # setting the next deadline at t0 + period (100.1).
         assert source.read() is not None
+        assert sleeps == []
 
-        assert adapter.reads == 2
-        assert sleeps == pytest.approx([0.08], abs=1e-6)
+        # Arriving 0.04s later must sleep only the *remaining* 0.06s to the
+        # deadline — not a full period stacked on top of the read (the old bug).
+        now[0] += 0.04
+        assert source.read() is not None
+        assert sleeps == pytest.approx([0.06], abs=1e-6)
+
+        # Arriving after the next deadline has already passed: no sleep at all,
+        # so a blocking/slow source is never double-paced.
+        now[0] += 0.12
+        assert source.read() is not None
+        assert len(sleeps) == 1
+        assert adapter.reads == 3
 
 
 class FakeWorker:
@@ -653,9 +663,10 @@ class TestTrackErrorAimRegion:
         assert sil_h == pytest.approx(torso_h)    # same bbox height when pose absent
 
     def test_pose_aim_sits_on_torso_and_sets_source(self) -> None:
-        # With a confident pose, the aim CENTRE is the pose torso anchor (not the
-        # box) and ``aim_source == "pose"`` — this is what keeps the on-screen
-        # circle on the skeleton and following the body, not the bounding box.
+        # With a confident pose, the aim CENTRE is the landmark-precise torso
+        # anchor fused with the box (pose-weighted by confidence) and
+        # ``aim_source == "pose"`` — this keeps the on-screen circle on the body,
+        # not the bounding box.
         from autoptz.engine.pipeline.framing import Keypoint
 
         class _FakePose:
@@ -678,9 +689,10 @@ class TestTrackErrorAimRegion:
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         (ex, ey), _h = w._track_error(trk, frame, now=123.0)
         assert trk.aim_source == "pose"
-        # upper_body bias → shoulder midpoint (50, 30), not the box centre (50, 50).
+        # upper_body → chest anchor (shoulders y=30 nudged 20% toward hips y=70 →
+        # y≈38), horizontally on the shoulder centre (x=50), NOT the box centre y.
         assert trk.aim_x == pytest.approx(50.0, abs=1.0)
-        assert trk.aim_y == pytest.approx(30.0, abs=1.0)
+        assert trk.aim_y == pytest.approx(38.0, abs=1.5)
         assert ey > 0.0  # torso anchor sits above frame centre
 
     def test_target_aim_fields_are_annotated(self) -> None:

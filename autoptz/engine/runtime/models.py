@@ -48,6 +48,7 @@ _DETECTOR_TIER_TO_PT = {
     "nano": "yolo11n.pt",
     "balanced": "yolo11s.pt",
     "small": "yolo11s.pt",
+    "medium": "yolo11m.pt",
 }
 
 
@@ -96,12 +97,21 @@ class ModelManager:
     def __init__(self, cache_dir: Path | None = None) -> None:
         self._cache_dir = Path(cache_dir) if cache_dir is not None else _models_cache_dir()
         self._lock = Lock()
+        # Human-readable reason the most recent detector resolution returned
+        # None ("" = no failure).  Surfaced to the UI so a silent fall-back to
+        # live-preview-only doesn't read as "the model tier doesn't exist".
+        self._last_error = ""
 
     # ── public API ────────────────────────────────────────────────────────────
 
     @property
     def cache_dir(self) -> Path:
         return self._cache_dir
+
+    @property
+    def last_error(self) -> str:
+        """Why the last :meth:`ensure_detector` failed, or "" if it succeeded."""
+        return self._last_error
 
     def ensure_detector(
         self,
@@ -124,6 +134,7 @@ class ModelManager:
         Never raises: a missing ultralytics / model / network logs a warning
         and returns ``None`` so the engine still delivers live preview.
         """
+        self._last_error = ""
         # 1. Env override wins outright.
         env = os.environ.get("AUTOPTZ_MODEL_PATH")
         if env:
@@ -187,16 +198,40 @@ class ModelManager:
 
     # ── internals ─────────────────────────────────────────────────────────────
 
+    def _prebuilt_url_for(self, stem: str) -> str:
+        """Resolve a prebuilt-ONNX download URL for a model *stem* ("yolo11s").
+
+        Resolution order so a torch-free mirror can serve *every* tier:
+        1. Per-model env override ``AUTOPTZ_MODEL_URL_<STEM>`` (e.g.
+           ``AUTOPTZ_MODEL_URL_YOLO11M``).
+        2. ``AUTOPTZ_MODEL_URL`` with a ``{stem}``/``{model}`` placeholder filled
+           in, so one template (``https://mirror/{stem}.onnx``) covers all tiers.
+        3. A placeholder-free ``AUTOPTZ_MODEL_URL`` is honoured **only** for the
+           default detector, so it can't fetch the wrong weights for balanced/
+           medium.
+        """
+        per_model = os.environ.get(
+            f"AUTOPTZ_MODEL_URL_{stem.upper().replace('-', '_')}"
+        )
+        if per_model:
+            return per_model
+        base = os.environ.get("AUTOPTZ_MODEL_URL", _DEFAULT_PREBUILT_URL)
+        if not base:
+            return ""
+        if "{stem}" in base or "{model}" in base:
+            return base.format(stem=stem, model=stem)
+        return base if stem == Path(_DEFAULT_DETECTOR_PT).stem else ""
+
     def _download_prebuilt(self, onnx_path: Path) -> str | None:
         """Download the prebuilt YOLO11 ONNX (no torch) to *onnx_path*.
 
-        Streams ``AUTOPTZ_MODEL_URL`` (default HuggingFace export) to a temp
+        Streams the tier-resolved URL (see :meth:`_prebuilt_url_for`) to a temp
         file in the cache dir, then atomically moves it into place once the
         download is complete and looks like a real model.  Returns the path on
         success, ``None`` on any failure (logged) so ``ensure_detector`` can
         fall back to the ultralytics export.  Never raises.
         """
-        url = os.environ.get("AUTOPTZ_MODEL_URL", _DEFAULT_PREBUILT_URL)
+        url = self._prebuilt_url_for(onnx_path.stem)
         if not url:
             return None
 
@@ -256,6 +291,11 @@ class ModelManager:
         try:
             from ultralytics import YOLO  # noqa: PLC0415
         except Exception:  # noqa: BLE001 — ImportError or transitive import failure
+            self._last_error = (
+                f"{Path(model_pt).stem}: ultralytics not installed and no "
+                "prebuilt ONNX. Install ultralytics, run "
+                "`python -m tools.fetch_models`, or set AUTOPTZ_MODEL_URL."
+            )
             log.warning(
                 "ultralytics not installed; detector unavailable "
                 "(live-preview-only). Install it or pre-fetch with "
@@ -296,7 +336,12 @@ class ModelManager:
                     if exported_path.is_file():
                         log.info("Detector ONNX ready at %s", exported_path)
                         return str(exported_path)
-        except Exception:  # noqa: BLE001 — network/export/runtime errors
+        except Exception as exc:  # noqa: BLE001 — network/export/runtime errors
+            self._last_error = (
+                f"{Path(model_pt).stem}: download/export failed "
+                f"({type(exc).__name__}). Check the network or pre-fetch with "
+                "`python -m tools.fetch_models`."
+            )
             log.warning(
                 "Detector model download/export failed; running "
                 "live-preview-only. Pre-fetch offline with "
@@ -314,6 +359,10 @@ class ModelManager:
             log.info("Detector ONNX ready at %s", onnx_path)
             return str(onnx_path)
 
+        self._last_error = (
+            f"{onnx_path.stem}: export reported success but the ONNX file is "
+            "missing."
+        )
         log.warning("Detector export reported success but %s is missing.", onnx_path)
         return None
 

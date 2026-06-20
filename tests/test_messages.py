@@ -21,10 +21,15 @@ from autoptz.engine.runtime.messages import (
     PtzSavePresetCmd,
     PTZState,
     RemoveCameraCmd,
+    RuntimeEventInfo,
+    RuntimeServiceInfo,
     SetLayoutCmd,
     SetTargetCmd,
+    StageTimingInfo,
+    SwitchStateInfo,
     TelemetryMsg,
     TrackInfo,
+    QualityStateInfo,
 )
 
 
@@ -69,7 +74,7 @@ class TestTelemetryMsg:
     def test_msgpack_is_compact(self) -> None:
         msg = TelemetryMsg(camera_id="x", seq=0)
         packed = msg.to_msgpack()
-        assert len(packed) < 512, "Bare telemetry should be small"
+        assert len(packed) < 1024, "Bare telemetry should stay reasonably small"
 
     def test_ts_auto_filled(self) -> None:
         before = time.time()
@@ -120,6 +125,56 @@ class TestTelemetryMsg:
         assert restored.detect_ms == 8.5
         assert restored.face_ms == 13.0
         assert restored.pose_ms == 4.5
+
+    def test_runtime_transparency_fields_round_trip(self) -> None:
+        msg = TelemetryMsg(
+            camera_id="c",
+            seq=1,
+            target_fps=30.0,
+            frame_budget_ms=33.333,
+            runtime_services=[
+                RuntimeServiceInfo(
+                    key="detector", name="Detector", scope="global",
+                    state="active", model="yolo11s.onnx", tier="balanced",
+                    ep="CoreMLExecutionProvider",
+                ),
+            ],
+            stage_timings=[
+                StageTimingInfo(
+                    key="detect", name="Detector", status="active",
+                    last_ms=12.0, avg_ms=10.0, p95_ms=15.0,
+                    cadence="every frame", fresh=True, budget_pct=30.0,
+                ),
+            ],
+            quality_state=QualityStateInfo(
+                floor="auto", active="balanced",
+                reason="latency headroom stable",
+                detector_tier="balanced", detector_model="yolo11s.onnx",
+                tracker="botsort", detect_interval=2,
+            ),
+            model_switch=SwitchStateInfo(
+                kind="detector", state="active",
+                from_value="fast", to_value="balanced",
+                active_value="balanced", reason="ready",
+            ),
+            tracker_switch=SwitchStateInfo(
+                kind="tracker", state="active",
+                from_value="bytetrack", to_value="botsort",
+                active_value="botsort",
+            ),
+            runtime_events=[RuntimeEventInfo(kind="detector", message="ready")],
+        )
+        restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+        assert restored.target_fps == pytest.approx(30.0)
+        assert restored.frame_budget_ms == pytest.approx(33.333)
+        assert restored.runtime_services[0].model == "yolo11s.onnx"
+        assert restored.stage_timings[0].avg_ms == pytest.approx(10.0)
+        assert restored.quality_state.reason == "latency headroom stable"
+        assert restored.model_switch is not None
+        assert restored.model_switch.active_value == "balanced"
+        assert restored.tracker_switch is not None
+        assert restored.tracker_switch.to_value == "botsort"
+        assert restored.runtime_events[0].message == "ready"
 
     def test_overlay_payloads_round_trip(self) -> None:
         """Face boxes + target pose keypoints survive msgpack for the overlays."""
