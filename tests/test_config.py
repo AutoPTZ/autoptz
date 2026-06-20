@@ -14,7 +14,6 @@ import pytest
 from pydantic import ValidationError
 
 from autoptz.config.models import (
-    CURRENT_SCHEMA_VERSION,
     AppConfig,
     CameraConfig,
     HardwarePrefs,
@@ -136,7 +135,6 @@ class TestModels:
 
     def test_app_config_defaults(self) -> None:
         cfg = AppConfig()
-        assert cfg.schema_version == CURRENT_SCHEMA_VERSION
         assert cfg.cameras == []
         assert isinstance(cfg.theme, ThemeConfig)
         assert isinstance(cfg.hardware, HardwarePrefs)
@@ -181,20 +179,6 @@ class TestModels:
         assert ptz.safe_zone_x == 0.25
         assert ptz.safe_zone_y == -0.2
 
-    def test_framing_box_migrates_from_legacy_radius(self) -> None:
-        """A pre-box config (radius only) seeds the box half-extents from radius."""
-        ptz = PTZConfig.model_validate({"safe_zone_radius": 0.2})
-        assert ptz.safe_zone_w == 0.2
-        assert ptz.safe_zone_h == 0.2
-
-    def test_framing_box_explicit_wins_over_radius(self) -> None:
-        """An explicit box keeps its own values even when radius is also present."""
-        ptz = PTZConfig.model_validate(
-            {"safe_zone_w": 0.1, "safe_zone_h": 0.3, "safe_zone_radius": 0.2}
-        )
-        assert ptz.safe_zone_w == 0.1
-        assert ptz.safe_zone_h == 0.3
-
     def test_framing_roundness_defaults_to_oval(self) -> None:
         """The framing region defaults to a full oval (roundness 1.0)."""
         assert PTZConfig().safe_zone_roundness == 1.0
@@ -212,76 +196,18 @@ class TestModels:
             HardwarePrefs(max_workers=100)
 
 
-# ── Store: bootstrap & schema version ─────────────────────────────────────────
+# ── Store: bootstrap ──────────────────────────────────────────────────────────
 
 
 class TestStoreBootstrap:
-    def test_schema_version_set_on_init(self, store: ConfigStore) -> None:
-        assert store._get_schema_version() == CURRENT_SCHEMA_VERSION
-
     def test_idempotent_bootstrap(self, tmp_path: Path) -> None:
-        """Opening the same DB twice must not raise or reset the version."""
+        """Opening the same DB twice must not raise or lose data."""
         p = tmp_path / "idempotent.db"
         s1 = ConfigStore(db_path=p, debounce_s=0)
+        s1.save_camera(CameraConfig(name="Keep"))
         s1.close()
         s2 = ConfigStore(db_path=p, debounce_s=0)
-        assert s2._get_schema_version() == CURRENT_SCHEMA_VERSION
-        s2.close()
-
-    def test_empty_db_migrated_to_current(self, tmp_path: Path) -> None:
-        """A DB with schema_version=0 (simulated old DB) must migrate cleanly."""
-        p = tmp_path / "old.db"
-        import sqlite3
-
-        conn = sqlite3.connect(str(p))
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value JSON NOT NULL)"
-        )
-        conn.execute("INSERT INTO app_settings(key,value) VALUES ('schema_version','0')")
-        conn.commit()
-        conn.close()
-
-        store = ConfigStore(db_path=p, debounce_s=0)
-        assert store._get_schema_version() == CURRENT_SCHEMA_VERSION
-        store.close()
-
-    def test_v3_migration_shortens_old_default_coast_window(self, tmp_path: Path) -> None:
-        p = tmp_path / "v3.db"
-        old_cam = CameraConfig(
-            name="Old Coast",
-            tracking=TrackingConfig(coast_window_ms=1500),
-        )
-        s1 = ConfigStore(db_path=p, debounce_s=0)
-        s1.save_camera(old_cam)
-        s1.set_setting("schema_version", 2)
-        s1.close()
-
-        s2 = ConfigStore(db_path=p, debounce_s=0)
-        loaded = s2.load_cameras()[0]
-        assert loaded.tracking.coast_window_ms == 300
-        assert s2._get_schema_version() == CURRENT_SCHEMA_VERSION
-        s2.close()
-
-    def test_v4_migration_adds_aim_body_mode(self, tmp_path: Path) -> None:
-        p = tmp_path / "v4.db"
-        old_cam = CameraConfig(name="Old Aim")
-        data = json.loads(old_cam.model_dump_json())
-        data["tracking"].pop("aim_body_mode", None)
-
-        s1 = ConfigStore(db_path=p, debounce_s=0)
-        with s1._tx() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO cameras(id, name, config, enabled, updated_at) "
-                "VALUES (?, ?, ?, 1, ?)",
-                (old_cam.id, old_cam.name, json.dumps(data), "2026-01-01T00:00:00"),
-            )
-        s1.set_setting("schema_version", 3)
-        s1.close()
-
-        s2 = ConfigStore(db_path=p, debounce_s=0)
-        loaded = s2.load_cameras()[0]
-        assert loaded.tracking.aim_body_mode == "torso"
-        assert s2._get_schema_version() == CURRENT_SCHEMA_VERSION
+        assert [c.name for c in s2.load_cameras()] == ["Keep"]
         s2.close()
 
 
@@ -523,7 +449,7 @@ class TestExportImport:
         store.save_layout(layout)
 
         bundle = store.export_show()
-        assert bundle["schema_version"] == CURRENT_SCHEMA_VERSION
+        assert "exported_at" in bundle
 
         # Fresh store — import into it
         import tempfile
@@ -576,7 +502,6 @@ class TestExportImport:
 
         new_cam = CameraConfig(name="Imported")
         bundle = {
-            "schema_version": CURRENT_SCHEMA_VERSION,
             "cameras": [json.loads(new_cam.model_dump_json())],
             "layouts": [],
         }
@@ -591,7 +516,6 @@ class TestExportImport:
     def test_import_invalid_camera_quarantined(self, store: ConfigStore, cam: CameraConfig) -> None:
         """Invalid camera blobs in the import bundle must quarantine, not raise."""
         bundle = {
-            "schema_version": CURRENT_SCHEMA_VERSION,
             "cameras": [
                 json.loads(cam.model_dump_json()),
                 {"id": "bad", "name": "", "source": "NOT_AN_OBJECT"},  # invalid

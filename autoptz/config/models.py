@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -140,16 +140,8 @@ class PanTiltZoomLimits(BaseModel, frozen=True):
     zoom_max: float = 1.0
 
 
-# Named auto-zoom framing presets (subject-height fractions live in the
-# controller).  Legacy values "tight"/"medium"/"wide" are accepted and migrated
-# to the nearest preset for backward compatibility with older stored configs.
+# Named auto-zoom framing presets (subject-height fractions live in the controller).
 ZoomFraming = Literal["face", "head_shoulders", "upper_body", "full_body", "wide"]
-
-_LEGACY_ZOOM_FRAMING: dict[str, str] = {
-    "tight": "head_shoulders",  # tightest legacy framing → head & shoulders
-    "medium": "upper_body",  # legacy medium → upper body (≈0.45, same target)
-    # "wide" maps to itself (still a valid value)
-}
 
 
 class PtzPresetSlot(BaseModel, frozen=True):
@@ -192,8 +184,7 @@ class PTZConfig(BaseModel, frozen=True):
     # keep them within it.  ``safe_zone_w`` / ``safe_zone_h`` are the box's
     # half-width / half-height as a fraction of the half-frame (0.15 ≈ 15% either
     # side of centre), drawn as a draggable, resizable overlay on the tile.  On by
-    # default so new cameras show the framing region; the legacy single-radius
-    # circle (``safe_zone_radius``) is migrated into the box by the validator.
+    # default so new cameras show the framing region.
     safe_zone_enabled: bool = True
     safe_zone_x: float = Field(default=0.0, ge=-0.9, le=0.9)
     safe_zone_y: float = Field(default=0.0, ge=-0.9, le=0.9)
@@ -202,7 +193,6 @@ class PTZConfig(BaseModel, frozen=True):
     # Corner roundness of the framing box, 0 = sharp rectangle … 1 = full oval.
     # Defaults to a full oval (the framing region reads as a soft ellipse).
     safe_zone_roundness: float = Field(default=1.0, ge=0.0, le=1.0)
-    safe_zone_radius: float = Field(default=0.12, ge=0.02, le=0.6)
     # Loss recovery: when the target is lost past the coast window, gently zoom
     # OUT (this speed) for up to ``reacquire_window_s`` to widen the view and
     # re-find the subject, instead of just stopping dead.
@@ -217,43 +207,16 @@ class PTZConfig(BaseModel, frozen=True):
     # preset saved).  This is UI metadata only — the actual position lives in the
     # camera's PTZ hardware preset memory, which the backend ``save_preset(slot)``
     # / ``goto_preset(slot)`` drive.  Round-trips through JSON (keys are coerced
-    # back to ``int`` on load; legacy plain-string labels are migrated).
+    # back to ``int`` on load).
     preset_slots: dict[int, PtzPresetSlot] = Field(default_factory=dict)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _seed_box_from_radius(cls, data: object) -> object:
-        """Seed the framing-box half-extents from the legacy circle radius.
-
-        Configs saved before the box fields existed carry only
-        ``safe_zone_radius``; map it onto ``safe_zone_w``/``safe_zone_h`` (a
-        square box of the same size) so prior tuning carries over.  Newer configs
-        that already specify the box keep their own values.
-        """
-        if isinstance(data, dict):
-            r = data.get("safe_zone_radius")
-            if r is not None:
-                data.setdefault("safe_zone_w", r)
-                data.setdefault("safe_zone_h", r)
-        return data
-
-    @field_validator("zoom_framing", mode="before")
-    @classmethod
-    def _migrate_legacy_framing(cls, v: object) -> object:
-        """Accept legacy ``tight``/``medium`` and migrate to a named preset."""
-        if isinstance(v, str):
-            return _LEGACY_ZOOM_FRAMING.get(v, v)
-        return v
 
     @field_validator("preset_slots", mode="before")
     @classmethod
     def _coerce_preset_slots(cls, v: object) -> object:
         """Coerce slot keys back to ``int`` and values to :class:`PtzPresetSlot`.
 
-        Accepts the new shape (``{slot: {label, thumbnail}}``), an already-built
-        ``PtzPresetSlot``, and the legacy ``{slot: "label"}`` plain-string form
-        (migrated to ``PtzPresetSlot(label=...)``).  JSON has no int keys, hence
-        the key coercion.
+        Accepts the ``{slot: {label, thumbnail}}`` shape and an already-built
+        ``PtzPresetSlot``.  JSON has no int keys, hence the key coercion.
         """
         if isinstance(v, dict):
             out: dict[int, PtzPresetSlot] = {}
@@ -264,8 +227,6 @@ class PTZConfig(BaseModel, frozen=True):
                     continue
                 if isinstance(val, PtzPresetSlot):
                     out[k] = val
-                elif isinstance(val, str):
-                    out[k] = PtzPresetSlot(label=val)
                 elif isinstance(val, dict):
                     out[k] = PtzPresetSlot(
                         label=str(val.get("label", "")),
@@ -383,11 +344,8 @@ class IdentityRecord(BaseModel, frozen=True):
 
 # ── Top-level app config ──────────────────────────────────────────────────────
 
-CURRENT_SCHEMA_VERSION = 4
-
 
 class AppConfig(BaseModel, frozen=True):
-    schema_version: int = CURRENT_SCHEMA_VERSION
     theme: ThemeConfig = Field(default_factory=ThemeConfig)
     active_layout_id: str = ""
     hardware: HardwarePrefs = Field(default_factory=HardwarePrefs)

@@ -9,7 +9,7 @@ devices are touched.  Covers:
   probable.
 * The ``"auto"`` probe (NDI source → NDI PTZ; address → ONVIF/VISCA-IP).
 * The framing-name → target subject-height mapping in the controller.
-* The ``PTZConfig.zoom_framing`` model change + legacy migration.
+* The ``PTZConfig.zoom_framing`` named presets.
 * CameraWorker integration: manual nudge → ``backend.move_velocity``; auto target
   error → command in the right direction; manual override suspends then resumes
   auto; ``stop()`` always halts the backend.
@@ -259,14 +259,7 @@ class TestFramingModel:
     def test_five_named_presets_accepted(self, name) -> None:
         assert _cfg(zoom_framing=name).zoom_framing == name
 
-    def test_legacy_medium_migrates_to_upper_body(self) -> None:
-        # legacy "medium" → "upper_body" (preserves the 0.45 target)
-        assert _cfg(zoom_framing="medium").zoom_framing == "upper_body"
-
-    def test_legacy_tight_migrates(self) -> None:
-        assert _cfg(zoom_framing="tight").zoom_framing == "head_shoulders"
-
-    def test_legacy_wide_still_valid(self) -> None:
+    def test_wide_preset_accepted(self) -> None:
         assert _cfg(zoom_framing="wide").zoom_framing == "wide"
 
 
@@ -293,18 +286,12 @@ class TestPresetSlotsModel:
         assert restored.preset_slots[3].label == "Podium"
         assert all(isinstance(k, int) for k in restored.preset_slots)
 
-    def test_legacy_string_label_migrates(self) -> None:
-        # An older stored config used {slot: "label"} plain strings.
-        slots = _cfg(preset_slots={0: "Stage", 3: "Podium"}).preset_slots
-        assert slots[0].label == "Stage" and slots[0].thumbnail is None
-        assert slots[3].label == "Podium"
-
-    def test_backward_compatible_when_field_absent(self) -> None:
-        # An older stored config (no preset_slots key) still validates → {}.
+    def test_absent_field_validates_to_empty(self) -> None:
+        # A config with no preset_slots key validates → {}.
         assert PTZConfig.model_validate({"backend": "auto"}).preset_slots == {}
 
     def test_bad_keys_are_dropped_not_raised(self) -> None:
-        slots = _cfg(preset_slots={"x": "nope", 2: "ok"}).preset_slots
+        slots = _cfg(preset_slots={"x": {"label": "nope"}, 2: {"label": "ok"}}).preset_slots
         assert set(slots) == {2} and slots[2].label == "ok"
 
 

@@ -443,19 +443,19 @@ class TestControllerZoom:
         assert zoom == pytest.approx(0.0)
 
     def test_tall_subject_zooms_out(self) -> None:
-        ctrl = PTZController(MockBackend(), _cfg(auto_zoom=True, zoom_framing="medium"))
+        ctrl = PTZController(MockBackend(), _cfg(auto_zoom=True, zoom_framing="upper_body"))
         # subject_height=0.9 >> target 0.45 → zoom out (negative)
         _, _, zoom = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.9, True, t=0.0)
         assert zoom < 0.0
 
     def test_short_subject_zooms_in(self) -> None:
-        ctrl = PTZController(MockBackend(), _cfg(auto_zoom=True, zoom_framing="medium"))
+        ctrl = PTZController(MockBackend(), _cfg(auto_zoom=True, zoom_framing="upper_body"))
         # subject_height=0.1 << target 0.45 → zoom in (positive)
         _, _, zoom = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.1, True, t=0.0)
         assert zoom > 0.0
 
     def test_subject_in_band_no_zoom(self) -> None:
-        ctrl = PTZController(MockBackend(), _cfg(auto_zoom=True, zoom_framing="medium"))
+        ctrl = PTZController(MockBackend(), _cfg(auto_zoom=True, zoom_framing="upper_body"))
         # subject_height ≈ target (0.45 ± 0.05 hysteresis)
         _, _, zoom = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
         assert zoom == pytest.approx(0.0, abs=1e-9)

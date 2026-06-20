@@ -1,14 +1,12 @@
-"""SQLite-backed config store with migration runner and JSON export/import.
+"""SQLite-backed config store with JSON export/import.
 
 Design decisions
 ----------------
 - One SQLite file per user at the platform config dir (§6.3).
-- ``CameraConfig`` is stored as a JSON blob so schema evolution (adding a
-  new sub-field with a default) never requires a SQL column migration.
+- ``CameraConfig`` is stored as a JSON blob so adding a new sub-field with a
+  default never requires a SQL column change.
 - ``ptz_presets``, ``identities``, ``identity_embeddings``, and ``layouts``
   get their own tables so they can be queried/indexed independently.
-- ``schema_version`` is a single row in ``app_settings``; the migration runner
-  applies numbered upgrade functions in order, each in its own transaction.
 - Invalid rows (failing pydantic validation) are quarantined to an
   ``_quarantine`` list and logged — the rest of the config still loads.
 - Debounced writes: callers can call ``save_camera_debounced()``; the store
@@ -32,7 +30,6 @@ from pathlib import Path
 from typing import Any
 
 from autoptz.config.models import (
-    CURRENT_SCHEMA_VERSION,
     AppConfig,
     CameraConfig,
     HardwarePrefs,
@@ -68,7 +65,7 @@ def default_db_path() -> Path:
 
 # ── DDL (schema version 1) ────────────────────────────────────────────────────
 
-_DDL_V1 = """
+_SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS app_settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL    -- JSON stored as text; JSON column type gives NUMERIC affinity
@@ -141,82 +138,6 @@ CREATE INDEX IF NOT EXISTS idx_emb_identity      ON identity_embeddings(identity
 CREATE INDEX IF NOT EXISTS idx_photo_identity    ON identity_photos(identity_id);
 """
 
-# ── Migration registry ────────────────────────────────────────────────────────
-# Each entry: (target_version, callable(conn) -> None)
-# The runner applies all entries whose target_version > current schema_version.
-
-
-def _migrate_to_v1(conn: sqlite3.Connection) -> None:
-    """Apply the v1 schema to an older DB.
-
-    _bootstrap() already runs CREATE TABLE IF NOT EXISTS for all tables, so
-    this migration only needs to exist so the runner bumps schema_version.
-    Future schema changes (ALTER TABLE, new tables) go in subsequent entries.
-    """
-    conn.executescript(_DDL_V1)
-
-
-def _migrate_to_v2(conn: sqlite3.Connection) -> None:
-    """Add the ``identities.enabled`` column (idempotent).
-
-    Fresh DBs already have the column from the updated v1 DDL; an older DB that
-    predates it gets it added here.  ``ADD COLUMN`` on an existing column raises
-    ``OperationalError`` which we swallow so the migration is safe to re-run.
-    """
-    cols = {row["name"] for row in conn.execute("PRAGMA table_info(identities)")}
-    if "enabled" not in cols:
-        conn.execute("ALTER TABLE identities ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
-
-
-def _migrate_to_v3(conn: sqlite3.Connection) -> None:
-    """Shorten the stale-track coast default for existing camera configs.
-
-    Only configs still carrying the old default ``1500`` are migrated. A user
-    who intentionally changed the value keeps their setting.
-    """
-    rows = conn.execute("SELECT id, config FROM cameras").fetchall()
-    for row in rows:
-        try:
-            data = json.loads(row["config"])
-            tracking = data.setdefault("tracking", {})
-            if int(tracking.get("coast_window_ms", 1500)) != 1500:
-                continue
-            tracking["coast_window_ms"] = 300
-            conn.execute(
-                "UPDATE cameras SET config=? WHERE id=?",
-                (json.dumps(data), row["id"]),
-            )
-        except Exception:  # noqa: BLE001
-            log.debug("v3 coast-window migration skipped camera %s", row["id"], exc_info=True)
-
-
-def _migrate_to_v4(conn: sqlite3.Connection) -> None:
-    """Add the tracking aim-body mode to existing camera configs."""
-    rows = conn.execute("SELECT id, config FROM cameras").fetchall()
-    for row in rows:
-        try:
-            data = json.loads(row["config"])
-            tracking = data.setdefault("tracking", {})
-            if "aim_body_mode" in tracking:
-                continue
-            tracking["aim_body_mode"] = "torso"
-            conn.execute(
-                "UPDATE cameras SET config=? WHERE id=?",
-                (json.dumps(data), row["id"]),
-            )
-        except Exception:  # noqa: BLE001
-            log.debug("v4 aim-body-mode migration skipped camera %s", row["id"], exc_info=True)
-
-
-_MIGRATIONS: list[tuple[int, Any]] = [
-    # (target_version, upgrade_fn(conn) -> None)
-    (1, _migrate_to_v1),
-    (2, _migrate_to_v2),
-    (3, _migrate_to_v3),
-    (4, _migrate_to_v4),
-]
-
-
 # ── ConfigStore ───────────────────────────────────────────────────────────────
 
 
@@ -248,7 +169,6 @@ class ConfigStore:
 
         self._open()
         self._bootstrap()
-        self._migrate()
 
     # ── Connection management ──────────────────────────────────────────────────
 
@@ -277,44 +197,9 @@ class ConfigStore:
     # ── Bootstrap & migrations ─────────────────────────────────────────────────
 
     def _bootstrap(self) -> None:
-        """Create all tables if this is a fresh DB, then ensure schema_version exists."""
+        """Create all tables if this is a fresh DB."""
         with self._tx() as conn:
-            conn.executescript(_DDL_V1)
-            # Insert schema_version = 1 only if it doesn't exist yet
-            conn.execute(
-                "INSERT OR IGNORE INTO app_settings(key, value) VALUES (?, ?)",
-                ("schema_version", json.dumps(CURRENT_SCHEMA_VERSION)),
-            )
-
-    def _migrate(self) -> None:
-        """Run any pending migrations in version order."""
-        current = self._get_schema_version()
-        pending = [(v, fn) for v, fn in _MIGRATIONS if v > current]
-        if not pending:
-            return
-        for target_version, fn in sorted(pending, key=lambda x: x[0]):
-            log.info("Migrating DB schema %d → %d", current, target_version)
-            with self._tx() as conn:
-                fn(conn)
-                conn.execute(
-                    "UPDATE app_settings SET value=? WHERE key='schema_version'",
-                    (json.dumps(target_version),),
-                )
-            current = target_version
-        log.info("DB schema is now at version %d", current)
-
-    def _get_schema_version(self) -> int:
-        assert self._conn is not None
-        row = self._conn.execute(
-            "SELECT value FROM app_settings WHERE key='schema_version'"
-        ).fetchone()
-        if row is None:
-            return 0
-        val = row["value"]
-        # Defensive: a legacy DB with NUMERIC-affinity column may return int directly.
-        if isinstance(val, int | float):
-            return int(val)
-        return int(json.loads(val))
+            conn.executescript(_SCHEMA_DDL)
 
     # ── app_settings ──────────────────────────────────────────────────────────
 
@@ -672,7 +557,6 @@ class ConfigStore:
         cameras = self.load_cameras()
         layouts = self.load_layouts()
         out: dict[str, Any] = {
-            "schema_version": CURRENT_SCHEMA_VERSION,
             "exported_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
             "cameras": [json.loads(c.model_dump_json()) for c in cameras],
             "layouts": [json.loads(lo.model_dump_json()) for lo in layouts],
