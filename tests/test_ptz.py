@@ -402,6 +402,26 @@ class TestControllerStateMachine:
         ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, False, t=0.40)
         assert ctrl.state == ControllerState.SEARCHING
 
+    def test_status_snapshot_reports_coast_remaining(self) -> None:
+        ctrl = PTZController(MockBackend(), _cfg(), coast_window_ms=500)
+        ctrl.step((0.3, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
+        ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, False, t=0.10)
+        snap = ctrl.status_snapshot(t=0.25)
+        assert snap["state"] == "coasting"
+        assert snap["action"] == "holding"
+        assert snap["coast_remaining_s"] == pytest.approx(0.35)
+
+    def test_status_snapshot_reports_search_zoom_remaining(self) -> None:
+        cfg = _cfg(loss_zoom_out=0.5, reacquire_window_s=2.0)
+        ctrl = PTZController(MockBackend(), cfg, coast_window_ms=100)
+        ctrl.step((0.3, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
+        ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, False, t=0.05)
+        ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, False, t=0.20)
+        snap = ctrl.status_snapshot(t=0.70)
+        assert snap["state"] == "searching"
+        assert snap["action"] == "zooming_out"
+        assert snap["search_remaining_s"] == pytest.approx(1.5)
+
     def test_coast_expired_sends_stop(self) -> None:
         backend = MockBackend()
         ctrl = PTZController(backend, _cfg(), coast_window_ms=200)

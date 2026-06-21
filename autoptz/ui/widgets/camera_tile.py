@@ -59,8 +59,10 @@ from autoptz.ui.widgets.tile_helpers import (  # re-exported for back-compat
     _rect_jump,
     _snap_center_axis,
     _tracking_enabled,
+    _tracking_status,
     _tracks,
     _upper_body_bbox,  # noqa: F401  re-exported for tests
+    elide_keeping_pct,
 )
 
 log = logging.getLogger(__name__)
@@ -988,6 +990,7 @@ class CameraTile(QWidget):
 
     def _paint_tracks(self, p: QPainter, rec: Any) -> None:
         tracks = _tracks(rec)
+        status = _tracking_status(rec)
         seq = int(getattr(getattr(rec, "telemetry", None), "seq", 0) or 0)
         live = bool(getattr(rec, "tracking_enabled", False))
         show_boxes = self._overlays.get("detection", True)
@@ -1013,7 +1016,9 @@ class CameraTile(QWidget):
             self._paint_pose(p, rec)
         if target is not None:
             # Live tracking the present target → red; locked but idle → green.
-            self._paint_target(p, target, live, seq)
+            self._paint_target(p, target, live, seq, status)
+        elif str(status.get("state", "idle") or "idle") != "idle":
+            self._paint_target_status_label(p, status)
 
     def _paint_faces(self, p: QPainter, rec: Any) -> None:
         """Draw detected face boxes (amber) with the matched name, if any."""
@@ -1094,7 +1099,14 @@ class CameraTile(QWidget):
         )
         p.restore()
 
-    def _paint_target(self, p: QPainter, t: dict[str, Any], live: bool, seq: int) -> None:
+    def _paint_target(
+        self,
+        p: QPainter,
+        t: dict[str, Any],
+        live: bool,
+        seq: int,
+        status: dict[str, Any] | None = None,
+    ) -> None:
         rect = self._map_bbox(t.get("bbox", {}))
         if rect.width() < 2 or rect.height() < 2:
             return
@@ -1121,14 +1133,46 @@ class CameraTile(QWidget):
         p.drawEllipse(QPointF(cx, cy), 4.5, 4.5)
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(QPointF(cx, cy), 9.0, 9.0)
-        # lock label — its pill matches the state; "searching" while coasting.
+        # Lock label — reuse this top-left target chip for tracking status too.
         conf = t.get("confidence")
         ident = t.get("identity") or f"ID {t.get('track_id', '?')}"
-        label = f"Searching: {ident}" if lost else f"Target: {ident}"
-        if not lost and isinstance(conf, int | float) and conf > 0:
+        status = status or {}
+        status_state = str(status.get("state", "idle") or "idle")
+        status_headline = str(status.get("headline", "") or "").strip()
+        status_detail = str(status.get("detail", "") or "").strip()
+        status_severity = str(status.get("severity", "") or "")
+        label = (
+            status_headline
+            if status_headline and status_state != "idle"
+            else (f"Searching: {ident}" if lost else f"Target: {ident}")
+        )
+        if status_state == "locked" and isinstance(conf, int | float) and conf > 0:
             label += f"  {round(conf * 100)}%"
-        self._draw_target_label(p, label, accent)
+        label_detail = "" if status_state in ("", "idle", "locked") else status_detail
+        label_accent = (
+            QColor(T.ERROR)
+            if status_severity == "error"
+            else QColor(T.WARNING)
+            if status_severity == "warning"
+            else accent
+        )
+        self._draw_target_label(p, label, label_accent, detail=label_detail)
         p.restore()
+
+    def _paint_target_status_label(self, p: QPainter, status: dict[str, Any]) -> None:
+        headline = str(status.get("headline", "") or "").strip()
+        if not headline:
+            return
+        detail = str(status.get("detail", "") or "").strip()
+        severity = str(status.get("severity", "") or "")
+        accent = (
+            QColor(T.ERROR)
+            if severity == "error"
+            else QColor(T.WARNING)
+            if severity == "warning"
+            else QColor(T.TARGET)
+        )
+        self._draw_target_label(p, headline, accent, detail=detail)
 
     def _target_aim_point(self, t: dict[str, Any], rect: QRectF) -> QPointF:
         aim = t.get("aim")
@@ -1182,35 +1226,56 @@ class CameraTile(QWidget):
         p.drawText(
             rect,
             Qt.AlignmentFlag.AlignCenter,
-            fm.elidedText(text, Qt.TextElideMode.ElideRight, int(width - pad * 2)),
+            elide_keeping_pct(fm, text, width - pad * 2),
         )
 
-    def _draw_target_label(self, p: QPainter, text: str, bg: QColor) -> None:
+    def _draw_target_label(
+        self,
+        p: QPainter,
+        text: str,
+        bg: QColor,
+        *,
+        detail: str = "",
+    ) -> None:
         """Draw the active target label as a readable tile chip, not a bbox chip."""
         f = QFont(self.font())
         f.setPixelSize(12)
         f.setBold(True)
+        detail_font = QFont(self.font())
+        detail_font.setPixelSize(10)
         p.setFont(f)
         fm = QFontMetrics(f)
+        detail_fm = QFontMetrics(detail_font)
         pad_x = 8
         bounds = self._painted_rect if self._painted_rect.isValid() else QRectF(self.rect())
         max_width = min(360.0, max(120.0, bounds.width() - 16.0))
         min_width = min(max_width, 180.0)
-        width = min(max_width, max(min_width, float(fm.horizontalAdvance(text) + pad_x * 2)))
+        text_width = fm.horizontalAdvance(text)
+        detail_width = detail_fm.horizontalAdvance(detail) if detail else 0
+        width = min(max_width, max(min_width, float(max(text_width, detail_width) + pad_x * 2)))
         x = bounds.left() + 8.0
         y = bounds.top() + 36.0
-        if y + 22.0 > bounds.bottom() - 4.0:
+        height = 38.0 if detail else 22.0
+        if y + height > bounds.bottom() - 4.0:
             y = bounds.top() + 8.0
-        rect = QRectF(x, y, width, 22)
+        rect = QRectF(x, y, width, height)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(bg)
         p.drawRoundedRect(rect, 5, 5)
         p.setPen(QColor(T.VIDEO_TEXT))
         p.drawText(
-            rect,
+            QRectF(rect.left(), rect.top(), rect.width(), 22),
             Qt.AlignmentFlag.AlignCenter,
-            fm.elidedText(text, Qt.TextElideMode.ElideRight, int(width - pad_x * 2)),
+            elide_keeping_pct(fm, text, width - pad_x * 2),
         )
+        if detail:
+            p.setFont(detail_font)
+            p.setPen(QColor(T.VIDEO_TEXT))
+            p.drawText(
+                QRectF(rect.left() + pad_x, rect.top() + 20, rect.width() - pad_x * 2, 14),
+                Qt.AlignmentFlag.AlignCenter,
+                detail_fm.elidedText(detail, Qt.TextElideMode.ElideRight, int(width - pad_x * 2)),
+            )
 
     def _paint_name_pill(self, p: QPainter, rec: Any) -> None:
         name = getattr(rec, "display_name", "") or self.camera_id

@@ -31,6 +31,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -51,6 +52,7 @@ from autoptz.engine.runtime.messages import (
     SwitchStateInfo,
     TelemetryMsg,
     TrackInfo,
+    TrackingStatusInfo,
 )
 
 if TYPE_CHECKING:
@@ -128,6 +130,24 @@ _POSE_TTL_S = 0.12
 # embedder is moderately heavy and per-frame recovery is unnecessary.
 _REID_INTERVAL_S = 0.25
 
+# Conservative target-lock gates. These intentionally prefer a short hold over a
+# one-frame wrong-person switch in crowded scenes.
+_TARGET_HOLD_S = 1.0
+_TARGET_AMBIGUOUS_HOLD_S = 0.75
+_TARGET_JUMP_MIN_PX = 80.0
+_TARGET_JUMP_SCALE = 0.75
+_TARGET_JUMP_IOU = 0.12
+_TARGET_OVERLAP_IOU = 0.08
+_TARGET_CLOSE_Y_OVERLAP = 0.45
+_TARGET_CLOSE_GAP_FRAC = 0.18
+_POSE_BBOX_MARGIN = 0.22
+_POSE_JUMP_MIN_PX = 70.0
+_POSE_JUMP_SCALE = 0.65
+_REID_RECOVERY_CONFIRM_STABLE = 3
+_REID_RECOVERY_CONFIRM_RESPONSIVE = 1
+_REID_RECOVERY_MARGIN = 0.08
+_IDENTITY_TARGET_CONFIRM = 2
+
 # EMA weight for the pose-derived aim point: lower = smoother/laggier.  Light
 # smoothing so noisy keypoint regression doesn't jitter the framing.
 _POSE_AIM_ALPHA = 0.4
@@ -143,6 +163,22 @@ _DEFAULT_FEATURES: dict[str, bool] = {
     # is on AND its tracking_mode is "stable" (see ``_reid_active``).
     "reid": True,
 }
+
+
+@dataclass
+class _TargetLockState:
+    """Last trusted target evidence used to suppress crowded-scene switches."""
+
+    trusted_track_id: int | None = None
+    trusted_bbox: BBox | None = None
+    trusted_identity: str | None = None
+    trusted_identity_id: str | None = None
+    trusted_confidence: float = 0.0
+    trusted_aim: tuple[float, float] | None = None
+    trusted_t: float = 0.0
+    status: str = "idle"
+    reason: str = ""
+    ambiguous_until: float = 0.0
 
 
 # Frame-source abstraction, fps pacing, and source construction live in
@@ -280,6 +316,8 @@ class CameraWorker:
         # tracking state
         self._tracking_enabled = config.target.mode != "off"
         self._target_track_id: int | None = None
+        self._target_lock = _TargetLockState()
+        self._identity_recover_candidate: tuple[str, int, int] | None = None
 
         # ── pose-stable aim (lazy) ───────────────────────────────────────────────
         # Optional keypoint estimator for the active target so an extended arm
@@ -598,18 +636,14 @@ class CameraWorker:
             self._tracking_enabled = bool(payload)
         elif kind == "set_target":
             # An explicit track id supersedes identity targeting for this camera.
-            if payload != self._target_track_id:
-                self._reset_pose_aim()
-                self._reset_reid()  # drop the old subject's appearance template
-            self._target_track_id = payload
+            self._commit_target_track(payload, reset_reid=True, reason="manual")
             self._target_identity_id = None
         elif kind == "set_target_identity":
             self._target_identity_id = payload
             # Clear the explicit track lock so the identity match takes over once
             # the named person is detected ("track when found").
-            self._target_track_id = None
+            self._commit_target_track(None, reset_reid=True, reason="identity")
             self._reset_pose_aim()
-            self._reset_reid()
         elif kind == "enroll_track":
             if len(payload) == 3:
                 track_id, identity_id, name = payload
@@ -745,7 +779,7 @@ class CameraWorker:
             # Manual track ids are backend-local and may not survive a rebuild.
             # Identity targeting stays and will reacquire on the next face/ReID hit.
             if self._target_identity_id is None:
-                self._target_track_id = None
+                self._commit_target_track(None, reset_reid=True, reason="tracker_rebuild")
             self._track_identity.clear()
             self._reset_pose_aim()
             self._reset_reid()
@@ -1000,6 +1034,199 @@ class CameraWorker:
                 return t
         return None
 
+    def _commit_target_track(
+        self,
+        track_id: int | None,
+        *,
+        reset_reid: bool = False,
+        reason: str = "",
+    ) -> None:
+        """Commit the active target track through one state-transition path."""
+        if track_id != self._target_track_id:
+            self._reset_pose_aim()
+            self._target_lock = _TargetLockState(status="pending", reason=reason)
+            self._reid_recover_candidate = None
+            self._identity_recover_candidate = None
+            if reset_reid:
+                self._reset_reid()
+        elif track_id is None:
+            self._target_lock = _TargetLockState(status="idle", reason=reason)
+            if reset_reid:
+                self._reset_reid()
+        self._target_track_id = track_id
+
+    @staticmethod
+    def _bbox_area(bb: BBox) -> float:
+        return max(0.0, float(bb.x2 - bb.x1)) * max(0.0, float(bb.y2 - bb.y1))
+
+    @staticmethod
+    def _bbox_center(bb: BBox) -> tuple[float, float]:
+        return ((float(bb.x1) + float(bb.x2)) * 0.5, (float(bb.y1) + float(bb.y2)) * 0.5)
+
+    @classmethod
+    def _bbox_iou(cls, a: BBox, b: BBox) -> float:
+        ix1 = max(float(a.x1), float(b.x1))
+        iy1 = max(float(a.y1), float(b.y1))
+        ix2 = min(float(a.x2), float(b.x2))
+        iy2 = min(float(a.y2), float(b.y2))
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        union = cls._bbox_area(a) + cls._bbox_area(b) - inter
+        return inter / union if union > 0.0 else 0.0
+
+    @staticmethod
+    def _bbox_y_overlap_frac(a: BBox, b: BBox) -> float:
+        inter = max(0.0, min(float(a.y2), float(b.y2)) - max(float(a.y1), float(b.y1)))
+        denom = max(1.0, min(float(a.y2 - a.y1), float(b.y2 - b.y1)))
+        return inter / denom
+
+    @staticmethod
+    def _bbox_x_gap(a: BBox, b: BBox) -> float:
+        if a.x2 < b.x1:
+            return float(b.x1 - a.x2)
+        if b.x2 < a.x1:
+            return float(a.x1 - b.x2)
+        return 0.0
+
+    def _sync_target_flags(self, tracks: list[TrackInfo]) -> None:
+        """Make TrackInfo.is_target reflect the current committed target id."""
+        for t in tracks:
+            t.is_target = self._target_track_id is not None and t.track_id == self._target_track_id
+
+    def _target_label(self, track: TrackInfo | None = None) -> str:
+        if track is not None:
+            return track.identity or f"ID {track.track_id}"
+        lock = self._target_lock
+        if lock.trusted_identity:
+            return lock.trusted_identity
+        if lock.trusted_track_id is not None:
+            return f"ID {lock.trusted_track_id}"
+        if self._target_track_id is not None:
+            return f"ID {self._target_track_id}"
+        return "target"
+
+    def _store_trusted_target(self, target: TrackInfo, now: float) -> None:
+        lock = self._target_lock
+        lock.trusted_track_id = target.track_id
+        lock.trusted_bbox = target.bbox.model_copy()
+        lock.trusted_identity = target.identity
+        lock.trusted_identity_id = target.identity_id
+        lock.trusted_confidence = float(target.confidence or 0.0)
+        lock.trusted_t = now
+        lock.status = "locked"
+        lock.reason = ""
+
+    def _target_bbox_jumped(self, target: TrackInfo) -> bool:
+        prev = self._target_lock.trusted_bbox
+        if prev is None:
+            return False
+        cur = target.bbox
+        pcx, pcy = self._bbox_center(prev)
+        ccx, ccy = self._bbox_center(cur)
+        jump = ((ccx - pcx) ** 2 + (ccy - pcy) ** 2) ** 0.5
+        prev_diag = max(1.0, ((prev.x2 - prev.x1) ** 2 + (prev.y2 - prev.y1) ** 2) ** 0.5)
+        cur_diag = max(1.0, ((cur.x2 - cur.x1) ** 2 + (cur.y2 - cur.y1) ** 2) ** 0.5)
+        limit = max(_TARGET_JUMP_MIN_PX, min(prev_diag, cur_diag) * _TARGET_JUMP_SCALE)
+        return jump > limit and self._bbox_iou(prev, cur) < _TARGET_JUMP_IOU
+
+    def _target_crowded(self, target: TrackInfo, tracks: list[TrackInfo]) -> bool:
+        tb = target.bbox
+        tw = max(1.0, float(tb.x2 - tb.x1))
+        for other in tracks:
+            if other.track_id == target.track_id or getattr(other, "lost", False):
+                continue
+            ob = other.bbox
+            if self._bbox_iou(tb, ob) >= _TARGET_OVERLAP_IOU:
+                return True
+            y_overlap = self._bbox_y_overlap_frac(tb, ob)
+            gap = self._bbox_x_gap(tb, ob)
+            ow = max(1.0, float(ob.x2 - ob.x1))
+            if y_overlap >= _TARGET_CLOSE_Y_OVERLAP and gap <= min(tw, ow) * _TARGET_CLOSE_GAP_FRAC:
+                return True
+        return False
+
+    def _mark_target_ambiguous(
+        self,
+        target: TrackInfo | None,
+        *,
+        now: float,
+        reason: str,
+    ) -> None:
+        lock = self._target_lock
+        lock.status = "ambiguous"
+        lock.reason = reason
+        lock.ambiguous_until = max(lock.ambiguous_until, now + _TARGET_AMBIGUOUS_HOLD_S)
+        self._pose_keypoints = None
+        self._pose_kp_track_id = None
+        if target is None or lock.trusted_bbox is None:
+            return
+        target.lost = True
+        target.bbox = lock.trusted_bbox.model_copy()
+        target.identity = lock.trusted_identity
+        target.identity_id = lock.trusted_identity_id
+        target.confidence = lock.trusted_confidence
+        target.vx = 0.0
+        target.vy = 0.0
+        if lock.trusted_aim is not None:
+            target.aim_x, target.aim_y = lock.trusted_aim
+            target.aim_source = "held"
+
+    def _append_held_target(self, tracks: list[TrackInfo], now: float) -> None:
+        lock = self._target_lock
+        if self._target_track_id is None or lock.trusted_bbox is None:
+            return
+        if now - lock.trusted_t > _TARGET_HOLD_S:
+            lock.status = "lost"
+            lock.reason = "missing"
+            return
+        tracks.append(
+            TrackInfo(
+                track_id=self._target_track_id,
+                bbox=lock.trusted_bbox.model_copy(),
+                identity=lock.trusted_identity,
+                identity_id=lock.trusted_identity_id,
+                confidence=lock.trusted_confidence,
+                is_target=True,
+                lost=True,
+                aim_x=lock.trusted_aim[0] if lock.trusted_aim is not None else None,
+                aim_y=lock.trusted_aim[1] if lock.trusted_aim is not None else None,
+                aim_source="held" if lock.trusted_aim is not None else "",
+            )
+        )
+        lock.status = "coasting"
+        lock.reason = "missing"
+
+    def _apply_target_lock(
+        self,
+        tracks: list[TrackInfo],
+        frame: NDArray[np.uint8] | None,
+        now: float,
+    ) -> None:
+        """Suppress target evidence from obvious crossings or pose-risk crowding."""
+        del frame  # reserved for future image-space checks
+        self._sync_target_flags(tracks)
+        if self._target_track_id is None:
+            self._target_lock.status = "idle"
+            return
+        target = self._resolve_target_track(tracks)
+        if target is None:
+            self._append_held_target(tracks, now)
+            return
+        if target.lost:
+            return
+        if (
+            self._target_lock.trusted_track_id != target.track_id
+            or self._target_lock.trusted_bbox is None
+        ):
+            self._store_trusted_target(target, now)
+            return
+        if self._target_bbox_jumped(target):
+            self._mark_target_ambiguous(target, now=now, reason="jump")
+            return
+        if self._target_crowded(target, tracks):
+            self._mark_target_ambiguous(target, now=now, reason="blocked")
+            return
+        self._store_trusted_target(target, now)
+
     # ── appearance ReID recovery ─────────────────────────────────────────────────
 
     def _reid_active(self) -> bool:
@@ -1040,6 +1267,7 @@ class CameraWorker:
     def _reset_reid(self) -> None:
         """Drop the appearance template (target changed / cleared)."""
         self._reid_recover_candidate = None
+        self._identity_recover_candidate = None
         if self._reid is not None:
             try:
                 self._reid.reset()
@@ -1062,6 +1290,8 @@ class CameraWorker:
         """
         if self._target_track_id is None or frame is None or not self._feature("tracking"):
             return
+        if self._target_lock.status == "ambiguous":
+            return
         reid = self._ensure_reid()
         if reid is None or not getattr(reid, "available", False):
             return
@@ -1069,7 +1299,8 @@ class CameraWorker:
             return
         self._last_reid_t = now
 
-        present = {t.track_id: t for t in tracks}
+        visible_tracks = [t for t in tracks if not getattr(t, "lost", False)]
+        present = {t.track_id: t for t in visible_tracks}
         if self._target_track_id in present:
             # Target visible → refresh (or seed) its appearance template.
             tgt = present[self._target_track_id]
@@ -1079,30 +1310,52 @@ class CameraWorker:
             return
 
         # Target lost → recover onto the best-matching present track.
-        if not getattr(reid, "locked", False) or not tracks:
+        if not getattr(reid, "locked", False) or not visible_tracks:
             return
-        cand = reid.embed([_xyxy(t.bbox) for t in tracks], frame)
+        cand = reid.embed([_xyxy(t.bbox) for t in visible_tracks], frame)
         if cand.size == 0:
             return
-        result = reid.recover(cand)
-        if result.matched and 0 <= result.best_index < len(tracks):
-            new_id = tracks[result.best_index].track_id
+        result = reid.recover(
+            cand,
+            threshold=float(self.config.tracking.reid_threshold_hi),
+            update=False,
+        )
+        if result.matched and 0 <= result.best_index < len(visible_tracks):
+            if len(result.scores) > 1:
+                ranked = sorted(result.scores, reverse=True)
+                if ranked[0] - ranked[1] < _REID_RECOVERY_MARGIN:
+                    self._target_lock.status = "ambiguous"
+                    self._target_lock.reason = "reid_margin"
+                    self._target_lock.ambiguous_until = max(
+                        self._target_lock.ambiguous_until,
+                        now + _TARGET_AMBIGUOUS_HOLD_S,
+                    )
+                    return
+            new_id = visible_tracks[result.best_index].track_id
             if new_id != self._target_track_id:
                 if not self._reid_recovery_confirmed(new_id):
                     return
+                # Now that the candidate is confirmed, blend the matching feature
+                # into the target template exactly once.
+                reid.recover(
+                    cand[[result.best_index]],
+                    threshold=float(self.config.tracking.reid_threshold_hi),
+                    update=True,
+                )
                 log.info(
                     "camera_id=%s ReID recovered target → track=%d score=%.2f",
                     self.camera_id,
                     new_id,
                     result.best_score,
                 )
-                self._target_track_id = new_id
-                self._reset_pose_aim()
+                self._commit_target_track(new_id, reason="reid")
 
     def _reid_recovery_confirmed(self, track_id: int) -> bool:
         """Return True when the active tracking mode allows rebinding now."""
         mode = getattr(self.config.tracking, "tracking_mode", "stable")
-        required = 2 if mode == "stable" else 1
+        required = (
+            _REID_RECOVERY_CONFIRM_STABLE if mode == "stable" else _REID_RECOVERY_CONFIRM_RESPONSIVE
+        )
         prev_id, count = self._reid_recover_candidate or (None, 0)
         count = count + 1 if prev_id == track_id else 1
         self._reid_recover_candidate = (track_id, count)
@@ -1190,6 +1443,8 @@ class CameraWorker:
             track.aim_x = float(ax)
             track.aim_y = float(ay)
             track.aim_source = aim_source
+            if not getattr(track, "lost", False):
+                self._target_lock.trusted_aim = (float(ax), float(ay))
 
         ex = (ax - w * 0.5) / (w * 0.5)  # [-1, 1] right-positive
         ey = -((ay - h * 0.5) / (h * 0.5))  # [-1, 1] up-positive
@@ -1268,6 +1523,56 @@ class CameraWorker:
 
     # ── pose-stable aim (lazy, graceful) ────────────────────────────────────────
 
+    @staticmethod
+    def _point_inside_bbox_margin(
+        point: tuple[float, float],
+        bbox: BBox,
+        margin_frac: float,
+    ) -> bool:
+        x, y = point
+        bw = max(1.0, float(bbox.x2 - bbox.x1))
+        bh = max(1.0, float(bbox.y2 - bbox.y1))
+        mx, my = bw * margin_frac, bh * margin_frac
+        return (
+            float(bbox.x1) - mx <= x <= float(bbox.x2) + mx
+            and float(bbox.y1) - my <= y <= float(bbox.y2) + my
+        )
+
+    def _pose_keypoints_consistent(
+        self,
+        kps: list[Any],
+        track: TrackInfo,
+        frame: NDArray[np.uint8],
+        now: float,
+    ) -> bool:
+        del frame  # reserved for future image-space consistency checks
+        try:
+            from autoptz.engine.pipeline import framing
+        except Exception:  # noqa: BLE001
+            return False
+
+        raw_aim, conf = framing.body_aim_point(
+            kps,
+            framing=_resolve_framing(self.config.tracking),
+        )
+        if raw_aim is None or conf <= 0.0:
+            return False
+        if not self._point_inside_bbox_margin(raw_aim, track.bbox, _POSE_BBOX_MARGIN):
+            self._mark_target_ambiguous(track, now=now, reason="pose_off_target")
+            return False
+
+        trusted = self._target_lock.trusted_aim
+        if trusted is not None:
+            dx = raw_aim[0] - trusted[0]
+            dy = raw_aim[1] - trusted[1]
+            dist = (dx * dx + dy * dy) ** 0.5
+            bb = track.bbox
+            diag = max(1.0, ((bb.x2 - bb.x1) ** 2 + (bb.y2 - bb.y1) ** 2) ** 0.5)
+            if dist > max(_POSE_JUMP_MIN_PX, diag * _POSE_JUMP_SCALE):
+                self._mark_target_ambiguous(track, now=now, reason="pose_jump")
+                return False
+        return True
+
     def _pose_aim(
         self,
         track: TrackInfo,
@@ -1310,7 +1615,7 @@ class CameraWorker:
             self._pose_ms = (time.perf_counter() - pose_t0) * 1000.0
             self._record_stage("pose", self._pose_ms)
             self._last_pose_t = now
-            if kps is not None:
+            if kps is not None and self._pose_keypoints_consistent(kps, track, frame, now):
                 self._pose_keypoints = kps
                 self._pose_kp_track_id = track.track_id
                 self._last_pose_overlay_t = now
@@ -1569,17 +1874,14 @@ class CameraWorker:
             tracks = self._maybe_track(frame)
             self._inference_ms = (time.perf_counter() - detect_t0) * 1000.0
 
+            self._apply_target_lock(tracks, frame, now)
+
             # Appearance ReID: refresh the target template while it's visible and
             # re-bind it onto the right track after an occlusion (throttled; no-op
             # unless _reid_active — global reid feature + stable mode — and boxmot
             # is available).
             self._maybe_reid_recover(tracks, frame, now)
-
-            # Estimate pose for the selected person so the pose overlay shows the
-            # moment you click someone — independent of whether PTZ auto-follow is
-            # actively driving (which is the only place pose ran before).
-            self._maybe_estimate_pose_overlay(tracks, frame, now)
-            self._annotate_target_aim(tracks, frame, now)
+            self._apply_target_lock(tracks, frame, now)
 
             # Face recognition + auto-harvest (throttled internally; record the
             # cost only when a run actually executed so the badge shows real cost).
@@ -1589,6 +1891,13 @@ class CameraWorker:
             if face_dt > 0.5:
                 self._face_ms = face_dt
                 self._record_stage("face", face_dt)
+            self._apply_target_lock(tracks, frame, now)
+
+            # Estimate pose for the selected person so the pose overlay shows the
+            # moment you click someone — independent of whether PTZ auto-follow is
+            # actively driving (which is the only place pose ran before).
+            self._maybe_estimate_pose_overlay(tracks, frame, now)
+            self._annotate_target_aim(tracks, frame, now)
 
             # Auto PTZ control (suspended during a manual-override window).  Lock
             # the backend so a concurrent telemetry position read can't interleave.
@@ -2259,14 +2568,19 @@ class CameraWorker:
         if self._target_identity_id is not None:
             tid = matched_identity_track.get(self._target_identity_id)
             if tid is not None and tid != self._target_track_id:
-                log.info(
-                    "camera_id=%s identity-target id=%s acquired on track=%d",
-                    self.camera_id,
-                    self._target_identity_id,
-                    tid,
-                )
-                self._target_track_id = tid
-                self._reset_pose_aim()
+                if not self._identity_target_confirmed(self._target_identity_id, tid):
+                    self._target_lock.status = "pending"
+                    self._target_lock.reason = "identity_confirm"
+                else:
+                    log.info(
+                        "camera_id=%s identity-target id=%s acquired on track=%d",
+                        self.camera_id,
+                        self._target_identity_id,
+                        tid,
+                    )
+                    self._commit_target_track(tid, reason="identity")
+            elif tid is not None:
+                self._identity_recover_candidate = None
 
         # Prune stale cache entries for tracks no longer present.
         live_ids = {t.track_id for t in tracks}
@@ -2297,6 +2611,12 @@ class CameraWorker:
         self._last_face_track_ids = face_track_ids
         self._last_faces_frame_id = max(1, self._current_inference_frame_id) if faces_out else 0
 
+    def _identity_target_confirmed(self, identity_id: str, track_id: int) -> bool:
+        prev_iid, prev_tid, count = self._identity_recover_candidate or ("", -1, 0)
+        count = count + 1 if prev_iid == identity_id and prev_tid == track_id else 1
+        self._identity_recover_candidate = (identity_id, track_id, count)
+        return count >= _IDENTITY_TARGET_CONFIRM
+
     @staticmethod
     def _track_for_face(
         obs: Any,
@@ -2306,6 +2626,8 @@ class CameraWorker:
         best: TrackInfo | None = None
         best_d = float("inf")
         for t in tracks:
+            if getattr(t, "lost", False):
+                continue
             bb = t.bbox
             if bb.x1 <= obs.cx <= bb.x2 and bb.y1 <= obs.cy <= bb.y2:
                 tcx = (bb.x1 + bb.x2) * 0.5
@@ -2585,6 +2907,128 @@ class CameraWorker:
             return []
         self._last_pose_emitted_frame_id = self._last_pose_overlay_frame_id
         return [PoseKeypoint(x=float(k.x), y=float(k.y), conf=float(k.conf)) for k in kps]
+
+    def _ptz_status_snapshot(self, now: float) -> dict[str, float | str]:
+        ctrl = self._ptz
+        if ctrl is None or not hasattr(ctrl, "status_snapshot"):
+            return {
+                "state": "idle",
+                "action": "",
+                "coast_remaining_s": 0.0,
+                "search_remaining_s": 0.0,
+            }
+        try:
+            return ctrl.status_snapshot(now)
+        except Exception:  # noqa: BLE001
+            return {
+                "state": "idle",
+                "action": "",
+                "coast_remaining_s": 0.0,
+                "search_remaining_s": 0.0,
+            }
+
+    def _tracking_status_info(
+        self,
+        tracks: list[TrackInfo],
+        now: float,
+    ) -> TrackingStatusInfo:
+        """Human-readable explanation of target lock and PTZ recovery behavior."""
+        if self._target_track_id is None and self._target_identity_id is None:
+            return TrackingStatusInfo()
+
+        target = self._resolve_target_track(tracks)
+        label = self._target_label(target)
+
+        if self._manual_override_active(now):
+            remaining = max(0.0, self._manual_override_until - now)
+            return TrackingStatusInfo(
+                state="manual",
+                headline="Manual control - auto paused",
+                detail=f"Auto tracking resumes in {remaining:.1f}s.",
+                action="manual",
+                remaining_s=remaining,
+                severity="warning",
+            )
+
+        snap = self._ptz_status_snapshot(now)
+        ptz_state = str(snap.get("state", "idle"))
+        ptz_action = str(snap.get("action", ""))
+        coast_remaining = float(snap.get("coast_remaining_s", 0.0) or 0.0)
+        search_remaining = float(snap.get("search_remaining_s", 0.0) or 0.0)
+
+        if self._target_lock.status == "ambiguous":
+            remaining = max(0.0, self._target_lock.ambiguous_until - now, coast_remaining)
+            return TrackingStatusInfo(
+                state="ambiguous",
+                headline="Target blocked",
+                detail=(
+                    f"Holding {label}'s last trusted position"
+                    + (f" for {remaining:.1f}s." if remaining > 0.0 else ".")
+                ),
+                action="holding",
+                remaining_s=remaining,
+                severity="warning",
+            )
+
+        if target is not None and not target.lost:
+            if self._tracking_enabled and self._feature("tracking"):
+                return TrackingStatusInfo(
+                    state="locked",
+                    headline=f"Tracking {label}",
+                    detail="Camera is following the confirmed target.",
+                    action="tracking",
+                    severity="ok",
+                )
+            return TrackingStatusInfo(
+                state="locked",
+                headline=f"Target selected: {label}",
+                detail="Auto tracking is paused.",
+                action="paused",
+                severity="info",
+            )
+
+        if ptz_state == "coasting" or self._target_lock.status == "coasting":
+            remaining = max(
+                coast_remaining, max(0.0, _TARGET_HOLD_S - (now - self._target_lock.trusted_t))
+            )
+            return TrackingStatusInfo(
+                state="coasting",
+                headline="Target lost - holding position",
+                detail=(
+                    f"Keeping the last trusted framing for {remaining:.1f}s while "
+                    "checking for the same person."
+                ),
+                action="holding",
+                remaining_s=remaining,
+                severity="warning",
+            )
+
+        if ptz_state == "searching" and ptz_action == "zooming_out":
+            return TrackingStatusInfo(
+                state="searching",
+                headline="Searching - zooming out",
+                detail=f"Widening the shot for {search_remaining:.1f}s to reacquire {label}.",
+                action="zooming_out",
+                remaining_s=search_remaining,
+                severity="warning",
+            )
+
+        if self._target_lock.status == "pending":
+            return TrackingStatusInfo(
+                state="standby",
+                headline="Confirming target",
+                detail="Waiting for repeated identity confirmation before following.",
+                action="confirming",
+                severity="info",
+            )
+
+        return TrackingStatusInfo(
+            state="standby",
+            headline="Standing by for reacquire",
+            detail=f"Waiting to confirm {label} before moving the camera.",
+            action="standby",
+            severity="info",
+        )
 
     def _stage_status(self, key: str, *, enabled: bool, available: bool = True) -> str:
         if not enabled:
@@ -2880,6 +3324,7 @@ class CameraWorker:
             faces=self._fresh_faces_for_telemetry(tracks),
             pose=self._pose_overlay(),
             ptz=self._ptz_state(),
+            tracking_status=self._tracking_status_info(tracks, time.monotonic()),
             health=HealthInfo(state=health, last_error=last_error),
         )
         self._seq += 1

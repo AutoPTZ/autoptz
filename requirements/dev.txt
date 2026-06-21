@@ -1,4 +1,4 @@
-# AutoPTZ v2 — development & test dependencies
+# AutoPTZ — development & test dependencies
 # Install after base:
 #   pip install -r requirements/base.txt -r requirements/dev.txt
 

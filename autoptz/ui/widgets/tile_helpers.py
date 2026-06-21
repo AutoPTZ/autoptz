@@ -9,16 +9,41 @@ on painting + interaction. ``camera_tile`` re-exports these.
 from __future__ import annotations
 
 import logging
-from typing import Any
+import re
+from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QRectF
+from PySide6.QtCore import QRectF, Qt
+
+if TYPE_CHECKING:
+    from PySide6.QtGui import QFontMetrics
 
 log = logging.getLogger(__name__)
+
+# Matches a trailing " 85%" token so on-video labels never elide the percentage.
+_PCT_SUFFIX = re.compile(r"\s+\d+%$")
 
 # Framing-box centre-snap threshold (fraction) and the box-jump fraction used to
 # detect a teleport vs. smooth motion. Used only by the helpers below.
 _FB_CENTER_SNAP = 0.04
 _BOX_JUMP_FRAC = 0.22
+
+
+def elide_keeping_pct(fm: QFontMetrics, text: str, max_px: float) -> str:
+    """Elide *text* to fit *max_px*, but never drop a trailing ``" 85%"`` token.
+
+    Plain ``ElideRight`` chops the percentage off first, so a cramped on-video
+    label reads ``"Target: Alexand…"`` instead of ``"Target: Alex… 85%"``. This
+    keeps the percentage and elides only the name part.
+    """
+    max_px = max(0.0, float(max_px))
+    if fm.horizontalAdvance(text) <= max_px:
+        return text
+    m = _PCT_SUFFIX.search(text)
+    if m is None:
+        return fm.elidedText(text, Qt.TextElideMode.ElideRight, int(max_px))
+    head, pct = text[: m.start()], text[m.start() :]
+    avail = max(0, int(max_px - fm.horizontalAdvance(pct)))
+    return fm.elidedText(head, Qt.TextElideMode.ElideRight, avail) + pct
 
 
 def _tracking_enabled(rec: Any | None) -> bool:
@@ -70,6 +95,13 @@ def _pose(rec: Any) -> list[dict[str, float]]:
         return rec.pose_as_list()
     except Exception:  # noqa: BLE001
         return []
+
+
+def _tracking_status(rec: Any) -> dict[str, Any]:
+    try:
+        return rec.tracking_status_as_dict()
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _ignore_arms(rec: Any) -> bool:

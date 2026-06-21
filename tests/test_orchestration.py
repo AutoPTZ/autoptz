@@ -1123,6 +1123,7 @@ class TestTrackingStability:
         )
         stable = CameraWorker("stable123456", stable_cfg, lambda _m: None)
         assert stable._reid_recovery_confirmed(2) is False
+        assert stable._reid_recovery_confirmed(2) is False
         assert stable._reid_recovery_confirmed(2) is True
 
         resp_cfg = _camera_config("resp12345678").model_copy(

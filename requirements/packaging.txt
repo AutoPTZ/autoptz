@@ -1,4 +1,4 @@
-# AutoPTZ v2 — packaging / native-app build tooling
+# AutoPTZ — packaging / native-app build tooling
 #
 # Install on the BUILD machine (in addition to base + the platform extras), e.g.:
 #   macOS:    pip install -r requirements/base.txt -r requirements/macos.txt \

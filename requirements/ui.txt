@@ -1,6 +1,6 @@
-# AutoPTZ v2 — minimal requirements to run / test the UI only.
+# AutoPTZ — minimal requirements to run / test the UI only.
 # Does NOT pull in onnxruntime, boxmot, av, or other heavy ML deps.
-# Use this to iterate on Phase 7/8 UI work without a full environment.
+# Use this to iterate on UI work without a full environment.
 #
 # Install:
 #   pip install -r requirements/ui.txt

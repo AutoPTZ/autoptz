@@ -17,12 +17,10 @@ What gets bundled
 -----------------
 * the whole `autoptz` package (collected as data + submodules so dynamic
   imports like the engine pipeline / ptz backends are present)
-* the QML tree at autoptz/ui/qml/*  ->  bundled to autoptz/ui/qml so the
-  app's `Path(__file__).parent / "qml"` resolution works unchanged when frozen
-* autoptz/assets and autoptz/models (if non-empty) so a pre-fetched detector
-  ONNX can ship inside the app
-* PySide6 Qt plugins needed for QtQuick: platforms, quick, qml, labsplatform,
-  imageformats, styles, plus the QML modules under Qt/qml
+* autoptz/assets (the logo) and autoptz/models (if non-empty) so a pre-fetched
+  detector ONNX can ship inside the app
+* PySide6 Qt plugins needed for a Qt Widgets app: platforms, styles,
+  imageformats, iconengines
 
 Notes
 -----
@@ -86,20 +84,14 @@ def _tree(src: Path, dest: str) -> list[tuple[str, str]]:
 
 datas: list[tuple[str, str]] = []
 
-# QML must land at autoptz/ui/qml so app.py's __file__-relative lookup resolves.
-datas += _tree(PKG_DIR / "ui" / "qml", "autoptz/ui/qml")
-# Ship assets and any pre-fetched model weights (skips empty / .gitkeep-only dirs
-# gracefully — _tree just yields nothing for empty trees).
+# Ship assets (logo) and any pre-fetched model weights (skips empty /
+# .gitkeep-only dirs gracefully — _tree yields nothing for empty trees).
 datas += _tree(PKG_DIR / "assets", "autoptz/assets")
 datas += _tree(PKG_DIR / "models", "autoptz/models")
 
-# Package READMEs / data that pydantic/etc. might read at runtime.
-datas += collect_data_files("autoptz", includes=["**/*.qml"])
-
-# PySide6 / Qt: let the bundled hook collect the bulk, then make sure the QML
-# modules + plugin data come along (QtQuick apps fail silently without them).
+# PySide6 / Qt Widgets: the bundled hook collects the bulk; make sure the Qt
+# plugins a Widgets app needs come along (no QtQuick/QML — the UI is Widgets).
 datas += collect_data_files("PySide6", includes=[
-    "Qt/qml/**",
     "Qt/plugins/platforms/**",
     "Qt/plugins/styles/**",
     "Qt/plugins/imageformats/**",
@@ -116,7 +108,7 @@ for mod in ("onnxruntime", "cv2"):
         pass
 
 # Optional: bundle an NDI runtime if present beside the spec (NDI_RUNTIME env or
-# packaging/ndi/).  libndi is NOT a pip wheel; see docs/v2-rework/11.
+# packaging/ndi/).  libndi is NOT a pip wheel; see docs/building.md.
 _ndi = os.environ.get("NDI_RUNTIME")
 _ndi_dir = Path(_ndi) if _ndi else (SPEC_DIR / "ndi")
 if _ndi_dir.exists():
@@ -131,11 +123,9 @@ if _ndi_dir.exists():
 hiddenimports: list[str] = []
 hiddenimports += collect_submodules("autoptz")
 hiddenimports += [
-    "PySide6.QtQuick",
-    "PySide6.QtQml",
-    "PySide6.QtQuickControls2",
-    "PySide6.QtLabsPlatform",   # Qt.labs.platform (native menu / About / dialogs)
-    "PySide6.QtNetwork",
+    "PySide6.QtWidgets",
+    "PySide6.QtGui",
+    "PySide6.QtCore",
 ]
 # ML / engine deps that are imported lazily and may be missed by static analysis.
 for opt in (

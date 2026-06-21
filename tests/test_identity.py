@@ -743,7 +743,7 @@ class TestWorkerAutoHarvest:
         assert service.best_score(ident.id, target_emb) == pytest.approx(1.0, abs=1e-5)
         assert service.best_score(ident.id, wrong_emb) < 0.5
 
-    def test_target_by_identity_locks_matched_track(self):
+    def test_target_by_identity_locks_after_repeated_match(self):
         service, _ = _make_service()
         emb = _vec(62)
         ident = service.enroll("Alice", emb)
@@ -755,7 +755,11 @@ class TestWorkerAutoHarvest:
         w._drain_commands()
         track = _StubTrack(9, (250, 150, 400, 460))
         w._maybe_identify(_gray(3), [track], now=300.0)
-        # the single target is now locked to the track bound to Alice
+        assert w._target_track_id is None
+        assert w._target_lock.status == "pending"
+
+        w._maybe_identify(_gray(3), [track], now=300.3)
+        # the single target is now locked to the repeatedly confirmed Alice track
         assert w._target_track_id == 9
 
     def test_disabled_recognizer_is_noop(self):

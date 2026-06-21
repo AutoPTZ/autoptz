@@ -277,10 +277,11 @@ class CameraInfoPanel(QWidget):
         self._set(
             "Match", f"{round(conf * 100)}%" if isinstance(conf, int | float) and conf > 0 else "—"
         )
+        status_headline = str(getattr(getattr(tel, "tracking_status", None), "headline", "") or "")
         self._set(
             "Lock",
-            "Locked" if target else "Searching",
-            color=T.TRACKING if target else T.CURRENT.subtext,
+            status_headline or ("Locked" if target else "Searching"),
+            color=T.TRACKING if target else T.WARNING if status_headline else T.CURRENT.subtext,
         )
         self._set("People in view", str(len(tracks)))
 

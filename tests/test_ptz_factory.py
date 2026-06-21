@@ -554,6 +554,62 @@ class TestWorkerAutoControl:
         assert w._ptz.state in (ControllerState.SEARCHING, ControllerState.COASTING)
 
 
+class TestWorkerTargetLock:
+    def test_target_jump_is_held_as_lost(self) -> None:
+        w = _worker()
+        w._target_track_id = 7
+        frame = np.zeros((720, 1000, 3), dtype=np.uint8)
+        tracks = [_track(7, _bbox(100, 100, 220, 420))]
+        w._apply_target_lock(tracks, frame, now=0.0)
+
+        jumped = [_track(7, _bbox(650, 100, 770, 420))]
+        w._apply_target_lock(jumped, frame, now=0.1)
+
+        assert jumped[0].lost is True
+        assert jumped[0].bbox.x1 == pytest.approx(100)
+        assert w._tracking_status_info(jumped, 0.1).state == "ambiguous"
+
+    def test_crowded_target_is_marked_ambiguous(self) -> None:
+        w = _worker()
+        w._target_track_id = 7
+        frame = np.zeros((720, 1000, 3), dtype=np.uint8)
+        tracks = [_track(7, _bbox(100, 100, 240, 440))]
+        w._apply_target_lock(tracks, frame, now=0.0)
+
+        crowded = [
+            _track(7, _bbox(100, 100, 240, 440)),
+            _track(8, _bbox(225, 105, 360, 440)),
+        ]
+        w._apply_target_lock(crowded, frame, now=0.1)
+
+        assert crowded[0].lost is True
+        assert w._tracking_status_info(crowded, 0.1).headline == "Target blocked"
+
+    def test_pose_on_neighbor_is_rejected_before_cache(self) -> None:
+        from autoptz.engine.pipeline.framing import (
+            KP_LEFT_HIP,
+            KP_LEFT_SHOULDER,
+            KP_RIGHT_HIP,
+            KP_RIGHT_SHOULDER,
+            Keypoint,
+        )
+
+        w = _worker()
+        w._target_track_id = 7
+        frame = np.zeros((720, 1000, 3), dtype=np.uint8)
+        track = _track(7, _bbox(100, 100, 240, 440))
+        w._apply_target_lock([track], frame, now=0.0)
+        kps = [Keypoint(0.0, 0.0, 0.0)] * 17
+        kps[KP_LEFT_SHOULDER] = Keypoint(520.0, 150.0, 0.9)
+        kps[KP_RIGHT_SHOULDER] = Keypoint(560.0, 150.0, 0.9)
+        kps[KP_LEFT_HIP] = Keypoint(525.0, 330.0, 0.9)
+        kps[KP_RIGHT_HIP] = Keypoint(555.0, 330.0, 0.9)
+
+        assert w._pose_keypoints_consistent(kps, track, frame, now=0.1) is False
+        assert track.lost is True
+        assert w._pose_keypoints is None
+
+
 class TestWorkerPtzState:
     def test_telemetry_reports_backend_position(self) -> None:
         backend = RecordingBackend(has_position=True)

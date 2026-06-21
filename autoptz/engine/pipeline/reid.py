@@ -1,7 +1,7 @@
 """OSNet body-appearance re-identification with hysteresis matching.
 
-Purpose (see docs/v2-rework/03-vision-pipeline.md §3.4)
-------------------------------------------------------
+Purpose
+-------
 The *tracker* owns frame-to-frame continuity; **ReID owns recovery**.  When the
 target track goes ``lost`` (occlusion, someone crosses in front), new tracks are
 embedded with **OSNet** and matched against the target's appearance template so
@@ -204,22 +204,31 @@ class BodyReID:
     def recover(
         self,
         candidates: NDArray[np.float32],
+        *,
+        threshold: float | None = None,
+        update: bool = True,
     ) -> ReIDResult:
         """Pick the candidate body crop that best matches the target template.
 
         Hysteresis: a *new* lock requires ``score > threshold_hi``; maintaining
         an existing lock only requires ``score > threshold_lo`` (set by whether
-        :attr:`locked` is currently True).  Returns the best index/score and
-        whether it cleared the active threshold.
+        :attr:`locked` is currently True).  Callers can pass *threshold* to force
+        a stricter recovery gate and *update=False* to score candidates without
+        blending ambiguous evidence into the template.  Returns the best
+        index/score and whether it cleared the active threshold.
         """
         if self._template is None or candidates.size == 0:
             return ReIDResult()
         scores = [_cosine(self._template.vec, c) for c in np.atleast_2d(candidates)]
         best_i = int(np.argmax(scores))
         best = float(scores[best_i])
-        thr = self._threshold_lo if self._locked else self._threshold_hi
+        thr = (
+            float(threshold)
+            if threshold is not None
+            else (self._threshold_lo if self._locked else self._threshold_hi)
+        )
         matched = best >= thr
-        if matched:
+        if matched and update:
             self._template.update(candidates[best_i])
             self._locked = True
         return ReIDResult(

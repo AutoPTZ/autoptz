@@ -31,6 +31,7 @@ from autoptz.engine.runtime.messages import (
     SwitchStateInfo,
     TelemetryMsg,
     TrackInfo,
+    TrackingStatusInfo,
 )
 
 
@@ -274,6 +275,24 @@ class TestTelemetryMsg:
     def test_track_defaults_not_lost(self) -> None:
         t = TrackInfo(track_id=1, bbox=BBox(x1=0, y1=0, x2=1, y2=1))
         assert t.lost is False and t.vx == 0.0 and t.vy == 0.0
+
+    def test_tracking_status_round_trip(self) -> None:
+        msg = TelemetryMsg(
+            camera_id="cam-1",
+            seq=1,
+            tracking_status=TrackingStatusInfo(
+                state="searching",
+                headline="Searching - zooming out",
+                detail="Widening the shot for 2.5s.",
+                action="zooming_out",
+                remaining_s=2.5,
+                severity="warning",
+            ),
+        )
+        restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+        assert restored.tracking_status.state == "searching"
+        assert restored.tracking_status.action == "zooming_out"
+        assert restored.tracking_status.remaining_s == pytest.approx(2.5)
 
 
 class TestCommands:

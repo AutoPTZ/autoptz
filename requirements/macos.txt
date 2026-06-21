@@ -1,4 +1,4 @@
-# AutoPTZ v2 — macOS extras (Apple Silicon, M-series)
+# AutoPTZ — macOS extras (Apple Silicon, M-series)
 #
 # Install after base:
 #   pip install -r requirements/base.txt -r requirements/macos.txt
@@ -11,7 +11,7 @@
 #   python -c "import onnxruntime; print(onnxruntime.get_available_providers())"
 #   # Should include 'CoreMLExecutionProvider'
 
-# ── camera enumeration + native capture (Phase 4) ────────────────────────────
+# ── camera enumeration + native capture ────────────────────────────
 # AVFoundation bindings: friendly device names + stable uniqueID, Continuity
 # Camera detection (engine/discovery/usb.py:enumerate_cameras), AND native
 # capture bound by uniqueID (engine/pipeline/avf_capture.py) — bypasses OpenCV's
@@ -32,7 +32,7 @@ pyobjc-framework-Quartz>=10.0
 # binding directly).
 pyobjc-framework-libdispatch>=10.0
 
-# ── NDI ingest + discovery (Phase 2) ─────────────────────────────────────────
+# ── NDI ingest + discovery ─────────────────────────────────────────
 # NDI SDK runtime must be installed first from https://ndi.video/tools/ndi-downloads/
 # Then install cyndilib (Cython NDI bindings with frame-sync and PTZ support):
 # cyndilib==0.0.11  # uncomment once NDI SDK runtime is installed

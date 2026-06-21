@@ -76,6 +76,17 @@ class PTZState(BaseModel):
     state: str = "idle"
 
 
+class TrackingStatusInfo(BaseModel):
+    """Operator-facing explanation of the current target-tracking state."""
+
+    state: str = "idle"
+    headline: str = ""
+    detail: str = ""
+    action: str = ""
+    remaining_s: float = 0.0
+    severity: str = "info"
+
+
 class HealthState(str, Enum):
     OK = "ok"
     RECONNECTING = "reconnecting"
@@ -217,6 +228,7 @@ class TelemetryMsg(BaseModel):
     faces: list[FaceBox] = Field(default_factory=list)
     pose: list[PoseKeypoint] = Field(default_factory=list)  # target subject only
     ptz: PTZState = Field(default_factory=PTZState)
+    tracking_status: TrackingStatusInfo = Field(default_factory=TrackingStatusInfo)
     health: HealthInfo = Field(default_factory=HealthInfo)
 
     def to_msgpack(self) -> bytes:

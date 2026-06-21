@@ -176,6 +176,26 @@ class CameraRecord:
         p = self.telemetry.ptz
         return {"pan": p.pan, "tilt": p.tilt, "zoom": p.zoom, "moving": p.moving, "state": p.state}
 
+    def tracking_status_as_dict(self) -> dict[str, Any]:
+        if not self.telemetry:
+            return {
+                "state": "idle",
+                "headline": "",
+                "detail": "",
+                "action": "",
+                "remaining_s": 0.0,
+                "severity": "info",
+            }
+        s = self.telemetry.tracking_status
+        return {
+            "state": s.state,
+            "headline": s.headline,
+            "detail": s.detail,
+            "action": s.action,
+            "remaining_s": s.remaining_s,
+            "severity": s.severity,
+        }
+
     def presets_as_list(self) -> list[dict[str, Any]]:
         if not self.camera_config:
             return []
@@ -214,6 +234,7 @@ class CameraListModel(QAbstractListModel):
     DroppedFramesRole = Qt.ItemDataRole.UserRole + 14
     LatencyMsRole = Qt.ItemDataRole.UserRole + 15
     StreamingRole = Qt.ItemDataRole.UserRole + 16
+    TrackingStatusRole = Qt.ItemDataRole.UserRole + 17
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -243,6 +264,7 @@ class CameraListModel(QAbstractListModel):
             self.DroppedFramesRole: QByteArray(b"droppedFrames"),
             self.LatencyMsRole: QByteArray(b"latencyMs"),
             self.StreamingRole: QByteArray(b"streaming"),
+            self.TrackingStatusRole: QByteArray(b"trackingStatus"),
         }
 
     def data(
@@ -286,6 +308,8 @@ class CameraListModel(QAbstractListModel):
                 return rec.latency_ms
             case self.StreamingRole:
                 return rec.streaming
+            case self.TrackingStatusRole:
+                return rec.tracking_status_as_dict()
         return None
 
     def setData(
@@ -349,6 +373,7 @@ class CameraListModel(QAbstractListModel):
                 self.DroppedFramesRole,
                 self.LatencyMsRole,
                 self.StreamingRole,
+                self.TrackingStatusRole,
             ],
         )
 

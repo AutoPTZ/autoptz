@@ -173,6 +173,38 @@ class TestCameraTileFramingHelpers:
         assert _snap_center_axis(0.041) == pytest.approx(0.041)
 
 
+class TestElideKeepingPct:
+    """On-video labels must keep the trailing 'NN%' instead of eliding it away."""
+
+    class _FM:
+        # 10px per character; elidedText keeps as many chars as fit + an ellipsis.
+        def horizontalAdvance(self, s: str) -> int:
+            return len(s) * 10
+
+        def elidedText(self, s: str, _mode, px: int) -> str:
+            if len(s) * 10 <= px:
+                return s
+            n = max(0, int(px) // 10 - 1)
+            return s[:n] + "…"
+
+    def test_unchanged_when_it_fits(self) -> None:
+        from autoptz.ui.widgets.tile_helpers import elide_keeping_pct
+
+        assert elide_keeping_pct(self._FM(), "Target: Al 85%", 1000) == "Target: Al 85%"
+
+    def test_percentage_preserved_when_cramped(self) -> None:
+        from autoptz.ui.widgets.tile_helpers import elide_keeping_pct
+
+        out = elide_keeping_pct(self._FM(), "Target: Alexander 85%", 120)
+        assert out.endswith("85%")
+
+    def test_plain_elide_without_percentage(self) -> None:
+        from autoptz.ui.widgets.tile_helpers import elide_keeping_pct
+
+        out = elide_keeping_pct(self._FM(), "Target: Alexander", 80)
+        assert out.endswith("…") and not out.endswith("%")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CameraRecord
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,6 +249,32 @@ class TestCameraRecord:
         p = rec.ptz_as_dict()
         assert p["pan"] == 0.0
         assert p["zoom"] == 0.0
+
+    def test_tracking_status_defaults_without_telemetry(self, qapp) -> None:
+        from autoptz.ui.engine_client import CameraRecord
+
+        rec = CameraRecord("id1", "usb://0", "Cam")
+        assert rec.tracking_status_as_dict()["state"] == "idle"
+
+    def test_tracking_status_as_dict(self, qapp) -> None:
+        from autoptz.engine.runtime.messages import TelemetryMsg, TrackingStatusInfo
+        from autoptz.ui.engine_client import CameraRecord
+
+        rec = CameraRecord("id1", "usb://0", "Cam")
+        rec.telemetry = TelemetryMsg(
+            camera_id="id1",
+            seq=0,
+            tracking_status=TrackingStatusInfo(
+                state="coasting",
+                headline="Target lost - holding position",
+                action="holding",
+                remaining_s=0.7,
+                severity="warning",
+            ),
+        )
+        out = rec.tracking_status_as_dict()
+        assert out["headline"] == "Target lost - holding position"
+        assert out["remaining_s"] == pytest.approx(0.7)
 
     def test_tracks_emit_name_and_id_not_uuid(self, qapp) -> None:
         # Regression: the bbox/target label must show the display NAME, with the

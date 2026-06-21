@@ -1,4 +1,4 @@
-# AutoPTZ v2 — NVIDIA GPU extras (Windows x64 / Linux x64)
+# AutoPTZ — NVIDIA GPU extras (Windows x64 / Linux x64)
 #
 # Install after base:
 #   pip uninstall onnxruntime -y

@@ -203,6 +203,30 @@ class PTZController:
     def state(self) -> ControllerState:
         return self._state
 
+    def status_snapshot(self, t: float | None = None) -> dict[str, float | str]:
+        """Return state + recovery timing for operator-facing telemetry."""
+        now = time.monotonic() if t is None else float(t)
+        state = self._state.name.lower()
+        coast_remaining = 0.0
+        search_remaining = 0.0
+        action = ""
+        if self._state == ControllerState.COASTING:
+            coast_remaining = max(0.0, self._coast_window_s - (now - self._coast_start))
+            action = "holding"
+        elif self._state == ControllerState.SEARCHING:
+            window = float(getattr(self._cfg, "reacquire_window_s", 0.0))
+            search_remaining = max(0.0, window - (now - self._search_start))
+            zoom_out = float(getattr(self._cfg, "loss_zoom_out", 0.0))
+            action = "zooming_out" if zoom_out > 0.0 and search_remaining > 0.0 else "standby"
+        elif self._state == ControllerState.TRACKING:
+            action = "tracking"
+        return {
+            "state": state,
+            "action": action,
+            "coast_remaining_s": coast_remaining,
+            "search_remaining_s": search_remaining,
+        }
+
     def update_config(self, cfg: PTZConfig) -> None:
         """Swap in a new PTZConfig live (e.g. the Advanced tuning sliders).
 
