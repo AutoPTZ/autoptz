@@ -37,8 +37,25 @@ first):
 | CPU only (any OS) | base wheel | CPU | FP32 |
 
 Overrides (per the supervisor → env wiring): `AUTOPTZ_FORCE_EP`,
-`AUTOPTZ_PRECISION` (`auto`/`fp32`/`fp16`), `AUTOPTZ_ORT_INTRA_THREADS`. These are
-also exposed as `HardwarePrefs` (`force_ep`, `precision`, `intra_op_threads`).
+`AUTOPTZ_PRECISION` (`auto`/`fp32`/`fp16`/`int8`), `AUTOPTZ_ORT_INTRA_THREADS`.
+These are also exposed as `HardwarePrefs` (`force_ep`, `precision`,
+`intra_op_threads`).
+
+### INT8 (opt-in)
+
+Setting `precision = "int8"` runs a **dynamically-quantized** detector
+(`ModelManager.ensure_detector_int8` caches a `*.int8.onnx` ~¼ the FP32 size). It
+can speed up CPU inference but, for YOLO's conv-heavy graph, the win is modest and
+it can cost a little accuracy — so it's **opt-in**, not a default. Measure it on
+your footage first: `python tools/bench/ep_compare.py --precision int8`. It falls
+back to FP32 automatically if quantization fails.
+
+### RT-DETR (drop-in)
+
+The detector's pre-NMS parser already understands RT-DETR's (NMS-free) COCO
+output. To try it, export an RT-DETR ONNX (`rtdetr-l`/`rtdetr-x` are in the tier
+map for `tools.fetch_models`) and point `AUTOPTZ_MODEL_PATH` at it. Benchmark vs
+YOLO11 with `ep_compare`/`track_clip` on your hardware before switching.
 
 ## Tuning for stability
 
@@ -67,17 +84,21 @@ NVIDIA to confirm the TensorRT engine cache makes the second launch fast.
 `tools/bench/track_clip.py` benchmarks the full detect + track pipeline (and
 ID-stability metrics) on a recorded clip.
 
-## Roadmap (evaluate, then enable)
+## Multi-camera throughput & the batching roadmap
 
-These are deliberately **not** on by default for 2.0.0 — they either need
-per-hardware validation or are a net win only for specific setups. Use the bench
-harness to evaluate on your target hardware before enabling:
+Today the inference pool builds **one** detector/pose/face model for the whole
+app and shares it across cameras; ONNX Runtime's `run()` is thread-safe, so every
+camera thread calls the same session concurrently. That already removes the
+per-camera model duplication and keeps the accelerator busy.
 
-- **INT8 quantization** — dynamic INT8 helps transformer-heavy graphs but is
-  marginal for YOLO's conv-dominated network and can cost accuracy without a
-  static calibration set; evaluate per model/footage.
-- **RT-DETR / alternative detectors** — NMS-free, anchor-free; promising on GPU.
-  Drop in via `AUTOPTZ_MODEL_PATH` once validated on your footage.
-- **Multi-camera batched inference** — batching frames across cameras that share
-  one EP raises GPU utilization; benefits scale with camera count and need
-  end-to-end latency validation on the real fleet.
+**True batched inference** (collecting frames from N cameras into one
+`run()` with batch=N) is the next step but is deliberately deferred — it requires:
+
+1. Re-exporting the model with a **dynamic batch axis** (current exports are
+   fixed `[1,3,640,640]`, which the letterbox/parser rely on).
+2. A central **batch scheduler** that trades a little latency (waiting to fill a
+   batch) for throughput, replacing the simple concurrent-call model.
+3. End-to-end latency validation on a real multi-camera GPU fleet.
+
+It's a throughput optimization on top of an already-shared model, not a missing
+capability — evaluate it against your fleet's latency budget before adopting.

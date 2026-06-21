@@ -50,6 +50,12 @@ _DETECTOR_TIER_TO_PT = {
     "balanced": "yolo11s.pt",
     "small": "yolo11s.pt",
     "medium": "yolo11m.pt",
+    # RT-DETR (NMS-free, anchor-free) — exportable via ultralytics. The detector's
+    # pre-NMS parser already handles its COCO output; select via tools.fetch_models
+    # or point AUTOPTZ_MODEL_PATH at an exported RT-DETR ONNX.
+    "rtdetr": "rtdetr-l.pt",
+    "rtdetr-l": "rtdetr-l.pt",
+    "rtdetr-x": "rtdetr-x.pt",
 }
 
 
@@ -173,6 +179,44 @@ class ModelManager:
                 "Prebuilt detector ONNX unavailable; trying ultralytics export.",
             )
             return self._download_and_export(model_pt, onnx_path)
+
+    def ensure_detector_int8(self, fp32_onnx: str | Path) -> str | None:
+        """Return an INT8 dynamically-quantized copy of *fp32_onnx*, cached.
+
+        Used when ``precision == "int8"`` — a CPU-side win for some models (most
+        impactful on transformer-heavy graphs; evaluate accuracy on YOLO with
+        ``tools/bench``).  Never raises: returns ``None`` (caller keeps the FP32
+        model) if onnxruntime's quantizer or the source file is unavailable.
+        """
+        src = Path(fp32_onnx)
+        if not src.is_file():
+            return None
+        dst = src.with_name(src.stem + ".int8.onnx")
+        if dst.is_file():
+            return str(dst)
+        with self._lock:
+            if dst.is_file():
+                return str(dst)
+            tmp = dst.with_suffix(".onnx.part")
+            try:
+                from onnxruntime.quantization import QuantType, quantize_dynamic
+
+                quantize_dynamic(str(src), str(tmp), weight_type=QuantType.QUInt8)
+                if not tmp.is_file() or tmp.stat().st_size < _MIN_ONNX_BYTES:
+                    log.warning("INT8 quantization of %s produced no/!tiny file", src.name)
+                    return None
+                tmp.replace(dst)
+                log.info("INT8 detector ready at %s (%.1f MB)", dst, dst.stat().st_size / (1 << 20))
+                return str(dst)
+            except Exception:  # noqa: BLE001 — quantization is best-effort
+                log.warning("INT8 quantization failed; using FP32 detector.", exc_info=True)
+                return None
+            finally:
+                try:
+                    if tmp.exists():
+                        tmp.unlink()
+                except Exception:  # noqa: BLE001
+                    log.debug("could not remove temp %s", tmp, exc_info=True)
 
     def ensure_pose(self, *, model_pt: str = "yolo11n-pose.pt") -> str | None:
         """Return a path to a YOLO11 pose ONNX, downloading/exporting if needed.

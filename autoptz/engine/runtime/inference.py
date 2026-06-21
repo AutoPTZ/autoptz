@@ -27,7 +27,7 @@ import onnxruntime as ort
 
 logger = logging.getLogger(__name__)
 
-Precision = Literal["auto", "fp32", "fp16"]
+Precision = Literal["auto", "fp32", "fp16", "int8"]
 
 
 class EP(str, Enum):
@@ -91,10 +91,8 @@ def prefs_from_env() -> HardwarePrefs | None:
         except ValueError:
             logger.warning("Ignoring unknown AUTOPTZ_FORCE_EP=%r", force)
     precision: Precision = "auto"
-    if precision_raw == "fp32":
-        precision = "fp32"
-    elif precision_raw == "fp16":
-        precision = "fp16"
+    if precision_raw in ("fp32", "fp16", "int8"):
+        precision = precision_raw  # type: ignore[assignment]
     threads: int | None = None
     if threads_raw:
         try:
@@ -169,8 +167,8 @@ def _trt_engine_cache_dir() -> str:
 
 
 def _wants_fp16(prefs: HardwarePrefs | None) -> bool:
-    """FP16 is on unless the user explicitly forced fp32."""
-    return prefs is None or prefs.precision != "fp32"
+    """FP16 is on for auto/fp16 (not fp32, and not int8 where the model is quantized)."""
+    return prefs is None or prefs.precision in ("auto", "fp16")
 
 
 def effective_precision(ep: EP | str, prefs: HardwarePrefs | None = None) -> str:
@@ -181,6 +179,8 @@ def effective_precision(ep: EP | str, prefs: HardwarePrefs | None = None) -> str
     effective precision without querying the live session.
     """
     prefs = _resolve_prefs(prefs)
+    if prefs is not None and prefs.precision == "int8":
+        return "int8"
     if isinstance(ep, str):
         try:
             ep = EP(ep)

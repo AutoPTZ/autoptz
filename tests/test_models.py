@@ -76,6 +76,49 @@ def test_detector_tier_maps_to_expected_weights() -> None:
     assert detector_model_for_tier("bogus") == "yolo11n.pt"
 
 
+def test_detector_tier_includes_rtdetr() -> None:
+    assert detector_model_for_tier("rtdetr") == "rtdetr-l.pt"
+    assert detector_model_for_tier("rtdetr-x") == "rtdetr-x.pt"
+
+
+def test_ensure_detector_int8_missing_file_returns_none(tmp_path) -> None:
+    mgr = ModelManager(cache_dir=tmp_path / "cache")
+    assert mgr.ensure_detector_int8(tmp_path / "nope.onnx") is None
+
+
+def test_ensure_detector_int8_reuses_cached(tmp_path) -> None:
+    """An existing ``*.int8.onnx`` is returned without re-quantizing."""
+    fp32 = tmp_path / "yolo11n.onnx"
+    fp32.write_bytes(b"\x00" * 1024)
+    int8 = tmp_path / "yolo11n.int8.onnx"
+    int8.write_bytes(b"\x01" * 1024)
+    mgr = ModelManager(cache_dir=tmp_path)
+    out = mgr.ensure_detector_int8(fp32)
+    assert out == str(int8)
+    assert int8.read_bytes() == b"\x01" * 1024  # untouched (no re-quantization)
+
+
+def test_maybe_quantize_int8_is_noop_without_env(monkeypatch) -> None:
+    from autoptz.engine.worker.stacks import _maybe_quantize_int8
+
+    monkeypatch.delenv("AUTOPTZ_PRECISION", raising=False)
+    assert _maybe_quantize_int8("/models/yolo11n.onnx") == "/models/yolo11n.onnx"
+
+
+def test_maybe_quantize_int8_uses_manager_when_enabled(monkeypatch) -> None:
+    from autoptz.engine.runtime import models as models_mod
+    from autoptz.engine.worker import stacks
+
+    monkeypatch.setenv("AUTOPTZ_PRECISION", "int8")
+
+    class _FakeMgr:
+        def ensure_detector_int8(self, p):
+            return "/models/yolo11n.int8.onnx"
+
+    monkeypatch.setattr(models_mod, "default_manager", lambda: _FakeMgr())
+    assert stacks._maybe_quantize_int8("/models/yolo11n.onnx") == "/models/yolo11n.int8.onnx"
+
+
 # ── download + export path (mocked ultralytics) ───────────────────────────────
 
 

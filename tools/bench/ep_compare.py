@@ -83,7 +83,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Compare ORT EPs for the AutoPTZ detector.")
     ap.add_argument("--model", default=None, help="ONNX model path (default: cached detector)")
     ap.add_argument("--runs", type=int, default=50, help="timed runs per EP (default 50)")
-    ap.add_argument("--precision", default="auto", choices=["auto", "fp32", "fp16"])
+    ap.add_argument("--precision", default="auto", choices=["auto", "fp32", "fp16", "int8"])
     args = ap.parse_args()
 
     model = _resolve_model(args.model)
@@ -93,6 +93,15 @@ def main() -> int:
             "`python -m tools.fetch_models`."
         )
         return 1
+
+    if args.precision == "int8":
+        from autoptz.engine.runtime.models import default_manager
+
+        int8 = default_manager().ensure_detector_int8(model)
+        if int8 is None:
+            print("ERROR: INT8 quantization failed for this model.")
+            return 1
+        model = int8
 
     avail = set(ort.get_available_providers())
     candidates = [ep for ep in EP if ep.value in avail]

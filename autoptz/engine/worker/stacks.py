@@ -158,6 +158,27 @@ def _face_crop_png(
         return None
 
 
+def _maybe_quantize_int8(model_path: str) -> str:
+    """Return an INT8-quantized detector when ``AUTOPTZ_PRECISION=int8``, else as-is.
+
+    Falls back to the FP32 path on any failure so the detector always builds.
+    """
+    import os
+
+    if os.environ.get("AUTOPTZ_PRECISION", "auto") != "int8":
+        return model_path
+    try:
+        from autoptz.engine.runtime.models import default_manager
+
+        int8 = default_manager().ensure_detector_int8(model_path)
+        if int8:
+            log.info("using INT8 detector model %s", int8)
+            return int8
+    except Exception:  # noqa: BLE001 — never block detector build on quantization
+        log.warning("INT8 detector resolution failed; using FP32.", exc_info=True)
+    return model_path
+
+
 def _resolve_model_path(config: CameraConfig) -> str | None:
     """Best-effort lookup of a usable detector model.
 
@@ -225,6 +246,7 @@ def _build_detect_stack(config: CameraConfig) -> _DetectStack | None:
     if model_path is None:
         _log_no_detector_once()
         return None
+    model_path = _maybe_quantize_int8(model_path)
 
     try:
         from autoptz.engine.pipeline.detect import PersonDetector
