@@ -5,7 +5,7 @@
 # ── testing ───────────────────────────────────────────────────────────────────
 pytest==8.3.5
 pytest-timeout==2.3.1
-onnx==1.17.0            # create minimal ONNX models in tests
+onnx==1.21.0            # create minimal ONNX models in tests
 
 # ── linting / type checking ───────────────────────────────────────────────────
 ruff==0.9.10
