@@ -24,6 +24,7 @@ the future hardening step (see ``supervisor.py``).
 
 from __future__ import annotations
 
+import functools
 import logging
 import threading
 import time
@@ -116,6 +117,36 @@ _HARVEST_COOLDOWN_S = 2.0
 # spamming a line per missed frame.
 _DROP_LOG_INTERVAL_S = 10.0
 
+
+def _async_appearance_enabled() -> bool:
+    """Run face + ReID on their own thread (default on; AUTOPTZ_ASYNC_APPEARANCE=0 off)."""
+    import os
+
+    return os.environ.get("AUTOPTZ_ASYNC_APPEARANCE", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def _appearance_guarded(method: Callable) -> Callable:
+    """Serialise a target/identity method under the worker's ``_appearance_lock``.
+
+    Lets the async appearance thread and the hot inference thread share the
+    target-lock/identity state machine safely without re-indenting these long
+    method bodies.  The lock is re-entrant, so nested calls (e.g. ReID →
+    ``_commit_target_track``) are fine.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        with self._appearance_lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 # How often pose keypoints are (re)estimated for the active target.  Pose runs
 # only on the single target crop, not every frame; between runs the worker reuses
 # the last keypoints (the bbox still tracks the person each frame, so a slightly
@@ -139,8 +170,14 @@ _TARGET_OVERLAP_IOU = 0.08
 _TARGET_CLOSE_Y_OVERLAP = 0.45
 _TARGET_CLOSE_GAP_FRAC = 0.18
 _POSE_BBOX_MARGIN = 0.22
+_POSE_KEYPOINT_MARGIN = 0.08
 _POSE_JUMP_MIN_PX = 70.0
 _POSE_JUMP_SCALE = 0.65
+# If the body keypoints clear this confidence while a target is crowded or its
+# detector box jitters, trust the pose anchor and keep following the same body.
+_POSE_TARGET_LOCK_MIN_CONF = 0.45
+_FACE_LEARN_MATCH_THRESHOLD = 0.58
+_FACE_TARGET_MATCH_THRESHOLD = 0.52
 _REID_RECOVERY_CONFIRM_STABLE = 3
 _REID_RECOVERY_CONFIRM_RESPONSIVE = 1
 _REID_RECOVERY_MARGIN = 0.08
@@ -357,6 +394,21 @@ class CameraWorker:
         self._prev_aim_t: float = 0.0
         self._aim_vel: tuple[float, float] = (0.0, 0.0)
 
+        # Ego-motion: the camera's own pan/tilt shifts every pixel, so a still
+        # subject looks like it's moving.  This estimator measures that global
+        # image motion (background optical flow + a learned command gain) in the
+        # same normalized error space as the aim velocity, so _estimate_aim_velocity
+        # can subtract it and feed the controller the subject's *world* motion —
+        # the fix for hunting when the subject and camera move together.
+        from autoptz.engine.pipeline.egomotion import EgoMotionEstimator
+
+        self._ego_estimator = EgoMotionEstimator(
+            gain_max=float(getattr(self.config.ptz, "ego_comp_gain_max", 8.0))
+        )
+        # This tick's ego velocity (error-space units/sec) and last full estimate.
+        self._ego_vel: tuple[float, float] = (0.0, 0.0)
+        self._ego_source: str = "none"
+
         # runtime state
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -386,6 +438,25 @@ class CameraWorker:
         # motion) and the capture thread (which reads position for telemetry).
         self._ptz_lock = threading.Lock()
 
+        # ── async appearance (face + ReID) handoff ───────────────────────────────
+        # The appearance stages (face recognition + ReID recovery) are the heavy,
+        # latency-tolerant, throttled passes.  Running them on the hot inference
+        # thread made the detect→track→PTZ control loop wait behind a 12–20 ms face
+        # pass.  When ``_async_appearance`` is on (default), they run on their own
+        # thread while the hot loop does detect+track+PTZ — the two heavy costs
+        # overlap.  All target/identity state they share with the hot loop
+        # (_target_lock, _target_track_id, _track_identity) is serialised by the
+        # single re-entrant ``_appearance_lock`` (held only inside the four
+        # target/identity methods), so the brief critical sections serialise while
+        # the expensive inference overlaps.  Disable with AUTOPTZ_ASYNC_APPEARANCE=0.
+        self._appearance_lock = threading.RLock()
+        self._async_appearance = _async_appearance_enabled()
+        self._appearance_thread: threading.Thread | None = None
+        self._appearance_ready = threading.Event()
+        # Latest (frame, tracks, now, frame_id) published for the appearance thread.
+        self._appearance_input: tuple[NDArray[np.uint8], list[TrackInfo], float, int] | None = None
+        self._appearance_ms = 0.0
+
         # ── shared inference pool + global feature switches ──────────────────────
         # The supervisor injects a process-wide :class:`InferencePool` (heavy
         # models built once for every camera) via ``set_inference_pool`` before
@@ -405,6 +476,10 @@ class CameraWorker:
         self._shm: ShmWriter | None = None
         self._detect: _DetectStack | None = None
         self._pooled_detector = False
+        # True when the detector is the unified YOLO11-pose model (boxes+keypoints
+        # in one pass); the worker then sources pose-aim keypoints from the
+        # detections instead of running a separate pose forward pass.
+        self._unified_pose_active = False
         self._detect_frame_index = 0
         # Last detections, re-fed to the tracker on detector-skip frames (when
         # detect_interval > 1) so tracks don't age out into "no boxes".
@@ -419,6 +494,14 @@ class CameraWorker:
         self._frame_w = 0
         self._frame_h = 0
         self._dropped_frames = 0
+        # Inference-stage drops: frames the capture thread posted that the
+        # inference thread never consumed (overwritten in the latest-frame slot
+        # because inference couldn't keep up).  Previously invisible — counted here
+        # so sustained overload shows up in the logs instead of silently dropping.
+        self._frames_captured = 0
+        self._frames_inferred = 0
+        self._last_logged_inf_captured = 0
+        self._last_logged_inf_inferred = 0
 
         # Per-frame processing latency (ingest read + detect + track wall time)
         # in milliseconds, published in telemetry for the live stats overlay.
@@ -436,6 +519,10 @@ class CameraWorker:
             for key in ("ingest", "detect", "track", "face", "pose", "reid")
         }
         self._stage_last_t: dict[str, float] = {}
+        # Guards _stage_samples now that "face" is appended from the appearance
+        # thread while the hot thread sums it in _stage_avg (avoids a "deque
+        # mutated during iteration" race).
+        self._stage_lock = threading.Lock()
         self._runtime_events: deque[RuntimeEventInfo] = deque(maxlen=_EVENT_MAX)
         self._tracker_switch: SwitchStateInfo | None = None
         self._last_applied_fps: float | None = None
@@ -925,6 +1012,7 @@ class CameraWorker:
     def _manual_override_active(self, now: float) -> bool:
         return now < self._manual_override_until
 
+    @_appearance_guarded
     def _drive_ptz_auto(
         self,
         tracks: list[TrackInfo],
@@ -948,6 +1036,10 @@ class CameraWorker:
         if self._manual_override_active(now):
             return
 
+        # Tell the controller how long this machine's capture+inference pipeline
+        # takes so its lead time anticipates the real delay (lead_time_auto).
+        ctrl.set_loop_latency(self._latency_ms / 1000.0)
+
         # Global ``tracking`` switch hard-gates auto-following: when off we never
         # drive the camera toward a target (the controller is stepped idle so it
         # coasts→stops), even if a target track is locked.
@@ -964,7 +1056,7 @@ class CameraWorker:
             and self._tracking_enabled
             and tracking_on
         ):
-            err, height = self._track_error(target, frame, now)
+            err, height = self._track_error(target, frame, now, tracks=tracks)
             vel = self._estimate_aim_velocity(err, now)
             try:
                 pan, tilt, zoom = ctrl.step(err, vel, height, track_active=True, t=now)
@@ -982,20 +1074,61 @@ class CameraWorker:
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s ptz auto idle step failed", self.camera_id, exc_info=True)
 
+    def _update_ego_motion(
+        self,
+        tracks: list[TrackInfo],
+        frame: NDArray[np.uint8] | None,
+        now: float,
+    ) -> None:
+        """Measure this tick's camera-induced image motion (error-space units/s).
+
+        Stored in ``self._ego_vel`` so :meth:`_estimate_aim_velocity` can subtract
+        it.  Person boxes are masked out of the optical flow so the subject's own
+        motion doesn't bias the camera estimate.  No-op (zero) when disabled.
+        """
+        if frame is None or not getattr(self.config.ptz, "ego_comp_enabled", True):
+            self._ego_vel = (0.0, 0.0)
+            self._ego_source = "none"
+            return
+        boxes = [
+            (t.bbox.x1, t.bbox.y1, t.bbox.x2, t.bbox.y2)
+            for t in tracks
+            if getattr(t, "bbox", None) is not None
+        ]
+        try:
+            ego = self._ego_estimator.estimate(frame, now, boxes=boxes, ptz_cmd=self._ptz_last_cmd)
+        except Exception:  # noqa: BLE001
+            log.debug("camera_id=%s ego-motion estimate failed", self.camera_id, exc_info=True)
+            self._ego_vel = (0.0, 0.0)
+            self._ego_source = "none"
+            return
+        self._ego_vel = (ego.vx, ego.vy)
+        self._ego_source = ego.source
+
     def _estimate_aim_velocity(
         self,
         err: tuple[float, float],
         now: float,
     ) -> tuple[float, float]:
-        """EMA-smoothed d(error)/dt in normalized units/sec for PTZ feed-forward."""
+        """EMA-smoothed d(error)/dt in normalized units/sec for PTZ feed-forward.
+
+        The raw d(error)/dt mixes the subject's motion with the image shift the
+        camera itself caused; subtracting the per-tick ego-motion estimate
+        (``self._ego_vel``, also error-space units/sec) leaves the subject's
+        *world* motion, so the controller's velocity feed-forward stops chasing
+        the camera's own pan/tilt (the hunting/oscillation fix).
+        """
         vx = vy = 0.0
         prev = self._prev_aim_err
         if prev is not None:
             dt = now - self._prev_aim_t
             if dt > 1e-3:
+                ego_vx, ego_vy = self._ego_vel
+                raw_vx = (err[0] - prev[0]) / dt - ego_vx
+                raw_vy = (err[1] - prev[1]) / dt - ego_vy
                 a = 0.5  # EMA: balance responsiveness vs. jitter rejection
-                vx = a * ((err[0] - prev[0]) / dt) + (1.0 - a) * self._aim_vel[0]
-                vy = a * ((err[1] - prev[1]) / dt) + (1.0 - a) * self._aim_vel[1]
+                vx = a * raw_vx + (1.0 - a) * self._aim_vel[0]
+                vy = a * raw_vy + (1.0 - a) * self._aim_vel[1]
         self._aim_vel = (vx, vy)
         self._prev_aim_err = err
         self._prev_aim_t = now
@@ -1039,19 +1172,25 @@ class CameraWorker:
         reset_reid: bool = False,
         reason: str = "",
     ) -> None:
-        """Commit the active target track through one state-transition path."""
-        if track_id != self._target_track_id:
-            self._reset_pose_aim()
-            self._target_lock = _TargetLockState(status="pending", reason=reason)
-            self._reid_recover_candidate = None
-            self._identity_recover_candidate = None
-            if reset_reid:
-                self._reset_reid()
-        elif track_id is None:
-            self._target_lock = _TargetLockState(status="idle", reason=reason)
-            if reset_reid:
-                self._reset_reid()
-        self._target_track_id = track_id
+        """Commit the active target track through one state-transition path.
+
+        Guarded by ``_appearance_lock`` (re-entrant) because both the hot thread
+        (user set-target / clear) and the async appearance thread (ReID rebind)
+        commit targets — this is the single serialised target-id transition.
+        """
+        with self._appearance_lock:
+            if track_id != self._target_track_id:
+                self._reset_pose_aim()
+                self._target_lock = _TargetLockState(status="pending", reason=reason)
+                self._reid_recover_candidate = None
+                self._identity_recover_candidate = None
+                if reset_reid:
+                    self._reset_reid()
+            elif track_id is None:
+                self._target_lock = _TargetLockState(status="idle", reason=reason)
+                if reset_reid:
+                    self._reset_reid()
+            self._target_track_id = track_id
 
     @staticmethod
     def _bbox_area(bb: BBox) -> float:
@@ -1142,6 +1281,30 @@ class CameraWorker:
                 return True
         return False
 
+    def _target_pose_trusted(
+        self,
+        target: TrackInfo,
+        frame: NDArray[np.uint8] | None,
+        now: float,
+        tracks: list[TrackInfo] | None = None,
+    ) -> bool:
+        """Return True when target body keypoints are good enough to hold lock.
+
+        Box overlap alone is a weak signal in real scenes: singers, speakers, and
+        musicians often stand close together, so the selected person's detector
+        box can overlap another person even while their torso keypoints are
+        stable and inside the selected track.  In that case we should trust the
+        body position and keep following instead of entering "Target blocked".
+
+        The pose path still rejects wrong-person evidence: ``_pose_aim`` calls
+        ``_pose_keypoints_consistent()``, which checks the keypoint anchor is
+        inside this target box and not jumping away from the last trusted aim.
+        """
+        if frame is None or not self._feature("pose"):
+            return False
+        anchor, conf, _height = self._pose_aim(target, frame, now, tracks=tracks)
+        return anchor is not None and conf >= _POSE_TARGET_LOCK_MIN_CONF
+
     def _mark_target_ambiguous(
         self,
         target: TrackInfo | None,
@@ -1193,6 +1356,7 @@ class CameraWorker:
         lock.status = "coasting"
         lock.reason = "missing"
 
+    @_appearance_guarded
     def _apply_target_lock(
         self,
         tracks: list[TrackInfo],
@@ -1200,7 +1364,6 @@ class CameraWorker:
         now: float,
     ) -> None:
         """Suppress target evidence from obvious crossings or pose-risk crowding."""
-        del frame  # reserved for future image-space checks
         self._sync_target_flags(tracks)
         if self._target_track_id is None:
             self._target_lock.status = "idle"
@@ -1217,10 +1380,17 @@ class CameraWorker:
         ):
             self._store_trusted_target(target, now)
             return
-        if self._target_bbox_jumped(target):
-            self._mark_target_ambiguous(target, now=now, reason="jump")
-            return
-        if self._target_crowded(target, tracks):
+        # Only DISTRUST the target (freeze + go ambiguous) when there's a real
+        # wrong-person risk: another track is crowding it AND its box jumped to a
+        # low-overlap position.  A lone subject that simply moves fast is NOT
+        # ambiguous — freezing on it was the "tracking keeps blocking itself when
+        # they move away too quickly" bug.  Crowd disambiguation still defers to
+        # pose when the body keypoints vouch for the same person.
+        crowded = self._target_crowded(target, tracks)
+        if crowded and self._target_bbox_jumped(target):
+            if self._target_pose_trusted(target, frame, now, tracks):
+                self._store_trusted_target(target, now)
+                return
             self._mark_target_ambiguous(target, now=now, reason="blocked")
             return
         self._store_trusted_target(target, now)
@@ -1272,6 +1442,7 @@ class CameraWorker:
             except Exception:  # noqa: BLE001
                 pass
 
+    @_appearance_guarded
     def _maybe_reid_recover(
         self,
         tracks: list[TrackInfo],
@@ -1364,6 +1535,8 @@ class CameraWorker:
         track: TrackInfo,
         frame: NDArray[np.uint8],
         now: float | None = None,
+        *,
+        tracks: list[TrackInfo] | None = None,
     ) -> tuple[tuple[float, float], float]:
         """Return (normalized center error, subject-height fraction).
 
@@ -1425,7 +1598,12 @@ class CameraWorker:
         # the box when it isn't, so it never snaps between the two.  now is None for
         # pure-bbox callers / unit tests (deterministic, un-smoothed).
         if now is not None:
-            pose_anchor, pose_conf, torso_height = self._pose_aim(track, frame, now)
+            pose_anchor, pose_conf, torso_height = self._pose_aim(
+                track,
+                frame,
+                now,
+                tracks=tracks,
+            )
             if pose_anchor is not None and pose_conf > 0.0:
                 w_pose = max(0.0, min(1.0, pose_conf))
                 ax = w_pose * pose_anchor[0] + (1.0 - w_pose) * ax_bbox
@@ -1515,7 +1693,7 @@ class CameraWorker:
         if target is None or target.lost:
             return
         try:
-            self._track_error(target, frame, now)
+            self._track_error(target, frame, now, tracks=tracks)
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s target aim annotation failed", self.camera_id, exc_info=True)
 
@@ -1536,12 +1714,89 @@ class CameraWorker:
             and float(bbox.y1) - my <= y <= float(bbox.y2) + my
         )
 
+    def _pose_owned_by_track(
+        self,
+        kps: list[Any],
+        track: TrackInfo,
+        tracks: list[TrackInfo] | None,
+    ) -> bool:
+        """Return True when torso/head keypoints clearly belong to ``track``.
+
+        In crowded crops a single-person pose model can choose the neighboring
+        body.  Aim math must reject that evidence before it can move the reticle
+        or teach target lock state.
+        """
+        try:
+            from autoptz.engine.pipeline import framing
+        except Exception:  # noqa: BLE001
+            return False
+
+        indices = (
+            framing.KP_NOSE,
+            framing.KP_LEFT_EYE,
+            framing.KP_RIGHT_EYE,
+            framing.KP_LEFT_SHOULDER,
+            framing.KP_RIGHT_SHOULDER,
+            framing.KP_LEFT_HIP,
+            framing.KP_RIGHT_HIP,
+        )
+        points = []
+        for idx in indices:
+            if 0 <= idx < len(kps):
+                kp = kps[idx]
+                try:
+                    if kp.usable():
+                        points.append((float(kp.x), float(kp.y)))
+                except Exception:  # noqa: BLE001
+                    continue
+        if not points:
+            return False
+
+        inside = [
+            p
+            for p in points
+            if self._point_inside_bbox_margin(p, track.bbox, _POSE_KEYPOINT_MARGIN)
+        ]
+        needed = max(1, int(round(len(points) * 0.60)))
+        if len(inside) < needed:
+            return False
+
+        cx = sum(x for x, _y in points) / len(points)
+        cy = sum(y for _x, y in points) / len(points)
+        center = (cx, cy)
+        if not self._point_inside_bbox_margin(center, track.bbox, _POSE_BBOX_MARGIN):
+            return False
+
+        if not tracks:
+            return True
+
+        tcx, tcy = self._bbox_center(track.bbox)
+        target_d2 = (cx - tcx) ** 2 + (cy - tcy) ** 2
+        target_diag = max(
+            1.0,
+            ((track.bbox.x2 - track.bbox.x1) ** 2 + (track.bbox.y2 - track.bbox.y1) ** 2) ** 0.5,
+        )
+        ambiguous_slack = target_diag * 0.18
+        for other in tracks:
+            if other.track_id == track.track_id or getattr(other, "lost", False):
+                continue
+            if not self._point_inside_bbox_margin(center, other.bbox, _POSE_KEYPOINT_MARGIN):
+                continue
+            ocx, ocy = self._bbox_center(other.bbox)
+            other_d2 = (cx - ocx) ** 2 + (cy - ocy) ** 2
+            if other_d2 + ambiguous_slack * ambiguous_slack < target_d2:
+                return False
+            if self._bbox_iou(track.bbox, other.bbox) >= 0.25:
+                return False
+        return True
+
     def _pose_keypoints_consistent(
         self,
         kps: list[Any],
         track: TrackInfo,
         frame: NDArray[np.uint8],
         now: float,
+        tracks: list[TrackInfo] | None = None,
     ) -> bool:
         del frame  # reserved for future image-space consistency checks
         try:
@@ -1555,8 +1810,13 @@ class CameraWorker:
         )
         if raw_aim is None or conf <= 0.0:
             return False
+        # A pose anchor that lands outside the box or jumps far from the last
+        # trusted aim just means "don't trust the keypoints this frame" — fall
+        # back to the bbox aim and KEEP FOLLOWING.  It must NOT freeze tracking
+        # (the old behaviour made the camera stall whenever the subject moved).
         if not self._point_inside_bbox_margin(raw_aim, track.bbox, _POSE_BBOX_MARGIN):
-            self._mark_target_ambiguous(track, now=now, reason="pose_off_target")
+            return False
+        if not self._pose_owned_by_track(kps, track, tracks):
             return False
 
         trusted = self._target_lock.trusted_aim
@@ -1567,7 +1827,6 @@ class CameraWorker:
             bb = track.bbox
             diag = max(1.0, ((bb.x2 - bb.x1) ** 2 + (bb.y2 - bb.y1) ** 2) ** 0.5)
             if dist > max(_POSE_JUMP_MIN_PX, diag * _POSE_JUMP_SCALE):
-                self._mark_target_ambiguous(track, now=now, reason="pose_jump")
                 return False
         return True
 
@@ -1576,6 +1835,8 @@ class CameraWorker:
         track: TrackInfo,
         frame: NDArray[np.uint8],
         now: float,
+        *,
+        tracks: list[TrackInfo] | None = None,
     ) -> tuple[tuple[float, float] | None, float, float]:
         """Return ``(raw_anchor | None, confidence, subject_height_fraction)``.
 
@@ -1613,7 +1874,13 @@ class CameraWorker:
             self._pose_ms = (time.perf_counter() - pose_t0) * 1000.0
             self._record_stage("pose", self._pose_ms)
             self._last_pose_t = now
-            if kps is not None and self._pose_keypoints_consistent(kps, track, frame, now):
+            if kps is not None and self._pose_keypoints_consistent(
+                kps,
+                track,
+                frame,
+                now,
+                tracks,
+            ):
                 self._pose_keypoints = kps
                 self._pose_kp_track_id = track.track_id
                 self._last_pose_overlay_t = now
@@ -1666,7 +1933,7 @@ class CameraWorker:
         if target is None or target.lost:
             self._reset_pose_aim()
             return
-        self._pose_aim(target, frame, now)  # side effect: fills _pose_keypoints
+        self._pose_aim(target, frame, now, tracks=tracks)  # side effect: fills _pose_keypoints
 
     def _ensure_pose(self) -> Any | None:
         """Return the pose estimator (shared pool's first, else per-worker build).
@@ -1681,6 +1948,20 @@ class CameraWorker:
         if self._pose_probed:
             return self._pose
         self._pose_probed = True
+
+        # Unified mode: keypoints already came from the detection pass — expose
+        # them through the PoseEstimator API so _pose_aim is unchanged, with no
+        # second forward pass.
+        if self._unified_pose_active:
+            try:
+                from autoptz.engine.pipeline.pose_detect import UnifiedPoseAdapter
+
+                ep = getattr(self._detect.detector, "ep", "") if self._detect else ""
+                self._pose = UnifiedPoseAdapter(lambda: self._last_detections, ep=ep)
+            except Exception:  # noqa: BLE001
+                log.debug("camera_id=%s unified pose adapter failed", self.camera_id, exc_info=True)
+                self._pose = None
+            return self._pose
 
         if self._pool is not None:
             try:
@@ -1796,6 +2077,7 @@ class CameraWorker:
                 with self._frame_lock:
                     self._latest_frame = frame
                     self._latest_frame_id += 1
+                self._frames_captured += 1
                 self._frame_ready.set()
 
                 self._ingest_ms = ingest_ms
@@ -1849,6 +2131,7 @@ class CameraWorker:
         if self._stop_event.is_set():
             return
         self._build_inference_stacks()
+        self._start_appearance_thread()
         last_id = 0
         while not self._stop_event.is_set():
             # Wake on a new frame, but fall through on the timeout too so commands
@@ -1865,6 +2148,7 @@ class CameraWorker:
             if frame is None or fid == last_id:
                 continue
             last_id = fid
+            self._frames_inferred += 1
             self._current_inference_frame_id = fid
             now = time.monotonic()
 
@@ -1874,28 +2158,37 @@ class CameraWorker:
 
             self._apply_target_lock(tracks, frame, now)
 
-            # Appearance ReID: refresh the target template while it's visible and
-            # re-bind it onto the right track after an occlusion (throttled; no-op
-            # unless _reid_active — global reid feature + stable mode — and boxmot
-            # is available).
-            self._maybe_reid_recover(tracks, frame, now)
-            self._apply_target_lock(tracks, frame, now)
-
-            # Face recognition + auto-harvest (throttled internally; record the
-            # cost only when a run actually executed so the badge shows real cost).
-            face_t0 = time.perf_counter()
-            self._maybe_identify(frame, tracks, now)
-            face_dt = (time.perf_counter() - face_t0) * 1000.0
-            if face_dt > 0.5:
-                self._face_ms = face_dt
-                self._record_stage("face", face_dt)
-            self._apply_target_lock(tracks, frame, now)
+            if self._async_appearance:
+                # Hand the heavy appearance passes (ReID + face) to their own
+                # thread so they overlap detect+track+PTZ instead of stalling the
+                # control loop.  Shared target/identity state is serialised by
+                # _appearance_lock inside those methods; the hot loop re-reads the
+                # (possibly rebound) target via _apply_target_lock each tick.
+                self._publish_appearance_input(frame, tracks, now, fid)
+            else:
+                # Inline (sync) path — preserves the exact original ordering.
+                self._maybe_reid_recover(tracks, frame, now)
+                self._apply_target_lock(tracks, frame, now)
+                face_t0 = time.perf_counter()
+                self._maybe_identify(frame, tracks, now)
+                face_dt = (time.perf_counter() - face_t0) * 1000.0
+                if face_dt > 0.5:
+                    self._face_ms = face_dt
+                    self._record_stage("face", face_dt)
+                self._apply_target_lock(tracks, frame, now)
 
             # Estimate pose for the selected person so the pose overlay shows the
             # moment you click someone — independent of whether PTZ auto-follow is
             # actively driving (which is the only place pose ran before).
             self._maybe_estimate_pose_overlay(tracks, frame, now)
             self._annotate_target_aim(tracks, frame, now)
+
+            # Estimate the camera's own image motion for this tick BEFORE driving
+            # the PTZ — _drive_ptz_auto → _estimate_aim_velocity subtracts it so the
+            # feed-forward follows the subject's world motion, not the frame shift.
+            # (_ptz_last_cmd still holds the *previous* command here — exactly the
+            # one that produced this frame's observed shift.)
+            self._update_ego_motion(tracks, frame, now)
 
             # Auto PTZ control (suspended during a manual-override window).  Lock
             # the backend so a concurrent telemetry position read can't interleave.
@@ -1913,6 +2206,80 @@ class CameraWorker:
                     len(tracks),
                     self._fps,
                 )
+
+        self._stop_appearance_thread()
+
+    # ── async appearance (face + ReID) thread ───────────────────────────────────
+
+    def _start_appearance_thread(self) -> None:
+        """Spawn the appearance thread (face + ReID) when async mode is on."""
+        if not self._async_appearance or self._appearance_thread is not None:
+            return
+        self._appearance_thread = threading.Thread(
+            target=self._appearance_loop,
+            name=f"appearance-{self.camera_id[:8]}",
+            daemon=True,
+        )
+        self._appearance_thread.start()
+
+    def _stop_appearance_thread(self) -> None:
+        """Wake + join the appearance thread on shutdown (idempotent)."""
+        self._appearance_ready.set()
+        thread = self._appearance_thread
+        if thread is not None:
+            thread.join(timeout=3.0)
+            self._appearance_thread = None
+
+    def _publish_appearance_input(
+        self,
+        frame: NDArray[np.uint8],
+        tracks: list[TrackInfo],
+        now: float,
+        fid: int,
+    ) -> None:
+        """Hand the latest (frame, tracks, now, id) to the appearance thread.
+
+        A shallow copy of the tracks list is published so the hot loop can keep
+        mutating its own list (telemetry annotations) without racing the
+        appearance thread; the shared TrackInfo objects are only read there.
+        """
+        with self._frame_lock:
+            self._appearance_input = (frame, list(tracks), now, fid)
+        self._appearance_ready.set()
+
+    def _appearance_loop(self) -> None:
+        """Run ReID recovery + face identification off the hot inference thread.
+
+        Consumes the freshest published (frame, tracks) — dropping intermediate
+        ones like the inference loop — and runs the two heavy, throttled passes.
+        All target/identity state they touch is serialised by ``_appearance_lock``
+        (acquired inside the methods), so this overlaps the hot loop's detect/track
+        without corrupting the target-lock state machine.
+        """
+        last_fid = -1
+        while not self._stop_event.is_set():
+            self._appearance_ready.wait(timeout=0.1)
+            self._appearance_ready.clear()
+            if self._stop_event.is_set():
+                break
+            with self._frame_lock:
+                payload = self._appearance_input
+            if payload is None:
+                continue
+            frame, tracks, now, fid = payload
+            if fid == last_fid:
+                continue
+            last_fid = fid
+            try:
+                self._maybe_reid_recover(tracks, frame, now)
+                t0 = time.perf_counter()
+                self._maybe_identify(frame, tracks, now)
+                face_dt = (time.perf_counter() - t0) * 1000.0
+                if face_dt > 0.5:
+                    self._face_ms = face_dt
+                    self._record_stage("face", face_dt)
+            except Exception:  # noqa: BLE001 — appearance must never crash the worker
+                log.debug("camera_id=%s appearance pass failed", self.camera_id, exc_info=True)
 
     # ── resource management ─────────────────────────────────────────────────────
 
@@ -1973,6 +2340,16 @@ class CameraWorker:
         if detect is not None:
             self._ep = detect.ep
         self._detect = detect
+        # Detect unified-pose mode by detector type so both the pooled and
+        # per-worker build paths are covered uniformly.
+        self._unified_pose_active = False
+        if detect is not None:
+            try:
+                from autoptz.engine.pipeline.pose_detect import PoseDetector
+
+                self._unified_pose_active = isinstance(detect.detector, PoseDetector)
+            except Exception:  # noqa: BLE001
+                self._unified_pose_active = False
 
         # Face / identity stack (graceful: None → no identity features).  Prefer
         # the pool's shared recogniser; fall back to a per-worker build.
@@ -2081,7 +2458,16 @@ class CameraWorker:
             from autoptz.engine.ptz.controller import PTZController
             from autoptz.engine.ptz.factory import build_backend
 
-            backend = build_backend(self.config.ptz)
+            # For NDI cameras, hand the factory the source name so it can open a
+            # dedicated PTZ receiver (the video adapter keeps its own). Without
+            # this, NDI PTZ (auto-follow + manual) silently never builds.
+            ndi_name: str | None = None
+            src = getattr(self.config, "source", None)
+            if src is not None and getattr(src, "type", "") == "ndi":
+                addr = (getattr(src, "address", "") or "").strip()
+                ndi_name = addr[len("ndi://") :] if addr.startswith("ndi://") else addr
+
+            backend = build_backend(self.config.ptz, ndi_name=ndi_name)
             if backend is None:
                 return
             self._ptz_backend = backend
@@ -2151,22 +2537,12 @@ class CameraWorker:
             return None
 
     def _unlink_stale_shm(self) -> None:
-        from multiprocessing.shared_memory import SharedMemory
+        from autoptz.engine.runtime.shm import unlink_shared_memory_pair
 
-        for name in (self.shm_name, f"{self.shm_name}__idx"):
-            try:
-                stale = SharedMemory(name=name, create=False)
-                stale.close()
-                stale.unlink()
-            except FileNotFoundError:
-                pass
-            except Exception:  # noqa: BLE001
-                log.debug(
-                    "camera_id=%s could not unlink stale shm %s",
-                    self.camera_id,
-                    name,
-                    exc_info=True,
-                )
+        try:
+            unlink_shared_memory_pair(self.shm_name)
+        except Exception:  # noqa: BLE001
+            log.debug("camera_id=%s could not unlink stale shm", self.camera_id, exc_info=True)
 
     def _close_resources(self) -> None:
         if self._source is not None:
@@ -2239,6 +2615,28 @@ class CameraWorker:
                 self._dropped_frames,
                 self._fps,
             )
+
+        # Inference-stage backpressure: how many captured frames the inference
+        # thread couldn't keep up with this window.  A high ratio means the
+        # detector cadence (quality policy) should relax or the model is too heavy.
+        cap_delta = self._frames_captured - self._last_logged_inf_captured
+        inf_delta = self._frames_inferred - self._last_logged_inf_inferred
+        self._last_logged_inf_captured = self._frames_captured
+        self._last_logged_inf_inferred = self._frames_inferred
+        skipped = cap_delta - inf_delta
+        if cap_delta > 0 and skipped > 0:
+            ratio = skipped / cap_delta
+            if ratio >= 0.5:  # only shout when the inference thread is well behind
+                log.info(
+                    "camera_id=%s inference behind: processed %d/%d frames (%.0f%% skipped) "
+                    "in the last %.0fs; cadence=%s",
+                    self.camera_id,
+                    inf_delta,
+                    cap_delta,
+                    ratio * 100.0,
+                    _DROP_LOG_INTERVAL_S,
+                    self._quality_active,
+                )
 
     def _push_frame(self, frame: NDArray[np.uint8]) -> None:
         if self._shm is None:
@@ -2420,6 +2818,7 @@ class CameraWorker:
         self._last_faces_emitted_frame_id = self._last_faces_frame_id
         return list(self._last_faces)
 
+    @_appearance_guarded
     def _maybe_identify(
         self,
         frame: NDArray[np.uint8] | None,
@@ -2523,7 +2922,8 @@ class CameraWorker:
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s face match failed", self.camera_id, exc_info=True)
             if match is not None:
-                if track is not None:
+                strong_bind = match.score >= _FACE_TARGET_MATCH_THRESHOLD
+                if track is not None and strong_bind:
                     prev = self._track_identity.get(track.track_id)
                     self._track_identity[track.track_id] = (
                         match.identity_id,
@@ -2542,21 +2942,44 @@ class CameraWorker:
                             match.name,
                             match.score,
                         )
-                # Keep the matched identity's template fresh, and occasionally
-                # capture a fresh crop so the person accrues a few varied
-                # candidate profile photos (rate-limited to avoid flooding).
-                crop: bytes | None = None
-                if now - self._last_crop_t >= _HARVEST_COOLDOWN_S:
-                    crop = _face_crop_png(frame, obs.bbox)
-                    self._last_crop_t = now
-                try:
-                    face.service.add_embedding(
+                elif track is not None:
+                    log.debug(
+                        "camera_id=%s weak face match ignored for track bind "
+                        "track=%d id=%s score=%.2f threshold=%.2f",
+                        self.camera_id,
+                        track.track_id,
                         match.identity_id,
-                        obs.embedding,
-                        thumbnail=crop,
+                        match.score,
+                        _FACE_TARGET_MATCH_THRESHOLD,
                     )
-                except Exception:  # noqa: BLE001
-                    log.debug("camera_id=%s add_embedding failed", self.camera_id, exc_info=True)
+                # Only teach the gallery from high-confidence matches.  We still
+                # treat weaker matches as "not novel" so they do not auto-harvest
+                # duplicates, but we do not append their embedding to anyone.
+                if match.score >= _FACE_LEARN_MATCH_THRESHOLD:
+                    crop: bytes | None = None
+                    if now - self._last_crop_t >= _HARVEST_COOLDOWN_S:
+                        crop = _face_crop_png(frame, obs.bbox)
+                        self._last_crop_t = now
+                    try:
+                        face.service.add_embedding(
+                            match.identity_id,
+                            obs.embedding,
+                            thumbnail=crop,
+                        )
+                    except Exception:  # noqa: BLE001
+                        log.debug(
+                            "camera_id=%s add_embedding failed",
+                            self.camera_id,
+                            exc_info=True,
+                        )
+                else:
+                    log.debug(
+                        "camera_id=%s weak face match not learned id=%s score=%.2f threshold=%.2f",
+                        self.camera_id,
+                        match.identity_id,
+                        match.score,
+                        _FACE_LEARN_MATCH_THRESHOLD,
+                    )
             elif track is not None:
                 self._maybe_harvest(face, frame, obs, track, now)
 
@@ -2649,12 +3072,26 @@ class CameraWorker:
         nearest to it within the requested track. Without a click point, use the
         largest face in that track as a stable fallback.
         """
+        target_track = next((t for t in tracks if t.track_id == track_id), None)
         candidates = []
         for obs in observations:
             tr = self._track_for_face(obs, tracks)
-            if tr is None or tr.track_id != track_id or getattr(tr, "lost", False):
+            if tr is not None and tr.track_id == track_id and not getattr(tr, "lost", False):
+                candidates.append(obs)
                 continue
-            candidates.append(obs)
+            if click_norm is None or target_track is None or getattr(target_track, "lost", False):
+                continue
+            h, w = frame.shape[:2]
+            px = click_norm[0] * max(1, w)
+            py = click_norm[1] * max(1, h)
+            x1, y1, x2, y2 = obs.bbox
+            if (
+                target_track.bbox.x1 <= px <= target_track.bbox.x2
+                and target_track.bbox.y1 <= py <= target_track.bbox.y2
+                and x1 <= px <= x2
+                and y1 <= py <= y2
+            ):
+                candidates.append(obs)
         if not candidates:
             return None
         if click_norm is None:
@@ -2825,9 +3262,10 @@ class CameraWorker:
         """Remember a stage measurement for last/avg/p95 diagnostics."""
         if ms < 0:
             return
-        samples = self._stage_samples.setdefault(key, deque(maxlen=_STAGE_WINDOW))
-        samples.append(float(ms))
-        self._stage_last_t[key] = time.monotonic()
+        with self._stage_lock:
+            samples = self._stage_samples.setdefault(key, deque(maxlen=_STAGE_WINDOW))
+            samples.append(float(ms))
+            self._stage_last_t[key] = time.monotonic()
 
     def _target_fps(self) -> float:
         return max(1.0, float(getattr(self.config.source, "fps", 0.0) or 0.0))
@@ -2836,10 +3274,12 @@ class CameraWorker:
         return 1000.0 / self._target_fps()
 
     def _stage_avg(self, key: str) -> float:
-        samples = self._stage_samples.get(key)
-        if not samples:
-            return 0.0
-        return float(sum(samples) / len(samples))
+        with self._stage_lock:
+            samples = self._stage_samples.get(key)
+            if not samples:
+                return 0.0
+            snapshot = list(samples)
+        return float(sum(snapshot) / len(snapshot))
 
     def _effective_detect_interval(self) -> int:
         """Return the actual detector cadence after quality policy is applied."""
@@ -3048,7 +3488,8 @@ class CameraWorker:
         cadence: str = "",
         detail: str = "",
     ) -> StageTimingInfo:
-        samples = list(self._stage_samples.get(key, ()))
+        with self._stage_lock:
+            samples = list(self._stage_samples.get(key, ()))
         last = float(samples[-1]) if samples else 0.0
         avg = float(sum(samples) / len(samples)) if samples else 0.0
         if samples:

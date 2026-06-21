@@ -1,4 +1,4 @@
-"""UpdateDialog — notify the user of a newer release and link to the download."""
+"""UpdateDialog — offer the OS-specific release update."""
 
 from __future__ import annotations
 
@@ -22,18 +22,20 @@ from autoptz.update.checker import UpdateInfo
 
 
 class UpdateDialog(QDialog):
-    """Shows the new version + release notes; opens the release page to download."""
+    """Shows the new version + release notes and starts the updater."""
 
     def __init__(
         self,
         info: UpdateInfo,
         current_version: str,
         on_skip: Callable[[str], None] | None = None,
+        on_install: Callable[[UpdateInfo], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._info = info
         self._on_skip = on_skip
+        self._on_install = on_install
         self.setWindowTitle("Update Available")
         self.setModal(True)
         self.setMinimumWidth(460)
@@ -79,13 +81,21 @@ class UpdateDialog(QDialog):
         later = QPushButton("Later")
         later.clicked.connect(self.reject)
         buttons.addWidget(later)
-        download = QPushButton("Download")
+        download = QPushButton("Download and Restart" if info.asset_for_platform() else "Download")
         download.setProperty("accent", True)
+        if info.asset_for_platform():
+            download.setToolTip("Download the installer for this OS, launch it, then quit AutoPTZ.")
+        else:
+            download.setToolTip("Open the release page because this OS has no matching asset.")
         download.clicked.connect(self._download)
         buttons.addWidget(download)
         col.addLayout(buttons)
 
     def _download(self) -> None:
+        if self._info.asset_for_platform() and self._on_install is not None:
+            self._on_install(self._info)
+            self.accept()
+            return
         QDesktopServices.openUrl(QUrl(self._info.html_url))
         self.accept()
 

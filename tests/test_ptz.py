@@ -80,6 +80,9 @@ def _cfg(**kw: object) -> PTZConfig:
         "max_tilt_speed": 1.0,
         "max_zoom_speed": 1.0,
         "auto_zoom": False,
+        # Isolate the PD/feed-forward math: no acceleration ramp unless a test
+        # opts in (the slew limiter has its own dedicated tests).
+        "max_accel": 0.0,
     }
     defaults.update(kw)
     return PTZConfig(**defaults)  # type: ignore[arg-type]
@@ -660,3 +663,136 @@ class TestMockBackend:
         pos = b.get_position()
         assert pos is not None
         assert isinstance(pos, PTZState)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Control-law additions: integral (anti-windup), oscillation guard, latency lead
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestControllerIntegral:
+    def test_integral_off_by_default(self) -> None:
+        """ki defaults to 0 → the loop is pure PD (no accumulation)."""
+        ctrl = PTZController(MockBackend(), _cfg(kp=0.5))
+        assert ctrl._cfg.ki == 0.0
+        a = ctrl.step((0.2, 0.0), (0.0, 0.0), 0.45, True, t=0.0)[0]
+        b = ctrl.step((0.2, 0.0), (0.0, 0.0), 0.45, True, t=0.5)[0]
+        # steady error, no integral → command shouldn't grow tick over tick
+        assert b == pytest.approx(a, abs=0.05)
+
+    def test_integral_accumulates_on_steady_error(self) -> None:
+        """With ki>0 a persistent error builds extra command over time."""
+        ctrl = PTZController(MockBackend(), _cfg(kp=0.2, ki=1.0, aim_smoothing=0.0))
+        first = ctrl.step((0.2, 0.0), (0.0, 0.0), 0.45, True, t=0.0)[0]
+        last = first
+        for i in range(1, 8):
+            last = ctrl.step((0.2, 0.0), (0.0, 0.0), 0.45, True, t=i * 0.1)[0]
+        assert last > first  # integral pushed the command up
+
+    def test_integral_is_anti_windup_clamped(self) -> None:
+        """A long saturating error can't wind the integral past its cap."""
+        ctrl = PTZController(MockBackend(), _cfg(kp=0.2, ki=2.0, aim_smoothing=0.0))
+        for i in range(50):
+            ctrl.step((1.0, 0.0), (0.0, 0.0), 0.45, True, t=i * 0.1)
+        # ki·∫ is capped at 0.5 → accumulator stays within ±(0.5/ki)
+        assert abs(ctrl._int_ex) <= 0.5 / 2.0 + 1e-6
+
+    def test_integral_resets_on_reacquire(self) -> None:
+        ctrl = PTZController(MockBackend(), _cfg(kp=0.2, ki=1.0, aim_smoothing=0.0))
+        for i in range(6):
+            ctrl.step((0.3, 0.0), (0.0, 0.0), 0.45, True, t=i * 0.1)
+        assert ctrl._int_ex != 0.0
+        ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, False, t=1.0)  # lose target
+        ctrl.step((0.3, 0.0), (0.0, 0.0), 0.45, True, t=5.0)  # re-acquire
+        assert ctrl._int_ex == 0.0
+
+
+class TestOscillationGuard:
+    def test_guard_damps_sustained_hunting(self) -> None:
+        """Alternating-sign errors (hunting) get progressively damped."""
+        ctrl = PTZController(MockBackend(), _cfg(kp=0.8, aim_smoothing=0.0, osc_guard=True))
+        mags: list[float] = []
+        for i in range(8):
+            err = 0.5 if i % 2 == 0 else -0.5  # flip every tick
+            pan = ctrl.step((err, 0.0), (0.0, 0.0), 0.45, True, t=i * 0.05)[0]
+            mags.append(abs(pan))
+        assert ctrl._flip_score > 1.0  # detected hunting
+        assert mags[-1] < mags[1]  # later commands damped vs early ones
+
+    def test_guard_leaves_steady_motion_alone(self) -> None:
+        """A constant-direction error keeps full command (no false damping)."""
+        ctrl = PTZController(MockBackend(), _cfg(kp=0.8, aim_smoothing=0.0, osc_guard=True))
+        for i in range(6):
+            ctrl.step((0.4, 0.0), (0.0, 0.0), 0.45, True, t=i * 0.05)
+        assert ctrl._flip_score == pytest.approx(0.0, abs=1e-9)
+
+
+class TestLatencyLead:
+    def test_measured_latency_increases_lead(self) -> None:
+        """A moving subject yields a larger lead-in command once latency is fed."""
+        b_lo, b_hi = MockBackend(), MockBackend()
+        # lead comes only from latency (lead_time_s=0); kp turns the lead-shifted
+        # error into a command; kv=0 so the velocity itself adds nothing directly.
+        cfg = _cfg(
+            kp=0.6,
+            kd=0.0,
+            kv=0.0,
+            aim_smoothing=0.0,
+            lead_time_s=0.0,
+            lead_time_auto=True,
+            safe_zone_enabled=False,  # otherwise the framing box swallows the lead
+        )
+        lo = PTZController(b_lo, cfg)
+        hi = PTZController(b_hi, cfg)
+        hi.set_loop_latency(0.3)  # 300 ms pipeline
+        # Off-centre error so we're actively *following* (the hold only suppresses
+        # motion when the subject is inside the box); the latency lead then
+        # projects further ahead → a larger command.
+        lo.step((0.2, 0.0), (0.5, 0.0), 0.45, True, t=0.0)
+        hi.step((0.2, 0.0), (0.5, 0.0), 0.45, True, t=0.0)
+        lo_pan = lo.step((0.2, 0.0), (0.5, 0.0), 0.45, True, t=0.1)[0]
+        hi_pan = hi.step((0.2, 0.0), (0.5, 0.0), 0.45, True, t=0.1)[0]
+        assert abs(hi_pan) > abs(lo_pan)
+
+    def test_set_loop_latency_is_clamped(self) -> None:
+        ctrl = PTZController(MockBackend(), _cfg())
+        ctrl.set_loop_latency(99.0)
+        assert ctrl._loop_latency_s <= 0.8
+        ctrl.set_loop_latency(-5.0)
+        assert ctrl._loop_latency_s == 0.0
+
+
+class TestSlewRateLimit:
+    def _ctrl(self, max_accel: float):
+        return PTZController(
+            MockBackend(),
+            _cfg(kp=1.0, aim_smoothing=0.0, safe_zone_enabled=False, max_accel=max_accel),
+        )
+
+    def test_ramps_up_instead_of_jumping(self) -> None:
+        ctrl = self._ctrl(max_accel=2.0)  # ≤0.2 change per 0.1s tick
+        cmds = [ctrl.step((1.0, 0.0), (0.0, 0.0), 0.45, True, t=i * 0.1)[0] for i in range(8)]
+        # Early commands are well short of the steady target (1.0) — it's ramping.
+        assert cmds[1] < 0.5
+        assert cmds[-1] > cmds[1]
+        # No tick jumps by more than max_accel*dt (0.2), so no "speeds out of nowhere".
+        assert all(b - a <= 0.2 + 1e-6 for a, b in zip(cmds, cmds[1:], strict=False))
+
+    def test_disabled_responds_instantly(self) -> None:
+        ctrl = self._ctrl(max_accel=0.0)
+        ctrl.step((1.0, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
+        pan = ctrl.step((1.0, 0.0), (0.0, 0.0), 0.45, True, t=0.1)[0]
+        assert pan == pytest.approx(1.0, abs=1e-6)  # jumps straight to full speed
+
+    def test_ramps_back_down_into_deadzone(self) -> None:
+        # Drive to speed, then center the target (use a real dead-zone) → the
+        # command should ease DOWN over ticks, not cut to zero abruptly.
+        ctrl = PTZController(
+            MockBackend(),
+            _cfg(kp=1.0, aim_smoothing=0.0, safe_zone_enabled=False, deadzone_x=0.1, max_accel=2.0),
+        )
+        for i in range(8):
+            ctrl.step((1.0, 0.0), (0.0, 0.0), 0.45, True, t=i * 0.1)
+        high = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.45, True, t=0.8)[0]  # centered now
+        lower = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.45, True, t=0.9)[0]
+        assert 0.0 <= lower < high  # decelerating, not slamming to 0

@@ -17,7 +17,7 @@ The detector model couldn't be loaded. The log says why. Common causes:
   offline: `python -m tools.fetch_models`, or set `AUTOPTZ_MODEL_PATH` to an
   existing ONNX, or `AUTOPTZ_MODEL_URL` to a mirror.
 - **`onnxruntime`/`cv2` missing** — you installed `requirements/ui.txt` only.
-  Install `requirements/base.txt`.
+  Run `python tools/install.py --editable`.
 
 Tracking still works once a model is present; boxmot is optional (the tracker
 falls back to a built-in IoU tracker).
@@ -40,8 +40,9 @@ persistently afterward — the second launch is fast. Run
 
 ## Wrong camera opens / camera names are generic (macOS)
 
-Install `requirements/macos.txt` (pyobjc AVFoundation) so cameras are opened by
-stable `uniqueID` with friendly names instead of OpenCV's divergent index order.
+Run `python tools/install.py --editable` so the PyObjC AVFoundation packages from
+`requirements/base.txt` are present. That lets cameras open by stable `uniqueID`
+instead of OpenCV's divergent index order.
 
 ## Tracking is laggy or jittery
 

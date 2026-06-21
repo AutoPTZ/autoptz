@@ -31,15 +31,22 @@ _DEFAULT_VISCA_IP_PORT = 52381
 _DEFAULT_ONVIF_PORT = 80
 
 
-def build_backend(ptz: PTZConfig, *, ndi_source: Any | None = None) -> PTZBackend | None:
+def build_backend(
+    ptz: PTZConfig,
+    *,
+    ndi_source: Any | None = None,
+    ndi_name: str | None = None,
+) -> PTZBackend | None:
     """Construct the PTZ backend described by *ptz*, or ``None``.
 
     Args:
         ptz:        The camera's :class:`PTZConfig`.
-        ndi_source: An already-connected NDI receiver (``cyndilib.Receiver``) for
-                    NDI cameras.  Required to build the NDI PTZ backend; when the
-                    config asks for NDI but no receiver is supplied, returns
-                    ``None`` (graceful — NDI PTZ rides the existing receiver).
+        ndi_source: An already-connected NDI receiver (``cyndilib.Receiver``) to
+                    share for NDI PTZ.
+        ndi_name:   NDI source name; when given (and no ``ndi_source``), the NDI
+                    backend opens its own low-bandwidth PTZ receiver to it.  This
+                    is what makes NDI cameras controllable without threading the
+                    video receiver through (the video adapter keeps its own).
 
     Returns:
         A :class:`PTZBackend` instance, or ``None`` when unconfigured / the
@@ -52,13 +59,13 @@ def build_backend(ptz: PTZConfig, *, ndi_source: Any | None = None) -> PTZBacken
 
     try:
         if backend in ("", "auto"):
-            return _probe_auto(ptz, ndi_source=ndi_source)
+            return _probe_auto(ptz, ndi_source=ndi_source, ndi_name=ndi_name)
         if backend == "visca_usb":
             return _build_visca_usb(ptz)
         if backend == "visca_ip":
             return _build_visca_ip(ptz)
         if backend == "ndi":
-            return _build_ndi(ptz, ndi_source=ndi_source)
+            return _build_ndi(ptz, ndi_source=ndi_source, ndi_name=ndi_name)
         if backend == "onvif":
             return _build_onvif(ptz)
     except Exception:  # noqa: BLE001 - factory must never raise into the engine
@@ -109,18 +116,25 @@ def _build_visca_ip(ptz: PTZConfig) -> PTZBackend | None:
     return backend
 
 
-def _build_ndi(ptz: PTZConfig, *, ndi_source: Any | None) -> PTZBackend | None:
-    if ndi_source is None:
-        log.warning("ndi PTZ requested but no NDI receiver supplied; PTZ disabled.")
+def _build_ndi(
+    ptz: PTZConfig, *, ndi_source: Any | None, ndi_name: str | None = None
+) -> PTZBackend | None:
+    name = (ndi_name or "").strip()
+    if ndi_source is None and not name:
+        log.warning("ndi PTZ requested but no NDI source/name supplied; PTZ disabled.")
         return None
     from autoptz.engine.ptz.ndi_ptz import NDIPTZBackend
 
     try:
-        backend = NDIPTZBackend(ndi_source)
-    except Exception:  # noqa: BLE001 - cyndilib missing / NDI runtime absent
-        log.warning("NDI PTZ unavailable (cyndilib/runtime missing); PTZ disabled.", exc_info=True)
+        backend = NDIPTZBackend(ndi_name=name, receiver=ndi_source)
+    except Exception:  # noqa: BLE001 - cyndilib missing / source not found
+        log.warning(
+            "NDI PTZ unavailable (cyndilib/runtime missing or source %r not found); PTZ disabled.",
+            name,
+            exc_info=True,
+        )
         return None
-    log.info("PTZ backend: NDI PTZ")
+    log.info("PTZ backend: NDI PTZ (%s)", name or "shared receiver")
     return backend
 
 
@@ -144,16 +158,18 @@ def _build_onvif(ptz: PTZConfig) -> PTZBackend | None:
 # ── auto probe ──────────────────────────────────────────────────────────────────
 
 
-def _probe_auto(ptz: PTZConfig, *, ndi_source: Any | None) -> PTZBackend | None:
+def _probe_auto(
+    ptz: PTZConfig, *, ndi_source: Any | None, ndi_name: str | None = None
+) -> PTZBackend | None:
     """Best-effort backend discovery for ``backend="auto"``.
 
     Order:
-      1. An NDI source → NDI PTZ (rides the existing receiver).
+      1. An NDI source/name → NDI PTZ (own or shared receiver).
       2. An address present → try ONVIF, then VISCA-IP.
       3. Nothing probable → ``None`` (manual PTZ no-ops; auto control disabled).
     """
-    if ndi_source is not None:
-        ndi = _build_ndi(ptz, ndi_source=ndi_source)
+    if ndi_source is not None or (ndi_name or "").strip():
+        ndi = _build_ndi(ptz, ndi_source=ndi_source, ndi_name=ndi_name)
         if ndi is not None:
             return ndi
 

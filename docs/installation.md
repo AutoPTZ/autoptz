@@ -14,8 +14,10 @@ Download the latest build for your OS from the
   unsigned installer — **More info → Run anyway**.
 - **Linux** — `AutoPTZ-<version>-linux-x86_64.AppImage`. `chmod +x` it and run.
 
-The app checks GitHub Releases on startup and from **Help → Check for Updates…**
-and opens the download page when a newer version exists.
+The app checks GitHub Releases on startup and from **Help -> Check for Updates...**.
+When a newer version exists, AutoPTZ downloads the matching asset for your OS,
+starts it, and closes so the installer/new AppImage can finish. If that release
+does not include your OS asset, AutoPTZ opens the release page instead.
 
 ## From source
 
@@ -26,41 +28,45 @@ git clone https://github.com/AutoPTZ/autoptz
 cd autoptz
 python3.12 -m venv .venv            # at the repo root, NOT inside autoptz/
 source .venv/bin/activate           # Windows: .venv\Scripts\activate
-pip install -r requirements/base.txt
-pip install -e .
+python tools/install.py --editable
 python -m autoptz
 ```
 
 - `requirements/base.txt` — full stack: ONNX Runtime, OpenCV, PySide6, PyAV,
-  ultralytics, boxmot, insightface, PTZ libs.
+  ultralytics, boxmot, insightface, PTZ libs, plus OS-specific camera helpers
+  through pip environment markers.
 - `requirements/ui.txt` — UI-only (no ML stack), for quick UI work.
 - `requirements/dev.txt` — pytest, ruff, mypy.
+- `tools/install.py` — one readable install entry point that selects the right
+  profile and prevents multiple `onnxruntime*` wheels from coexisting.
 
 ### Accelerators
 
-Install **one** accelerator wheel in place of the base CPU `onnxruntime`
-(uninstall the previous one first):
+The installer defaults to safe local choices: CoreML through the base wheel on
+macOS, DirectML on Windows, NVIDIA on Linux when `nvidia-smi` is present, and
+CPU otherwise. Review or override it with:
 
 ```bash
-# NVIDIA (Windows/Linux): TensorRT + CUDA
-pip uninstall -y onnxruntime && pip install -r requirements/gpu-nvidia.txt
-# AMD/Intel GPU (Windows): DirectML
-pip uninstall -y onnxruntime && pip install -r requirements/gpu-directml.txt
-# Intel CPU/iGPU (any OS): OpenVINO
-pip uninstall -y onnxruntime && pip install -r requirements/openvino.txt
+python tools/install.py --dry-run
+python tools/install.py --accelerator cpu --editable
+python tools/install.py --accelerator directml --editable   # Windows
+python tools/install.py --accelerator nvidia --editable     # Windows/Linux
+python tools/install.py --accelerator openvino --editable
 ```
 
-macOS needs nothing extra — CoreML ships in the base wheel. See
-[Performance](performance.md).
+Manual accelerator installs are still possible: install `requirements/base.txt`,
+uninstall all `onnxruntime*` packages, then install exactly one of
+`requirements/gpu-nvidia.txt`, `requirements/gpu-directml.txt`, or
+`requirements/openvino.txt`.
 
 ### Platform notes
 
-- **macOS** — `requirements/macos.txt` adds pyobjc frameworks for native
-  AVFoundation capture + friendly camera names. NDI (`cyndilib`) needs the NDI
-  SDK runtime and is commented out by default.
-- **Windows** — `pygrabber` gives friendly camera names; install
-  `requirements/gpu-nvidia.txt` for CUDA/TensorRT (needs CUDA 12.x + cuDNN 9.x,
-  TensorRT 10.x).
+- **macOS** — `requirements/base.txt` installs PyObjC AVFoundation packages via
+  markers, so native capture can bind cameras by stable uniqueID. NDI
+  (`cyndilib`) still needs the NDI SDK runtime first.
+- **Windows** — DirectML is the default GPU path because it works without CUDA.
+  Force `--accelerator nvidia` only on machines with CUDA 12.x + cuDNN 9.x, and
+  TensorRT 10.x if you want TensorRT.
 - **Linux** — install Qt's system libs: `libegl1 libgl1 libxkbcommon0
   libdbus-1-3` and the `libxcb-*` set (see `docs/building.md`).
 

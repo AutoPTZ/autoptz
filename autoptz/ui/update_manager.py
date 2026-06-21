@@ -1,4 +1,4 @@
-"""Background update checks wired to the GUI (notify-only).
+"""Background update checks and downloads wired to the GUI.
 
 Runs :func:`autoptz.update.checker.check_for_update` off the GUI thread via
 ``QThreadPool`` and emits results back on the GUI thread. Persists its prefs
@@ -24,6 +24,11 @@ class _CheckSignals(QObject):
     finished = Signal(object, bool)  # (UpdateInfo | None, manual)
 
 
+class _DownloadSignals(QObject):
+    finished = Signal(object)  # DownloadedUpdate
+    failed = Signal(str)
+
+
 class _CheckTask(QRunnable):
     def __init__(
         self, current: str, include_prereleases: bool, manual: bool, signals: _CheckSignals
@@ -45,18 +50,42 @@ class _CheckTask(QRunnable):
         self._signals.finished.emit(info, self._manual)
 
 
+class _DownloadTask(QRunnable):
+    def __init__(self, info: object, signals: _DownloadSignals) -> None:
+        super().__init__()
+        self._info = info
+        self._signals = signals
+
+    def run(self) -> None:
+        from autoptz.update.installer import download_update
+
+        try:
+            result = download_update(self._info)  # type: ignore[arg-type]
+        except Exception as exc:  # noqa: BLE001
+            log.debug("update download failed", exc_info=True)
+            self._signals.failed.emit(str(exc) or "Update download failed.")
+            return
+        self._signals.finished.emit(result)
+
+
 class UpdateManager(QObject):
     """Owns update-check scheduling, settings, and result routing."""
 
     updateAvailable = Signal(object)  # UpdateInfo
     upToDate = Signal(bool)  # manual?
+    downloadStarted = Signal(object)  # UpdateInfo
+    downloadFinished = Signal(object)  # DownloadedUpdate
+    downloadFailed = Signal(str)
 
     def __init__(self, client: Any, current_version: str, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._client = client
         self._current = current_version
         self._signals = _CheckSignals(self)
+        self._download_signals = _DownloadSignals(self)
         self._signals.finished.connect(self._on_finished)
+        self._download_signals.finished.connect(self.downloadFinished.emit)
+        self._download_signals.failed.connect(self.downloadFailed.emit)
 
     # ── settings ────────────────────────────────────────────────────────────────
     def _get(self, key: str, default: Any) -> Any:
@@ -102,6 +131,12 @@ class UpdateManager(QObject):
     def _start(self, *, manual: bool) -> None:
         self._set("update_last_check", time.time())
         task = _CheckTask(self._current, self.include_prereleases, manual, self._signals)
+        QThreadPool.globalInstance().start(task)
+
+    def download(self, info: object) -> None:
+        """Download the OS-specific update asset in the background."""
+        self.downloadStarted.emit(info)
+        task = _DownloadTask(info, self._download_signals)
         QThreadPool.globalInstance().start(task)
 
     @Slot(object, bool)

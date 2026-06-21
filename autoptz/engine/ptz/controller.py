@@ -17,7 +17,7 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from autoptz.config.models import PTZConfig
@@ -41,8 +41,28 @@ _ZOOM_FRAMING_TARGETS = {
     "medium": 0.45,
 }
 _DEFAULT_ZOOM_FRAMING_TARGET = 0.45  # == upper_body
-_ZOOM_HYSTERESIS = 0.05  # ±5 % of frame height before zoom moves
-_POWER = 1.5  # response-curve exponent (ease-in: gentle near zero)
+# Auto-zoom is deliberately slow + stable: it holds the crop across a wide band
+# and only acts at the extremes, so it never "zooms out of nowhere".
+_ZOOM_HEIGHT_EMA = 0.12  # heavy smoothing of subject height (de-spike bad frames)
+_ZOOM_IN_BAND = 0.18  # zoom IN only when the subject is this much SMALLER than target
+_ZOOM_TOO_CLOSE = 0.82  # safety: subject fills ≥82% of frame height → zoom OUT
+_ZOOM_OUT_MARGIN = 0.30  # …or this much taller than the framing target, whichever first
+_ZOOM_RATE_PER_S = 0.8  # max change in the normalized zoom command per second (slew)
+_POWER = 1.2  # response-curve exponent (mild ease-in; 1.5 attenuated medium moves
+# so much the follow felt sluggish — 1.2 stays smooth near centre but reaches
+# useful speed much sooner for real movement)
+
+# Oscillation guard: each frame-to-frame command sign-flip adds to a score that
+# decays when motion is steady; the score scales a damping factor 1/(1+gain·score)
+# applied to the command, so sustained hunting is progressively suppressed.
+_OSC_DECAY = 0.6  # per-tick score decay (lower = forgets flips faster)
+_OSC_GAIN = 0.6  # how hard the score damps the command
+_OSC_MAX = 4.0  # score ceiling (caps the strongest damping)
+_LEAD_MAX_S = 0.8  # hard cap on total lead time (avoid runaway extrapolation)
+# Framing-box hold hysteresis: once parked inside the box, the subject must move
+# this fraction *beyond* the box edge before following resumes — kills the
+# start/stop chatter when they hover right on the boundary.
+_HOLD_HYSTERESIS = 0.25
 
 
 # ── one-euro filter ───────────────────────────────────────────────────────────
@@ -113,6 +133,20 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 def _shape(x: float) -> float:
     """Non-linear response curve: ease-in (gentle near zero, full speed at ±1)."""
     return math.copysign(abs(x) ** _POWER, x) if x != 0.0 else 0.0
+
+
+def _slew(prev: float, target: float, max_step: float) -> float:
+    """Rate-limit *acceleration* only: ramp speed UP gently, slow DOWN freely.
+
+    Increasing the command magnitude is capped to *max_step* (smooth start, no
+    "speeds out of nowhere"); decreasing it (toward zero — slowing or stopping) is
+    unrestricted, so the camera stops promptly when the subject enters the box.
+    """
+    if max_step <= 0.0:
+        return target
+    if abs(target) <= abs(prev):
+        return target  # decelerating / stopping → immediate
+    return prev + _clamp(target - prev, -max_step, max_step)
 
 
 # ── controller state ──────────────────────────────────────────────────────────
@@ -186,6 +220,32 @@ class PTZController:
         self._prev_ey_f: float = 0.0
         self._last_t: float = -1.0
 
+        # PID integral accumulators (anti-windup clamped in _pd_step)
+        self._int_ex: float = 0.0
+        self._int_ey: float = 0.0
+
+        # Oscillation-guard state (sign of last command per axis + flip score)
+        self._prev_pan_sign: int = 0
+        self._prev_tilt_sign: int = 0
+        self._flip_score: float = 0.0
+
+        # Slew-rate limiter state: the last emitted pan/tilt command, so the next
+        # one can only move toward its target by ``max_accel * dt`` (smooth ramp).
+        self._slew_pan: float = 0.0
+        self._slew_tilt: float = 0.0
+
+        # Framing-box hold latch (hysteresis): True while parked inside the box.
+        self._holding: bool = False
+
+        # Auto-zoom state: heavily-smoothed subject height + slewed zoom command,
+        # so zoom is slow/stable and only reacts to sustained size changes.
+        self._zoom_height_ema: float | None = None
+        self._zoom_cmd: float = 0.0
+
+        # Measured end-to-end loop latency (s), fed by the worker each tick; used
+        # as extra lead so the aim anticipates the real pipeline delay.
+        self._loop_latency_s: float = 0.0
+
         # last command sent (for rate-limit suppression)
         self._last_pan: float = 0.0
         self._last_tilt: float = 0.0
@@ -226,6 +286,14 @@ class PTZController:
             "coast_remaining_s": coast_remaining,
             "search_remaining_s": search_remaining,
         }
+
+    def set_loop_latency(self, seconds: float) -> None:
+        """Report the measured capture+inference latency for latency-lead.
+
+        Cheap to call every tick; clamped to a sane range so a spurious spike
+        can't extrapolate the aim wildly.
+        """
+        self._loop_latency_s = _clamp(float(seconds), 0.0, _LEAD_MAX_S)
 
     def update_config(self, cfg: PTZConfig) -> None:
         """Swap in a new PTZConfig live (e.g. the Advanced tuning sliders).
@@ -380,6 +448,18 @@ class PTZController:
                 self._prev_ex_f = 0.0
                 self._prev_ey_f = 0.0
                 self._last_t = -1.0
+                # Fresh acquire: drop accumulated integral + hunting history so a
+                # stale wind-up or flip score can't kick the new target.
+                self._int_ex = 0.0
+                self._int_ey = 0.0
+                self._prev_pan_sign = 0
+                self._prev_tilt_sign = 0
+                self._flip_score = 0.0
+                self._slew_pan = 0.0
+                self._slew_tilt = 0.0
+                self._holding = False
+                self._zoom_height_ema = None
+                self._zoom_cmd = 0.0
                 self._state = ControllerState.TRACKING
         else:
             if self._state == ControllerState.TRACKING:
@@ -428,46 +508,91 @@ class PTZController:
         ex, ey = p.error
         vx, vy = p.velocity
 
-        # 0. motion prediction — anticipate where the subject is heading by
-        #    projecting the aim error forward by the control lead time, so the
-        #    camera leads the motion instead of always trailing it.
-        lead = float(getattr(cfg, "lead_time_s", 0.0))
-        if lead > 0.0:
-            ex += vx * lead
-            ey += vy * lead
-
-        # 1. dead-zone — the adjustable "framing box" around centre when enabled
-        #    (PTZ holds still while the subject is inside the box), else per-axis.
-        if getattr(cfg, "safe_zone_enabled", False):
-            cx = float(getattr(cfg, "safe_zone_x", 0.0))
-            cy = float(getattr(cfg, "safe_zone_y", 0.0))
-            hw = float(getattr(cfg, "safe_zone_w", 0.15))
-            hh = float(getattr(cfg, "safe_zone_h", 0.22))
-            ex -= cx
-            ey -= cy
-            if abs(ex) <= hw and abs(ey) <= hh:
-                ex = ey = 0.0
+        # 0. HOLD — while the subject is actually inside the framing region (its
+        #    *measured* position, not a velocity-predicted one), hold the camera
+        #    still: zero the error AND the feed-forward velocity so a parked
+        #    subject can't trigger micro-moves from velocity/aim noise.  Hysteresis
+        #    (see ``_update_hold``) stops it chattering at the edge.
+        #
+        # 1. Only while *following* (outside the region) do we project the aim
+        #    forward by the lead time (+ measured loop latency when
+        #    ``lead_time_auto``), so the camera leads real motion without nudging a
+        #    stationary subject.  The velocity is ego-corrected, so this leads the
+        #    subject's world motion, not the camera's own pan.
+        holding = self._update_hold(ex, ey, cfg)
+        if holding:
+            ex = ey = 0.0
+            vx = vy = 0.0
         else:
-            ex = ex if abs(ex) >= cfg.deadzone_x else 0.0
-            ey = ey if abs(ey) >= cfg.deadzone_y else 0.0
+            lead = float(getattr(cfg, "lead_time_s", 0.0))
+            if getattr(cfg, "lead_time_auto", True):
+                lead += self._loop_latency_s
+            lead = _clamp(lead, 0.0, _LEAD_MAX_S)
+            if lead > 0.0:
+                ex += vx * lead
+                ey += vy * lead
 
         # 2. one-euro filter
         ex_f = self._filt_ex(ex, t)
         ey_f = self._filt_ey(ey, t)
 
-        # 3. PD derivative (finite difference of filtered error)
-        dt = (t - self._last_t) if self._last_t >= 0.0 else 0.0
+        # 3. PD derivative (finite difference of filtered error).  On the very
+        #    first tick (no previous time) assume one nominal control interval so
+        #    the derivative doesn't spike and the slew limiter below still allows a
+        #    normal first step (a tiny dt would otherwise freeze the command at 0).
+        dt = (t - self._last_t) if self._last_t >= 0.0 else (1.0 / max(1.0, self._rate_hz))
         dt = max(dt, 1e-6)
         dex = (ex_f - self._prev_ex_f) / dt
         dey = (ey_f - self._prev_ey_f) / dt
 
-        # 4. PD + velocity feed-forward
-        pan_raw = cfg.kp * ex_f + cfg.kd * dex + cfg.kv * vx
-        tilt_raw = cfg.kp * ey_f + cfg.kd * dey + cfg.kv * vy
+        # 3b. integral (opt-in, ki>0) with anti-windup: accumulate the filtered
+        #     error, but clamp the accumulator so ki·∫ can't exceed a bounded
+        #     contribution, and freeze it while the command is saturated (below).
+        #     While holding (parked in the box) bleed it instead of accumulating,
+        #     so it can't build up and kick when following resumes.
+        ki = float(getattr(cfg, "ki", 0.0))
+        if holding:
+            self._int_ex *= 0.9
+            self._int_ey *= 0.9
+        elif ki > 0.0 and self._last_t >= 0.0:
+            i_max = 0.5 / ki  # cap ki·∫ at ±0.5 of a normalized command
+            self._int_ex = _clamp(self._int_ex + ex_f * dt, -i_max, i_max)
+            self._int_ey = _clamp(self._int_ey + ey_f * dt, -i_max, i_max)
+        i_term_x = ki * self._int_ex
+        i_term_y = ki * self._int_ey
+
+        # 4. PID + velocity feed-forward
+        pan_raw = cfg.kp * ex_f + i_term_x + cfg.kd * dex + cfg.kv * vx
+        tilt_raw = cfg.kp * ey_f + i_term_y + cfg.kd * dey + cfg.kv * vy
+
+        # 4b. anti-windup back-off: if a command saturates, bleed the integral so
+        #     it can't keep growing while the axis is already maxed out.
+        if ki > 0.0:
+            if abs(pan_raw) > 1.0:
+                self._int_ex *= 0.5
+            if abs(tilt_raw) > 1.0:
+                self._int_ey *= 0.5
 
         # 5. per-camera speed ceiling + clamp + response curve
         pan_cmd = _shape(_clamp(pan_raw * cfg.max_pan_speed, -1.0, 1.0))
         tilt_cmd = _shape(_clamp(tilt_raw * cfg.max_tilt_speed, -1.0, 1.0))
+
+        # 5b. oscillation guard — damp the command when it keeps flipping sign
+        #     (self-sustained hunting), easing back to full speed once it settles.
+        if getattr(cfg, "osc_guard", True):
+            damp = self._osc_damping(pan_cmd, tilt_cmd)
+            pan_cmd *= damp
+            tilt_cmd *= damp
+
+        # 5c. slew-rate limit — cap acceleration so the head ramps smoothly toward
+        #     the target speed instead of jumping there (no "speeds out of nowhere").
+        max_accel = float(getattr(cfg, "max_accel", 0.0))
+        if max_accel > 0.0:
+            step = max_accel * dt
+            pan_cmd = _slew(self._slew_pan, pan_cmd, step)
+            tilt_cmd = _slew(self._slew_tilt, tilt_cmd, step)
+        self._slew_pan = pan_cmd
+        self._slew_tilt = tilt_cmd
 
         # 6. soft limits (velocity: clamp to zero if at boundary)
         lim = cfg.soft_limits
@@ -493,24 +618,100 @@ class PTZController:
 
         return pan_cmd, tilt_cmd
 
+    def _update_hold(self, ex: float, ey: float, cfg: Any) -> bool:
+        """Return whether to HOLD (subject inside the framing region), with hysteresis.
+
+        Uses the *measured* error.  For the framing box (safe-zone) the region is an
+        ellipse matching the on-screen oval; otherwise it's the per-axis dead-zone.
+        Once holding, the subject must travel ``_HOLD_HYSTERESIS`` beyond the edge
+        to resume following — so hovering on the boundary doesn't start/stop chatter.
+        """
+        if getattr(cfg, "safe_zone_enabled", False):
+            cx = float(getattr(cfg, "safe_zone_x", 0.0))
+            cy = float(getattr(cfg, "safe_zone_y", 0.0))
+            hw = max(1e-3, float(getattr(cfg, "safe_zone_w", 0.15)))
+            hh = max(1e-3, float(getattr(cfg, "safe_zone_h", 0.22)))
+            # Elliptical distance (1.0 == on the oval edge), matching the overlay.
+            dist = ((ex - cx) / hw) ** 2 + ((ey - cy) / hh) ** 2
+            inside = dist <= 1.0
+            outside = dist > (1.0 + _HOLD_HYSTERESIS) ** 2
+        else:
+            dzx = max(1e-6, float(getattr(cfg, "deadzone_x", 0.0)))
+            dzy = max(1e-6, float(getattr(cfg, "deadzone_y", 0.0)))
+            inside = abs(ex) <= dzx and abs(ey) <= dzy
+            m = 1.0 + _HOLD_HYSTERESIS
+            outside = abs(ex) > dzx * m or abs(ey) > dzy * m
+
+        if self._holding:
+            if outside:
+                self._holding = False
+        elif inside:
+            self._holding = True
+        return self._holding
+
+    def _osc_damping(self, pan_cmd: float, tilt_cmd: float) -> float:
+        """Return a 0<d≤1 damping factor that shrinks while the command hunts.
+
+        Each per-axis sign flip versus the previous tick bumps a score that
+        otherwise decays; the score maps to ``1/(1+gain·score)`` so sustained
+        oscillation is damped hard and steady motion is left at full speed.
+        """
+        score = self._flip_score * _OSC_DECAY
+        for cur, prev_attr in (
+            (pan_cmd, "_prev_pan_sign"),
+            (tilt_cmd, "_prev_tilt_sign"),
+        ):
+            sign = 0 if abs(cur) < 1e-3 else (1 if cur > 0.0 else -1)
+            prev = getattr(self, prev_attr)
+            if sign != 0 and prev != 0 and sign != prev:
+                score += 1.0
+            setattr(self, prev_attr, sign)
+        self._flip_score = min(score, _OSC_MAX)
+        return 1.0 / (1.0 + _OSC_GAIN * self._flip_score)
+
     def _zoom_step(self, subject_height: float) -> float:
+        """Slow, stable auto-zoom: hold the crop; only act at the extremes.
+
+        Zoom is the most jarring axis when it twitches (it shifts the whole frame,
+        which makes tilt chase it), so this is deliberately sluggish: the subject
+        height is heavily EMA-smoothed, the command is slew-limited, and there's a
+        wide neutral band.  Zoom OUT is a *safety* — it only fires when the subject
+        is genuinely too close (filling the frame); zoom IN only when they're well
+        below the framing target.  Otherwise the crop is left alone.
+        """
         cfg = self._cfg
         if subject_height <= 0.0:
-            return 0.0
-        # The unified "Framing" control (``tracking.framing``) drives BOTH aim and
-        # zoom.  The worker mirrors the chosen framing into ``ptz.zoom_framing`` so
-        # this controller — which only sees the PTZConfig — resolves the same
-        # subject-height target.  Prefer an explicit ``framing`` attribute should a
-        # future config carry one directly, then fall back to ``zoom_framing``.
+            # No reliable size reading → ease any zoom to a stop, don't hold one.
+            self._zoom_cmd = _slew(self._zoom_cmd, 0.0, _ZOOM_RATE_PER_S / max(1.0, self._rate_hz))
+            return self._zoom_cmd
+
+        # Heavy smoothing so a single bad detection frame can't jolt the zoom.
+        if self._zoom_height_ema is None:
+            self._zoom_height_ema = subject_height
+        else:
+            a = _ZOOM_HEIGHT_EMA
+            self._zoom_height_ema = a * subject_height + (1.0 - a) * self._zoom_height_ema
+        height = self._zoom_height_ema
+
+        # The unified "Framing" control drives the target subject height.
         framing = getattr(cfg, "framing", None) or cfg.zoom_framing
         target = _ZOOM_FRAMING_TARGETS.get(framing, _DEFAULT_ZOOM_FRAMING_TARGET)
-        zoom_error = subject_height - target
-        if zoom_error > _ZOOM_HYSTERESIS:
-            # subject too tall → zoom out (negative)
-            zoom_cmd = -_clamp(zoom_error * 2.0, 0.0, 1.0)
-        elif zoom_error < -_ZOOM_HYSTERESIS:
-            # subject too short → zoom in (positive)
-            zoom_cmd = _clamp(-zoom_error * 2.0, 0.0, 1.0)
+        # Zoom OUT past a WIDE band above the framing target (keeps a tighter crop
+        # than the target before pulling back), but never past the absolute
+        # too-close safety floor (catches very tight framings about to overflow).
+        out_threshold = min(target + _ZOOM_OUT_MARGIN, _ZOOM_TOO_CLOSE)
+        in_threshold = target - _ZOOM_IN_BAND
+
+        if height > out_threshold:
+            raw = -_clamp((height - out_threshold) * 1.5, 0.0, 1.0)  # zoom OUT
+        elif height < in_threshold:
+            raw = _clamp((in_threshold - height) * 1.5, 0.0, 1.0)  # zoom IN
         else:
-            zoom_cmd = 0.0
-        return _clamp(zoom_cmd * cfg.max_zoom_speed, -1.0, 1.0)
+            raw = 0.0  # wide neutral band → keep the crop
+
+        target_cmd = _clamp(raw * cfg.max_zoom_speed, -1.0, 1.0)
+        # Slew so zoom eases in/out and never jolts (rate is per second).
+        self._zoom_cmd = _slew(
+            self._zoom_cmd, target_cmd, _ZOOM_RATE_PER_S / max(1.0, self._rate_hz)
+        )
+        return self._zoom_cmd

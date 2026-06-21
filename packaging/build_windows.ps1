@@ -7,11 +7,13 @@
 # Usage (PowerShell):
 #   powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 #   powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1 -OneFile
+#   powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1 -Accelerator nvidia
 #   powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1 -SkipInstall
 
 param(
     [switch]$OneFile,
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [string]$Accelerator = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,15 +40,11 @@ if (-not (Test-Path $Py)) {
 # DirectML EP for onnxruntime: install onnxruntime-directml in place of the CPU
 # onnxruntime from base.txt (DirectML accelerates on any DX12 GPU).
 if (-not $SkipInstall) {
-    Write-Host "==> Installing dependencies (DirectML default)"
-    & $Py -m pip install --upgrade pip
-    & $Py -m pip install -r requirements\base.txt -r requirements\packaging.txt
-    # Swap the CPU onnxruntime for the DirectML build:
-    & $Py -m pip uninstall -y onnxruntime
-    & $Py -m pip install onnxruntime-directml
-    # Friendly Windows camera names (parity with macOS AVFoundation enum):
-    & $Py -m pip install pygrabber
-    & $Py -m pip install -e .
+    if (-not $Accelerator) {
+        $Accelerator = if ($env:ACCELERATOR) { $env:ACCELERATOR } else { "directml" }
+    }
+    Write-Host "==> Installing dependencies (accelerator=$Accelerator)"
+    & $Py tools\install.py --upgrade-pip --packaging --editable --accelerator $Accelerator
 } else {
     Write-Host "==> -SkipInstall — using existing venv as-is"
 }
@@ -119,8 +117,7 @@ if (-not $OneFile -and $MakeInstaller) {
     installer the same way.
 
  CUDA / TensorRT variant (NVIDIA GPUs, instead of the DirectML default):
-      pip uninstall -y onnxruntime onnxruntime-directml
-      pip install -r requirements\gpu-nvidia.txt   # onnxruntime-gpu (CUDA+TensorRT EPs)
+      powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1 -Accelerator nvidia
     then rebuild.  Requires CUDA 12.x + cuDNN 9.x (CUDA EP) and TensorRT 10.x
     (TensorRT EP) installed on the build + target machines.
 ============================================================================

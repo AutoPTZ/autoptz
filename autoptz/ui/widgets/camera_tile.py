@@ -1178,10 +1178,20 @@ class CameraTile(QWidget):
         aim = t.get("aim")
         if isinstance(aim, dict) and aim.get("x") is not None and aim.get("y") is not None:
             r = self._painted_rect
-            return QPointF(
+            pt = QPointF(
                 r.x() + float(aim.get("x", 0.0)) * r.width(),
                 r.y() + float(aim.get("y", 0.0)) * r.height(),
             )
+            # Engine telemetry should already be target-owned.  Keep the debug
+            # reticle readable if stale/bad telemetry slips through a frame.
+            guard = rect.adjusted(
+                -rect.width() * 0.25,
+                -rect.height() * 0.25,
+                rect.width() * 0.25,
+                rect.height() * 0.25,
+            )
+            if guard.contains(pt):
+                return pt
         return rect.center()
 
     @staticmethod

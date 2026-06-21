@@ -13,6 +13,9 @@ concurrency:
 env:
   # Qt runs headless on CI runners (no display).
   QT_QPA_PLATFORM: offscreen
+  # Windows runners can default to a legacy console codepage; selftest prints
+  # Unicode status marks, so force UTF-8 for every Python subprocess.
+  PYTHONUTF8: "1"
 
 jobs:
   test:
@@ -48,14 +51,8 @@ jobs:
             libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
             x11-utils
 
-      - name: Install base dependencies
-        run: pip install -r requirements/base.txt
-
-      - name: Install dev dependencies
-        run: pip install -r requirements/dev.txt
-
-      - name: Install autoptz package (editable)
-        run: pip install -e . --no-deps
+      - name: Install dependencies
+        run: python tools/install.py --ci --dev --editable
 
       - name: Lint (ruff)
         run: ruff check autoptz/ tests/ tools/

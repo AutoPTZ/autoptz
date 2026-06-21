@@ -118,7 +118,7 @@ class TestFactoryDispatch:
         seen: dict[str, object] = {}
         monkeypatch.setattr(
             "autoptz.engine.ptz.ndi_ptz.NDIPTZBackend",
-            lambda recv, *a, **k: seen.update(recv=recv) or RecordingBackend(),
+            lambda *a, **k: seen.update(recv=k.get("receiver")) or RecordingBackend(),
         )
         recv = object()
         b = build_backend(_cfg(backend="ndi"), ndi_source=recv)
@@ -195,7 +195,7 @@ class TestAutoProbe:
         seen: dict[str, object] = {}
         monkeypatch.setattr(
             "autoptz.engine.ptz.ndi_ptz.NDIPTZBackend",
-            lambda recv, *a, **k: seen.update(recv=recv) or RecordingBackend(),
+            lambda *a, **k: seen.update(recv=k.get("receiver")) or RecordingBackend(),
         )
         recv = object()
         b = build_backend(_cfg(backend="auto"), ndi_source=recv)
@@ -555,7 +555,10 @@ class TestWorkerAutoControl:
 
 
 class TestWorkerTargetLock:
-    def test_target_jump_is_held_as_lost(self) -> None:
+    def test_lone_target_jump_keeps_following(self) -> None:
+        # A lone subject that moves fast is NOT ambiguous — the camera keeps
+        # following it (freezing on a lone fast mover was the "tracking keeps
+        # blocking itself when they move away" bug).
         w = _worker()
         w._target_track_id = 7
         frame = np.zeros((720, 1000, 3), dtype=np.uint8)
@@ -565,25 +568,69 @@ class TestWorkerTargetLock:
         jumped = [_track(7, _bbox(650, 100, 770, 420))]
         w._apply_target_lock(jumped, frame, now=0.1)
 
-        assert jumped[0].lost is True
-        assert jumped[0].bbox.x1 == pytest.approx(100)
-        assert w._tracking_status_info(jumped, 0.1).state == "ambiguous"
+        assert jumped[0].lost is False
+        assert w._target_lock.status == "locked"
+        # Trusted box follows the subject to its new position.
+        assert w._target_lock.trusted_bbox is not None
+        assert w._target_lock.trusted_bbox.x1 == pytest.approx(650)
 
-    def test_crowded_target_is_marked_ambiguous(self) -> None:
+    def test_crowded_target_jump_is_marked_ambiguous(self) -> None:
+        # Ambiguity requires BOTH crowding and a low-overlap jump (a real
+        # wrong-person risk), so we don't switch to the wrong nearby person.
         w = _worker()
+        w._pose = None  # pose can't vouch → deterministic ambiguity
+        w._pose_probed = True
         w._target_track_id = 7
         frame = np.zeros((720, 1000, 3), dtype=np.uint8)
         tracks = [_track(7, _bbox(100, 100, 240, 440))]
         w._apply_target_lock(tracks, frame, now=0.0)
 
         crowded = [
-            _track(7, _bbox(100, 100, 240, 440)),
-            _track(8, _bbox(225, 105, 360, 440)),
+            _track(7, _bbox(650, 100, 790, 440)),  # jumped (zero IoU with trusted)
+            _track(8, _bbox(640, 105, 780, 440)),  # neighbour crowding the new spot
         ]
         w._apply_target_lock(crowded, frame, now=0.1)
 
         assert crowded[0].lost is True
         assert w._tracking_status_info(crowded, 0.1).headline == "Target blocked"
+
+    def test_crowded_target_with_trusted_pose_stays_locked(self) -> None:
+        from autoptz.engine.pipeline.framing import (
+            KP_LEFT_HIP,
+            KP_LEFT_SHOULDER,
+            KP_RIGHT_HIP,
+            KP_RIGHT_SHOULDER,
+            Keypoint,
+        )
+
+        class _FakePose:
+            available = True
+
+            def estimate(self, _frame, _bbox):
+                kps = [Keypoint(0.0, 0.0, 0.0)] * 17
+                kps[KP_LEFT_SHOULDER] = Keypoint(690.0, 180.0, 0.9)
+                kps[KP_RIGHT_SHOULDER] = Keypoint(740.0, 180.0, 0.9)
+                kps[KP_LEFT_HIP] = Keypoint(695.0, 330.0, 0.9)
+                kps[KP_RIGHT_HIP] = Keypoint(735.0, 330.0, 0.9)
+                return kps
+
+        w = _worker()
+        w._pose = _FakePose()
+        w._pose_probed = True
+        w._target_track_id = 7
+        frame = np.zeros((720, 1000, 3), dtype=np.uint8)
+        tracks = [_track(7, _bbox(100, 100, 240, 440))]
+        w._apply_target_lock(tracks, frame, now=0.0)
+
+        crowded = [
+            _track(7, _bbox(650, 100, 790, 440)),
+            _track(8, _bbox(780, 105, 920, 440)),
+        ]
+        w._apply_target_lock(crowded, frame, now=0.1)
+
+        assert crowded[0].lost is False
+        assert w._target_lock.status == "locked"
+        assert w._tracking_status_info(crowded, 0.1).state == "locked"
 
     def test_pose_on_neighbor_is_rejected_before_cache(self) -> None:
         from autoptz.engine.pipeline.framing import (
@@ -605,9 +652,40 @@ class TestWorkerTargetLock:
         kps[KP_LEFT_HIP] = Keypoint(525.0, 330.0, 0.9)
         kps[KP_RIGHT_HIP] = Keypoint(555.0, 330.0, 0.9)
 
+        # The off-target pose is rejected (fall back to bbox aim) but tracking is
+        # NOT frozen — a rejected pose anchor must never mark the target lost.
         assert w._pose_keypoints_consistent(kps, track, frame, now=0.1) is False
-        assert track.lost is True
-        assert w._pose_keypoints is None
+        assert track.lost is False
+
+    def test_pose_shared_by_overlapping_neighbor_is_ambiguous(self) -> None:
+        from autoptz.engine.pipeline.framing import (
+            KP_LEFT_HIP,
+            KP_LEFT_SHOULDER,
+            KP_RIGHT_HIP,
+            KP_RIGHT_SHOULDER,
+            Keypoint,
+        )
+
+        w = _worker()
+        frame = np.zeros((720, 1000, 3), dtype=np.uint8)
+        target = _track(7, _bbox(100, 100, 240, 440))
+        other = _track(8, _bbox(150, 105, 290, 440))
+        kps = [Keypoint(0.0, 0.0, 0.0)] * 17
+        kps[KP_LEFT_SHOULDER] = Keypoint(190.0, 180.0, 0.9)
+        kps[KP_RIGHT_SHOULDER] = Keypoint(230.0, 180.0, 0.9)
+        kps[KP_LEFT_HIP] = Keypoint(195.0, 330.0, 0.9)
+        kps[KP_RIGHT_HIP] = Keypoint(225.0, 330.0, 0.9)
+
+        assert (
+            w._pose_keypoints_consistent(
+                kps,
+                target,
+                frame,
+                now=0.1,
+                tracks=[target, other],
+            )
+            is False
+        )
 
 
 class TestWorkerPtzState:

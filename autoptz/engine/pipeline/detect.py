@@ -82,11 +82,19 @@ class BBox:
 
 @dataclass(frozen=True)
 class Detection:
-    """One person detection from the model."""
+    """One person detection from the model.
+
+    ``keypoints`` is populated only by the unified pose detector (one backbone
+    emitting boxes *and* COCO-17 keypoints per person); it's ``None`` for the
+    plain detector.  Stored as raw ``(x, y, conf)`` triples in original-frame
+    pixels to avoid importing the framing ``Keypoint`` type here (the worker
+    converts when feeding the pose-stable aim).
+    """
 
     bbox: BBox
     conf: float
     class_id: int = 0  # 0 = person in COCO
+    keypoints: tuple[tuple[float, float, float], ...] | None = None
 
 
 # ── Letterbox helpers ─────────────────────────────────────────────────────────

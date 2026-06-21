@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import base64
 import logging
+import threading
 from typing import Any
 
-from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtCore import QByteArray, QObject, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QProgressBar,
+    QProgressDialog,
     QTabBar,
     QTabWidget,
     QVBoxLayout,
@@ -68,6 +70,14 @@ class MainWindow(QMainWindow):
         self._docks: dict[str, QDockWidget] = {}
         self._selected_camera: str = ""
         self._shown_optional_setup_prompt = False
+        # Discovery state: a running modal scan (USB rescan / NDI rescan), the
+        # single-use fresh USB result, and the NDI source list kept populated in
+        # the background so the Cameras → NDI Sources menu is never empty-by-lag.
+        self._scan_ctx: tuple | None = None
+        self._usb_scan_cache: list | None = None
+        self._ndi_sources_cache: list = []
+        self._ndi_scanning = False
+        self._ndi_task: _ScanTask | None = None
 
         self.setWindowTitle("AutoPTZ")
         self.setDockNestingEnabled(True)
@@ -81,6 +91,9 @@ class MainWindow(QMainWindow):
         self._updates = UpdateManager(client, _app_version(), self)
         self._updates.updateAvailable.connect(self._on_update_available)
         self._updates.upToDate.connect(self._on_up_to_date)
+        self._updates.downloadStarted.connect(self._on_update_download_started)
+        self._updates.downloadFinished.connect(self._on_update_download_finished)
+        self._updates.downloadFailed.connect(self._on_update_download_failed)
         self._startup_update_checked = False
 
         self._build_central()
@@ -98,6 +111,13 @@ class MainWindow(QMainWindow):
         self._ensure_desktop_window_chrome()
         self._restore_geometry()
         self._refresh_engine_state()
+
+        # Start NDI discovery in the background so the Cameras → NDI Sources list
+        # is already populated when first opened (deferred to the event loop; a
+        # no-op when cyndilib/NDI isn't installed).
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(0, self._refresh_ndi_async)
 
     # ── section title bars ──────────────────────────────────────────────────────
 
@@ -426,7 +446,14 @@ class MainWindow(QMainWindow):
         # source kinds read clearly; check to add, uncheck to remove.
         usb = menu.addMenu("USB Cameras")
         usb.setToolTipsVisible(True)
-        devices = _safe(lambda: self._client.scanUSBCameras(), []) or []
+        # A fresh off-thread Rescan stashes its result here so this reopen shows it
+        # without re-probing (which would block the GUI thread again); single-use.
+        cached = getattr(self, "_usb_scan_cache", None)
+        if cached is not None:
+            self._usb_scan_cache = None
+            devices = cached
+        else:
+            devices = _safe(lambda: self._client.scanUSBCameras(), []) or []
         if not devices:
             none = usb.addAction("No USB cameras found")
             none.setEnabled(False)
@@ -465,15 +492,45 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         ndi = menu.addMenu("NDI Sources")
         ndi.setToolTipsVisible(True)
-        ndi.addAction(
-            _action(
-                self,
-                "Scan for NDI Sources…",
-                self._scan_ndi,
-                tip="Discover NDI network video sources on the LAN. Network-dependent "
-                "and heavier to decode than USB.",
+        if not _safe(lambda: self._client.ndiAvailable(), False):
+            # Honest, persistent reason instead of a fleeting "none found" message:
+            # NDI needs cyndilib + the NDI SDK runtime, neither bundled by default.
+            unavail = ndi.addAction("NDI unavailable — install cyndilib + NDI SDK")
+            unavail.setEnabled(False)
+            unavail.setToolTip(
+                "NDI discovery needs the 'cyndilib' package and the NDI SDK runtime. "
+                "Install both, then reopen this menu."
             )
-        )
+        else:
+            # List discovered sources directly (check to add, uncheck to remove),
+            # exactly like USB — populated from the background discovery cache.
+            sources = list(self._ndi_sources_cache)
+            if not sources:
+                msg = "Scanning for NDI sources…" if self._ndi_scanning else "No NDI sources found"
+                placeholder = ndi.addAction(msg)
+                placeholder.setEnabled(False)
+            for src in sources:
+                name = str(src.get("name", src.get("uri", "?")))
+                uri = str(src.get("uri", ""))
+                act = QAction(name, self, checkable=True)
+                act.setChecked(self._find_camera(uri, "") is not None)
+                act.setToolTip(
+                    "NDI network video source. Network-dependent and heavier to "
+                    "decode than a local USB camera."
+                )
+                act.toggled.connect(lambda checked, s=src: self._toggle_ndi_camera(s, checked))
+                ndi.addAction(act)
+            ndi.addSeparator()
+            ndi.addAction(
+                _action(
+                    self,
+                    "Rescan",
+                    self._rescan_ndi,
+                    tip="Re-scan the network for NDI sources.",
+                )
+            )
+            # Refresh the cache in the background so the next open is current.
+            self._refresh_ndi_async()
 
         menu.addSeparator()
         menu.addAction(
@@ -519,22 +576,105 @@ class MainWindow(QMainWindow):
                 return cid
         return None
 
-    def _rescan_usb(self) -> None:
-        # scanUSBCameras() re-probes devices; re-open the refreshed list.
-        self._open_cameras_menu()
+    def _run_scan(self, label: str, work: Any, on_done: Any) -> None:
+        """Run a blocking discovery ``work()`` off the GUI thread with a busy dialog.
 
-    def _scan_ndi(self) -> None:
-        from PySide6.QtWidgets import QInputDialog
+        Shows an indeterminate "searching…" progress dialog so the user can see it
+        is doing something (the scans block for ~1–2 s), runs ``work`` on a worker
+        thread, and calls ``on_done(result)`` on the GUI thread when it finishes.
+        Single-flight: a second request while one is running is ignored.
+        """
+        if getattr(self, "_scan_ctx", None) is not None:
+            return  # a scan is already running
+        dlg = QProgressDialog(label, "", 0, 0, self)  # range 0,0 → busy spinner
+        dlg.setWindowTitle("Searching…")
+        dlg.setCancelButton(None)  # no cancel: the scans are short and uncancellable
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.show()
 
-        sources = _safe(lambda: self._client.scanNDISources(), []) or []
-        if not sources:
-            self.statusBar().showMessage("No NDI sources found (cyndilib not installed?)", 5000)
+        task = _ScanTask(work)
+        self._scan_ctx = (dlg, on_done, task)  # keep refs alive until done
+        task.done.connect(self._on_scan_finished)
+        threading.Thread(target=task.run, name="ui-scan", daemon=True).start()
+
+    def _on_scan_finished(self, result: Any) -> None:
+        ctx = getattr(self, "_scan_ctx", None)
+        if ctx is None:
             return
-        labels = [s.get("name", s.get("uri", "?")) for s in sources]
-        label, ok = QInputDialog.getItem(self, "NDI Sources", "Source:", labels, 0, False)
-        if ok:
-            src = sources[labels.index(label)]
-            self._client.addCamera(src.get("uri", ""), src.get("name", ""))
+        dlg, on_done, _task = ctx
+        self._scan_ctx = None
+        dlg.close()
+        try:
+            on_done(result or [])
+        except Exception:  # noqa: BLE001
+            log.debug("scan completion handler failed", exc_info=True)
+
+    def _rescan_usb(self) -> None:
+        # Re-probe USB devices off the GUI thread (it opens VideoCapture handles
+        # and can take ~1 s) with a busy indicator, then reopen the refreshed menu.
+        def _done(devices: list) -> None:
+            self._usb_scan_cache = devices  # single-use: consumed by next populate
+            self._open_cameras_menu()
+
+        self._run_scan(
+            "Re-probing USB cameras…",
+            lambda: _safe(lambda: self._client.scanUSBCameras(), []) or [],
+            _done,
+        )
+
+    def _toggle_ndi_camera(self, src: dict, checked: bool) -> None:
+        uri = str(src.get("uri", ""))
+        name = str(src.get("name", ""))
+        if checked:
+            self._client.addCamera(uri, name)
+        else:
+            cid = self._find_camera(uri, "")
+            if cid:
+                self._client.removeCamera(cid)
+
+    def _refresh_ndi_async(self) -> None:
+        """Refresh the NDI source cache in the background (no dialog).
+
+        Keeps the Cameras → NDI Sources list populated without blocking the GUI.
+        Single-flight via ``_ndi_scanning``; a no-op when NDI is unavailable.
+        """
+        if self._ndi_scanning or not _safe(lambda: self._client.ndiAvailable(), False):
+            return
+        self._ndi_scanning = True
+        task = _ScanTask(lambda: _safe(lambda: self._client.scanNDISources(), []) or [])
+        self._ndi_task = task  # keep a ref so the QObject isn't GC'd mid-flight
+        task.done.connect(self._on_ndi_refresh)
+        threading.Thread(target=task.run, name="ui-ndi-scan", daemon=True).start()
+
+    def _on_ndi_refresh(self, sources: list) -> None:
+        self._ndi_scanning = False
+        self._ndi_task = None
+        self._ndi_sources_cache = sources or []
+
+    def _rescan_ndi(self) -> None:
+        """User-triggered NDI rescan with a visible busy indicator."""
+        if not _safe(lambda: self._client.ndiAvailable(), False):
+            self.statusBar().showMessage(
+                "NDI unavailable — install cyndilib and the NDI SDK runtime.", 8000
+            )
+            return
+
+        def _done(sources: list) -> None:
+            self._ndi_sources_cache = sources
+            if not sources:
+                self.statusBar().showMessage(
+                    "No NDI sources found on the network (is an NDI source running?).", 6000
+                )
+            self._open_cameras_menu()  # reopen with the refreshed NDI list
+
+        self._run_scan(
+            "Searching the network for NDI sources…",
+            lambda: _safe(lambda: self._client.scanNDISources(), []) or [],
+            _done,
+        )
 
     def _add_network_camera(self) -> None:
         NetworkCameraDialog(self._client, self).exec()
@@ -545,7 +685,53 @@ class MainWindow(QMainWindow):
     def _on_update_available(self, info: Any) -> None:
         from autoptz import version as _app_version
 
-        UpdateDialog(info, _app_version(), on_skip=self._updates.skip_version, parent=self).exec()
+        UpdateDialog(
+            info,
+            _app_version(),
+            on_skip=self._updates.skip_version,
+            on_install=self._updates.download,
+            parent=self,
+        ).exec()
+
+    def _on_update_download_started(self, info: Any) -> None:
+        version = str(getattr(info, "version", "") or "new version")
+        self.statusBar().showMessage(f"Downloading AutoPTZ {version}…")
+
+    def _on_update_download_finished(self, result: Any) -> None:
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        from autoptz.update.installer import launch_update
+
+        path = getattr(result, "path", None)
+        if path is None:
+            self._on_update_download_failed(
+                "The update downloaded, but no installer path was returned."
+            )
+            return
+        try:
+            launch_update(path)
+        except Exception as exc:  # noqa: BLE001
+            self._on_update_download_failed(str(exc))
+            return
+        self.statusBar().showMessage("Update started. AutoPTZ will close now.", 5000)
+        QMessageBox.information(
+            self,
+            "Update Started",
+            "The AutoPTZ update has started. AutoPTZ will close so the installer "
+            "or new app can finish safely.",
+        )
+        QTimer.singleShot(250, QApplication.quit)
+
+    def _on_update_download_failed(self, message: str) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        self.statusBar().clearMessage()
+        QMessageBox.warning(
+            self,
+            "Update Failed",
+            f"{message}\n\nYou can still download the installer from the Releases page.",
+        )
 
     def _on_up_to_date(self, manual: bool) -> None:
         # Only nag for manual checks; the silent startup check stays silent.
@@ -824,6 +1010,29 @@ class MainWindow(QMainWindow):
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+
+class _ScanTask(QObject):
+    """Runs a blocking discovery callable off the GUI thread, emitting its result.
+
+    ``done`` is emitted from the worker thread; connecting it to a bound method of
+    a GUI-thread QObject (e.g. the MainWindow) gives a queued connection, so the
+    completion handler runs safely on the GUI thread.
+    """
+
+    done = Signal(object)
+
+    def __init__(self, work: Any) -> None:
+        super().__init__()
+        self._work = work
+
+    def run(self) -> None:
+        try:
+            result = self._work()
+        except Exception:  # noqa: BLE001 — a scan failure must surface as "none found"
+            log.debug("scan task failed", exc_info=True)
+            result = []
+        self.done.emit(result)
 
 
 def _action(

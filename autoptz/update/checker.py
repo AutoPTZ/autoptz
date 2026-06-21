@@ -1,9 +1,9 @@
-"""Check GitHub Releases for a newer AutoPTZ version (notify-only).
+"""Check GitHub Releases for a newer AutoPTZ version.
 
 Pure and network-tolerant: :func:`check_for_update` never raises — any failure
 (offline, rate-limited, bad JSON) returns ``None`` so the UI simply shows
-"up to date" or nothing. No download or self-replace happens here; the UI opens
-the release page in the browser.
+"up to date" or nothing. Download/install lives in :mod:`autoptz.update.installer`
+so release parsing stays pure and easy to test.
 """
 
 from __future__ import annotations
@@ -38,18 +38,23 @@ class UpdateInfo:
     is_prerelease: bool
     assets: tuple[tuple[str, str], ...] = ()  # (filename, browser_download_url)
 
-    def asset_url_for_platform(self) -> str | None:
-        """Direct download URL for the current OS asset, or None if absent."""
+    def asset_for_platform(self) -> tuple[str, str] | None:
+        """Return ``(filename, url)`` for this OS, or None if absent."""
         if sys.platform == "darwin":
             exts = (".dmg",)
         elif sys.platform == "win32":
-            exts = (".exe", ".msi")
+            exts = ("setup.exe", ".msi", ".exe")
         else:
             exts = (".appimage", ".deb", ".tar.gz")
         for name, url in self.assets:
             if name.lower().endswith(exts):
-                return url
+                return name, url
         return None
+
+    def asset_url_for_platform(self) -> str | None:
+        """Direct download URL for the current OS asset, or None if absent."""
+        asset = self.asset_for_platform()
+        return asset[1] if asset else None
 
 
 def _repo() -> str:

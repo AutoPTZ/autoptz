@@ -367,57 +367,70 @@ class TestNDIAdapter:
 
     def _install_mock_cyndilib(self, source_names: list[str], frame: np.ndarray) -> None:
         cyn = types.ModuleType("cyndilib")
+        cyn.__path__ = []  # mark as a package so cyndilib.wrapper imports resolve
         finder_mod = types.ModuleType("cyndilib.finder")
         recv_mod = types.ModuleType("cyndilib.receiver")
         framesync_mod = types.ModuleType("cyndilib.framesync")
         vf_mod = types.ModuleType("cyndilib.video_frame")
+        wrapper_mod = types.ModuleType("cyndilib.wrapper")
+        wrapper_mod.__path__ = []
+        ndi_recv_mod = types.ModuleType("cyndilib.wrapper.ndi_recv")
 
-        # Mock source objects
-        mock_sources = []
+        # Mock source objects keyed by name (for get_source + iter_sources).
+        sources_by_name: dict[str, MagicMock] = {}
         for name in source_names:
             src = MagicMock()
             src.__str__ = MagicMock(return_value=name)
-            mock_sources.append(src)
+            sources_by_name[name] = src
 
-        # Finder
+        # Finder — cyndilib ≥0.1 API: wait_for_sources + get_source + iter_sources.
         finder_instance = MagicMock()
-        finder_instance.iter_sources.return_value = iter(mock_sources)
         finder_instance.open.return_value = None
         finder_instance.close.return_value = None
-        FinderCls = MagicMock(return_value=finder_instance)
-        finder_mod.Finder = FinderCls
+        finder_instance.wait_for_sources.return_value = None
+        finder_instance.get_source.side_effect = lambda n: sources_by_name.get(n)
+        finder_instance.iter_sources.side_effect = lambda: iter(sources_by_name.values())
+        finder_mod.Finder = MagicMock(return_value=finder_instance)
 
-        # Receiver
-        RecvBandwidth = MagicMock()
-        RecvBandwidth.highest = "highest"
-        recv_mod.RecvBandwidth = RecvBandwidth
+        # Receiver — exposes a ``frame_sync`` (FrameSync); capture_video() fills the
+        # *registered* video frame (set via set_video_frame), taking no frame arg.
+        registered: dict[str, MagicMock] = {}
+
+        def fake_set_video_frame(vf: MagicMock) -> None:
+            registered["vf"] = vf
+
+        def fake_capture_video(*_a: object, **_k: object) -> None:
+            vf = registered.get("vf")
+            if vf is not None:
+                vf.get_array.return_value = frame.reshape(-1)
+                vf.yres = frame.shape[0]
+                vf.xres = frame.shape[1]
+
+        frame_sync = MagicMock()
+        frame_sync.set_video_frame.side_effect = fake_set_video_frame
+        frame_sync.capture_video.side_effect = fake_capture_video
         receiver_instance = MagicMock()
-        ReceiverCls = MagicMock(return_value=receiver_instance)
-        recv_mod.Receiver = ReceiverCls
+        receiver_instance.frame_sync = frame_sync
+        recv_mod.Receiver = MagicMock(return_value=receiver_instance)
 
-        # FrameSyncReceiver
-        framesync_instance = MagicMock()
+        # framesync module still exists (FrameSync type lives here).
+        framesync_mod.FrameSync = MagicMock
 
-        # capture_video sets data on the video_frame object
-        def fake_capture_video(vf: MagicMock) -> None:
-            vf.get_array.return_value = frame.reshape(-1)
-            vf.yres = frame.shape[0]
-            vf.xres = frame.shape[1]
+        # wrapper.ndi_recv — color/bandwidth enums used by the adapter.
+        ndi_recv_mod.RecvBandwidth = MagicMock(highest="highest")
+        ndi_recv_mod.RecvColorFormat = MagicMock(BGRX_BGRA="bgra")
+        wrapper_mod.ndi_recv = ndi_recv_mod
 
-        framesync_instance.capture_video.side_effect = fake_capture_video
-        FrameSyncCls = MagicMock(return_value=framesync_instance)
-        framesync_mod.FrameSyncReceiver = FrameSyncCls
+        # VideoFrameSync factory.
+        vf_mod.VideoFrameSync = MagicMock(return_value=MagicMock())
 
-        # VideoFrameSync
-        vf_cls = MagicMock(return_value=MagicMock())
-        vf_mod.VideoFrameSync = vf_cls
-
-        # Wire up sys.modules
         sys.modules["cyndilib"] = cyn
         sys.modules["cyndilib.finder"] = finder_mod
         sys.modules["cyndilib.receiver"] = recv_mod
         sys.modules["cyndilib.framesync"] = framesync_mod
         sys.modules["cyndilib.video_frame"] = vf_mod
+        sys.modules["cyndilib.wrapper"] = wrapper_mod
+        sys.modules["cyndilib.wrapper.ndi_recv"] = ndi_recv_mod
 
     def _remove_mock_cyndilib(self) -> None:
         for mod in [
@@ -426,6 +439,8 @@ class TestNDIAdapter:
             "cyndilib.receiver",
             "cyndilib.framesync",
             "cyndilib.video_frame",
+            "cyndilib.wrapper",
+            "cyndilib.wrapper.ndi_recv",
         ]:
             sys.modules.pop(mod, None)
 
@@ -446,7 +461,7 @@ class TestNDIAdapter:
             ok = adapter._open()
             assert ok
             assert adapter._receiver is not None
-            assert adapter._framesync is not None
+            assert adapter._video_frame is not None
         finally:
             adapter._close()
             self._remove_mock_cyndilib()
@@ -460,7 +475,8 @@ class TestNDIAdapter:
         ingest_mod._NDI_AVAILABLE = True
 
         try:
-            adapter = NDIAdapter("ndi-2", ndi_name="MISSING SOURCE")
+            # Short discover timeout so the "not found" poll loop returns fast.
+            adapter = NDIAdapter("ndi-2", ndi_name="MISSING SOURCE", discover_timeout=0.1)
             ok = adapter._open()
             assert not ok
         finally:

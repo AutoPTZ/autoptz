@@ -32,7 +32,8 @@ device is missing (it always keeps live preview).
   with per-EP tuning (FP16, persistent TensorRT engine cache, full graph
   optimization). See [Performance](docs/performance.md).
 - **PTZ backends** — VISCA over USB, VISCA over IP, ONVIF, and NDI.
-- **In-app updates** — checks GitHub Releases and points you at the new build.
+- **In-app updates** — downloads the matching GitHub Release asset for your OS
+  and starts the installer/new AppImage.
 
 ## Quick start (from source)
 
@@ -46,9 +47,8 @@ cd autoptz
 python3.12 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-# Full stack (detection + tracking + UI):
-pip install -r requirements/base.txt
-pip install -e .
+# Full stack (detection + tracking + UI), editable source checkout:
+python tools/install.py --editable
 
 python -m autoptz                # launch the app
 python -m autoptz --selftest     # verify the foundations and exit
@@ -59,15 +59,16 @@ dir; without it the app still runs in live-preview-only mode.
 
 ### Picking your accelerator
 
-The standard `requirements/base.txt` ships CPU ONNX Runtime (plus Apple CoreML on
-macOS arm64). For a GPU, install **one** accelerator wheel in its place:
+`tools/install.py` detects the OS/GPU and prints every pip command before it
+runs it. Use `--dry-run` to review the plan. Static requirements files cannot
+inspect CUDA/TensorRT, so you can still force the ONNX Runtime wheel explicitly:
 
-| Platform / GPU            | Install                                                                 |
-| ------------------------- | ---------------------------------------------------------------------- |
-| Apple Silicon / Intel Mac | nothing extra — CoreML ships in the base wheel                          |
-| NVIDIA (Win/Linux)        | `pip install -r requirements/gpu-nvidia.txt` (TensorRT → CUDA)         |
-| AMD / Intel GPU (Windows) | `pip install -r requirements/gpu-directml.txt`                         |
-| Intel CPU/iGPU (any OS)   | `pip install -r requirements/openvino.txt`                             |
+```bash
+python tools/install.py --dry-run
+python tools/install.py --accelerator nvidia --editable
+python tools/install.py --accelerator openvino --editable
+python tools/install.py --accelerator cpu --editable
+```
 
 Only one `onnxruntime*` wheel can be installed at a time — see
 [Performance](docs/performance.md).
@@ -78,6 +79,10 @@ Pre-built installers are published on the
 [Releases page](https://github.com/AutoPTZ/autoptz/releases): a macOS `.dmg`, a
 Windows installer (`.exe`), and a Linux `AppImage`. To build them yourself see
 [docs/building.md](docs/building.md).
+
+After install, **Help -> Check for Updates...** downloads the matching OS asset,
+starts it, and closes AutoPTZ so the update can finish. If a release is missing
+your OS asset, AutoPTZ opens the release page instead.
 
 ## Documentation
 

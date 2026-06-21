@@ -23,6 +23,24 @@ logging.basicConfig(
 logger = logging.getLogger("autoptz")
 
 
+def _ensure_utf8_console() -> None:
+    """Prefer UTF-8 console output, but never fail startup if unavailable."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+def _status_mark() -> str:
+    """Return a console-safe pass marker for selftest output."""
+    enc = (getattr(sys.stdout, "encoding", "") or "").lower()
+    return "✓" if "utf" in enc else "OK"
+
+
 # ── selftest ──────────────────────────────────────────────────────────────────
 
 
@@ -39,7 +57,9 @@ def selftest() -> None:
     )
     from autoptz.engine.runtime.shm import ShmWriter
 
-    print("AutoPTZ v2 — selftest")
+    ok = _status_mark()
+
+    print("AutoPTZ v2 - selftest")
     print("=" * 50)
 
     ep = get_best_ep()
@@ -80,13 +100,13 @@ def selftest() -> None:
 
     assert result["seq"] == seq
     assert result["sum"] == expected_sum
-    print(f"[2] SHM ring buffer:      OK  seq={seq} shape={list(frame.shape)} ✓")
+    print(f"[2] SHM ring buffer:      OK  seq={seq} shape={list(frame.shape)} {ok}")
 
     tel = TelemetryMsg(camera_id="test-cam", seq=42, fps=30.0, ep=ep.value)
     packed = tel.to_msgpack()
     tel2 = TelemetryMsg.from_msgpack(packed)
     assert tel2.camera_id == tel.camera_id
-    print(f"[3] Telemetry round-trip: OK  {len(packed)} bytes ✓")
+    print(f"[3] Telemetry round-trip: OK  {len(packed)} bytes {ok}")
 
     cmd = AddCameraCmd(
         camera_id="cam-uuid-00000001",
@@ -96,7 +116,7 @@ def selftest() -> None:
     packed_cmd = cmd.to_msgpack()
     cmd2 = BaseCommand.from_msgpack(packed_cmd)
     assert cmd2.kind == CmdKind.ADD_CAMERA
-    print(f"[4] Command round-trip:   OK  {len(packed_cmd)} bytes ✓")
+    print(f"[4] Command round-trip:   OK  {len(packed_cmd)} bytes {ok}")
 
     print("=" * 50)
     print("All selftest checks passed.")
@@ -106,6 +126,8 @@ def selftest() -> None:
 
 
 def main() -> None:
+    _ensure_utf8_console()
+
     parser = argparse.ArgumentParser(prog="autoptz", description="AutoPTZ v2")
     parser.add_argument("--selftest", action="store_true", help="Run foundation selftest and exit")
     parser.add_argument(

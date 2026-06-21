@@ -742,6 +742,23 @@ class PropertiesPanel(QWidget):
             ),
         )
 
+        sph, self._max_speed, self._max_speed_val = _slider(
+            10, 100, "Top pan/tilt speed when following."
+        )
+        self._max_speed.valueChanged.connect(
+            lambda v: (self._max_speed_val.setText(f"{v}%"), self._schedule())
+        )
+        af.addRow(
+            "Tracking speed",
+            _with_chip(
+                sph,
+                HelpBadge(
+                    "Maximum pan/tilt speed the auto-tracker uses. Higher keeps up with "
+                    "fast movers; lower is calmer. Applies to both pan and tilt."
+                ),
+            ),
+        )
+
         self._safe_zone = QCheckBox("Framing box (hold still while centered)")
         self._safe_zone.toggled.connect(self._schedule)
         af.addRow(
@@ -1319,6 +1336,8 @@ class PropertiesPanel(QWidget):
             self._smoothing_val.setText(f"{self._smoothing.value()}%")
             self._lead.setValue(int(round(float(pz.get("lead_time_s", 0.15)) * 100)))
             self._lead_val.setText(f"{self._lead.value() * 10} ms")
+            self._max_speed.setValue(int(round(float(pz.get("max_pan_speed", 0.7)) * 100)))
+            self._max_speed_val.setText(f"{self._max_speed.value()}%")
             self._safe_zone.setChecked(bool(pz.get("safe_zone_enabled", True)))
             self._safe_x.setValue(int(round(float(pz.get("safe_zone_x", 0.0)) * 100)))
             self._safe_x_val.setText(_signed_pct(self._safe_x.value()))
@@ -1499,6 +1518,8 @@ class PropertiesPanel(QWidget):
         cfg["ptz"]["kp"] = self._kp.value() / 100.0
         cfg["ptz"]["aim_smoothing"] = self._smoothing.value() / 100.0
         cfg["ptz"]["lead_time_s"] = self._lead.value() / 100.0
+        cfg["ptz"]["max_pan_speed"] = self._max_speed.value() / 100.0
+        cfg["ptz"]["max_tilt_speed"] = self._max_speed.value() / 100.0
         cfg["ptz"]["safe_zone_enabled"] = self._safe_zone.isChecked()
         cfg["ptz"]["safe_zone_x"] = self._safe_x.value() / 100.0
         cfg["ptz"]["safe_zone_y"] = self._safe_y.value() / 100.0

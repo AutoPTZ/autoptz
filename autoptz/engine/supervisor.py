@@ -85,8 +85,8 @@ def _log_macos_capture_path() -> None:
         else:
             log.warning(
                 "macOS capture: native AVFoundation UNAVAILABLE — using OpenCV "
-                "fallback; camera selection may be unreliable. Install the macOS "
-                "extras: pip install -r requirements/macos.txt",
+                "fallback; camera selection may be unreliable. Reinstall with "
+                "`python tools/install.py --editable`.",
             )
     except Exception:  # noqa: BLE001 — diagnostics must never break startup
         log.debug("macOS capture-path probe failed", exc_info=True)
@@ -268,9 +268,11 @@ class Supervisor:
         )
         if pool is not None:
             try:
-                detector = getattr(pool, "detector", None)
-                if callable(detector):
-                    detector()
+                # Prefer warmup_* (build + a dummy forward pass so the EP compiles
+                # now); fall back to the bare builder on older pools.
+                warm = getattr(pool, "warmup_detector", None) or getattr(pool, "detector", None)
+                if callable(warm):
+                    warm()
             except Exception:  # noqa: BLE001
                 log.debug("startup detector warmup failed", exc_info=True)
 
@@ -282,9 +284,9 @@ class Supervisor:
                 progress, active=True, phase="Warming face", started=started, total=total
             )
             try:
-                face = getattr(pool, "face", None)
-                if callable(face):
-                    face()
+                warm = getattr(pool, "warmup_face", None) or getattr(pool, "face", None)
+                if callable(warm):
+                    warm()
             except Exception:  # noqa: BLE001
                 log.debug("startup face warmup failed", exc_info=True)
 
@@ -292,9 +294,9 @@ class Supervisor:
                 progress, active=True, phase="Warming pose", started=started, total=total
             )
             try:
-                pose = getattr(pool, "pose", None)
-                if callable(pose):
-                    pose()
+                warm = getattr(pool, "warmup_pose", None) or getattr(pool, "pose", None)
+                if callable(warm):
+                    warm()
             except Exception:  # noqa: BLE001
                 log.debug("startup pose warmup failed", exc_info=True)
 
@@ -615,7 +617,9 @@ class Supervisor:
                     tier = str(getter() or "auto")
             except Exception:  # noqa: BLE001
                 tier = "auto"
-            self._inference_pool = build_inference_pool(detector_tier=tier)
+            self._inference_pool = build_inference_pool(
+                detector_tier=tier, unified_pose=self._any_unified_pose()
+            )
         except Exception:  # noqa: BLE001 — pool is an optimisation, never load-bearing
             log.warning("inference pool init failed; using per-worker models.", exc_info=True)
             self._inference_pool = None
@@ -743,6 +747,21 @@ class Supervisor:
         on_telemetry: Any,
     ) -> CameraWorker:
         return CameraWorker(camera_id, config, on_telemetry)
+
+    def _any_unified_pose(self) -> bool:
+        """True iff any configured camera opts into the unified pose detector.
+
+        The pool also honours ``AUTOPTZ_UNIFIED_POSE``; this just lets the config
+        flag drive it too.  Best-effort — never raises into pool construction.
+        """
+        try:
+            for cid in self._client.cameraModel.camera_ids():
+                cfg = self._resolve_config(cid)
+                if cfg is not None and getattr(cfg.tracking, "unified_pose", False):
+                    return True
+        except Exception:  # noqa: BLE001
+            log.debug("unified-pose config scan failed", exc_info=True)
+        return False
 
     def _resolve_config(self, camera_id: str) -> CameraConfig | None:
         """Resolve a camera's full CameraConfig.

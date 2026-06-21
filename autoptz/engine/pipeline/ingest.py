@@ -463,8 +463,8 @@ class USBAdapter(SourceAdapter):
             _WARNED_NO_NATIVE_AVF = True
             log.warning(
                 "Native macOS camera capture is unavailable (PyObjC AVFoundation "
-                "missing) — camera selection may be unreliable. Install the macOS "
-                "extras: pip install -r requirements/macos.txt",
+                "missing) — camera selection may be unreliable. Reinstall with "
+                "`python tools/install.py --editable`.",
             )
         return False
 
@@ -501,8 +501,8 @@ class USBAdapter(SourceAdapter):
             log.warning(
                 "camera_id=%s uniqueID=%s could not be matched to an OpenCV "
                 "capture index (PyObjC/AVFoundation unavailable?); refusing to "
-                "open a possibly-wrong device. Install the macOS pyobjc extras "
-                "(requirements/macos.txt) for reliable camera selection.",
+                "open a possibly-wrong device. Run `python tools/install.py "
+                "--editable` for reliable macOS camera selection.",
                 self.camera_id,
                 self._unique_id,
             )
@@ -578,8 +578,8 @@ class USBAdapter(SourceAdapter):
             # camera, so we bail with a clear, UI-visible reason (surfaced via
             # health ``last_error``) instead.
             self._set_error(
-                "Camera could not be verified — install the macOS pyobjc extras "
-                "for reliable selection."
+                "Camera could not be verified; reinstall with python tools/install.py "
+                "--editable for reliable macOS selection."
             )
             return False
         cap = cv2.VideoCapture(source, backend)  # type: ignore[call-overload]
@@ -846,11 +846,14 @@ class NDIAdapter(SourceAdapter):
         shm_writer: ShmWriter | None = None,
         target_fps: float = 30.0,
         stall_timeout: float = _STALL_TIMEOUT_DEFAULT,
+        discover_timeout: float = 6.0,
     ) -> None:
         super().__init__(camera_id, shm_writer, target_fps, stall_timeout)
         self._ndi_name = ndi_name
+        self._discover_timeout = float(discover_timeout)
         self._receiver: object | None = None
-        self._framesync: object | None = None
+        self._finder: object | None = None
+        self._video_frame: object | None = None
 
     def _open(self) -> bool:
         if not _probe_ndi():
@@ -858,80 +861,125 @@ class NDIAdapter(SourceAdapter):
             return False
 
         try:
+            # cyndilib ≥0.1: capture is pull-based via ``Receiver.frame_sync`` (a
+            # ``FrameSync``); ``BGRX_BGRA`` delivers ready-to-use BGRA frames.
             from cyndilib.finder import Finder  # noqa: PLC0415
-            from cyndilib.framesync import FrameSyncReceiver  # noqa: PLC0415
-            from cyndilib.receiver import Receiver, RecvBandwidth  # noqa: PLC0415
+            from cyndilib.receiver import Receiver  # noqa: PLC0415
+            from cyndilib.video_frame import VideoFrameSync  # noqa: PLC0415
+            from cyndilib.wrapper.ndi_recv import (  # noqa: PLC0415
+                RecvBandwidth,
+                RecvColorFormat,
+            )
 
-            # Verify the source is currently visible
             finder = Finder()
             finder.open()
-            time.sleep(0.5)
-            known_names = [str(src) for src in finder.iter_sources()]
-            finder.close()
-
-            if self._ndi_name not in known_names:
+            # NDI discovery is eventually-consistent: a single snapshot can miss a
+            # source that's actually present, so poll for it for a few seconds
+            # before giving up.
+            source = self._resolve_source(finder)
+            if source is None:
+                known = [str(s) for s in finder.iter_sources()]
+                finder.close()
+                self._set_error(f"NDI source {self._ndi_name!r} not on the network.")
                 log.warning(
-                    "camera_id=%s NDI source %r not found on network (seen: %s)",
+                    "camera_id=%s NDI source %r not found (seen: %s)",
                     self.camera_id,
                     self._ndi_name,
-                    known_names,
+                    known,
                 )
                 return False
 
-            receiver = Receiver(bandwidth=RecvBandwidth.highest)  # type: ignore[call-arg]
-            framesync = FrameSyncReceiver(receiver)
+            receiver = Receiver(
+                color_format=RecvColorFormat.BGRX_BGRA,
+                bandwidth=RecvBandwidth.highest,
+            )
+            video_frame = VideoFrameSync()
+            receiver.frame_sync.set_video_frame(video_frame)
+            receiver.set_source(source)
 
-            # Connect to the named source
-            for src in Finder().iter_sources():  # type: ignore[call-arg]
-                if str(src) == self._ndi_name:
-                    receiver.set_source(src)
-                    break
-
+            # Keep the finder open for the receiver's lifetime so the resolved
+            # source stays valid.
+            self._finder = finder
             self._receiver = receiver
-            self._framesync = framesync
+            self._video_frame = video_frame
             log.info("camera_id=%s NDIAdapter connected to %r", self.camera_id, self._ndi_name)
             return True
 
         except Exception as exc:  # noqa: BLE001
             log.warning("camera_id=%s NDIAdapter open failed: %s", self.camera_id, exc)
+            self._set_error(f"NDI open failed: {exc}")
             return False
 
+    def _resolve_source(self, finder: object) -> object | None:
+        """Poll *finder* for ``self._ndi_name`` until it appears or the timeout.
+
+        NDI sources blink in and out of any single discovery poll, so we wait
+        (refreshing each iteration) rather than trusting one snapshot.
+        """
+        deadline = time.monotonic() + self._discover_timeout
+        while time.monotonic() < deadline:
+            try:
+                finder.wait_for_sources(1.0)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001 — older API without wait_for_sources
+                time.sleep(0.5)
+            try:
+                src = finder.get_source(self._ndi_name)  # type: ignore[attr-defined]
+                if src is not None:
+                    return src
+            except Exception:  # noqa: BLE001
+                pass
+            for src in finder.iter_sources():  # type: ignore[attr-defined]
+                if str(src) == self._ndi_name:
+                    return src
+        return None
+
     def _read_frame(self) -> NDArray[np.uint8] | None:
-        if self._framesync is None:
+        receiver = self._receiver
+        vf = self._video_frame
+        if receiver is None or vf is None:
             return None
         try:
-            from cyndilib.video_frame import VideoFrameSync  # noqa: PLC0415
-
-            vf = VideoFrameSync()
-            self._framesync.capture_video(vf)  # type: ignore[union-attr]
-
-            data = vf.get_array()
-            if data is None or len(data) == 0:
+            # Non-blocking: fills the *registered* video frame (``vf``) with the
+            # latest frame.  capture_video() takes a FrameFormat (default
+            # progressive), NOT the frame — the frame was set via set_video_frame.
+            receiver.frame_sync.capture_video()  # type: ignore[union-attr]
+            w = int(getattr(vf, "xres", 0))
+            h = int(getattr(vf, "yres", 0))
+            if w <= 0 or h <= 0:
                 return None
 
-            arr: NDArray[np.uint8] = np.asarray(data, dtype=np.uint8)
-            # NDI typically delivers UYVY or BGRA; convert to BGR
-            if arr.ndim == 1:
-                # Packed UYVY (4:2:2): 2 bytes per pixel; reshape then convert
-                h = vf.yres  # type: ignore[union-attr]
-                w = vf.xres  # type: ignore[union-attr]
-                arr = arr.reshape((h, w, 2))
-                arr = cv2.cvtColor(arr, cv2.COLOR_YUV2BGR_UYVY)
-            elif arr.ndim == 3 and arr.shape[2] == 4:
-                arr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+            data = vf.get_array()  # type: ignore[union-attr]
+            if data is None or len(data) == 0:
+                return None
+            arr: NDArray[np.uint8] = np.asarray(data, dtype=np.uint8).reshape(-1)
 
-            return arr
+            # BGRX_BGRA → 4 bytes/pixel (BGRA); some sources still hand back UYVY
+            # (2 bytes/pixel).  Pick the layout from the actual buffer size.
+            if arr.size == h * w * 4:
+                return cv2.cvtColor(arr.reshape((h, w, 4)), cv2.COLOR_BGRA2BGR)
+            if arr.size == h * w * 2:
+                return cv2.cvtColor(arr.reshape((h, w, 2)), cv2.COLOR_YUV2BGR_UYVY)
+            if arr.size == h * w * 3:
+                return arr.reshape((h, w, 3))
+            return None
 
         except Exception as exc:  # noqa: BLE001
             log.debug("camera_id=%s NDI read_frame error: %s", self.camera_id, exc)
             return None
 
     def _close(self) -> None:
-        for attr in ("_framesync", "_receiver"):
-            obj = getattr(self, attr, None)
-            if obj is not None:
-                try:
-                    obj.close()  # type: ignore[union-attr]
-                except Exception:  # noqa: BLE001
-                    pass
-                setattr(self, attr, None)
+        receiver = self._receiver
+        if receiver is not None:
+            try:
+                receiver.disconnect()  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001
+                pass
+        finder = self._finder
+        if finder is not None:
+            try:
+                finder.close()  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001
+                pass
+        self._receiver = None
+        self._finder = None
+        self._video_frame = None

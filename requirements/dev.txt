@@ -1,6 +1,6 @@
 # AutoPTZ — development & test dependencies
 # Install after base:
-#   pip install -r requirements/base.txt -r requirements/dev.txt
+#   python tools/install.py --dev --editable
 
 # ── testing ───────────────────────────────────────────────────────────────────
 pytest==8.3.5

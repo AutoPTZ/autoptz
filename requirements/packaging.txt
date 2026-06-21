@@ -1,10 +1,9 @@
 # AutoPTZ — packaging / native-app build tooling
 #
 # Install on the BUILD machine (in addition to base + the platform extras), e.g.:
-#   macOS:    pip install -r requirements/base.txt -r requirements/macos.txt \
-#                          -r requirements/packaging.txt -e .
-#   Windows:  pip install -r requirements/base.txt -r requirements/gpu-nvidia.txt \
-#                          -r requirements/packaging.txt -e .
+#   python tools/install.py --packaging --editable --accelerator cpu
+#   python tools/install.py --packaging --editable --accelerator directml
+#   python tools/install.py --packaging --editable --accelerator nvidia
 #
 # Produces a native, correctly-named app via PyInstaller using
 # packaging/autoptz.spec.  On macOS the spec's BUNDLE step writes

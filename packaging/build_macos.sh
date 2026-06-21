@@ -35,12 +35,7 @@ fi
 # ── 2. dependencies ─────────────────────────────────────────────────────────
 if [[ "${SKIP_INSTALL:-0}" != "1" ]]; then
     echo "==> Installing dependencies"
-    "${PY}" -m pip install --upgrade pip
-    "${PY}" -m pip install \
-        -r requirements/base.txt \
-        -r requirements/macos.txt \
-        -r requirements/packaging.txt
-    "${PY}" -m pip install -e .
+    "${PY}" tools/install.py --upgrade-pip --packaging --editable --accelerator cpu
 else
     echo "==> SKIP_INSTALL=1 — using existing venv as-is"
 fi

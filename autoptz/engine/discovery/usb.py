@@ -332,7 +332,7 @@ def enumerate_cameras() -> list[dict]:
             cams = None
         if cams is not None:
             return cams
-    # TODO(Windows): use pygrabber (DirectShow) for friendly device names.
+    # TODO(Windows): add a native enumerator for friendly device names.
     # Fallback (no platform enumeration): only real, openable indices.
     return _probed_fallback_cameras()
 

@@ -227,6 +227,15 @@ def _log_detector_ready_once(model_path: str, ep: str) -> None:
     log.info("detector ready (model=%s, ep=%s)", model_path, ep)
 
 
+def _want_unified_pose(config: CameraConfig) -> bool:
+    """True iff this camera wants the unified pose detector (config or env)."""
+    import os
+
+    if getattr(config.tracking, "unified_pose", False):
+        return True
+    return os.environ.get("AUTOPTZ_UNIFIED_POSE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _build_detect_stack(config: CameraConfig) -> _DetectStack | None:
     """Try to build a PersonDetector + Tracker; return None on any failure.
 
@@ -252,10 +261,27 @@ def _build_detect_stack(config: CameraConfig) -> _DetectStack | None:
         from autoptz.engine.pipeline.detect import PersonDetector
         from autoptz.engine.pipeline.track import Tracker
 
-        detector = PersonDetector(
-            model_path=model_path,
-            detect_interval=config.tracking.detect_interval,
-        )
+        detector: Any
+        if _want_unified_pose(config):
+            try:
+                from autoptz.engine.pipeline.pose_detect import PoseDetector
+
+                detector = PoseDetector(detect_interval=config.tracking.detect_interval)
+            except Exception:  # noqa: BLE001 — unified must never disable detection
+                log.warning(
+                    "camera_id=%s unified pose detector unavailable; plain detector.",
+                    config.id,
+                    exc_info=True,
+                )
+                detector = PersonDetector(
+                    model_path=model_path,
+                    detect_interval=config.tracking.detect_interval,
+                )
+        else:
+            detector = PersonDetector(
+                model_path=model_path,
+                detect_interval=config.tracking.detect_interval,
+            )
         # NOTE: the *tracker's* internal BoT-SORT ``reid_model`` stays unset —
         # BoxMOT 19 wants a built ReID object (not a weights path) and only fails
         # at update() time, so the tracker runs motion-only (robust).  Appearance

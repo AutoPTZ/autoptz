@@ -2,7 +2,6 @@
 # Install: pip install -r requirements/base.txt
 #
 # Platform extras:
-#   macOS (Apple Silicon):  pip install -r requirements/macos.txt
 #   Windows/Linux + NVIDIA: pip install -r requirements/gpu-nvidia.txt
 #   Development:            pip install -r requirements/dev.txt
 
@@ -38,9 +37,19 @@ av>=17.1.0
 # Optional — ONVIFDiscovery logs a warning and no-ops if not installed.
 wsdiscovery>=2.1.2
 
-# cyndilib (NDI) — added in requirements/macos.txt and requirements/gpu-nvidia.txt
-# where the NDI SDK runtime is expected; not listed here to avoid install failure
-# on machines without the NDI runtime.
+# macOS native camera support. Environment markers keep these off non-macOS
+# machines while making the normal base install open cameras by stable
+# AVFoundation uniqueID instead of fragile OpenCV indices.
+pyobjc-framework-AVFoundation>=10.0; platform_system == "Darwin"
+pyobjc-framework-Quartz>=10.0; platform_system == "Darwin"
+pyobjc-framework-libdispatch>=10.0; platform_system == "Darwin"
+
+# NDI source discovery + capture. cyndilib ships self-contained wheels (the NDI
+# runtime is bundled) for macOS/Windows/Linux, so a plain install enables the
+# Cameras → NDI Sources menu. If a wheel isn't available for your platform/Python
+# and the build can't find the NDI SDK, this line can be dropped (NDI then just
+# stays unavailable — the rest of the app is unaffected).
+cyndilib>=0.1.1
 
 # ── config & persistence ──────────────────────────────────────────
 # SQLite is stdlib; no extra dep needed.

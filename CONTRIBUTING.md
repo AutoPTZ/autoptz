@@ -11,14 +11,13 @@ git clone https://github.com/AutoPTZ/autoptz
 cd autoptz
 python3.12 -m venv .venv            # at the repo root
 source .venv/bin/activate           # Windows: .venv\Scripts\activate
-pip install -r requirements/base.txt -r requirements/dev.txt
-pip install -e .
+python tools/install.py --dev --editable
 pre-commit install                  # optional but recommended
 ```
 
 ## Quality gates (what CI runs)
 
-All four must pass on macOS, Windows, and Linux:
+All five must pass on macOS, Windows, and Linux:
 
 ```bash
 ruff check autoptz/ tests/ tools/          # lint

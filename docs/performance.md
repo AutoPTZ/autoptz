@@ -24,17 +24,18 @@ provider (EP)** for your hardware and tunes the session per EP.
 
 ## Choosing an accelerator
 
-Install **one** `onnxruntime*` wheel (they conflict — uninstall the previous one
-first):
+Use `python tools/install.py --dry-run` to see what will be installed. The tool
+keeps the ONNX Runtime swap explicit because only one `onnxruntime*` wheel should
+be installed at a time:
 
 | Target | Install | EP order | Precision |
 | --- | --- | --- | --- |
-| Apple Silicon | base wheel | CoreML → CPU | FP16 (MLProgram) |
-| Intel Mac + AMD GPU | base wheel | CoreML → CPU | FP16 |
-| Windows / Linux + NVIDIA | `requirements/gpu-nvidia.txt` | TensorRT → CUDA → CPU | FP16 + engine cache |
-| Windows + AMD/Intel GPU | `requirements/gpu-directml.txt` | DirectML → CPU | FP16 |
-| Intel CPU/iGPU (any OS) | `requirements/openvino.txt` | OpenVINO → CPU | FP16 |
-| CPU only (any OS) | base wheel | CPU | FP32 |
+| Apple Silicon | `python tools/install.py` | CoreML → CPU | FP16 (MLProgram) |
+| Intel Mac + AMD GPU | `python tools/install.py` | CoreML → CPU | FP16 |
+| Windows default | `python tools/install.py` | DirectML → CPU | FP16 |
+| Windows / Linux + NVIDIA | `python tools/install.py --accelerator nvidia` | TensorRT → CUDA → CPU | FP16 + engine cache |
+| Intel CPU/iGPU (any OS) | `python tools/install.py --accelerator openvino` | OpenVINO → CPU | FP16 |
+| CPU only (any OS) | `python tools/install.py --accelerator cpu` | CPU | FP32 |
 
 Overrides (per the supervisor → env wiring): `AUTOPTZ_FORCE_EP`,
 `AUTOPTZ_PRECISION` (`auto`/`fp32`/`fp16`/`int8`), `AUTOPTZ_ORT_INTRA_THREADS`.

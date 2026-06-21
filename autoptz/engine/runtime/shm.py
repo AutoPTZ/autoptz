@@ -40,6 +40,38 @@ _IDX_FMT = "=q"  # signed int64 (-1 = no frame yet)
 _IDX_SIZE = struct.calcsize(_IDX_FMT)
 
 
+def frame_region_size(height: int, width: int, channels: int = 3) -> int:
+    """Return the byte size of the frame ring for this shape."""
+    frame_bytes = height * width * channels
+    return (_HDR_SIZE + frame_bytes) * _N_SLOTS
+
+
+def _unlink_one(name: str) -> None:
+    """Close and unlink one shared-memory segment if it exists."""
+    try:
+        shm = SharedMemory(name=name, create=False)
+    except FileNotFoundError:
+        return
+    except Exception:
+        return
+    try:
+        shm.close()
+    except Exception:
+        pass
+    try:
+        shm.unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+def unlink_shared_memory_pair(name: str) -> None:
+    """Best-effort cleanup for a frame ring and its commit-index segment."""
+    for segment in (name, f"{name}__idx"):
+        _unlink_one(segment)
+
+
 @dataclass(frozen=True)
 class FrameHeader:
     seq: int
@@ -56,13 +88,35 @@ class ShmWriter:
         self.height = height
         self.width = width
         self.channels = channels
+        self._closed = False
 
         self._frame_bytes = height * width * channels
         self._slot_size = _HDR_SIZE + self._frame_bytes
-        total = self._slot_size * _N_SLOTS
+        total = frame_region_size(height, width, channels)
 
-        self._shm = SharedMemory(name=name, create=True, size=total)
-        self._idx_shm = SharedMemory(name=f"{name}__idx", create=True, size=_IDX_SIZE)
+        created: SharedMemory | None = None
+        try:
+            created = SharedMemory(name=name, create=True, size=total)
+            self._idx_shm = SharedMemory(name=f"{name}__idx", create=True, size=_IDX_SIZE)
+            self._shm = created
+        except FileExistsError:
+            if created is not None:
+                try:
+                    created.close()
+                    created.unlink()
+                except Exception:
+                    pass
+            unlink_shared_memory_pair(name)
+            self._shm = SharedMemory(name=name, create=True, size=total)
+            self._idx_shm = SharedMemory(name=f"{name}__idx", create=True, size=_IDX_SIZE)
+        except Exception:
+            if created is not None:
+                try:
+                    created.close()
+                    created.unlink()
+                except Exception:
+                    pass
+            raise
 
         # Numpy view over the data region for zero-copy writes
         self._buf = np.frombuffer(self._shm.buf, dtype=np.uint8)
@@ -102,20 +156,36 @@ class ShmWriter:
         return seq
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         # Release the numpy array's exported C-pointer before closing the mmap.
         # Python's mmap raises BufferError if any exported pointers still exist.
         # CPython drops the refcount to 0 immediately (no reference cycles here).
-        del self._buf
+        if hasattr(self, "_buf"):
+            del self._buf
         self._shm.close()
-        self._shm.unlink()
+        try:
+            self._shm.unlink()
+        except FileNotFoundError:
+            pass
         self._idx_shm.close()
-        self._idx_shm.unlink()
+        try:
+            self._idx_shm.unlink()
+        except FileNotFoundError:
+            pass
 
     def __enter__(self) -> ShmWriter:
         return self
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class ShmReader:
@@ -126,6 +196,7 @@ class ShmReader:
         self.height = height
         self.width = width
         self.channels = channels
+        self._closed = False
 
         self._frame_bytes = height * width * channels
         self._slot_size = _HDR_SIZE + self._frame_bytes
@@ -172,7 +243,11 @@ class ShmReader:
         )
 
     def close(self) -> None:
-        del self._buf  # release exported mmap pointer before closing
+        if self._closed:
+            return
+        self._closed = True
+        if hasattr(self, "_buf"):
+            del self._buf  # release exported mmap pointer before closing
         self._shm.close()
         self._idx_shm.close()
 
@@ -181,3 +256,9 @@ class ShmReader:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass

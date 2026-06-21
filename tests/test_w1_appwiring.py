@@ -245,6 +245,74 @@ class TestScanUSBCameras:
         assert client.scanUSBCameras() == []
 
 
+# ── scanNDISources / ndiAvailable ──────────────────────────────────────────────
+
+
+class _FakeFinder:
+    """Stand-in for cyndilib.finder.Finder using the iter_sources() API."""
+
+    sources = ["STUDIO (CAM 1)", "STUDIO (CAM 2)"]
+
+    def open(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def iter_sources(self):
+        return list(self.sources)
+
+
+def _install_fake_cyndilib(monkeypatch) -> None:
+    import sys
+    import time
+    import types
+
+    pkg = types.ModuleType("cyndilib")
+    finder_mod = types.ModuleType("cyndilib.finder")
+    finder_mod.Finder = _FakeFinder
+    monkeypatch.setitem(sys.modules, "cyndilib", pkg)
+    monkeypatch.setitem(sys.modules, "cyndilib.finder", finder_mod)
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)  # skip the 2s settle
+
+
+class TestScanNDISources:
+    def test_ndi_available_false_without_cyndilib(self, qapp, monkeypatch) -> None:
+        monkeypatch.setattr("importlib.util.find_spec", lambda _name: None)
+        assert _client().ndiAvailable() is False
+
+    def test_ndi_available_true_when_spec_found(self, qapp, monkeypatch) -> None:
+        monkeypatch.setattr("importlib.util.find_spec", lambda _name: object())
+        assert _client().ndiAvailable() is True
+
+    def test_scan_returns_empty_without_cyndilib(self, qapp, monkeypatch) -> None:
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _no_cyndilib(name, *a, **k):
+            if name.startswith("cyndilib"):
+                raise ImportError("no cyndilib")
+            return real_import(name, *a, **k)
+
+        monkeypatch.setattr(builtins, "__import__", _no_cyndilib)
+        assert _client().scanNDISources() == []
+
+    def test_scan_parses_iter_sources(self, qapp, monkeypatch) -> None:
+        _install_fake_cyndilib(monkeypatch)
+        rows = _client().scanNDISources()
+        assert rows == [
+            {"name": "STUDIO (CAM 1)", "uri": "ndi://STUDIO (CAM 1)"},
+            {"name": "STUDIO (CAM 2)", "uri": "ndi://STUDIO (CAM 2)"},
+        ]
+
+    def test_scan_dedupes_repeated_names(self, qapp, monkeypatch) -> None:
+        _install_fake_cyndilib(monkeypatch)
+        monkeypatch.setattr(_FakeFinder, "sources", ["A", "A", "B"])
+        rows = _client().scanNDISources()
+        assert [r["name"] for r in rows] == ["A", "B"]
+
+
 # ── addCamera unique_id population ─────────────────────────────────────────────
 
 

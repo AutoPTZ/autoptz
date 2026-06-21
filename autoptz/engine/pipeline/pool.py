@@ -37,10 +37,17 @@ per-worker fallback for tests/fakes that do not inject a pool.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+
+def _env_unified_pose() -> bool:
+    """Process-wide opt-in for the unified (one-backbone) pose detector."""
+    return os.environ.get("AUTOPTZ_UNIFIED_POSE", "").strip().lower() in ("1", "true", "yes", "on")
+
 
 if TYPE_CHECKING:
     import numpy as np
@@ -134,10 +141,14 @@ class InferencePool:
     and must stay per-worker.
     """
 
-    def __init__(self, *, detector_tier: str = "auto") -> None:
+    def __init__(self, *, detector_tier: str = "auto", unified_pose: bool = False) -> None:
         # Guards the lazy *build* of each model (not their per-call use).
         self._build_lock = threading.Lock()
         self._detector_tier = str(detector_tier or "auto")
+        # When set, the detector slot is a unified YOLO11-pose model that emits
+        # boxes AND keypoints in one pass (the separate pose estimator is then
+        # unused).  Env var wins so it's togglable without touching config.
+        self._unified_pose = bool(unified_pose) or _env_unified_pose()
 
         self._detector: Any | None = None
         self._detector_built = False
@@ -188,6 +199,11 @@ class InferencePool:
     def detector_tier(self) -> str:
         """User-facing tier of the active shared detector."""
         return self._detector_tier
+
+    @property
+    def unified_pose(self) -> bool:
+        """True iff the shared detector is the unified (boxes+keypoints) model."""
+        return self._unified_pose
 
     @property
     def detector_model_path(self) -> str:
@@ -338,6 +354,27 @@ class InferencePool:
             log.debug("inference pool: no detector model; live-preview-only.")
             return None
 
+        # Unified path: one YOLO11-pose backbone emitting boxes + keypoints.  If
+        # its model can't be resolved/built we fall through to the plain detector
+        # so unified mode never *disables* detection — it just degrades.
+        if self._unified_pose:
+            try:
+                from autoptz.engine.pipeline.pose_detect import PoseDetector
+
+                detector = PoseDetector()
+                self._detector_ep = detector.ep
+                self._detector_model_path = "<yolo11-pose unified>"
+                self._detector_error = ""
+                log.info("inference pool: unified pose detector ready (ep=%s)", detector.ep)
+                return detector
+            except Exception:  # noqa: BLE001
+                log.warning(
+                    "inference pool: unified pose detector unavailable; "
+                    "falling back to plain detector.",
+                    exc_info=True,
+                )
+                self._unified_pose = False
+
         try:
             from autoptz.engine.pipeline.detect import PersonDetector
 
@@ -424,16 +461,66 @@ class InferencePool:
             log.debug("inference pool: pose estimator init failed; bbox aim only.", exc_info=True)
             return None
 
+    # ── warm-up ───────────────────────────────────────────────────────────────────
+    #
+    # Building a model only *constructs* its ORT session; the expensive graph /
+    # EP compilation (CoreML, TensorRT, DirectML) happens lazily on the FIRST
+    # ``run()``.  Running one dummy inference here moves that one-off stall into
+    # the startup "Warming…" phase so the first *live* frame isn't janky.
+
+    @staticmethod
+    def _dummy_frame(size: int = 640):
+        import numpy as np  # local: numpy is a runtime dep but type-only above
+
+        return np.zeros((size, size, 3), dtype=np.uint8)
+
+    def warmup_detector(self) -> None:
+        """Build the detector and run one dummy frame so its EP compiles now."""
+        det = self.detector()
+        if det is None:
+            return
+        try:
+            det.detect(self._dummy_frame())
+        except Exception:  # noqa: BLE001 — warmup must never break startup
+            log.debug("inference pool: detector warmup inference failed", exc_info=True)
+
+    def warmup_face(self) -> None:
+        """Build the face stack and run one dummy frame to pre-compile it."""
+        face = self.face()
+        if face is None or not getattr(face, "available", False):
+            return
+        try:
+            face.detect(self._dummy_frame())
+        except Exception:  # noqa: BLE001
+            log.debug("inference pool: face warmup inference failed", exc_info=True)
+
+    def warmup_pose(self) -> None:
+        """Build the pose estimator and run one dummy crop to pre-compile it."""
+        if self._unified_pose:
+            return  # unified detector already covers pose; no separate estimator
+        pose = self.pose()
+        if pose is None or not getattr(pose, "available", False):
+            return
+        try:
+            frame = self._dummy_frame()
+            h, w = frame.shape[:2]
+            pose.estimate(frame, (0.0, 0.0, float(w), float(h)))
+        except Exception:  # noqa: BLE001
+            log.debug("inference pool: pose warmup inference failed", exc_info=True)
+
 
 # ── factory ──────────────────────────────────────────────────────────────────────
 
 
-def build_inference_pool(*, detector_tier: str = "auto") -> InferencePool:
+def build_inference_pool(
+    *, detector_tier: str = "auto", unified_pose: bool = False
+) -> InferencePool:
     """Return a fresh :class:`InferencePool` (models built lazily on first use).
 
     The supervisor calls this once and injects the result into every worker via
     ``worker.set_inference_pool``.  Construction is cheap — no model is loaded
     until the first ``detector()`` / ``face()`` / ``pose()`` call — so this never
-    blocks startup and never raises.
+    blocks startup and never raises.  ``unified_pose`` (or ``AUTOPTZ_UNIFIED_POSE``)
+    makes the detector slot the one-backbone boxes+keypoints model.
     """
-    return InferencePool(detector_tier=detector_tier)
+    return InferencePool(detector_tier=detector_tier, unified_pose=unified_pose)

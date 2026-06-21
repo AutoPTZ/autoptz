@@ -1668,22 +1668,52 @@ class EngineClient(QObject):
         # empty list rather than inventing phantom indices 0-3.
         return results
 
+    @Slot(result=bool)
+    def ndiAvailable(self) -> bool:
+        """True iff the cyndilib + NDI SDK runtime is importable (NDI discovery possible)."""
+        import importlib.util
+
+        return importlib.util.find_spec("cyndilib") is not None
+
     @Slot(result="QVariantList")
     def scanNDISources(self) -> list[dict[str, str]]:
-        """Return discovered NDI sources. Requires cyndilib; returns [] if unavailable."""
+        """Discover NDI sources on the LAN (one-shot blocking scan).
+
+        Returns ``[{name, uri}]`` with ``uri = ndi://<name>``.  Returns ``[]``
+        when cyndilib / the NDI SDK runtime is unavailable (callers should check
+        :meth:`ndiAvailable` first to tell "not installed" from "none found").
+        Uses the SDK ``Finder.iter_sources()`` — the same call the engine's
+        :class:`~autoptz.engine.discovery.ndi.NDIDiscovery` polls — after a short
+        settle, because NDI sources don't appear the instant the finder opens.
+        Blocking (~2 s); run it off the GUI thread.
+        """
         try:
-            import time
-
             from cyndilib.finder import Finder  # type: ignore[import]
+        except Exception:
+            log.info("scanNDISources: cyndilib not installed; NDI discovery unavailable.")
+            return []
 
+        import time
+
+        sources: list[dict[str, str]] = []
+        try:
             finder = Finder()
             finder.open()
-            time.sleep(2.0)
-            names = list(finder.get_source_names())
-            finder.close()
-            return [{"name": n, "uri": f"ndi://{n}"} for n in names]
+            try:
+                # NDI sources may not be visible immediately after open; settle.
+                time.sleep(2.0)
+                seen: set[str] = set()
+                for src in finder.iter_sources():
+                    name = str(src)
+                    if name and name not in seen:
+                        seen.add(name)
+                        sources.append({"name": name, "uri": f"ndi://{name}"})
+            finally:
+                finder.close()
         except Exception:
+            log.warning("scanNDISources failed", exc_info=True)
             return []
+        return sources
 
     # ── theme ─────────────────────────────────────────────────────────────────
 

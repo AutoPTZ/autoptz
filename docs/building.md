@@ -32,8 +32,8 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 ```
 
 DirectML is the default EP on Windows; pass nothing extra. For NVIDIA, install
-`requirements/gpu-nvidia.txt` before building. Signing uses `signtool.exe` (see
-the notes printed by the script).
+with `-Accelerator nvidia` before building. Signing uses `signtool.exe` (see the
+notes printed by the script).
 
 ## Linux → AppImage
 
@@ -49,6 +49,10 @@ MAKE_APPIMAGE=1 bash packaging/build_linux.sh
 
 `appimagetool` is downloaded automatically if it isn't on `PATH`.
 
+Packaging scripts install dependencies through `tools/install.py`. Set
+`ACCELERATOR=nvidia` or `ACCELERATOR=openvino` for a hardware-specific Linux
+build; the default release build stays CPU for portability.
+
 ## CI release
 
 Push a tag to build + publish all three:
@@ -58,8 +62,9 @@ git tag v2.0.0 && git push origin v2.0.0      # v2.0.0-rc1 → marked pre-releas
 ```
 
 The workflow builds on macOS/Windows/Linux runners and attaches the artifacts to
-a GitHub Release (auto-generated notes). Those are exactly the assets the in-app
-updater points users to.
+a GitHub Release (auto-generated notes). Keep the asset suffixes stable
+(`.dmg`, `windows-x64-setup.exe`, `.AppImage`): the in-app updater uses them to
+choose the right download for the current OS, launch it, and close AutoPTZ.
 
 ## The spec
 

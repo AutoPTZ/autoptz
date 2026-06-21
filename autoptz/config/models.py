@@ -116,6 +116,12 @@ class TrackingConfig(BaseModel, frozen=True):
     # frame height — drops distant specks so the engine doesn't chase/save every
     # far-away person.  0.0 disables the gate.
     min_detection_size_frac: float = Field(default=0.05, ge=0.0, le=1.0)
+    # Unified "one backbone, two heads": use a single YOLO11-pose model that emits
+    # person boxes AND keypoints in one forward pass (feeding both the tracker and
+    # the pose-stable aim), instead of a separate detector + per-target pose pass.
+    # Off by default — flip on (or set AUTOPTZ_UNIFIED_POSE=1) to validate; falls
+    # back to the plain detector automatically if the pose model can't be built.
+    unified_pose: bool = False
 
 
 # Vertical aim point as a fraction of the person-box height measured from the TOP
@@ -163,9 +169,14 @@ class PtzPresetSlot(BaseModel, frozen=True):
 class PTZConfig(BaseModel, frozen=True):
     backend: Literal["auto", "ndi", "visca_ip", "visca_usb", "onvif"] = "auto"
     address: str | None = None
-    max_pan_speed: float = Field(default=0.5, ge=0.0, le=1.0)
-    max_tilt_speed: float = Field(default=0.5, ge=0.0, le=1.0)
+    max_pan_speed: float = Field(default=0.7, ge=0.0, le=1.0)
+    max_tilt_speed: float = Field(default=0.7, ge=0.0, le=1.0)
     max_zoom_speed: float = Field(default=0.3, ge=0.0, le=1.0)
+    # Slew-rate limit: the most the normalized pan/tilt command may change per
+    # second.  Caps acceleration so the camera ramps up/down smoothly instead of
+    # snapping to full speed on a sudden error (the "speeds out of nowhere" feel),
+    # which matters most on fast NDI/VISCA heads.  0 disables (instant response).
+    max_accel: float = Field(default=3.0, ge=0.0, le=50.0)
     invert_pan: bool = False
     invert_tilt: bool = False
     deadzone_x: float = Field(default=0.05, ge=0.0, le=0.5)
@@ -173,6 +184,18 @@ class PTZConfig(BaseModel, frozen=True):
     kp: float = Field(default=0.6, ge=0.0)
     kd: float = Field(default=0.05, ge=0.0)
     kv: float = Field(default=0.1, ge=0.0)
+    # Integral gain — removes steady-state offset when the subject holds a
+    # constant-velocity drift the PD loop alone trails.  Opt-in (0 = PD only) and
+    # anti-windup-clamped in the controller, so enabling it can't run away.
+    ki: float = Field(default=0.0, ge=0.0)
+    # Oscillation guard: when the pan/tilt command keeps flipping sign frame to
+    # frame (hunting), automatically damp the output until it settles.  Pure
+    # safety net — it can only reduce motion — so it's on by default.
+    osc_guard: bool = True
+    # Lead the aim point by the *measured* end-to-end loop latency (capture +
+    # inference) in addition to ``lead_time_s``, so following compensates for how
+    # long the pipeline actually takes on this machine, not a fixed guess.
+    lead_time_auto: bool = True
     # Motion prediction: project the aim point forward by this many seconds using
     # the target's measured velocity, so the camera anticipates motion instead of
     # always chasing where the subject *was* (which reads as laggy following).
@@ -194,14 +217,26 @@ class PTZConfig(BaseModel, frozen=True):
     # Corner roundness of the framing box, 0 = sharp rectangle … 1 = full oval.
     # Defaults to a full oval (the framing region reads as a soft ellipse).
     safe_zone_roundness: float = Field(default=1.0, ge=0.0, le=1.0)
-    # Loss recovery: when the target is lost past the coast window, gently zoom
-    # OUT (this speed) for up to ``reacquire_window_s`` to widen the view and
-    # re-find the subject, instead of just stopping dead.
-    loss_zoom_out: float = Field(default=0.25, ge=0.0, le=1.0)
+    # Loss recovery: when the target is lost past the coast window, optionally
+    # zoom OUT (this speed) for up to ``reacquire_window_s`` to widen the view and
+    # re-find the subject.  Default OFF — yanking the crop wide on every brief
+    # drop reads as "the camera keeps pulling back"; instead it holds the framing
+    # and waits.  Set >0 to opt into auto-widen-to-reacquire.
+    loss_zoom_out: float = Field(default=0.0, ge=0.0, le=1.0)
     reacquire_window_s: float = Field(default=4.0, ge=0.0, le=30.0)
     auto_zoom: bool = True
     zoom_framing: ZoomFraming = "upper_body"
     soft_limits: PanTiltZoomLimits | None = None
+    # Ego-motion compensation: subtract the camera's *own* induced image motion
+    # (measured by background optical flow, with a learned command→image gain as
+    # fallback) from the aim-error velocity, so the feed-forward tracks the
+    # subject's WORLD motion instead of chasing the frame shift the camera caused.
+    # This is what keeps following stable when the subject and the camera move at
+    # the same time; off restores the legacy contaminated-velocity behaviour.
+    ego_comp_enabled: bool = True
+    # Upper bound on the learned command→image gain (normalised img-vel per unit
+    # command); clamps the online regression so a bad sample can't run away.
+    ego_comp_gain_max: float = Field(default=8.0, ge=0.0, le=64.0)
     # Quick-recall hardware preset slots, shown in the Properties → PTZ section as
     # label + snapshot tiles.  Maps a slot index (0-based, 0..5) to a
     # :class:`PtzPresetSlot` (label + thumbnail); an absent slot is "empty" (no

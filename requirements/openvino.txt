@@ -4,8 +4,8 @@
 # faster than the default CPU EP, and it drives Intel integrated/Arc GPUs.
 #
 # Install after base (only one onnxruntime wheel can be installed at a time):
-#   pip uninstall onnxruntime onnxruntime-gpu onnxruntime-directml -y
-#   pip install -r requirements/base.txt -r requirements/openvino.txt
+#   pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml onnxruntime-openvino
+#   pip install -r requirements/openvino.txt
 #
 # Provides: OpenVINO EP (device_type=AUTO, FP16) -> CPU fallback.
 

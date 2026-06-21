@@ -1,8 +1,8 @@
 # AutoPTZ — NVIDIA GPU extras (Windows x64 / Linux x64)
 #
 # Install after base:
-#   pip uninstall onnxruntime -y
-#   pip install -r requirements/base.txt -r requirements/gpu-nvidia.txt
+#   pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml onnxruntime-openvino
+#   pip install -r requirements/gpu-nvidia.txt
 #
 # Provides: TensorRT EP (best) → CUDA EP → CPU fallback.
 # TensorRT EP requires TensorRT 10.x installed separately from NVIDIA.

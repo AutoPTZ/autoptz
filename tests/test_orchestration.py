@@ -35,17 +35,9 @@ def qapp():
 
 def _cleanup_shm(name: str) -> None:
     """Unlink a possibly-leaked shm segment (and its ``__idx``) before a test."""
-    from multiprocessing.shared_memory import SharedMemory
+    from autoptz.engine.runtime.shm import unlink_shared_memory_pair
 
-    for n in (name, f"{name}__idx"):
-        try:
-            s = SharedMemory(name=n, create=False)
-            s.close()
-            s.unlink()
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
+    unlink_shared_memory_pair(name)
 
 
 def _camera_config(camera_id: str = "cam-1234abcd5678", name: str = "Cam"):
@@ -558,17 +550,28 @@ class TestCameraWorker:
     def test_reclaims_leaked_shm_segment(self, qapp) -> None:
         """A stale segment from a crashed run is reclaimed, not fatal."""
         import uuid
+        from multiprocessing import resource_tracker
         from multiprocessing.shared_memory import SharedMemory
 
         from autoptz.engine.camera_worker import _PREVIEW_H, _PREVIEW_W, CameraWorker
-        from autoptz.engine.runtime.shm import ShmReader
+        from autoptz.engine.runtime.shm import ShmReader, frame_region_size
 
         cid = uuid.uuid4().hex[:12]
         shm_name = f"cam_{cid[:8]}_preview"
         _cleanup_shm(shm_name)
 
-        # Simulate a leaked main segment from a previous crashed process.
-        leaked = SharedMemory(name=shm_name, create=True, size=64)
+        # Simulate a leaked main segment from a previous crashed process.  Use
+        # the real preview region size; tiny placeholders can corrupt native
+        # mmap cleanup on Linux when the worker replaces the region.
+        leaked = SharedMemory(
+            name=shm_name,
+            create=True,
+            size=frame_region_size(_PREVIEW_H, _PREVIEW_W),
+        )
+        try:
+            resource_tracker.unregister(leaked._name, "shared_memory")  # noqa: SLF001
+        except Exception:
+            pass
         leaked.close()  # leave it linked (orphaned)
 
         worker = CameraWorker(
@@ -585,12 +588,14 @@ class TestCameraWorker:
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:
                 try:
-                    reader = ShmReader(shm_name, _PREVIEW_H, _PREVIEW_W)
+                    candidate = ShmReader(shm_name, _PREVIEW_H, _PREVIEW_W)
                 except Exception:
                     time.sleep(0.05)
                     continue
-                if reader.latest() is not None:
+                if candidate.latest() is not None:
+                    reader = candidate
                     break
+                candidate.close()
                 time.sleep(0.05)
             assert reader is not None, "worker did not reclaim leaked segment"
             reader.close()

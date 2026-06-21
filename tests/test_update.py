@@ -1,9 +1,10 @@
-"""Tests for the notify-only update checker (network mocked)."""
+"""Tests for update checking and OS-specific asset download (network mocked)."""
 
 from __future__ import annotations
 
 import autoptz.update.checker as checker
 from autoptz.update.checker import UpdateInfo, check_for_update
+from autoptz.update.installer import download_update
 
 
 def _release(tag: str, *, prerelease: bool = False, assets: list[str] | None = None) -> dict:
@@ -93,3 +94,42 @@ def test_asset_url_for_platform(monkeypatch) -> None:
     url = info.asset_url_for_platform()
     # Whatever this OS is, it should resolve to one of the provided assets.
     assert url in {"https://example/dmg", "https://example/exe", "https://example/appimage"}
+    asset = info.asset_for_platform()
+    assert asset is not None
+    assert asset[1] == url
+
+
+def test_download_update_writes_platform_asset(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(checker.sys, "platform", "linux")
+    info = UpdateInfo(
+        version="2.1.0",
+        tag="v2.1.0",
+        name="x",
+        body="",
+        html_url="https://example/rel",
+        is_prerelease=False,
+        assets=(("AutoPTZ-2.1.0-linux-x86_64.AppImage", "https://example/appimage"),),
+    )
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _n: int) -> bytes:
+            if getattr(self, "_done", False):
+                return b""
+            self._done = True
+            return b"appimage-bytes"
+
+    def _open(_request, timeout: float):
+        assert timeout > 0
+        return _Response()
+
+    result = download_update(info, dest_dir=tmp_path, opener=_open)
+
+    assert result.version == "2.1.0"
+    assert result.path.name == "AutoPTZ-2.1.0-linux-x86_64.AppImage"
+    assert result.path.read_bytes() == b"appimage-bytes"

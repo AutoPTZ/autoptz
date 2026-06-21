@@ -59,6 +59,15 @@ def _vec(seed: int, dim: int = 512) -> np.ndarray:
     return normalize(rng.standard_normal(dim).astype(np.float32))
 
 
+def _vec_with_cosine(base: np.ndarray, score: float, seed: int = 999) -> np.ndarray:
+    """Return a unit vector with an approximate cosine ``score`` to ``base``."""
+    rng = np.random.default_rng(seed)
+    b = normalize(base)
+    noise = normalize(rng.standard_normal(b.shape[0]).astype(np.float32))
+    noise = normalize(noise - float(np.dot(noise, b)) * b)
+    return normalize(score * b + np.sqrt(max(0.0, 1.0 - score * score)) * noise)
+
+
 def _make_store(tmp_path: Path):
     from autoptz.config.store import ConfigStore
 
@@ -689,6 +698,23 @@ class TestWorkerAutoHarvest:
         w._maybe_identify(_gray(2), [track], now=200.0)
         assert w._track_identity.get(7) is not None
         assert w._track_identity[7][0] == ident.id
+
+    def test_weak_match_does_not_pollute_identity_templates(self):
+        service, _ = _make_service()
+        emb = _vec(614)
+        weak = _vec_with_cosine(emb, 0.50)
+        ident = service.enroll("Alice", emb)
+        before = len(service.get(ident.id).embeddings)
+        app = _FakeApp([_FakeFace((280, 180, 380, 320), weak)])
+        rec = FaceRecognizer(_app=app, match_threshold=0.35)
+        w = self._worker(service, rec, [])
+        track = _StubTrack(7, (250, 150, 400, 460))
+
+        w._maybe_identify(_gray(214), [track], now=214.0)
+
+        assert w._track_identity == {}
+        assert len(service.get(ident.id).embeddings) == before
+        assert service.unlabeled_identities() == []
 
     def test_face_overlay_expires_and_clears_when_track_disappears(self):
         service, _ = _make_service()

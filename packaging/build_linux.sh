@@ -32,13 +32,16 @@ if [[ ! -x "${PY}" ]]; then
 fi
 
 # ── 2. dependencies ─────────────────────────────────────────────────────────
-# CPU onnxruntime from base by default. For Intel CPU/iGPU or NVIDIA, install
-# requirements/openvino.txt or requirements/gpu-nvidia.txt in its place.
+# Portable CPU build by default. Set ACCELERATOR=nvidia or ACCELERATOR=openvino
+# for a hardware-specific local build.
 if [[ "${SKIP_INSTALL:-0}" != "1" ]]; then
     echo "==> Installing dependencies"
-    "${PY}" -m pip install --upgrade pip
-    "${PY}" -m pip install -r requirements/base.txt -r requirements/packaging.txt
-    "${PY}" -m pip install -e .
+    ACCELERATOR="${ACCELERATOR:-cpu}"
+    "${PY}" tools/install.py \
+        --upgrade-pip \
+        --packaging \
+        --editable \
+        --accelerator "${ACCELERATOR}"
 else
     echo "==> SKIP_INSTALL=1 — using existing venv as-is"
 fi
