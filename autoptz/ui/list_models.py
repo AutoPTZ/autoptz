@@ -103,7 +103,7 @@ class CameraRecord:
     def tracks_as_list(self) -> list[dict[str, Any]]:
         if not self.telemetry:
             return []
-        # Detector produces pixel-space coords; QML overlays expect normalized 0–1.
+        # Detector produces pixel-space coords; the UI overlays expect normalized 0–1.
         w = max(1.0, float(self.telemetry.width or 1))
         h = max(1.0, float(self.telemetry.height or 1))
         result = []
@@ -216,7 +216,7 @@ class CameraRecord:
 
 
 class CameraListModel(QAbstractListModel):
-    """Ordered list of CameraRecords exposed to QML."""
+    """Ordered list of CameraRecords exposed to the UI."""
 
     CameraIdRole = Qt.ItemDataRole.UserRole + 1
     DisplayNameRole = Qt.ItemDataRole.UserRole + 2
@@ -454,7 +454,7 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
 class IdentityListModel(QAbstractListModel):
     """Flat list of IdentityRecords for the People view / IdentityManager.
 
-    FROZEN roles (QML binds to these exact names):
+    FROZEN roles (the UI binds to these exact names):
       ``identityId`` (str), ``identityName`` (str),
       ``thumbnail`` (str — a ``data:image/png;base64,…`` URI or ``""``),
       ``enabled`` (bool), ``labeled`` (bool; false = auto-harvested/unlabeled).

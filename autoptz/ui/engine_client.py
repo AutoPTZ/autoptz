@@ -1,15 +1,15 @@
-"""EngineClient: connects the QML UI to the Engine over typed command/telemetry channels.
+"""EngineClient: the typed bridge between the Qt Widgets UI and the engine.
 
-Phase 8 additions
------------------
-- ConfigStore integration: cameras/layouts/identities persist across restarts.
-- updateCameraConfig   — debounced write + UpdateCameraConfigCmd to engine.
-- ptzSavePreset / deletePreset — preset CRUD with model + store sync.
+It owns the command/telemetry channels and the Qt models the UI binds to:
+
+- ConfigStore integration — cameras/layouts/identities persist across restarts.
+- updateCameraConfig — debounced write + UpdateCameraConfigCmd to the engine.
+- ptzSavePreset / deletePreset — preset CRUD synced to model + store.
 - saveCurrentLayout / loadLayout / deleteLayout — named layout round-trip.
 - enrollIdentity / deleteIdentity / renameIdentity — identity management.
-- getCameraConfig      — returns CameraConfig as a QVariant dict for QML.
-- IdentityListModel / LayoutListModel — new list models for QML.
-- getTheme / setTheme  — persist theme preference via ConfigStore.
+- getCameraConfig — returns a CameraConfig dict for the UI.
+- the camera/identity/layout list models (see ``list_models.py``).
+- getTheme / setTheme — persist theme preference via ConfigStore.
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ from autoptz.ui.list_models import (  # noqa: E402
 class EngineClient(QObject):
     """Typed wrapper over the Engine command/telemetry contract.
 
-    QML usage::
+    Usage::
 
         engineClient.addCamera("rtsp://...", "Camera 1")
         engineClient.enableTracking(cameraId, true)
@@ -129,7 +129,7 @@ class EngineClient(QObject):
         engineClient.loadLayout(layoutId)
     """
 
-    # ── signals → QML ────────────────────────────────────────────────────────
+    # ── signals → UI  ────────────────────────────────────────────────────────
     cameraAdded = Signal(str)  # camera_id
     cameraRemoved = Signal(str)  # camera_id
     telemetryUpdated = Signal(str)  # camera_id
@@ -146,7 +146,7 @@ class EngineClient(QObject):
     trackingChanged = Signal(str)  # camera_id — tracking on/off changed
     errorOccurred = Signal(str)  # human-readable message
 
-    # ── engine lifecycle (FROZEN — other agents bind to these exact names) ─────
+    # ── engine lifecycle (stable names — the UI binds to these exactly) ────────
     engineStateChanged = Signal()  # engineRunning / engineEp changed
 
     # ── frame-source bridge (GUI thread connects these to ShmFrameSource) ──
@@ -497,7 +497,7 @@ class EngineClient(QObject):
         self.stopEngine()
         self.startEngine()
 
-    # ── app settings (thin wrappers over ConfigStore — used by QML to persist
+    # ── app settings (thin wrappers over ConfigStore — used by the UI to persist
     #    window geometry, columns, theme, selection, engine on/off, …) ─────────
 
     @Slot(str, "QVariant", result="QVariant")
@@ -678,7 +678,7 @@ class EngineClient(QObject):
 
     @Slot(str, result="QVariant")
     def getCameraConfig(self, camera_id: str) -> dict[str, Any]:
-        """Return the current CameraConfig as a plain dict for QML."""
+        """Return the current CameraConfig as a plain dict for the UI."""
         rec = self._model.get_record(camera_id)
         if rec and rec.camera_config:
             return json.loads(rec.camera_config.model_dump_json())
@@ -700,7 +700,7 @@ class EngineClient(QObject):
 
     @Slot(str, str)
     def updateCameraConfig(self, camera_id: str, config_json: str) -> None:
-        """Apply a full CameraConfig update from QML (debounced write to store)."""
+        """Apply a full CameraConfig update from the UI (debounced write to store)."""
         from autoptz.config.models import CameraConfig
 
         rec = self._model.get_record(camera_id)
@@ -1641,7 +1641,7 @@ class EngineClient(QObject):
                 unique_id = str(dev.get("unique_id") or "")
                 source_label = str(dev.get("source_label") or "USB")
                 # Coerce to a plain string: enumeration may hand back any object
-                # if a backend misbehaves; QML must only ever see a str name.
+                # if a backend misbehaves; the UI must only ever see a str name.
                 name = str(dev.get("name") or f"Camera {index}")
                 if dev.get("is_continuity"):
                     name = f"{name} (Continuity Camera)"
@@ -1818,7 +1818,7 @@ class EngineClient(QObject):
     def copyLogsToClipboard(self) -> str:
         """Copy the full buffered log to the clipboard; return the copied text.
 
-        Returns the text regardless of clipboard availability so QML can also
+        Returns the text regardless of clipboard availability so the UI can also
         use the return value (and tests can assert on it without a GUI app).
         """
         text = self._dump_logs()
@@ -1841,7 +1841,7 @@ class EngineClient(QObject):
     def exportLogs(self, path: str) -> bool:
         """Write the full buffered log to *path*.  Returns True on success.
 
-        A ``file://`` URL (as QML FileDialog yields) is accepted and normalised.
+        A ``file://`` URL (as a file dialog yields) is accepted and normalised.
         """
         text = self._dump_logs()
         target = path

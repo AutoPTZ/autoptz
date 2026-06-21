@@ -1,8 +1,8 @@
-"""Phase 8 tests: config drawer wiring, identity/layout CRUD, theme, debounce.
+"""EngineClient + ConfigStore CRUD tests: identity/layout CRUD, theme, debounce.
 
-These tests run headless (no QML engine) and verify the Python side of
-Phase 8 — EngineClient slots, model CRUD, ConfigStore integration,
-and new command types — without requiring a live Qt application.
+These tests run headless and verify the Python side — EngineClient slots,
+model CRUD, ConfigStore integration, and command types — without a live
+Qt application.
 """
 
 from __future__ import annotations

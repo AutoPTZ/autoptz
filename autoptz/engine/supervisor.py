@@ -1,7 +1,5 @@
 """Supervisor: owns CameraWorkers, routes commands, fans telemetry back to the UI.
 
-P0 implementation
------------------
 The :class:`Supervisor` is the engine's top-level orchestrator.  It:
 
 - Holds the :class:`EngineClient` (the UI-facing command/telemetry hub) and the
@@ -18,10 +16,11 @@ The :class:`Supervisor` is the engine's top-level orchestrator.  It:
 
 Threading
 ---------
-Workers run on threads (one per camera) for P0.  **Future hardening:**
-process-per-camera (``multiprocessing`` with shm transport) for fault isolation
-and to sidestep the GIL under many cameras — the worker/telemetry contract here
-is already process-safe (shm + msgpack), so this is a localized change.
+Each camera runs on its own threads (capture + inference) in this process.
+**Future hardening:** process-per-camera (``multiprocessing`` with shm transport)
+for fault isolation and to sidestep the GIL under many cameras — the
+worker/telemetry contract is already process-safe (shm + msgpack), so that is a
+localized change.
 
 The command pump can either be driven externally (``tick()`` from a GUI-thread
 ``QTimer`` — the default the UI uses) or by an internal daemon thread
@@ -623,11 +622,12 @@ class Supervisor:
         return self._inference_pool
 
     def _apply_hardware_env(self, camera_count: int) -> None:
-        """Publish global hardware prefs into the environment before spawning.
+        """Publish global hardware prefs into the environment before workers start.
 
-        Camera workers are spawned processes that inherit this environment, so
-        :func:`autoptz.engine.runtime.inference.prefs_from_env` picks these up for
-        every ORT session without threading prefs through the command schema.
+        :func:`autoptz.engine.runtime.inference.prefs_from_env` reads these for
+        every ORT session, so prefs reach the per-camera worker threads (and a
+        future process-per-camera build, which would inherit the env) without
+        threading them through the command schema.
         """
         import os
 

@@ -1,6 +1,6 @@
 """CameraTile — a single live camera preview with tracking HUD (QPainter).
 
-Replaces the QML ``CameraTile``.  The widget paints the latest shared-memory
+The widget paints the latest shared-memory
 frame in ``paintEvent`` (Qt double-buffers widget painting, so there is no
 flicker and no crossfade needed) and draws the broadcast HUD on top: a name
 pill, an fps/health chip, detection boxes, the target-lock reticle, a tracking

@@ -1,4 +1,4 @@
-"""Phase 7: UI engine-client and model tests.
+"""UI engine-client and model tests.
 
 All tests use QCoreApplication (no display needed) so they run cleanly in CI.
 Widget smoke tests run in an offscreen subprocess so they do not conflict with

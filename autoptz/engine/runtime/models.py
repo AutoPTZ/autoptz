@@ -26,7 +26,7 @@ Design
 The ONNX we prefer is the **NMS-free** ``[1, N, 6]`` layout that
 :mod:`autoptz.engine.pipeline.detect` prefers (``_parse_raw_output`` handles
 both NMS-free and pre-NMS, but NMS-free avoids the ultralytics batched-NMS
-export bug; see ``detect.py`` and the v2 plan §"Recommended libraries").
+export bug; see ``detect.py``).
 """
 
 from __future__ import annotations

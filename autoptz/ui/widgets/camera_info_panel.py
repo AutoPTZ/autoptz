@@ -1,6 +1,6 @@
 """CameraInfoPanel — live per-camera stats, reactive off telemetry.
 
-The old QML panel froze because it rendered a computed-array snapshot.  This one
+An earlier reactive panel froze because it rendered a computed-array snapshot.  This one
 holds named value labels and updates them imperatively whenever
 ``telemetryUpdated`` fires for the shown camera (plus a slow fallback timer and
 on ``configChanged``/``engineStateChanged``), so it actually shows live data.

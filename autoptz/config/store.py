@@ -2,7 +2,7 @@
 
 Design decisions
 ----------------
-- One SQLite file per user at the platform config dir (§6.3).
+- One SQLite file per user at the platform config dir.
 - ``CameraConfig`` is stored as a JSON blob so adding a new sub-field with a
   default never requires a SQL column change.
 - ``ptz_presets``, ``identities``, ``identity_embeddings``, and ``layouts``

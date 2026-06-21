@@ -1,6 +1,6 @@
 """Shared-memory frame source for the Qt Widgets camera tiles.
 
-Replaces the QML ``ShmFrameProvider`` (a ``QQuickImageProvider``).  Camera-tile
+Feeds decoded preview frames to the camera tiles.  Camera-tile
 widgets pull the latest frame for their camera in their repaint timer and paint
 it with ``QPainter`` — no image cache, no URL cache-buster, no crossfade.
 

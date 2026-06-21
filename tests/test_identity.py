@@ -1,4 +1,4 @@
-"""Phase 8 tests: face/ReID identity engine + EngineClient identity API.
+"""Face/ReID identity engine + EngineClient identity API tests.
 
 All tests are headless and mock the heavy ML stack (insightface, boxmot/OSNet)
 with fakes — no model download, no network, no GPU.  They cover:

@@ -1,4 +1,4 @@
-"""P0 engine-orchestration tests: CameraWorker, Supervisor, EngineClient lifecycle.
+"""Engine-orchestration tests: CameraWorker, Supervisor, EngineClient lifecycle.
 
 All tests are headless (no display): they use ``QCoreApplication`` for the
 EngineClient's Qt machinery and inject fakes for frame sources / workers so no

@@ -1,8 +1,9 @@
 # Architecture
 
-AutoPTZ is split into a **UI process** (Qt Widgets) and one **camera worker** per
-camera. The UI never blocks on inference; workers never touch Qt. They talk over
-typed messages + shared-memory frames.
+AutoPTZ runs the Qt Widgets UI and a per-camera worker (two threads each:
+capture + inference) in one process today; the UI never blocks on inference and
+workers never touch Qt. They talk over typed messages + shared-memory frames, so
+moving workers to their own processes later is a localized change.
 
 ```
 ┌────────────────────────── UI process (PySide6, GUI thread) ──────────────────────────┐
@@ -13,10 +14,10 @@ typed messages + shared-memory frames.
 │        ▲ telemetry / preview                              │ commands                    │
 └────────┼─────────────────────────────────────────────────┼─────────────────────────────┘
          │                                                  ▼
-┌────────┴───────────────────── Supervisor (spawns + supervises workers) ────────────────┐
-│  start() → applies hardware prefs to env → spawns one CameraWorker per camera           │
+┌────────┴───────────────────── Supervisor (owns + supervises workers) ──────────────────┐
+│  start() → applies hardware prefs to env → starts one CameraWorker per camera           │
 └────────┬───────────────────────────────────────────────────────────────────────────────┘
-         ▼  (process per camera, spawn)
+         ▼  (two threads per camera, in-process)
 ┌────────────────────────────── CameraWorker ─────────────────────────────────────────────┐
 │  capture thread:  FrameSource.read() → SHM preview → hand newest frame to inference       │
 │  inference thread: detect → track → reID recover → pose → aim → PTZ controller → backend  │
@@ -49,7 +50,7 @@ BGR frame
 | `autoptz/engine/identity/` | Identity gallery service (faces/ReID embeddings). |
 | `autoptz/engine/worker/` | Worker support modules extracted from `camera_worker`: `frame_source.py` (FrameSource + fps pacing + source construction) and `stacks.py` (ML capability probes + detector/face stack builders). |
 | `autoptz/engine/camera_worker.py` | The `CameraWorker` itself — capture + inference threads, command handling, telemetry. |
-| `autoptz/engine/supervisor.py` | Spawns/supervises one worker per camera; publishes hardware prefs to the environment before spawn. |
+| `autoptz/engine/supervisor.py` | Starts/supervises one worker (threads) per camera; publishes hardware prefs to the environment before start. |
 | `autoptz/ui/` | `app.py` (entry), `engine_client.py` (Qt bridge) + `list_models.py` (camera/identity/layout models), `branding.py`, `update_manager.py`, `theme.py`, `frames.py`, `log_bridge.py`, `widgets/` (main window, camera wall/tiles, panels, dialogs; pure helpers split into `tile_helpers.py` / `properties_helpers.py`). |
 | `autoptz/update/` | `checker.py` — notify-only GitHub Releases version check. |
 
@@ -61,6 +62,7 @@ BGR frame
   live-preview-only and logs an actionable one-time message.
 - **Hardware prefs reach workers via environment** (`AUTOPTZ_FORCE_EP`,
   `AUTOPTZ_PRECISION`, `AUTOPTZ_ORT_INTRA_THREADS`), set by the supervisor and
-  read by `inference.prefs_from_env()` — spawned workers inherit them.
+  read by `inference.prefs_from_env()` — worker threads read them in-process (a
+  future process-per-camera build would inherit them).
 - **EP selection is centralized** in `engine/runtime/inference.py`; see
   [Performance](performance.md).

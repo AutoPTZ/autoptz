@@ -1,4 +1,4 @@
-"""Phase 5: PTZ backends + closed-loop controller tests.
+"""PTZ backends + closed-loop controller tests.
 
 Uses a MockBackend throughout; no real hardware needed.
 """

@@ -1,4 +1,4 @@
-"""In-app logging bridge: stdlib ``logging`` → Qt model for the QML log viewer.
+"""In-app logging bridge: stdlib ``logging`` → Qt model for the in-app log viewer.
 
 Two pieces:
 
@@ -10,17 +10,15 @@ Two pieces:
 
 ``LogListModel``
     A :class:`~PySide6.QtCore.QAbstractListModel` ring buffer (default 2000
-    rows) exposed to QML with roles ``level``, ``logger``, ``message``, ``ts``.
+    rows) exposed to the UI with roles ``level``, ``logger``, ``message``, ``ts``.
 
 Wiring (done in ``app.py``)::
 
     log_model = LogListModel()
     handler = QtLogHandler(log_model)
     logging.getLogger().addHandler(handler)
-    ctx.setContextProperty("logModel", log_model)
 
-The QML ``LogConsole`` (built by another agent) binds to the ``logModel``
-context property and reads the roles above.
+The Logs panel binds to this model and reads the roles above.
 """
 
 from __future__ import annotations
@@ -47,7 +45,7 @@ DEFAULT_CAPACITY = 5000
 
 
 class LogListModel(QAbstractListModel):
-    """Ring-buffered list of log records exposed to QML.
+    """Ring-buffered list of log records exposed to the UI.
 
     Roles: ``level`` (str), ``logger`` (str), ``message`` (str), ``ts`` (str —
     ISO-ish ``HH:MM:SS.mmm`` formatted time).

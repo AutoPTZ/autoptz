@@ -1,4 +1,4 @@
-"""Phase 6: PTZ backend factory + worker auto/manual control-loop tests.
+"""PTZ backend factory + worker auto/manual control-loop tests.
 
 Everything is mocked — no real serial ports, sockets, NDI runtime, or ONVIF
 devices are touched.  Covers:

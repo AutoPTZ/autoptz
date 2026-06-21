@@ -367,7 +367,7 @@ class Tracker:
 
     Args:
         tracker_type:  ``"botsort"`` (default), ``"deepocsort"``, ``"bytetrack"``.
-        reid_weights:  Path to an OSNet ONNX / PT weight file (Phase 4 adds this).
+        reid_weights:  Path to an OSNet ONNX / PT weight file (optional).
         min_hits:      Consecutive detections before TENTATIVE → CONFIRMED.
         coast_window:  Seconds to keep a lost track before marking REMOVED.
         device:        Torch/ORT device string (``"cpu"``, ``"cuda:0"``, …).

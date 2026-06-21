@@ -726,7 +726,7 @@ class MainWindow(QMainWindow):
     def _on_error(self, message: str) -> None:
         self.statusBar().showMessage(message, 6000)
 
-    # ── geometry persistence (dock-layout persistence lands in Phase 7) ────────
+    # ── geometry persistence ────────────────────────────────────────────────
 
     def _ensure_desktop_window_chrome(self) -> None:
         """Keep the main shell as a normal native desktop window."""

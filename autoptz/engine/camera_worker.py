@@ -1,7 +1,5 @@
 """Per-camera pipeline worker: ingest → (detect → track) → telemetry + live preview.
 
-P0 implementation
------------------
 A :class:`CameraWorker` runs one camera on a background thread.  Each tick it:
 
 1. Reads one BGR frame from a :class:`FrameSource` (USB / RTSP / NDI, or a
@@ -20,8 +18,8 @@ Per-camera commands are honoured between ticks:
 ``ptzNudge(pan, tilt, zoom)`` (drives the PTZ controller/backend if one is
 configured; otherwise a safe no-op), and ``updateConfig(CameraConfig)``.
 
-Threading model is per-thread for P0; process-per-camera is the future
-hardening step (see ``supervisor.py``).
+Threading model is per-thread today (capture + inference); process-per-camera is
+the future hardening step (see ``supervisor.py``).
 """
 
 from __future__ import annotations
@@ -73,7 +71,7 @@ _DEFAULT_TELEMETRY_HZ = 10.0
 _MANUAL_OVERRIDE_WINDOW_S = 1.5
 
 # Face stack run-rate: detect/embed faces a few times a second on the target
-# region (per docs/03 §3.8), not every frame.  Period in seconds.
+# region, not every frame.  Period in seconds.
 _FACE_INTERVAL_S = 0.25
 _FACE_TTL_S = 0.12
 _STAGE_WINDOW = 60
