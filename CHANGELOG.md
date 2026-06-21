@@ -11,8 +11,8 @@ multi-process, multi-camera real-time tracking engine.
 
 ### Added
 
-- **Multi-camera engine** — one worker process per camera (capture + inference
-  threads), supervised, with shared-memory preview and typed command/telemetry.
+- **Multi-camera engine** — one worker per camera (capture + inference threads),
+  supervised, with shared-memory preview and typed command/telemetry.
 - **Vision pipeline** — YOLO11 person detection (ONNX Runtime), BoT-SORT/ByteTrack
   tracking with an IoU fallback, OSNet appearance ReID re-acquisition, YOLO11
   pose, and face-recognition identity binding.
@@ -23,7 +23,8 @@ multi-process, multi-camera real-time tracking engine.
   per-EP tuning: CoreML MLProgram (Apple ANE/GPU incl. AMD on Intel Macs),
   TensorRT FP16 + persistent engine cache, CUDA, DirectML, OpenVINO, CPU; full
   graph optimization and CPU-oversubscription-aware thread capping. Optional
-  `gpu-nvidia` / `gpu-directml` / `openvino` requirement sets.
+  `gpu-nvidia` / `gpu-directml` / `openvino` requirement sets. Opt-in INT8
+  detector quantization and drop-in RT-DETR support.
 - **In-app updates** — notify-only GitHub Releases check on startup and via
   **Help → Check for Updates…**, with skip-version + prerelease support.
 - **Installers** — macOS `.dmg`, Windows Inno Setup `.exe`, Linux AppImage, built
@@ -47,7 +48,9 @@ multi-process, multi-camera real-time tracking engine.
 
 - Repo-wide `ruff` lint + format; CI on macOS/Windows/Linux with a strict mypy
   gate on the typed core; pre-commit hooks.
-- `camera_worker` decomposition begun: frame-source and detector/face-stack
-  concerns extracted into `engine/worker/`.
+- The four largest modules split into focused submodules:
+  `camera_worker` → `engine/worker/{frame_source,stacks}`, `engine_client` →
+  `ui/list_models`, `camera_tile` → `ui/widgets/tile_helpers`, `properties_panel`
+  → `ui/widgets/properties_helpers`.
 
 [2.0.0]: https://github.com/AutoPTZ/autoptz/releases/tag/v2.0.0
