@@ -9,6 +9,6 @@
 
 PySide6>=6.8.3
 pydantic>=2.11.3
-msgpack>=1.1.0
+msgpack>=1.2.1
 pyserial>=3.5
 numpy>=2.2.0
