@@ -47,8 +47,14 @@ from PyInstaller.utils.hooks import (
 )
 
 # ── paths ──────────────────────────────────────────────────────────────────────
-# PyInstaller execs the spec with SPECPATH set to the spec's directory.
-SPEC_DIR = Path(globals().get("SPECPATH", os.path.dirname(os.path.abspath(__file__))))
+# PyInstaller execs the spec with SPECPATH set to the spec's directory and WITHOUT
+# defining __file__, so resolve from SPECPATH and only fall back to __file__ when
+# run directly (the fallback must stay lazy — referencing __file__ eagerly raises
+# NameError under PyInstaller).
+if "SPECPATH" in globals():
+    SPEC_DIR = Path(SPECPATH)  # noqa: F821  (injected by PyInstaller)
+else:
+    SPEC_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SPEC_DIR.parent
 PKG_DIR = PROJECT_ROOT / "autoptz"
 

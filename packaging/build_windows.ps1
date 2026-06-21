@@ -23,7 +23,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Split-Path -Parent $ScriptDir
 Set-Location $Root
 
-$Venv = if ($env:VENV) { $env:VENV } else { ".venv" }
+if ($env:VENV) { $Venv = $env:VENV } else { $Venv = ".venv" }
 $Py = Join-Path $Venv "Scripts\python.exe"
 
 Write-Host "==> AutoPTZ Windows build"
@@ -41,7 +41,7 @@ if (-not (Test-Path $Py)) {
 # onnxruntime from base.txt (DirectML accelerates on any DX12 GPU).
 if (-not $SkipInstall) {
     if (-not $Accelerator) {
-        $Accelerator = if ($env:ACCELERATOR) { $env:ACCELERATOR } else { "directml" }
+        if ($env:ACCELERATOR) { $Accelerator = $env:ACCELERATOR } else { $Accelerator = "directml" }
     }
     Write-Host "==> Installing dependencies (accelerator=$Accelerator)"
     & $Py tools\install.py --upgrade-pip --packaging --editable --accelerator $Accelerator
