@@ -50,7 +50,7 @@ BGR frame
 | `autoptz/engine/worker/` | Worker support modules extracted from `camera_worker`: `frame_source.py` (FrameSource + fps pacing + source construction) and `stacks.py` (ML capability probes + detector/face stack builders). |
 | `autoptz/engine/camera_worker.py` | The `CameraWorker` itself — capture + inference threads, command handling, telemetry. |
 | `autoptz/engine/supervisor.py` | Spawns/supervises one worker per camera; publishes hardware prefs to the environment before spawn. |
-| `autoptz/ui/` | `app.py` (entry), `engine_client.py` (Qt bridge), `branding.py`, `update_manager.py`, `theme.py`, `frames.py`, `log_bridge.py`, `widgets/` (main window, camera wall/tiles, panels, dialogs). |
+| `autoptz/ui/` | `app.py` (entry), `engine_client.py` (Qt bridge) + `list_models.py` (camera/identity/layout models), `branding.py`, `update_manager.py`, `theme.py`, `frames.py`, `log_bridge.py`, `widgets/` (main window, camera wall/tiles, panels, dialogs; pure helpers split into `tile_helpers.py` / `properties_helpers.py`). |
 | `autoptz/update/` | `checker.py` — notify-only GitHub Releases version check. |
 
 ## Key conventions
