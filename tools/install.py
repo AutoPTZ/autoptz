@@ -82,7 +82,9 @@ class InstallPlan:
 
 
 def _requirement_path(name: str) -> str:
-    return str(Path("requirements") / f"{name}.txt")
+    # Pip accepts forward slashes on every supported OS, and keeping this stable
+    # makes the install plan easy to test and compare on Windows.
+    return f"requirements/{name}.txt"
 
 
 def _requirement_step(name: str) -> PipStep:

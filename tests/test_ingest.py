@@ -124,10 +124,13 @@ class TestUSBAdapterReconnect:
     def test_stall_triggers_reconnect(self) -> None:
         """After stall_timeout without a frame, _open() should be called again."""
         open_calls: list[float] = []
+        reopened = threading.Event()
         frame_count = 0
 
         def fake_open(self: USBAdapter) -> bool:
             open_calls.append(time.monotonic())
+            if len(open_calls) >= 2:
+                reopened.set()
             # Succeed every time
             cap = MagicMock()
             cap.isOpened.return_value = True
@@ -154,12 +157,12 @@ class TestUSBAdapterReconnect:
             patch.object(USBAdapter, "_close", lambda self: None),
         ):
             adapter.start()
-            # Give enough time for stall detection + first reconnect
-            time.sleep(1.0)
+            # Wait for the capture thread to observe the stall and reconnect.
+            reopened.wait(timeout=3.0)
             adapter.stop()
 
         # Should have opened at least twice (initial + after stall)
-        assert len(open_calls) >= 2, f"Expected ≥ 2 open calls, got {open_calls}"
+        assert len(open_calls) >= 2, f"Expected >= 2 open calls, got {open_calls}"
 
     def test_status_transitions(self) -> None:
         """Status goes RUNNING after a successful open."""
