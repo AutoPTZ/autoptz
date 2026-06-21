@@ -3,7 +3,7 @@
 #   python tools/install.py --dev --editable
 
 # ── testing ───────────────────────────────────────────────────────────────────
-pytest==8.3.5
+pytest==9.0.3
 pytest-timeout==2.3.1
 onnx==1.17.0            # create minimal ONNX models in tests
 
