@@ -64,6 +64,7 @@ See [Performance](performance.md) for how these interact with your accelerator.
 | --- | --- |
 | `AUTOPTZ_MODEL_PATH` | Use this detector ONNX verbatim (skip download/export). |
 | `AUTOPTZ_MODEL_URL` / `AUTOPTZ_MODEL_URL_<STEM>` | Mirror to fetch a prebuilt ONNX (air-gapped/offline). |
+| `AUTOPTZ_NO_MODEL_EXPORT` | Disable Ultralytics/Torch ONNX export fallback; useful for CI and locked-down installs. |
 | `AUTOPTZ_POSE_MODEL_PATH` | Use this pose ONNX verbatim. |
 | `AUTOPTZ_FORCE_EP` / `AUTOPTZ_PRECISION` / `AUTOPTZ_ORT_INTRA_THREADS` | Hardware prefs (set automatically from config by the supervisor). |
 | `AUTOPTZ_UPDATE_REPO` | Override the GitHub repo the updater checks. |

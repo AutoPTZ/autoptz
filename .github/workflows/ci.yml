@@ -16,6 +16,9 @@ env:
   # Windows runners can default to a legacy console codepage; selftest prints
   # Unicode status marks, so force UTF-8 for every Python subprocess.
   PYTHONUTF8: "1"
+  # Unit tests must not perform real Ultralytics/Torch ONNX exports. Those
+  # native exporters can leave CI runners unstable after pytest has passed.
+  AUTOPTZ_NO_MODEL_EXPORT: "1"
 
 jobs:
   test:

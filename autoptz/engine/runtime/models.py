@@ -81,6 +81,13 @@ _MIN_ONNX_BYTES = 1 << 18  # 256 KiB
 
 # Export knobs that match what detect.py expects (see module docstring).
 _EXPORT_KWARGS = {"format": "onnx", "nms": False, "dynamic": False, "opset": 12}
+_DISABLE_EXPORT_ENV = "AUTOPTZ_NO_MODEL_EXPORT"
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _model_export_disabled() -> bool:
+    """Return True when runtime model export is explicitly disabled."""
+    return os.environ.get(_DISABLE_EXPORT_ENV, "").strip().lower() in _TRUE_ENV_VALUES
 
 
 def _models_cache_dir() -> Path:
@@ -334,6 +341,18 @@ class ModelManager:
 
         Returns the ONNX path on success, ``None`` on any failure (logged).
         """
+        if _model_export_disabled():
+            self._last_error = (
+                f"{Path(model_pt).stem}: model export disabled by "
+                f"{_DISABLE_EXPORT_ENV}; use a cached/prebuilt ONNX."
+            )
+            log.info(
+                "Skipping %s export because %s is set; cached/prebuilt models only.",
+                model_pt,
+                _DISABLE_EXPORT_ENV,
+            )
+            return None
+
         try:
             from ultralytics import YOLO  # type: ignore[attr-defined]  # noqa: PLC0415
         except Exception:  # noqa: BLE001 — ImportError or transitive import failure

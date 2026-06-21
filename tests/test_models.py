@@ -29,6 +29,7 @@ def _disable_prebuilt_by_default(monkeypatch) -> None:
     touching the network, so the existing ultralytics-export assertions hold.
     """
     monkeypatch.setenv("AUTOPTZ_MODEL_URL", "")
+    monkeypatch.delenv("AUTOPTZ_NO_MODEL_EXPORT", raising=False)
 
 
 # ── env override ──────────────────────────────────────────────────────────────
@@ -182,6 +183,28 @@ def test_missing_ultralytics_returns_none(tmp_path, monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "ultralytics", None)  # import → ImportError
     mgr = ModelManager(cache_dir=tmp_path / "cache")
     assert mgr.ensure_detector() is None
+
+
+def test_export_disabled_env_skips_ultralytics(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPTZ_MODEL_PATH", raising=False)
+    monkeypatch.setenv("AUTOPTZ_NO_MODEL_EXPORT", "1")
+    captured = _install_fake_ultralytics(monkeypatch)
+
+    mgr = ModelManager(cache_dir=tmp_path / "cache")
+    assert mgr.ensure_detector() is None
+    assert "disabled" in mgr.last_error
+    assert "export_kwargs" not in captured
+
+
+def test_export_disabled_env_applies_to_pose(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPTZ_POSE_MODEL_PATH", raising=False)
+    monkeypatch.setenv("AUTOPTZ_NO_MODEL_EXPORT", "true")
+    captured = _install_fake_ultralytics(monkeypatch)
+
+    mgr = ModelManager(cache_dir=tmp_path / "cache")
+    assert mgr.ensure_pose() is None
+    assert "disabled" in mgr.last_error
+    assert "export_kwargs" not in captured
 
 
 def test_export_does_not_change_cwd(tmp_path, monkeypatch) -> None:
