@@ -4,7 +4,7 @@ All notable changes to AutoPTZ are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/).
 
-## [2.0.0] — Unreleased
+## [2.0.0] — 2026-06-21
 
 First stable release of the v2 architecture: a native Qt Widgets app with a
 multi-process, multi-camera real-time tracking engine.
