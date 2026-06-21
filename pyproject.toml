@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoptz"
+dynamic = ["version"]
+description = "AutoPTZ — AI-driven PTZ camera tracking"
+requires-python = ">=3.12"
+readme = "README.md"
+license = {file = "LICENSE.md"}
+
+[tool.setuptools.dynamic]
+version = {attr = "autoptz.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["autoptz*", "tools*"]
+
+# ── ruff ──────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "C4"]
+ignore = [
+  "E501",   # line length enforced by formatter, not linter
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["autoptz", "tools"]
+
+# ── mypy ──────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+# Placeholder modules have no real content yet; skip them
+exclude = [
+  "autoptz/engine/supervisor\\.py",
+  "autoptz/engine/camera_worker\\.py",
+  # Phase 2+3 implemented: ingest, go2rtc, detect, track — exclude remaining stubs
+  "autoptz/engine/pipeline/(framing|identify|pose|reid)\\.py",
+  # Phase 5 implemented: all ptz/ files — no longer excluded
+  # Phase 2 implemented: ndi.py, usb.py, onvif.py — no longer excluded
+  "autoptz/engine/identity/",
+  # Phase 1 implemented: config/ no longer excluded
+  # Phase 7 implemented: ui/ no longer excluded
+  "tools/",
+]
+
+# Tests are validated by pytest; don't force full strict annotations on them.
+# Fixtures (qapp, tmp_path), parametrize, and helper defs add annotation noise
+# without catching real bugs. Their bodies are still checked for type errors.
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_decorators = false
+
+# ── pytest ─────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 60

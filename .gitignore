@@ -1,18 +1,45 @@
-/logic/image_processing/images/
-/libraries/visca/__pycache__
-/views/widgets/__pycache__
-/shared/__pycache__
-/views/homepage/__pycache__
-/logic/image_processing/__pycache__
-/logic/camera_search/__pycache__
-/facial_recognition/__pycache__
-/views/vapix.log
-/logic/image_processing/models/trainer.json
-/logic/image_processing/dialogs/__pycache__
-/vapix.log
-/logic/image_processing/models/encodings.pickle
-/libraries/face_recognition/__pycache__
-/views/functions/__pycache__
-/.idea
-/dlib/
-/logic/image_processing/models/
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+.coverage
+htmlcov/
+
+# Virtual environments — always at the project root
+.venv/
+
+# Environment / secrets
+.env
+*.env
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Model weights (never commit; fetched/exported at runtime)
+*.pt
+*.pth
+*.onnx
+*.mlpackage
+*.engine
+
+# AutoPTZ runtime artefacts
+/autoptz/models/*.onnx
+/autoptz/models/*.mlpackage
+/autoptz/models/*.engine
+*.db
+*.log
+
+# Packaging build outputs
+/packaging/build/
+/packaging/dist/

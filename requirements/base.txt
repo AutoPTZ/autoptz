@@ -1,0 +1,100 @@
+# AutoPTZ — base requirements (all platforms)
+# Install: pip install -r requirements/base.txt
+#
+# Platform extras:
+#   Windows/Linux + NVIDIA: pip install -r requirements/gpu-nvidia.txt
+#   Development:            pip install -r requirements/dev.txt
+
+# ── inference runtime ─────────────────────────────────────────────────────────
+# CPU-only onnxruntime; replaced by onnxruntime-gpu on NVIDIA systems.
+# macOS arm64 onnxruntime wheel already includes the CoreML EP.
+onnxruntime==1.20.1
+
+# ── computer vision ───────────────────────────────────────────────────────────
+numpy==2.2.6
+opencv-contrib-python==4.11.0.86
+Pillow==11.2.1
+
+# ── config & serialization ────────────────────────────────────────────────────
+pydantic==2.11.3
+msgpack==1.1.0
+
+# ── PTZ control ───────────────────────────────────────────────────────────────
+pyserial==3.5
+visca-over-ip==0.5.1
+# ONVIF PTZ (optional — ONVIFPTZBackend degrades with ImportError if absent)
+onvif-zeep==0.2.12
+
+# ── UI ─────────────────────────────────────────────────────────────
+PySide6==6.8.3
+
+# ── video ingest ────────────────────────────────────────────────────
+# PyAV: FFmpeg Python bindings for RTSP with HW decode (VideoToolbox/NVDEC/D3D11VA).
+# Optional — RTSPAdapter falls back to cv2.VideoCapture if not installed.
+av>=17.1.0
+
+# ONVIF WS-Discovery for continuous IP camera detection.
+# Optional — ONVIFDiscovery logs a warning and no-ops if not installed.
+wsdiscovery>=2.1.2
+
+# macOS native camera support. Environment markers keep these off non-macOS
+# machines while making the normal base install open cameras by stable
+# AVFoundation uniqueID instead of fragile OpenCV indices.
+pyobjc-framework-AVFoundation>=10.0; platform_system == "Darwin"
+pyobjc-framework-Quartz>=10.0; platform_system == "Darwin"
+pyobjc-framework-libdispatch>=10.0; platform_system == "Darwin"
+
+# NDI source discovery + capture. cyndilib ships self-contained wheels (the NDI
+# runtime is bundled) for macOS/Windows/Linux, so a plain install enables the
+# Cameras → NDI Sources menu. If a wheel isn't available for your platform/Python
+# and the build can't find the NDI SDK, this line can be dropped (NDI then just
+# stays unavailable — the rest of the app is unaffected).
+cyndilib>=0.1.1
+
+# ── config & persistence ──────────────────────────────────────────
+# SQLite is stdlib; no extra dep needed.
+# pydantic already listed above; models.py and store.py use only stdlib + pydantic.
+
+# ── detection + tracking ───────────────────────────────────────────
+# onnx is used to build synthetic test models, needed by boxmot, and used by
+# ModelManager's ultralytics export fallback (YOLO11 .pt → ONNX).
+onnx==1.17.0
+
+# ── model bootstrap ─────────────────────────────────────────────────
+# By default the engine acquires the YOLO11 detector ONNX **torch-free**:
+# ModelManager (engine/runtime/models.py) downloads a prebuilt YOLO11 ONNX into
+# the models cache on first run (URL overridable via AUTOPTZ_MODEL_URL; path via
+# AUTOPTZ_MODEL_PATH).  Only the standard onnxruntime (above) is required for
+# detection to work.
+#
+# Ultralytics is an OPTIONAL *fallback* used only when the prebuilt download is
+# unreachable; it exports the YOLO11 .pt → ONNX but pulls in torch (heavy).  Omit
+# it on minimal installs — detection still works via the prebuilt download, and
+# the engine degrades to live-preview-only only if BOTH paths fail.
+ultralytics>=8.3.0
+
+# BoxMOT: multi-object tracker collection (BoT-SORT, DeepOCSORT, ByteTrack).
+# Also provides the OSNet ReID backend used by engine/pipeline/reid.py for
+# body-appearance recovery after occlusion (weights auto-download on first use).
+# Optional at import time — Tracker / BodyReID degrade gracefully if absent.
+# Pin to a specific release once a stable wheel is available for all platforms.
+boxmot>=10.0.91
+
+# ── face identity ───────────────────────────────────────────────────
+# InsightFace: SCRFD face detector + ArcFace 512-d embeddings (engine/pipeline/
+# identify.py).  The "buffalo_l" model pack AUTO-DOWNLOADS to ~/.insightface/
+# models on first FaceAnalysis.prepare(); no weights are vendored here.
+# Optional/ML — FaceRecognizer logs once and disables face features if the
+# package, model, or network is unavailable (manual click-to-track still works).
+# NOTE: the InsightFace model packs carry an OSS-pack license; for commercial
+# use contact recognition-oss-pack@insightface.ai.
+insightface>=0.7.3
+
+# ── utilities ─────────────────────────────────────────────────────────────────
+imutils==0.5.4
+scipy==1.15.3
+watchdog==6.0.0
+# psutil: live system/process CPU + memory metrics for the status bar and the
+# Services panel. Optional — diagnostics.system_metrics() degrades to
+# placeholders if absent.
+psutil>=5.9

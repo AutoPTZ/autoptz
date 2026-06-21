@@ -1,65 +1,101 @@
-<p align="center">
-<img src="shared/AutoPTZLogo.png" width="150">
-</p>
-</p>
-<h1 align="center">AutoPTZ - Automating Your Production</h3>
-<br/>
+<div align="center">
 
-Our application is to be used mainly with PTZ cameras and have them physically move automatically by tracking a face on screen. While it can be connected to non-PTZ cameras, it does not add much value for individuals to use. The only difference would be that a PTZ camera can move but a normal camera will not move because of its nature. We have implemented facial recognition techniques to specifically select a face to track if there are multiple people on screen. Our application works on any PTZ cameras and is designed to be compatible with any standardized video connections via USB, NewTek NDI®, or RTSP IP. 
+<img src="autoptz/assets/AutoPTZLogo.png" alt="AutoPTZ" width="140" />
 
+# AutoPTZ
 
+**AI-driven PTZ camera tracking — detect people, lock onto a target, and move the camera to follow them automatically.**
 
-## Disclaimer
+[Installation](docs/installation.md) · [Configuration](docs/configuration.md) · [Performance](docs/performance.md) · [Building](docs/building.md) · [Architecture](docs/architecture.md) · [Troubleshooting](docs/troubleshooting.md)
 
-- ⚠️ The project is under active development.
-- ⚠️ Expect bugs and inaccuracies.
-- ⚠️ Do not use the app during your live productions yet!
-## Features
+</div>
 
-- Sources for NewTek NDI® and USB are supported, IP (RTSP) is under development
-- Live camera feeds
-- Accurate Facial Recognition and Motion Tracking
-- Automated PTZ VISCA Movement for Network and USB
-- Cross platform
+---
 
+AutoPTZ is a cross-platform desktop app (native Qt Widgets / PySide6) that runs
+a real-time vision pipeline per camera — **detect → track → re-identify → pose →
+aim → drive PTZ** — and sends smooth pan/tilt/zoom commands so a PTZ camera keeps
+the chosen person framed. It is built for live production: multi-camera, stable
+target identity across occlusions, and graceful degradation when a model or
+device is missing (it always keeps live preview).
 
-## Technology  Stack
+## Highlights
 
-1. **Python** - Backend of the application
-2. **Pyside6 (Qt)** - Frontend of the application
-3. **OpenCV** - Camera Video Feeds and Facial Detection
-4. **Dlib** - Facial Recognition and Motion Tracking
-5. **Facial Recognition** - Powered by Dlib, Provided by ageitgey (https://github.com/ageitgey/face_recognition)
-6. **NewTek NDI Wrapper**  - Provided by buresu (https://github.com/buresu/ndi-python)
-7. **IP VISCA Controller** - PTZ Movement Controller, Provided by misterhay (https://github.com/misterhay/VISCA-IP-Controller)
+- **Multi-camera** — each camera runs its own worker; identities stay stable per
+  camera with no cross-camera state bugs.
+- **Identity-gated tracking** — click a person to target them; optional face
+  recognition + appearance ReID re-bind the right person after occlusions.
+- **Smooth PTZ control** — motion prediction, one-euro smoothing, PD + velocity
+  feed-forward, an adjustable framing "safe zone", auto-zoom, and loss recovery.
+- **Runs anywhere, fast** — ONNX Runtime picks the best accelerator per platform
+  (Apple CoreML, NVIDIA TensorRT/CUDA, Windows DirectML, Intel OpenVINO, CPU)
+  with per-EP tuning (FP16, persistent TensorRT engine cache, full graph
+  optimization). See [Performance](docs/performance.md).
+- **PTZ backends** — VISCA over USB, VISCA over IP, ONVIF, and NDI.
+- **In-app updates** — downloads the matching GitHub Release asset for your OS
+  and starts the installer/new AppImage.
 
+## Quick start (from source)
 
-## Installation
+Requires **Python 3.12+**.
 
-### Requirements
-
-- Python 3.7+
-- Windows or macOS (Linux is not officially supported, but should work)
-
-### Installation Options:
-Clone the project
 ```bash
-  git clone https://github.com/AutoPTZ/autoptz.git
+git clone https://github.com/AutoPTZ/autoptz
+cd autoptz
+
+# Create a venv at the PROJECT ROOT (not inside autoptz/)
+python3.12 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+# Full stack (detection + tracking + UI), editable source checkout:
+python tools/install.py --editable
+
+python -m autoptz                # launch the app
+python -m autoptz --selftest     # verify the foundations and exit
 ```
 
-Then instal cmake to build a copy a dlib for your system.
+The first launch downloads the detector model (YOLO11) into the platform app-data
+dir; without it the app still runs in live-preview-only mode.
+
+### Picking your accelerator
+
+`tools/install.py` detects the OS/GPU and prints every pip command before it
+runs it. Use `--dry-run` to review the plan. Static requirements files cannot
+inspect CUDA/TensorRT, so you can still force the ONNX Runtime wheel explicitly:
+
 ```bash
-  pip install cmake
-  pip install dlib
+python tools/install.py --dry-run
+python tools/install.py --accelerator nvidia --editable
+python tools/install.py --accelerator openvino --editable
+python tools/install.py --accelerator cpu --editable
 ```
 
-After you successfully install cmake and dlib, you can install the rest of the required libraries.
-```bash
-  pip install -r requirements.txt
-```
+Only one `onnxruntime*` wheel can be installed at a time — see
+[Performance](docs/performance.md).
 
-Then you can finally run the program.
-```bash
-  python startup.py
-```
-    
+## Installers
+
+Pre-built installers are published on the
+[Releases page](https://github.com/AutoPTZ/autoptz/releases): a macOS `.dmg`, a
+Windows installer (`.exe`), and a Linux `AppImage`. To build them yourself see
+[docs/building.md](docs/building.md).
+
+After install, **Help -> Check for Updates...** downloads the matching OS asset,
+starts it, and closes AutoPTZ so the update can finish. If a release is missing
+your OS asset, AutoPTZ opens the release page instead.
+
+## Documentation
+
+| Doc | What's in it |
+| --- | --- |
+| [Installation](docs/installation.md)   | From source + pre-built installers, per platform. |
+| [Configuration](docs/configuration.md) | Every tuning knob: model tier, detect interval, framing, smoothing, PTZ gains. |
+| [Performance](docs/performance.md)     | Cross-platform device/precision matrix + the `ep_compare` benchmark. |
+| [Building](docs/building.md)           | PyInstaller bundles → DMG / Windows installer / AppImage. |
+| [Architecture](docs/architecture.md)   | Module map and the per-frame data flow. |
+| [Troubleshooting](docs/troubleshooting.md) | Common issues (no boxes, wrong camera, slow tracking). |
+| [Contributing](CONTRIBUTING.md)        | Dev setup, lint/type/test gates, branch policy. |
+
+## License
+
+See [LICENSE.md](LICENSE.md).

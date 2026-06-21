@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: ["dev/v2-architecture-rework", "phase-*/**", "main"]
+  pull_request:
+    branches: ["dev/v2-architecture-rework", "main"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Qt runs headless on CI runners (no display).
+  QT_QPA_PLATFORM: offscreen
+  # Windows runners can default to a legacy console codepage; selftest prints
+  # Unicode status marks, so force UTF-8 for every Python subprocess.
+  PYTHONUTF8: "1"
+  # Unit tests must not perform real Ultralytics/Torch ONNX exports. Those
+  # native exporters can leave CI runners unstable after pytest has passed.
+  AUTOPTZ_NO_MODEL_EXPORT: "1"
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14          # Apple Silicon (arm64)
+            python-version: "3.12"
+          - os: windows-latest    # x64
+            python-version: "3.12"
+          - os: ubuntu-latest     # x64 (Linux)
+            python-version: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install Linux Qt/headless system libs
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            x11-utils
+
+      - name: Install dependencies
+        run: python tools/install.py --ci --dev --editable
+
+      - name: Lint (ruff)
+        run: ruff check autoptz/ tests/ tools/
+
+      - name: Format check (ruff format)
+        run: ruff format --check autoptz/ tests/ tools/
+
+      - name: Type check (mypy)
+        # Strict gate on the typed core (runtime + config). The UI/pipeline are
+        # mid typing-migration and excluded in pyproject; expand this as they land.
+        run: mypy autoptz/engine/runtime/ autoptz/config/
+
+      - name: Run unit tests
+        run: pytest tests/ -v --timeout=60
+
+      - name: Selftest
+        # Run with spawn-safe multiprocessing; timeout guard
+        run: python -m autoptz --selftest --log-level INFO
+        timeout-minutes: 2

@@ -1,20 +1,24 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
+about: Suggest an idea or improvement for AutoPTZ
 title: ''
-labels: ''
+labels: enhancement
 assignees: ''
-
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+**Problem / motivation**
+What are you trying to do, and what's getting in the way? (e.g. "I'm always
+frustrated when the camera loses my subject during a crossing.")
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+**Proposed solution**
+What you'd like to happen.
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+**Alternatives considered**
+Other approaches you've thought about.
+
+**Scope (if known)**
+Which area does this touch — capture, detection/tracking, PTZ control, UI,
+packaging, a specific platform/accelerator?
 
 **Additional context**
-Add any other context or screenshots about the feature request here.
+Mockups, links, or references.

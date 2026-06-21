@@ -1,0 +1,985 @@
+"""Source adapters: USB, RTSP/FFmpeg (HW decode), NDI (cyndilib frame-sync).
+
+All adapters share the ``SourceAdapter`` ABC:
+
+- ``start()`` / ``stop()`` — manage an internal daemon capture thread
+- ``status``                — snapshot of current state
+
+The capture thread runs ``_run()`` which:
+
+1. Calls ``_open()``; on failure backs off exponentially (1 s → 2 → 4 … 30 s)
+2. Reads frames via ``_read_frame()``; paces to ``target_fps``
+3. Pushes BGR frames into the injected ``ShmWriter`` (resizing to fit)
+4. Detects stalls (no valid frame for ``> stall_timeout`` s) → reconnect
+5. On ``stop_event`` calls ``_close()`` and exits
+
+Subclasses implement only ``_open``, ``_read_frame``, and ``_close``.
+
+Optional dependencies:
+- ``av`` (PyAV) for RTSPAdapter HW decode — falls back to cv2 if absent
+- ``cyndilib`` for NDIAdapter — raises ImportError in ``_open`` if absent
+"""
+
+from __future__ import annotations
+
+import logging
+import platform
+import threading
+import time
+from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from dataclasses import dataclass
+from enum import Enum
+
+import cv2
+import numpy as np
+from numpy.typing import NDArray
+
+from autoptz.engine.runtime.shm import ShmWriter
+
+log = logging.getLogger(__name__)
+
+# ── Optional-dependency probes (lazy, cached) ──────────────────────────────────
+
+_AV_AVAILABLE: bool | None = None
+_NDI_AVAILABLE: bool | None = None
+
+
+def _probe_av() -> bool:
+    global _AV_AVAILABLE
+    if _AV_AVAILABLE is None:
+        try:
+            import av as _av  # noqa: F401
+
+            _AV_AVAILABLE = True
+        except ImportError:
+            _AV_AVAILABLE = False
+    return bool(_AV_AVAILABLE)
+
+
+def _probe_ndi() -> bool:
+    global _NDI_AVAILABLE
+    if _NDI_AVAILABLE is None:
+        try:
+            import cyndilib as _ndi  # noqa: F401
+
+            _NDI_AVAILABLE = True
+        except ImportError:
+            _NDI_AVAILABLE = False
+    return bool(_NDI_AVAILABLE)
+
+
+# ── Status ─────────────────────────────────────────────────────────────────────
+
+
+class AdapterState(str, Enum):
+    STARTING = "starting"
+    RUNNING = "running"
+    RECONNECTING = "reconnecting"
+    STOPPED = "stopped"
+    ERROR = "error"
+
+
+@dataclass
+class AdapterStatus:
+    state: AdapterState = AdapterState.STOPPED
+    fps: float = 0.0
+    frames_total: int = 0
+    last_error: str | None = None
+    # Trusted source fps ceiling, or ``None`` until known. Low current/default
+    # stream-rate readings are deliberately left unknown so the UI does not cap
+    # itself to a false "max".
+    source_fps_cap: float | None = None
+
+
+# ── Reconnect back-off constants ────────────────────────────────────────────────
+
+_BACKOFF_MIN = 1.0  # seconds
+_BACKOFF_MAX = 30.0
+_BACKOFF_FACTOR = 2.0
+_STALL_TIMEOUT_DEFAULT = 5.0  # seconds without a frame → stalled
+
+# One-time guard so the "native macOS capture unavailable" warning (which means
+# camera selection may be unreliable) is logged once per process, not per open.
+_WARNED_NO_NATIVE_AVF = False
+
+# Set once native AVFoundation capture is confirmed to start a session but deliver
+# no frames (a fragile PyObjC path on some builds).  Subsequent opens then skip the
+# native attempt and use OpenCV directly, so cameras don't each pay the native
+# first-frame wait before falling back.
+_NATIVE_AVF_BROKEN = False
+
+
+# ── Abstract base ──────────────────────────────────────────────────────────────
+
+
+class SourceAdapter(ABC):
+    """Base for all ingest adapters. Subclasses implement _open / _read_frame / _close."""
+
+    def __init__(
+        self,
+        camera_id: str,
+        shm_writer: ShmWriter | None = None,
+        target_fps: float = 30.0,
+        stall_timeout: float = _STALL_TIMEOUT_DEFAULT,
+    ) -> None:
+        self.camera_id = camera_id
+        self._shm = shm_writer
+        self._target_fps = max(1.0, target_fps)
+        self._stall_timeout = stall_timeout
+
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._status = AdapterStatus()
+        self._status_lock = threading.Lock()
+
+    # ── live tuning ───────────────────────────────────────────────────────────
+
+    def set_target_fps(self, fps: float) -> None:
+        """Change the pacing target fps **live** (thread-safe).
+
+        The capture loop re-reads ``self._target_fps`` every tick, so lowering it
+        immediately widens the per-frame sleep budget — actually reducing
+        capture/detection work without a reconnect.  Clamped to ``[1, fps_cap]``
+        when a hardware cap is known so we never pace faster than the source can
+        deliver.  Subclasses that hold an open capture may also nudge the device's
+        own ``CAP_PROP_FPS``; the pacing change alone is sufficient to slow work.
+        """
+        cap = self.status.source_fps_cap
+        target = max(1.0, float(fps))
+        if cap is not None and cap > 0:
+            target = min(target, cap)
+        self._target_fps = target
+
+    def _set_source_fps_cap(self, cap: float | None) -> None:
+        """Record the detected hardware fps ceiling (None when unknown/absurd)."""
+        with self._status_lock:
+            self._status.source_fps_cap = cap
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        """Start the internal capture thread (idempotent)."""
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"ingest-{self.camera_id[:8]}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Signal the capture thread to stop and block until it exits."""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=10.0)
+            self._thread = None
+        self._set_state(AdapterState.STOPPED)
+
+    @property
+    def status(self) -> AdapterStatus:
+        with self._status_lock:
+            s = self._status
+            return AdapterStatus(
+                state=s.state,
+                fps=s.fps,
+                frames_total=s.frames_total,
+                last_error=s.last_error,
+                source_fps_cap=s.source_fps_cap,
+            )
+
+    # ── Subclass interface ─────────────────────────────────────────────────────
+
+    @abstractmethod
+    def _open(self) -> bool:
+        """Attempt to open the source. Return True on success."""
+
+    @abstractmethod
+    def _read_frame(self) -> NDArray[np.uint8] | None:
+        """Read one BGR frame (H×W×3) or None on transient failure."""
+
+    @abstractmethod
+    def _close(self) -> None:
+        """Tear down the connection/capture device."""
+
+    # ── Capture loop ───────────────────────────────────────────────────────────
+
+    def _run(self) -> None:
+        backoff = _BACKOFF_MIN
+
+        while not self._stop_event.is_set():
+            self._set_state(AdapterState.STARTING)
+
+            success = False
+            try:
+                success = self._open()
+            except Exception as exc:  # noqa: BLE001
+                self._set_error(str(exc))
+
+            if not success:
+                self._set_state(AdapterState.RECONNECTING)
+                log.info(
+                    "camera_id=%s open failed; retrying in %.0fs",
+                    self.camera_id,
+                    backoff,
+                )
+                if self._stop_event.wait(timeout=backoff):
+                    break
+                backoff = min(backoff * _BACKOFF_FACTOR, _BACKOFF_MAX)
+                continue
+
+            backoff = _BACKOFF_MIN  # reset on successful open
+            self._set_state(AdapterState.RUNNING)
+
+            last_good_ts = time.monotonic()
+            fps_window_start = time.monotonic()
+            fps_window_frames = 0
+
+            while not self._stop_event.is_set():
+                t0 = time.monotonic()
+                frame: NDArray[np.uint8] | None = None
+
+                try:
+                    frame = self._read_frame()
+                except Exception as exc:  # noqa: BLE001
+                    self._set_error(str(exc))
+                    break  # trigger outer reconnect loop
+
+                now = time.monotonic()
+
+                if frame is not None:
+                    last_good_ts = now
+                    self._deliver(frame)
+                    fps_window_frames += 1
+
+                    elapsed = now - fps_window_start
+                    if elapsed >= 1.0:
+                        with self._status_lock:
+                            self._status.fps = fps_window_frames / elapsed
+                        fps_window_start = now
+                        fps_window_frames = 0
+                else:
+                    # Check for stall
+                    if now - last_good_ts > self._stall_timeout:
+                        log.warning(
+                            "camera_id=%s stalled (%.1f s without frame); reconnecting",
+                            self.camera_id,
+                            now - last_good_ts,
+                        )
+                        self._set_state(AdapterState.RECONNECTING)
+                        break  # trigger outer reconnect loop
+
+                # FPS pacing: sleep the remaining budget for this frame slot.
+                # ``_target_fps`` is re-read here every tick so a live
+                # ``set_target_fps()`` change takes effect without a reconnect.
+                frame_interval = 1.0 / max(1.0, self._target_fps)
+                elapsed_read = time.monotonic() - t0
+                sleep_for = frame_interval - elapsed_read
+                if sleep_for > 1e-3:
+                    self._stop_event.wait(timeout=sleep_for)
+
+            try:
+                self._close()
+            except Exception as exc:  # noqa: BLE001
+                log.debug("camera_id=%s _close() raised: %s", self.camera_id, exc)
+
+        self._set_state(AdapterState.STOPPED)
+
+    def _deliver(self, frame: NDArray[np.uint8]) -> None:
+        """Push frame to shm (resizing to ShmWriter dims if needed)."""
+        with self._status_lock:
+            self._status.frames_total += 1
+
+        if self._shm is None:
+            return
+
+        h, w = frame.shape[:2]
+        if h != self._shm.height or w != self._shm.width:
+            frame = cv2.resize(frame, (self._shm.width, self._shm.height))
+
+        self._shm.push(frame)
+
+    def _set_state(self, state: AdapterState) -> None:
+        with self._status_lock:
+            self._status.state = state
+
+    def _set_error(self, msg: str) -> None:
+        log.error("camera_id=%s adapter error: %s", self.camera_id, msg)
+        with self._status_lock:
+            self._status.state = AdapterState.ERROR
+            self._status.last_error = msg
+
+
+# ── USB Adapter ────────────────────────────────────────────────────────────────
+
+# A trusted source-FPS ceiling must be inside this band. OpenCV's CAP_PROP_FPS
+# often reports the current/default stream rate, not a real maximum, so USB/OpenCV
+# only publishes a cap when a high-rate probe gets a high-rate response.
+_FPS_CAP_MIN = 1.0
+_FPS_CAP_MAX = 240.0
+_FPS_TRUSTED_PROBE_MIN = 45.0
+_FPS_PROBE_CANDIDATES = (240.0, 120.0, 90.0, 60.0, 50.0)
+
+
+def _read_cv2_fps(cap: cv2.VideoCapture) -> float:
+    try:
+        reported = float(cap.get(cv2.CAP_PROP_FPS))
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return reported if _FPS_CAP_MIN <= reported <= _FPS_CAP_MAX else 0.0
+
+
+def _trusted_cv2_fps_reading(cap: cv2.VideoCapture) -> float:
+    """Trust only high CAP_PROP_FPS reads as a max; low reads are current-rate hints."""
+    reported = _read_cv2_fps(cap)
+    return reported if reported >= _FPS_TRUSTED_PROBE_MIN else 0.0
+
+
+def _cv2_usb_backend() -> int:
+    """Pick the best cv2 VideoCapture backend for USB cameras on this platform."""
+    system = platform.system()
+    if system == "Darwin":
+        return cv2.CAP_AVFOUNDATION
+    if system == "Windows":
+        return cv2.CAP_MSMF
+    return cv2.CAP_V4L2
+
+
+def _macos_index_for_unique_id(unique_id: str) -> int | None:
+    """Resolve a macOS AVFoundation ``uniqueID`` → the OpenCV capture index.
+
+    The bug this fixes: ``discovery/usb.py`` enumerates with the modern
+    ``AVCaptureDeviceDiscoverySession`` (which *includes* Desk View / Continuity
+    pseudo-cameras), but OpenCV's ``CAP_AVFOUNDATION`` opens device **N** from the
+    *legacy* ``[AVCaptureDevice devicesWithMediaType:]`` list — a different,
+    shorter, differently-ordered enumeration.  Trusting the discovery-session
+    index against OpenCV therefore opens the wrong physical camera (classic
+    symptom: picking the iPhone Continuity Camera opens the built-in webcam).
+
+    We re-resolve here against the **exact list OpenCV 4.x iterates**: video
+    devices plus muxed devices, sorted by ``uniqueID``.  The returned index is
+    therefore the verified position of the device whose ``uniqueID`` matches.
+    Returns ``None`` when PyObjC/AVFoundation is unavailable or the id is no
+    longer present.  Never raises.
+    """
+    try:
+        import AVFoundation  # type: ignore  # noqa: PLC0415
+
+        video = list(
+            AVFoundation.AVCaptureDevice.devicesWithMediaType_(
+                AVFoundation.AVMediaTypeVideo,
+            )
+        )
+        muxed = list(
+            AVFoundation.AVCaptureDevice.devicesWithMediaType_(
+                AVFoundation.AVMediaTypeMuxed,
+            )
+        )
+        devices = video + muxed
+        # OpenCV preserves system ordering by sorting the combined list by
+        # uniqueID before indexing into it. Match that exactly.
+        devices.sort(key=lambda d: str(d.uniqueID()))
+        for idx, dev in enumerate(devices):
+            try:
+                if str(dev.uniqueID()) == unique_id:
+                    return idx
+            except Exception:  # noqa: BLE001 — a flaky device must not abort
+                continue
+    except Exception:  # noqa: BLE001 — PyObjC/framework absent or runtime error
+        log.debug(
+            "AVFoundation uniqueID→index resolution unavailable for %s", unique_id, exc_info=True
+        )
+    return None
+
+
+class USBAdapter(SourceAdapter):
+    """Capture from a USB/built-in camera.
+
+    On **macOS**, when a stable AVFoundation ``unique_id`` is available, capture
+    goes through the native :class:`~autoptz.engine.pipeline.avf_capture.AVFCapture`
+    (an ``AVCaptureSession`` bound directly by ``uniqueID``) — this opens the
+    *exact* physical camera the user picked, sidestepping OpenCV's divergent
+    AVFoundation index ordering (the classic "pick the iPhone, get the webcam"
+    bug).  Everywhere else — non-macOS, PyObjC absent, or no ``unique_id`` — it
+    falls back to ``cv2.VideoCapture`` (AVFoundation/MSMF/V4L2), behaving exactly
+    as before.
+
+    The native vs. OpenCV choice is made per ``_open()`` (and re-made on every
+    reconnect), so a transient PyObjC/device hiccup degrades to OpenCV without a
+    restart.  All of ``set_target_fps``/``source_fps_cap``/stall handling/``status``
+    are provided by :class:`SourceAdapter` and are identical for both paths.
+
+    Args:
+        source:    device index (int) or device path/URI (str) — the fallback used
+                   when ``unique_id`` is absent or the native path is unavailable.
+        unique_id: stable macOS AVFoundation ``uniqueID`` for the device.  When
+                   given (and on macOS with PyObjC), it binds the native capture
+                   to the correct physical camera; on the OpenCV fallback it is
+                   re-resolved to the verified OpenCV capture index.
+    """
+
+    def __init__(
+        self,
+        camera_id: str,
+        source: int | str = 0,
+        shm_writer: ShmWriter | None = None,
+        target_fps: float = 30.0,
+        stall_timeout: float = _STALL_TIMEOUT_DEFAULT,
+        unique_id: str | None = None,
+    ) -> None:
+        super().__init__(camera_id, shm_writer, target_fps, stall_timeout)
+        self._source = source
+        self._unique_id = unique_id
+        self._cap: cv2.VideoCapture | None = None
+        # Native AVFoundation capture (macOS, uniqueID, PyObjC present); None when
+        # the OpenCV path is in use for this open.
+        self._avf: object | None = None
+
+    def _use_native_avf(self) -> bool:
+        """Decide whether to open via native AVFoundation rather than OpenCV.
+
+        True only on macOS, with a ``unique_id`` present, and when the PyObjC
+        AVFoundation capture path imports cleanly.  Any of those missing → use
+        OpenCV.  Never raises (a probe failure means "no native path").
+        """
+        global _WARNED_NO_NATIVE_AVF
+        if platform.system() != "Darwin" or not self._unique_id:
+            return False
+        try:
+            from autoptz.engine.pipeline import avf_capture  # noqa: PLC0415
+
+            if avf_capture.is_available():
+                return True
+        except Exception:  # noqa: BLE001 — import/probe failure → OpenCV fallback
+            log.debug(
+                "camera_id=%s native AVF probe failed; using OpenCV", self.camera_id, exc_info=True
+            )
+        # macOS + a uniqueID but no native path: capture must fall back to OpenCV,
+        # whose AVFoundation device ordering diverges from the picker — selection
+        # can be unreliable.  Warn once, loudly, so it shows in the Logs panel.
+        if not _WARNED_NO_NATIVE_AVF:
+            _WARNED_NO_NATIVE_AVF = True
+            log.warning(
+                "Native macOS camera capture is unavailable (PyObjC AVFoundation "
+                "missing) — camera selection may be unreliable. Reinstall with "
+                "`python tools/install.py --editable`.",
+            )
+        return False
+
+    def _resolve_source(self) -> int | str | None:
+        """Pick the cv2 source to open, preferring a verified uniqueID index.
+
+        On macOS, a stored ``unique_id`` is re-resolved to the OpenCV capture
+        index every open (so it tracks index reshuffles across reconnects /
+        Continuity Camera coming and going).  Off macOS — or when no
+        ``unique_id`` is stored — we use the integer index / path the adapter was
+        built with, exactly as before.
+
+        **macOS, uniqueID set but unresolvable → return ``None`` (refuse).**  The
+        stored ``usb://N`` address is an index from the *modern*
+        ``AVCaptureDeviceDiscoverySession`` enumeration, which does NOT line up
+        with OpenCV's *legacy* ``devicesWithMediaType:`` ordering.  Opening that
+        index would confidently start a **different physical camera** (the classic
+        "pick the built-in webcam, get the Continuity Camera").  Rather than guess
+        wrong, we refuse: the caller fails the open so the worker shows no-signal
+        and retries — the correct camera comes back once it can be verified by
+        ``uniqueID`` (native path) or matched in the legacy list.
+        """
+        if self._unique_id and platform.system() == "Darwin":
+            idx = _macos_index_for_unique_id(self._unique_id)
+            if idx is not None:
+                if idx != self._source:
+                    log.info(
+                        "camera_id=%s resolved uniqueID=%s → capture index %d",
+                        self.camera_id,
+                        self._unique_id,
+                        idx,
+                    )
+                return idx
+            log.warning(
+                "camera_id=%s uniqueID=%s could not be matched to an OpenCV "
+                "capture index (PyObjC/AVFoundation unavailable?); refusing to "
+                "open a possibly-wrong device. Run `python tools/install.py "
+                "--editable` for reliable macOS camera selection.",
+                self.camera_id,
+                self._unique_id,
+            )
+            return None
+        return self._source
+
+    def _open(self) -> bool:
+        # Native AVFoundation binds the EXACT device by uniqueID (the correct
+        # selection), so we PREFER it.  But on some PyObjC builds the sample-buffer
+        # delegate never fires and the session delivers no frames — so if native
+        # fails to deliver, we fall back to OpenCV, which DOES deliver frames.  The
+        # fallback is now SAFE: ``_resolve_source`` maps the uniqueID to the
+        # verified OpenCV capture index (and refuses rather than open the wrong
+        # device when it can't), so OpenCV opens the right camera too — it just
+        # can't reach devices missing from its shorter legacy list (e.g. Desk View).
+        #
+        # ``_NATIVE_AVF_BROKEN`` caches a confirmed no-frame native result so the
+        # other cameras (and reconnects) skip the native wait and go straight to
+        # the working OpenCV path.
+        global _NATIVE_AVF_BROKEN
+        if self._use_native_avf() and not _NATIVE_AVF_BROKEN:
+            if self._open_avf():
+                return True
+            _NATIVE_AVF_BROKEN = True
+            log.warning(
+                "camera_id=%s native AVFoundation delivered no frames — using "
+                "OpenCV for this and subsequent cameras.",
+                self.camera_id,
+            )
+        return self._open_cv()
+
+    def _open_avf(self) -> bool:
+        """Open the device natively via AVFoundation, bound by ``uniqueID``.
+
+        Returns False (never raises) when the device is gone or AVFoundation
+        errors, so the caller can drop to the OpenCV path / reconnect loop.
+        Publishes the device's reported hardware fps as the ``source_fps_cap``.
+        """
+        from autoptz.engine.pipeline.avf_capture import AVFCapture  # noqa: PLC0415
+
+        cap = AVFCapture(str(self._unique_id))
+        if not cap.open():
+            return False
+        # Surface the hardware fps ceiling (UI slider cap) and clamp our pacing
+        # to it, mirroring the OpenCV ``_detect_fps_cap`` behaviour.
+        reported = cap.fps
+        if reported is not None and _FPS_CAP_MIN <= reported <= _FPS_CAP_MAX:
+            self._set_source_fps_cap(reported)
+            if self._target_fps > reported:
+                log.info(
+                    "camera_id=%s clamping target_fps %.0f → source cap %.0f",
+                    self.camera_id,
+                    self._target_fps,
+                    reported,
+                )
+                self._target_fps = reported
+        else:
+            self._set_source_fps_cap(None)
+        self._avf = cap
+        log.info(
+            "camera_id=%s USBAdapter opened uniqueID=%s via native AVFoundation",
+            self.camera_id,
+            self._unique_id,
+        )
+        return True
+
+    def _open_cv(self) -> bool:
+        backend = _cv2_usb_backend()
+        source = self._resolve_source()
+        if source is None:
+            # macOS uniqueID could not be verified against the OpenCV capture
+            # list — opening the stored discovery index would start the wrong
+            # camera, so we bail with a clear, UI-visible reason (surfaced via
+            # health ``last_error``) instead.
+            self._set_error(
+                "Camera could not be verified; reinstall with python tools/install.py "
+                "--editable for reliable macOS selection."
+            )
+            return False
+        cap = cv2.VideoCapture(source, backend)  # type: ignore[call-overload]
+        if not cap.isOpened():
+            cap.release()
+            log.warning(
+                "camera_id=%s USBAdapter: cannot open source %r",
+                self.camera_id,
+                source,
+            )
+            return False
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:  # noqa: BLE001
+            log.debug("camera_id=%s USB cv2 buffer-size set failed", self.camera_id, exc_info=True)
+        # Probe for a trusted source fps ceiling. A plain CAP_PROP_FPS read is
+        # usually just the current/default rate, so low readings stay "unknown".
+        self._detect_fps_cap(cap)
+        cap.set(cv2.CAP_PROP_FPS, self._target_fps)
+        self._cap = cap
+        log.info("camera_id=%s USBAdapter opened source %r", self.camera_id, source)
+        return True
+
+    def _detect_fps_cap(self, cap: cv2.VideoCapture) -> None:
+        """Probe for a credible USB/OpenCV source FPS ceiling.
+
+        Many drivers report the active/default FPS (often 15 or 30) when asked
+        for ``CAP_PROP_FPS``. Treating that as "max" makes the UI lie. Instead we
+        ask for a few high rates and trust only high responses; otherwise the cap
+        remains unknown and the UI uses its generous fallback.
+        """
+        best = _trusted_cv2_fps_reading(cap)
+        for requested in _FPS_PROBE_CANDIDATES:
+            try:
+                cap.set(cv2.CAP_PROP_FPS, requested)
+            except Exception:  # noqa: BLE001
+                continue
+            reported = _read_cv2_fps(cap)
+            if reported >= max(_FPS_TRUSTED_PROBE_MIN, requested * 0.75):
+                best = max(best, reported)
+        self._apply_trusted_fps_cap(best)
+
+    def _apply_trusted_fps_cap(self, cap: float) -> None:
+        if _FPS_CAP_MIN <= cap <= _FPS_CAP_MAX:
+            self._set_source_fps_cap(cap)
+            if self._target_fps > cap:
+                log.info(
+                    "camera_id=%s clamping target_fps %.0f → source cap %.0f",
+                    self.camera_id,
+                    self._target_fps,
+                    cap,
+                )
+                self._target_fps = cap
+        else:
+            self._set_source_fps_cap(None)
+
+    def _read_frame(self) -> NDArray[np.uint8] | None:
+        # Native AVFoundation path: ``read()`` returns the newest BGR frame, or
+        # ``(False, None)`` on a transient gap.  A persistent None (device asleep
+        # / unplugged) lets the base loop's stall timer fire → reconnect, which
+        # rebinds by uniqueID.
+        if self._avf is not None:
+            ok, frame = self._avf.read()  # type: ignore[attr-defined]
+            if not ok or frame is None:
+                return None
+            return frame
+        if self._cap is None:
+            return None
+        ok, frame = self._cap.read()
+        if not ok or frame is None:
+            return None
+        return frame  # type: ignore[return-value]
+
+    def _close(self) -> None:
+        if self._avf is not None:
+            try:
+                self._avf.release()  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001 — teardown must not raise
+                log.debug("camera_id=%s AVF release raised", self.camera_id, exc_info=True)
+            self._avf = None
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+
+
+# ── RTSP Adapter ───────────────────────────────────────────────────────────────
+
+
+def _hw_decode_codec() -> tuple[str, dict[str, str]]:
+    """Return (codec_name, extra_options) for PyAV hardware-accelerated decode."""
+    system = platform.system()
+    if system == "Darwin":
+        # VideoToolbox — pass an empty codec name; av picks h264 by default, VT kicks in via hwaccel
+        return "", {"vt_require_sw": "false"}
+    if system == "Windows":
+        return "h264_d3d11va", {}
+    # Linux: prefer NVDEC if available
+    return "h264_cuvid", {}
+
+
+class RTSPAdapter(SourceAdapter):
+    """Capture from an RTSP/IP camera via PyAV (FFmpeg) with HW decode.
+
+    Falls back to ``cv2.VideoCapture`` if PyAV is not installed.
+
+    Args:
+        url:       RTSP/RTMP/HTTP stream URL.
+        transport: RTSP transport protocol (``"tcp"`` or ``"udp"``).
+        hw_decode: Request hardware-accelerated decode (VideoToolbox/NVDEC/D3D11VA).
+    """
+
+    def __init__(
+        self,
+        camera_id: str,
+        url: str,
+        shm_writer: ShmWriter | None = None,
+        target_fps: float = 30.0,
+        stall_timeout: float = _STALL_TIMEOUT_DEFAULT,
+        transport: str = "tcp",
+        hw_decode: bool = True,
+    ) -> None:
+        super().__init__(camera_id, shm_writer, target_fps, stall_timeout)
+        self._url = url
+        self._transport = transport
+        self._hw_decode = hw_decode
+
+        self._container: object | None = None
+        self._frame_iter: Iterator[NDArray[np.uint8]] | None = None
+        self._cap: cv2.VideoCapture | None = None  # cv2 fallback
+
+    def _open(self) -> bool:
+        if _probe_av():
+            return self._open_av()
+        return self._open_cv()
+
+    def _open_av(self) -> bool:
+        import av  # noqa: PLC0415
+
+        options: dict[str, str] = {
+            "rtsp_transport": self._transport,
+            "fflags": "nobuffer",
+            "flags": "low_delay",
+            "stimeout": "5000000",  # socket read timeout in µs (5 s)
+            "max_delay": "0",
+            "reorder_queue_size": "0",
+            "probesize": "32768",
+            "analyzeduration": "0",
+        }
+
+        try:
+            container = av.open(self._url, options=options, timeout=10.0)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("camera_id=%s RTSP av.open failed: %s", self.camera_id, exc)
+            return False
+
+        streams = container.streams.video
+        if not streams:
+            container.close()
+            return False
+
+        video_stream = streams[0]
+        # RTSP stream metadata reports the current stream cadence, not the
+        # camera/source maximum. Do not publish it as a hard cap.
+        self._set_source_fps_cap(None)
+
+        if self._hw_decode:
+            hw_codec, hw_opts = _hw_decode_codec()
+            if hw_codec:
+                try:
+                    video_stream.codec_context.codec = av.Codec(hw_codec)
+                    for k, v in hw_opts.items():
+                        video_stream.codec_context.options[k] = v  # type: ignore[index]
+                except Exception:  # noqa: BLE001
+                    log.debug(
+                        "camera_id=%s HW codec %r unavailable; using software decode",
+                        self.camera_id,
+                        hw_codec,
+                    )
+
+        self._container = container
+        self._frame_iter = self._iter_frames_av(container, video_stream)
+        log.info("camera_id=%s RTSPAdapter opened %r via PyAV", self.camera_id, self._url)
+        return True
+
+    def _open_cv(self) -> bool:
+        cap = cv2.VideoCapture(self._url)
+        if not cap.isOpened():
+            cap.release()
+            log.warning(
+                "camera_id=%s RTSPAdapter: cv2 fallback could not open %r",
+                self.camera_id,
+                self._url,
+            )
+            return False
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:  # noqa: BLE001
+            log.debug("camera_id=%s RTSP cv2 buffer-size set failed", self.camera_id, exc_info=True)
+        # OpenCV exposes the current RTSP stream rate here, not a source max.
+        self._set_source_fps_cap(None)
+        self._cap = cap
+        log.info(
+            "camera_id=%s RTSPAdapter opened %r via cv2 (PyAV not installed)",
+            self.camera_id,
+            self._url,
+        )
+        return True
+
+    @staticmethod
+    def _iter_frames_av(container: object, video_stream: object) -> Iterator[NDArray[np.uint8]]:
+        """Yield decoded BGR frames from a PyAV container."""
+        import av  # noqa: PLC0415
+
+        try:
+            for packet in container.demux(video_stream):  # type: ignore[union-attr]
+                if packet.size == 0:  # EOS sentinel
+                    break
+                for frame in packet.decode():
+                    yield frame.to_ndarray(format="bgr24")
+        except av.FFmpegError as exc:
+            log.debug("RTSPAdapter PyAV error during demux: %s", exc)
+
+    def _read_frame(self) -> NDArray[np.uint8] | None:
+        if self._frame_iter is not None:
+            try:
+                return next(self._frame_iter)
+            except StopIteration:
+                return None
+
+        if self._cap is not None:
+            ok, frame = self._cap.read()
+            return frame if ok else None  # type: ignore[return-value]
+
+        return None
+
+    def _close(self) -> None:
+        self._frame_iter = None
+        if self._container is not None:
+            try:
+                self._container.close()  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001
+                pass
+            self._container = None
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+
+
+# ── NDI Adapter ────────────────────────────────────────────────────────────────
+
+
+class NDIAdapter(SourceAdapter):
+    """Capture from an NDI source using cyndilib FrameSync.
+
+    Args:
+        ndi_name: NDI source name as advertised on the network,
+                  e.g. ``"LAPTOP (NDI CAMERA)"``; obtained from ``NDIDiscovery``.
+    """
+
+    def __init__(
+        self,
+        camera_id: str,
+        ndi_name: str,
+        shm_writer: ShmWriter | None = None,
+        target_fps: float = 30.0,
+        stall_timeout: float = _STALL_TIMEOUT_DEFAULT,
+        discover_timeout: float = 6.0,
+    ) -> None:
+        super().__init__(camera_id, shm_writer, target_fps, stall_timeout)
+        self._ndi_name = ndi_name
+        self._discover_timeout = float(discover_timeout)
+        self._receiver: object | None = None
+        self._finder: object | None = None
+        self._video_frame: object | None = None
+
+    def _open(self) -> bool:
+        if not _probe_ndi():
+            self._set_error("cyndilib not available — install it and the NDI SDK runtime.")
+            return False
+
+        try:
+            # cyndilib ≥0.1: capture is pull-based via ``Receiver.frame_sync`` (a
+            # ``FrameSync``); ``BGRX_BGRA`` delivers ready-to-use BGRA frames.
+            from cyndilib.finder import Finder  # noqa: PLC0415
+            from cyndilib.receiver import Receiver  # noqa: PLC0415
+            from cyndilib.video_frame import VideoFrameSync  # noqa: PLC0415
+            from cyndilib.wrapper.ndi_recv import (  # noqa: PLC0415
+                RecvBandwidth,
+                RecvColorFormat,
+            )
+
+            finder = Finder()
+            finder.open()
+            # NDI discovery is eventually-consistent: a single snapshot can miss a
+            # source that's actually present, so poll for it for a few seconds
+            # before giving up.
+            source = self._resolve_source(finder)
+            if source is None:
+                known = [str(s) for s in finder.iter_sources()]
+                finder.close()
+                self._set_error(f"NDI source {self._ndi_name!r} not on the network.")
+                log.warning(
+                    "camera_id=%s NDI source %r not found (seen: %s)",
+                    self.camera_id,
+                    self._ndi_name,
+                    known,
+                )
+                return False
+
+            receiver = Receiver(
+                color_format=RecvColorFormat.BGRX_BGRA,
+                bandwidth=RecvBandwidth.highest,
+            )
+            video_frame = VideoFrameSync()
+            receiver.frame_sync.set_video_frame(video_frame)
+            receiver.set_source(source)
+
+            # Keep the finder open for the receiver's lifetime so the resolved
+            # source stays valid.
+            self._finder = finder
+            self._receiver = receiver
+            self._video_frame = video_frame
+            log.info("camera_id=%s NDIAdapter connected to %r", self.camera_id, self._ndi_name)
+            return True
+
+        except Exception as exc:  # noqa: BLE001
+            log.warning("camera_id=%s NDIAdapter open failed: %s", self.camera_id, exc)
+            self._set_error(f"NDI open failed: {exc}")
+            return False
+
+    def _resolve_source(self, finder: object) -> object | None:
+        """Poll *finder* for ``self._ndi_name`` until it appears or the timeout.
+
+        NDI sources blink in and out of any single discovery poll, so we wait
+        (refreshing each iteration) rather than trusting one snapshot.
+        """
+        deadline = time.monotonic() + self._discover_timeout
+        while time.monotonic() < deadline:
+            try:
+                finder.wait_for_sources(1.0)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001 — older API without wait_for_sources
+                time.sleep(0.5)
+            try:
+                src = finder.get_source(self._ndi_name)  # type: ignore[attr-defined]
+                if src is not None:
+                    return src
+            except Exception:  # noqa: BLE001
+                pass
+            for src in finder.iter_sources():  # type: ignore[attr-defined]
+                if str(src) == self._ndi_name:
+                    return src
+        return None
+
+    def _read_frame(self) -> NDArray[np.uint8] | None:
+        receiver = self._receiver
+        vf = self._video_frame
+        if receiver is None or vf is None:
+            return None
+        try:
+            # Non-blocking: fills the *registered* video frame (``vf``) with the
+            # latest frame.  capture_video() takes a FrameFormat (default
+            # progressive), NOT the frame — the frame was set via set_video_frame.
+            receiver.frame_sync.capture_video()  # type: ignore[union-attr]
+            w = int(getattr(vf, "xres", 0))
+            h = int(getattr(vf, "yres", 0))
+            if w <= 0 or h <= 0:
+                return None
+
+            data = vf.get_array()  # type: ignore[union-attr]
+            if data is None or len(data) == 0:
+                return None
+            arr: NDArray[np.uint8] = np.asarray(data, dtype=np.uint8).reshape(-1)
+
+            # BGRX_BGRA → 4 bytes/pixel (BGRA); some sources still hand back UYVY
+            # (2 bytes/pixel).  Pick the layout from the actual buffer size.
+            if arr.size == h * w * 4:
+                return cv2.cvtColor(arr.reshape((h, w, 4)), cv2.COLOR_BGRA2BGR)
+            if arr.size == h * w * 2:
+                return cv2.cvtColor(arr.reshape((h, w, 2)), cv2.COLOR_YUV2BGR_UYVY)
+            if arr.size == h * w * 3:
+                return arr.reshape((h, w, 3))
+            return None
+
+        except Exception as exc:  # noqa: BLE001
+            log.debug("camera_id=%s NDI read_frame error: %s", self.camera_id, exc)
+            return None
+
+    def _close(self) -> None:
+        receiver = self._receiver
+        if receiver is not None:
+            try:
+                receiver.disconnect()  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001
+                pass
+        finder = self._finder
+        if finder is not None:
+            try:
+                finder.close()  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001
+                pass
+        self._receiver = None
+        self._finder = None
+        self._video_frame = None

@@ -1,0 +1,12 @@
+# AutoPTZ — OpenVINO extras (Intel CPU / iGPU / Arc GPU; great for CPU-only boxes)
+#
+# OpenVINO is Intel's accelerator. On CPU-only machines (any OS) it is usually
+# faster than the default CPU EP, and it drives Intel integrated/Arc GPUs.
+#
+# Install after base (only one onnxruntime wheel can be installed at a time):
+#   pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml onnxruntime-openvino
+#   pip install -r requirements/openvino.txt
+#
+# Provides: OpenVINO EP (device_type=AUTO, FP16) -> CPU fallback.
+
+onnxruntime-openvino==1.20.0

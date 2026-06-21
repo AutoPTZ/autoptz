@@ -1,0 +1,100 @@
+name: Release
+
+# Tag a release to build + publish installers:
+#   git tag v2.0.0 && git push origin v2.0.0
+# A "-" in the tag (e.g. v2.0.0-rc1) marks it as a GitHub pre-release, which the
+# in-app updater surfaces to users who opted into pre-releases.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  macos:
+    name: Build macOS .dmg
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build .app + .dmg
+        env:
+          MAKE_DMG: "1"
+        run: bash packaging/build_macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    name: Build Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Build .exe + installer
+        env:
+          MAKE_INSTALLER: "1"
+        run: powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*-setup.exe
+          if-no-files-found: error
+
+  linux:
+    name: Build Linux AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install system libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3 libfuse2 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+      - name: Build AppImage
+        env:
+          MAKE_APPIMAGE: "1"
+        run: bash packaging/build_linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true

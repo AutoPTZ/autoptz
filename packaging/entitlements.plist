@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  packaging/entitlements.plist : macOS hardened-runtime entitlements.
+
+  Applied at signing time via codesign (see packaging/build_macos.sh and
+  docs/v2-rework/11-packaging-and-distribution.md for the exact commands).
+
+  Hardened runtime is REQUIRED for Apple notarization. The JIT and
+  unsigned-executable-memory entitlements below are what Python plus PySide6 / Qt
+  (and onnxruntime CoreML / JIT paths) commonly need under the hardened runtime;
+  without them the app can crash with a code-signing / memory-protection error at
+  launch.
+
+  Validate with:  plutil -lint packaging/entitlements.plist
+
+  NOTE: XML comments cannot contain a double-hyphen, so CLI flags are spelled out
+  in the docs / build script rather than here.
+-->
+<plist version="1.0">
+<dict>
+    <!-- Device access. Camera is paired with NSCameraUsageDescription in Info.plist. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <!-- Audio is not used today; left false for least privilege. Flip to true
+         only if AutoPTZ ever captures audio. -->
+    <key>com.apple.security.device.audio-input</key>
+    <false/>
+
+    <!-- Python / Qt / onnxruntime under the hardened runtime. -->
+    <!-- Allow JIT and writable+executable memory: required by the CPython
+         interpreter, Qt's QML/JS engine, and some onnxruntime EP paths. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- Frozen apps load their own .so/.dylib that are not individually signed
+         by Apple; permit the dyld environment variables the bootloader uses. -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <!-- Some bundled native deps (cv2, onnxruntime, torch) trip library
+         validation when they dlopen sibling dylibs. Disabling it lets the
+         signed-but-not-Apple libs load. Re-test with this off first; only enable
+         it if you hit a "library load disallowed by system policy" crash. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Networking for NDI / ONVIF / RTSP. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!--
+      App Sandbox (OPTIONAL) is intentionally OFF. AutoPTZ ships with Developer
+      ID + notarization (NOT the Mac App Store), so the sandbox is not required
+      and would otherwise need temporary-exception entitlements for the model
+      cache, NDI runtime, and serial (VISCA-USB) ports. Do NOT add
+      com.apple.security.app-sandbox unless you target the Mac App Store.
+
+      Signing placeholders (set these on YOUR Mac; do not commit secrets):
+        Developer ID Application certificate (in your login Keychain), named like
+          "Developer ID Application: YOUR NAME (TEAM_ID)"
+        Team ID is the 10-char code shown by:  security find-identity -v -p codesigning
+    -->
+</dict>
+</plist>

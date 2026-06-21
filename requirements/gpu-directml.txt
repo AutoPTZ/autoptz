@@ -1,0 +1,12 @@
+# AutoPTZ — DirectML GPU extras (Windows: AMD / Intel / NVIDIA GPUs)
+#
+# DirectML accelerates inference on ANY DirectX 12 GPU — the right choice on
+# Windows for AMD and Intel GPUs (and a simple NVIDIA option without CUDA).
+#
+# Install after base (only one onnxruntime wheel can be installed at a time):
+#   pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml onnxruntime-openvino
+#   pip install -r requirements/gpu-directml.txt
+#
+# Provides: DirectML EP (DmlExecutionProvider) -> CPU fallback.
+
+onnxruntime-directml==1.20.1

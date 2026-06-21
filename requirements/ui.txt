@@ -1,0 +1,14 @@
+# AutoPTZ — minimal requirements to run / test the UI only.
+# Does NOT pull in onnxruntime, boxmot, av, or other heavy ML deps.
+# Use this to iterate on UI work without a full environment.
+#
+# Install:
+#   pip install -r requirements/ui.txt
+#   pip install -e .
+#   python -m autoptz.ui
+
+PySide6>=6.8.3
+pydantic>=2.11.3
+msgpack>=1.1.0
+pyserial>=3.5
+numpy>=2.2.0
