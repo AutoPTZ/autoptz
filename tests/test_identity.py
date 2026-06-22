@@ -537,16 +537,6 @@ def _make_client(tmp_path=None):
     return EngineClient(), None
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    import sys
-
-    from PySide6.QtCore import QCoreApplication
-
-    app = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
-    yield app
-
-
 class TestEngineClientIdentityAPI:
     def test_has_frozen_slots(self, qapp):
         client, _ = _make_client()

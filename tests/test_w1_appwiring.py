@@ -1,6 +1,6 @@
 """W1 (app-wiring slice) tests.
 
-Covers the Python app-wiring contracts exposed to QML:
+Covers the Python app-wiring contracts the UI relies on:
 - EngineClient.restartEngine() — stop then start.
 - EngineClient.getSetting/setSetting round-trip through ConfigStore.
 - EngineClient.scanUSBCameras() shape + Continuity label + in_use de-dup.
@@ -12,24 +12,8 @@ All tests use QCoreApplication (no display) so they run in CI.
 
 from __future__ import annotations
 
-import sys
-
 import PySide6  # noqa: F401
 import pytest
-
-# ── one QCoreApplication for the whole module ─────────────────────────────────
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    from PySide6.QtCore import QCoreApplication
-
-    existing = QCoreApplication.instance()
-    if existing is not None:
-        yield existing
-        return
-    app = QCoreApplication(sys.argv[:1])
-    yield app
 
 
 @pytest.fixture()

@@ -16,22 +16,6 @@ from pathlib import Path
 import PySide6  # noqa: F401
 import pytest
 
-# ── one QCoreApplication for the whole module ─────────────────────────────────
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    from PySide6.QtCore import QCoreApplication
-
-    existing = QCoreApplication.instance()
-    if existing is not None:
-        yield existing
-        return
-    app = QCoreApplication(sys.argv[:1])
-    yield app
-    # deliberately do not call app.quit() — other module fixtures still need it
-
-
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
