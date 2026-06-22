@@ -40,6 +40,18 @@ MAKE_DMG=1 bash packaging/build_macos.sh                 # signed + notarized + 
 `security find-identity -v -p codesigning` lists your identity + Team ID. Entitlements
 come from `packaging/entitlements.plist` (hardened runtime, required for notarization).
 
+> **You need a "Developer ID Application" certificate.** An **"Apple Development"**
+> cert (the default Xcode one) signs locally but **cannot be notarized** — Apple
+> returns `status: Invalid`. Create a Developer ID cert (needs the paid Apple
+> Developer Program): Xcode → Settings → Accounts → your team → Manage Certificates →
+> **+** → *Developer ID Application* (or via developer.apple.com → Certificates).
+> Then export it from Keychain Access as a `.p12`.
+
+If signing succeeds but notarization can't (e.g. wrong cert type), the script ships a
+**signed-but-not-notarized** build by default rather than failing — so a signing
+problem never blocks the Windows/Linux release. Set **`MACOS_SIGN_REQUIRED=1`** to make
+a non-notarized result a hard error once your Developer ID cert is in place.
+
 ### Signed releases in CI
 
 The [release workflow](../.github/workflows/release.yml) signs + notarizes the published
