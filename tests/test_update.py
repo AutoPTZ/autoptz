@@ -99,6 +99,37 @@ def test_asset_url_for_platform(monkeypatch) -> None:
     assert asset[1] == url
 
 
+def test_update_manager_prerelease_opt_in() -> None:
+    """include_prereleases defaults to opt-out (False) and the setter persists.
+
+    Stable users must not be offered pre-releases unless they explicitly opt in,
+    matching check_for_update()'s own default.
+    """
+    from PySide6.QtCore import QCoreApplication
+
+    from autoptz.ui.update_manager import UpdateManager
+
+    if QCoreApplication.instance() is None:
+        QCoreApplication([])
+
+    store: dict[str, object] = {}
+
+    class _Client:
+        def getSetting(self, key: str, default: object) -> object:
+            return store.get(key, default)
+
+        def setSetting(self, key: str, value: object) -> None:
+            store[key] = value
+
+    mgr = UpdateManager(_Client(), "2.0.0")
+    assert mgr.include_prereleases is False  # opt-out by default
+    mgr.set_include_prereleases(True)
+    assert mgr.include_prereleases is True
+    assert store["update_include_prereleases"] is True
+    mgr.set_include_prereleases(False)
+    assert mgr.include_prereleases is False
+
+
 def test_download_update_writes_platform_asset(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(checker.sys, "platform", "linux")
     info = UpdateInfo(
