@@ -36,9 +36,11 @@ echo "    venv:  ${VENV}"
 SIGN_IDENTITY="${MACOS_SIGN_IDENTITY:-}"
 
 # Notarize + staple a signed artifact (.app or .dmg) with whichever credentials
-# are available; a no-op (with a note) when none are set. Fails the build (and
-# prints Apple's detailed log) if the submission is not Accepted, instead of
-# blindly stapling a rejected artifact.
+# are available; a no-op (with a note) when none are set. On a non-Accepted
+# submission it prints Apple's detailed log, then by default warns and continues
+# (the build ships signed-but-not-notarized) so a signing problem can't brick the
+# whole cross-platform release. Set MACOS_SIGN_REQUIRED=1 to make it fatal once a
+# valid Developer ID Application cert is in place.
 notarize_and_staple() {
     local target="$1"
     local creds=()
@@ -66,7 +68,15 @@ notarize_and_staple() {
             echo "==> Apple notary log for ${submission_id}:"
             xcrun notarytool log "${submission_id}" "${creds[@]}" || true
         fi
-        return 1
+        echo "   Notarization requires a 'Developer ID Application' certificate; an"
+        echo "   'Apple Development' cert cannot notarize. See docs/building.md."
+        if [[ "${MACOS_SIGN_REQUIRED:-0}" == "1" ]]; then
+            echo "!! MACOS_SIGN_REQUIRED=1 — failing the build."
+            return 1
+        fi
+        echo "==> Continuing with a signed-but-NOT-notarized ${target}. Users will"
+        echo "    see a Gatekeeper warning until a Developer ID cert is configured."
+        return 0
     fi
     echo "==> Stapling ${target}"
     xcrun stapler staple "${target}"
