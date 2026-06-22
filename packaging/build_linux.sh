@@ -37,6 +37,20 @@ fi
 if [[ "${SKIP_INSTALL:-0}" != "1" ]]; then
     echo "==> Installing dependencies"
     ACCELERATOR="${ACCELERATOR:-cpu}"
+
+    # Force CPU-only torch for the portable CPU build. On Linux, PyPI's default
+    # torch wheel bundles CUDA (~2.5 GB of nvidia libs), which both bloats the
+    # AppImage and pushes it past GitHub's 2 GiB release-asset limit. Installing
+    # the CPU wheels *first* (from PyTorch's CPU index) means the ultralytics /
+    # boxmot requirements see torch already satisfied and never pull the CUDA
+    # build. Skipped for the nvidia accelerator, which wants the CUDA wheels.
+    if [[ "${ACCELERATOR}" == "cpu" ]]; then
+        echo "==> Pre-installing CPU-only torch (keeps CUDA libs out of the build)"
+        "${PY}" -m pip install --upgrade pip
+        "${PY}" -m pip install --index-url https://download.pytorch.org/whl/cpu \
+            torch torchvision
+    fi
+
     "${PY}" tools/install.py \
         --upgrade-pip \
         --packaging \
