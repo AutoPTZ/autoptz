@@ -34,6 +34,39 @@ echo "    venv:  ${VENV}"
 # Unset → unsigned build, and the manual sign/notarize commands are printed at
 # the end instead.
 SIGN_IDENTITY="${MACOS_SIGN_IDENTITY:-}"
+SIGN_REQUIRED="${MACOS_SIGN_REQUIRED:-0}"
+
+if [[ "${SIGN_REQUIRED}" == "1" && -z "${SIGN_IDENTITY}" ]]; then
+    echo "!! MACOS_SIGN_REQUIRED=1 but MACOS_SIGN_IDENTITY is empty." >&2
+    exit 1
+fi
+
+require_developer_id_signature() {
+    local target="$1"
+    local authorities
+    authorities="$(codesign -dvv "${target}" 2>&1 | grep -i "^Authority=" || true)"
+    printf '%s\n' "${authorities}"
+    if ! printf '%s\n' "${authorities}" | grep -q "^Authority=Developer ID Application:"; then
+        echo "!! ${target} is not signed with a Developer ID Application certificate." >&2
+        echo "   Export a 'Developer ID Application' certificate as .p12 and set" >&2
+        echo "   MACOS_SIGN_IDENTITY to the matching identity or SHA-1 hash." >&2
+        return 1
+    fi
+}
+
+sign_macho_files() {
+    local app="$1"
+    local signed=0
+    local candidate
+    while IFS= read -r -d '' candidate; do
+        if file -b "${candidate}" | grep -q "Mach-O"; then
+            codesign --force --options runtime --timestamp --sign "${SIGN_IDENTITY}" "${candidate}" \
+                || { echo "!! codesign failed for ${candidate}"; exit 1; }
+            signed=$((signed + 1))
+        fi
+    done < <(find "${app}/Contents" -type f -print0)
+    echo "==> Signed ${signed} nested Mach-O file(s)"
+}
 
 # Notarize + staple a signed artifact (.app or .dmg) with whichever credentials
 # are available; a no-op (with a note) when none are set. On a non-Accepted
@@ -53,6 +86,10 @@ notarize_and_staple() {
     else
         echo "==> Signed but NOT notarized (no notary credentials): ${target}"
         echo "    Set MACOS_NOTARY_APPLE_ID/TEAM_ID/PASSWORD or MACOS_NOTARY_KEYCHAIN_PROFILE."
+        if [[ "${SIGN_REQUIRED}" == "1" ]]; then
+            echo "!! MACOS_SIGN_REQUIRED=1 — failing because notarization credentials are missing."
+            return 1
+        fi
         return 0
     fi
     echo "==> Submitting ${target} to Apple's notary service…"
@@ -70,7 +107,7 @@ notarize_and_staple() {
         fi
         echo "   Notarization requires a 'Developer ID Application' certificate; an"
         echo "   'Apple Development' cert cannot notarize. See docs/building.md."
-        if [[ "${MACOS_SIGN_REQUIRED:-0}" == "1" ]]; then
+        if [[ "${SIGN_REQUIRED}" == "1" ]]; then
             echo "!! MACOS_SIGN_REQUIRED=1 — failing the build."
             return 1
         fi
@@ -130,14 +167,10 @@ plutil -lint "${APP}/Contents/Info.plist"
 # Must happen BEFORE the .dmg is built so the dmg ships the signed app.
 if [[ -n "${SIGN_IDENTITY}" ]]; then
     echo "==> Codesigning ${APP} with: ${SIGN_IDENTITY}"
-    # Sign every nested Mach-O (dylib/.so) first, inside-out. `codesign --deep` is
-    # unreliable for notarization — Apple returns "Invalid" when any nested binary
-    # is unsigned or carries an old signature — so sign them explicitly with the
-    # hardened runtime + a secure timestamp before sealing the bundle.
-    while IFS= read -r -d '' lib; do
-        codesign --force --options runtime --timestamp --sign "${SIGN_IDENTITY}" "${lib}" \
-            || { echo "!! codesign failed for ${lib}"; exit 1; }
-    done < <(find "${APP}/Contents" -type f \( -name "*.dylib" -o -name "*.so" \))
+    # Sign every nested Mach-O first. `codesign --deep` and extension-only scans can
+    # miss Python/PyInstaller binaries with no .dylib/.so suffix, which notarization
+    # reports later as "not signed with a valid Developer ID certificate".
+    sign_macho_files "${APP}"
     # Then the app bundle itself, carrying the entitlements.
     codesign --force --options runtime --timestamp \
         --entitlements packaging/entitlements.plist \
@@ -146,7 +179,7 @@ if [[ -n "${SIGN_IDENTITY}" ]]; then
     # Diagnostic: which certificate actually signed the bundle? Notarization needs
     # "Authority=Developer ID Application: …"; "Apple Development: …" is rejected.
     echo "==> Signing authority on ${APP}:"
-    codesign -dvv "${APP}" 2>&1 | grep -i "^Authority=" || true
+    require_developer_id_signature "${APP}"
     echo "==> ${APP} signed"
 fi
 
@@ -175,6 +208,8 @@ if [[ "${MAKE_DMG:-0}" == "1" ]]; then
     if [[ -n "${SIGN_IDENTITY}" ]]; then
         echo "==> Codesigning ${DMG}"
         codesign --force --timestamp --sign "${SIGN_IDENTITY}" "${DMG}"
+        echo "==> Signing authority on ${DMG}:"
+        require_developer_id_signature "${DMG}"
         notarize_and_staple "${DMG}"
     fi
 fi

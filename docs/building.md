@@ -13,7 +13,7 @@ The app icon is generated from `autoptz/assets/AutoPTZLogo.png` into
 
 ```bash
 bash packaging/build_macos.sh                 # dist/AutoPTZ.app
-MAKE_DMG=1 bash packaging/build_macos.sh      # + dist/AutoPTZ-<ver>-macos-arm64.dmg
+MAKE_DMG=1 bash packaging/build_macos.sh      # + dist/AutoPTZ-<ver>-macos-<arch>.dmg
 ```
 
 Produces a correctly-named bundle (`CFBundleName=AutoPTZ`). By default it is
@@ -47,25 +47,80 @@ come from `packaging/entitlements.plist` (hardened runtime, required for notariz
 > **+** → *Developer ID Application* (or via developer.apple.com → Certificates).
 > Then export it from Keychain Access as a `.p12`.
 
-If signing succeeds but notarization can't (e.g. wrong cert type), the script ships a
-**signed-but-not-notarized** build by default rather than failing — so a signing
-problem never blocks the Windows/Linux release. Set **`MACOS_SIGN_REQUIRED=1`** to make
-a non-notarized result a hard error once your Developer ID cert is in place.
+If signing succeeds but notarization can't, the script ships a
+**signed-but-not-notarized** local build by default. Set
+**`MACOS_SIGN_REQUIRED=1`** for release validation; CI sets this, so a bad
+certificate, missing notary credential, or rejected notarization fails the macOS
+release job instead of publishing a Gatekeeper-blocked `.dmg`.
 
 ### Signed releases in CI
 
 The [release workflow](../.github/workflows/release.yml) signs + notarizes the published
 `.dmg` automatically once these repository secrets are set (Settings → Secrets and
-variables → Actions); without them it still builds an unsigned `.dmg`:
+variables → Actions). Release CI requires all of them:
 
 | Secret | What it is |
 | --- | --- |
 | `MACOS_CERTIFICATE_P12_BASE64` | Your "Developer ID Application" cert exported as `.p12`, base64-encoded (`base64 -i cert.p12 \| pbcopy`). |
 | `MACOS_CERTIFICATE_PASSWORD` | The password you set when exporting the `.p12`. |
-| `MACOS_SIGN_IDENTITY` | `Developer ID Application: Your Name (TEAMID)`. |
+| `MACOS_SIGN_IDENTITY` | Prefer the SHA-1 hash from `security find-identity -v -p codesigning`; the full `Developer ID Application: Your Name (TEAMID)` string also works. |
 | `MACOS_NOTARY_APPLE_ID` | Apple ID email for notarization. |
 | `MACOS_NOTARY_TEAM_ID` | Your 10-character Team ID. |
-| `MACOS_NOTARY_PASSWORD` | An app-specific password for that Apple ID. |
+| `MACOS_NOTARY_PASSWORD` | An app-specific password for that Apple ID, not the Apple ID login password. |
+
+#### Exact macOS signing setup
+
+1. Join the paid Apple Developer Program for the Team ID you will ship under.
+2. Create a **Developer ID Application** certificate. Do not use **Apple
+   Development**; it can sign locally but Apple notarization rejects it.
+3. In Keychain Access, find the `Developer ID Application: ... (TEAMID)`
+   certificate, expand it, confirm it has a private key, then export the
+   certificate **and private key** as `cert.p12`. Set a strong export password.
+4. Verify the exported certificate locally:
+
+   ```bash
+   security import cert.p12 -k ~/Library/Keychains/login.keychain-db -P '<p12 export password>' -T /usr/bin/codesign
+   security find-identity -v -p codesigning | grep "Developer ID Application"
+   ```
+
+   Copy the SHA-1 hash at the start of the matching line; that is the safest value
+   for `MACOS_SIGN_IDENTITY`.
+
+5. Create an Apple app-specific password for notarization, then set repository
+   secrets:
+
+   ```bash
+   gh secret set MACOS_CERTIFICATE_P12_BASE64 --body "$(base64 -i cert.p12)"
+   gh secret set MACOS_CERTIFICATE_PASSWORD --body '<p12 export password>'
+   gh secret set MACOS_SIGN_IDENTITY --body '<SHA-1 from security find-identity>'
+   gh secret set MACOS_NOTARY_APPLE_ID --body 'you@example.com'
+   gh secret set MACOS_NOTARY_TEAM_ID --body '<TEAMID>'
+   gh secret set MACOS_NOTARY_PASSWORD --body '<app-specific password>'
+   ```
+
+6. Test before tagging:
+
+   ```bash
+   export MACOS_SIGN_IDENTITY='<SHA-1 from security find-identity>'
+   export MACOS_NOTARY_APPLE_ID='you@example.com'
+   export MACOS_NOTARY_TEAM_ID='<TEAMID>'
+   export MACOS_NOTARY_PASSWORD='<app-specific password>'
+   MACOS_SIGN_REQUIRED=1 MAKE_DMG=1 bash packaging/build_macos.sh
+   spctl -a -vvv -t open --context context:primary-signature dist/AutoPTZ-*-macos-*.dmg
+   ```
+
+   A valid release build prints `status: Accepted`, staples the `.dmg`, and exits
+   successfully. If Apple reports `not signed with a valid Developer ID
+   certificate`, the `.p12` or `MACOS_SIGN_IDENTITY` is wrong.
+
+#### macOS architectures in CI
+
+The release workflow builds arm64 on `macos-14` and x86_64 on `macos-15-intel`.
+They intentionally stay separate because a universal2 PyInstaller bundle would
+require every bundled native dependency (`onnxruntime`, OpenCV, PySide/Qt, Python
+extensions, etc.) to be universal too. The arm64 artifact gates the main release;
+the Intel artifact is best-effort and is attached to the same GitHub Release when
+the Intel runner finishes.
 
 ## Windows → `.exe` + installer
 

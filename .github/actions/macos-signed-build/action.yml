@@ -29,6 +29,10 @@ inputs:
   notary-password:
     required: false
     default: ""
+  sign-required:
+    description: "Set to 1 to fail if signing or notarization is missing/invalid."
+    required: false
+    default: "0"
 
 runs:
   using: composite
@@ -45,14 +49,49 @@ runs:
       env:
         CERT_B64: ${{ inputs.cert-b64 }}
         CERT_PASSWORD: ${{ inputs.cert-password }}
+        SIGN_IDENTITY: ${{ inputs.sign-identity }}
+        NOTARY_APPLE_ID: ${{ inputs.notary-apple-id }}
+        NOTARY_TEAM_ID: ${{ inputs.notary-team-id }}
+        NOTARY_PASSWORD: ${{ inputs.notary-password }}
+        SIGN_REQUIRED: ${{ inputs.sign-required }}
       run: |
+        missing=()
+        if [ "${SIGN_REQUIRED}" = "1" ]; then
+          [ -n "${CERT_B64}" ] || missing+=("cert-b64 / MACOS_CERTIFICATE_P12_BASE64")
+          [ -n "${CERT_PASSWORD}" ] || missing+=("cert-password / MACOS_CERTIFICATE_PASSWORD")
+          [ -n "${SIGN_IDENTITY}" ] || missing+=("sign-identity / MACOS_SIGN_IDENTITY")
+          [ -n "${NOTARY_APPLE_ID}" ] || missing+=("notary-apple-id / MACOS_NOTARY_APPLE_ID")
+          [ -n "${NOTARY_TEAM_ID}" ] || missing+=("notary-team-id / MACOS_NOTARY_TEAM_ID")
+          [ -n "${NOTARY_PASSWORD}" ] || missing+=("notary-password / MACOS_NOTARY_PASSWORD")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error::Signing is required, but these inputs are missing: %s\n' "${missing[*]}"
+            exit 1
+          fi
+        fi
+
         if [ -z "${CERT_B64}" ]; then
           echo "No signing cert provided — building unsigned."
           exit 0
         fi
+        if [ -z "${CERT_PASSWORD}" ] || [ -z "${SIGN_IDENTITY}" ]; then
+          echo "::error::A signing certificate was provided, but cert-password or sign-identity is empty."
+          exit 1
+        fi
+        notary_count=0
+        [ -n "${NOTARY_APPLE_ID}" ] && notary_count=$((notary_count + 1))
+        [ -n "${NOTARY_TEAM_ID}" ] && notary_count=$((notary_count + 1))
+        [ -n "${NOTARY_PASSWORD}" ] && notary_count=$((notary_count + 1))
+        if [ "${notary_count}" -ne 0 ] && [ "${notary_count}" -ne 3 ]; then
+          echo "::error::Notary credentials are partially configured. Set all three: Apple ID, Team ID, and app-specific password."
+          exit 1
+        fi
+
         KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
         KEYCHAIN_PW="$(uuidgen)"
-        printf '%s' "${CERT_B64}" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+        printf '%s' "${CERT_B64}" | base64 --decode > "$RUNNER_TEMP/cert.p12" || {
+          echo "::error::MACOS_CERTIFICATE_P12_BASE64 is not valid base64."
+          exit 1
+        }
         security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
         security set-keychain-settings -lut 21600 "$KEYCHAIN"
         security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
@@ -68,6 +107,15 @@ runs:
         # an "Apple Development: …" identity will be rejected by Apple.
         echo "==> Code-signing identities in the import keychain:"
         security find-identity -v -p codesigning "$KEYCHAIN" || true
+        if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "Developer ID Application:" >/dev/null; then
+          echo "::error::The imported .p12 does not contain a Developer ID Application identity."
+          exit 1
+        fi
+        if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "${SIGN_IDENTITY}" >/dev/null; then
+          echo "::error::MACOS_SIGN_IDENTITY does not match any identity imported from the .p12."
+          echo "Use the exact SHA-1 hash or identity string printed above."
+          exit 1
+        fi
     - name: Build .app + .dmg
       shell: bash
       env:
@@ -76,6 +124,7 @@ runs:
         MACOS_NOTARY_APPLE_ID: ${{ inputs.notary-apple-id }}
         MACOS_NOTARY_TEAM_ID: ${{ inputs.notary-team-id }}
         MACOS_NOTARY_PASSWORD: ${{ inputs.notary-password }}
+        MACOS_SIGN_REQUIRED: ${{ inputs.sign-required }}
       run: bash packaging/build_macos.sh
     - uses: actions/upload-artifact@v4
       with:

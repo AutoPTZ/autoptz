@@ -56,6 +56,7 @@ jobs:
           notary-apple-id: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
           notary-team-id: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
           notary-password: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          sign-required: "1"
 
   # Intel (x86_64) — best-effort. GitHub retired the macos-13 Intel image (Dec 2025);
   # `macos-15-intel` is its standard-runner replacement and the last Intel image
@@ -80,6 +81,7 @@ jobs:
           notary-apple-id: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
           notary-team-id: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
           notary-password: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          sign-required: "1"
 
   windows:
     name: Build Windows installer
@@ -146,3 +148,19 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
+
+  publish-macos-intel:
+    name: Attach macOS x86_64 artifact if available
+    needs: [release, macos-intel]
+    if: ${{ always() && github.ref_type == 'tag' && needs.release.result == 'success' && needs.macos-intel.result == 'success' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-x86_64
+          path: artifacts/macos-x86_64
+      - name: Upload x86_64 dmg to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" artifacts/macos-x86_64/*.dmg --clobber
