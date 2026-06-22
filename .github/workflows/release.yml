@@ -41,9 +41,21 @@ jobs:
           fi
 
   macos:
-    name: Build macOS .dmg
+    name: Build macOS .dmg (${{ matrix.arch }})
     needs: guard
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Build both Mac architectures as separate native bundles. PyInstaller and
+      # the ML wheels (torch, onnxruntime) are arch-specific, so there is no
+      # single universal2 build — Apple Silicon and Intel each get their own dmg.
+      # fail-fast: false so an Intel-only hiccup can't sink the arm64 build.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14   # Apple Silicon (arm64)
+            arch: arm64
+          - runner: macos-13   # Intel (x86_64)
+            arch: x86_64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -56,7 +68,7 @@ jobs:
         run: bash packaging/build_macos.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: macos
+          name: macos-${{ matrix.arch }}
           path: dist/*.dmg
           if-no-files-found: error
 
