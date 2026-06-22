@@ -348,6 +348,23 @@ class MainWindow(QMainWindow):
             act.toggled.connect(lambda on, k=key: self._client.setOverlay(k, on))
             overlays.addAction(act)
 
+        # Quick collapse/expand of the two side panels (mirrored on the status bar).
+        view.addSeparator()
+        self._act_toggle_left = QAction("Show Left Panel", self, checkable=True)
+        self._act_toggle_left.setShortcut("Ctrl+Alt+[")
+        self._act_toggle_left.setToolTip("Show or hide the left Properties panel.")
+        self._act_toggle_left.setStatusTip(self._act_toggle_left.toolTip())
+        self._act_toggle_left.toggled.connect(self._set_left_panel_visible)
+        view.addAction(self._act_toggle_left)
+        self._act_toggle_right = QAction("Show Right Panel", self, checkable=True)
+        self._act_toggle_right.setShortcut("Ctrl+Alt+]")
+        self._act_toggle_right.setToolTip(
+            "Show or hide the right Camera Info / People / Services panel."
+        )
+        self._act_toggle_right.setStatusTip(self._act_toggle_right.toolTip())
+        self._act_toggle_right.toggled.connect(self._set_right_panel_visible)
+        view.addAction(self._act_toggle_right)
+
         # Panels (dock toggles) and Layouts are view concerns, so they live under
         # View rather than as separate top-level menus.
         view.addSeparator()
@@ -837,6 +854,8 @@ class MainWindow(QMainWindow):
             self._client,
             logs_toggle=self._toggle_logs,
             cameras_popup=self._open_cameras_menu,
+            left_toggle=self._set_left_panel_visible,
+            right_toggle=self._set_right_panel_visible,
         )
         self.statusBar().addPermanentWidget(self._status, 1)
         self.statusBar().setSizeGripEnabled(False)
@@ -844,6 +863,13 @@ class MainWindow(QMainWindow):
         if logs is not None:
             logs.visibilityChanged.connect(self._status.set_logs_visible)
             self._status.set_logs_visible(logs.isVisible())
+        # Keep both the menu checkmarks and the status-bar buttons in sync with the
+        # side panels however they're toggled (menu, button, shortcut, or close box).
+        for key in ("properties", *self._RIGHT_PANEL_KEYS):
+            dock = self._docks.get(key)
+            if dock is not None:
+                dock.visibilityChanged.connect(lambda _v: self._sync_panel_toggles())
+        self._sync_panel_toggles()
 
     def _toggle_logs(self, shown: bool | None = None) -> None:
         dock = self._docks.get("logs")
@@ -855,6 +881,48 @@ class MainWindow(QMainWindow):
             dock.raise_()
         else:
             dock.hide()
+
+    # ── side-panel collapse ──────────────────────────────────────────────────────
+
+    #: The right-hand dock group is three tabbed panels toggled as one unit.
+    _RIGHT_PANEL_KEYS = ("camera_info", "people", "services")
+
+    def _set_left_panel_visible(self, shown: bool) -> None:
+        dock = self._docks.get("properties")
+        if dock is None:
+            return
+        if shown:
+            dock.show()
+            dock.raise_()
+        else:
+            dock.hide()
+
+    def _set_right_panel_visible(self, shown: bool) -> None:
+        docks = [d for k in self._RIGHT_PANEL_KEYS if (d := self._docks.get(k)) is not None]
+        for dock in docks:
+            dock.setVisible(shown)
+        if shown and docks:
+            docks[0].raise_()
+
+    def _sync_panel_toggles(self) -> None:
+        """Keep the menu checkmarks and status-bar buttons in step with the docks."""
+        left = self._docks.get("properties")
+        left_on = bool(left is not None and left.isVisible())
+        right_on = any(
+            (d := self._docks.get(k)) is not None and d.isVisible() for k in self._RIGHT_PANEL_KEYS
+        )
+        for act, on in (
+            (getattr(self, "_act_toggle_left", None), left_on),
+            (getattr(self, "_act_toggle_right", None), right_on),
+        ):
+            if act is not None:
+                blocked = act.blockSignals(True)
+                act.setChecked(on)
+                act.blockSignals(blocked)
+        status = getattr(self, "_status", None)
+        if status is not None:
+            status.set_left_visible(left_on)
+            status.set_right_visible(right_on)
 
     # ── selection routing ──────────────────────────────────────────────────────
 

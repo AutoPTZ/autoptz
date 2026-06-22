@@ -28,6 +28,8 @@ class StatusBar(QWidget):
         client: Any,
         logs_toggle: Callable[[bool], None] | None = None,
         cameras_popup: Callable[..., None] | None = None,
+        left_toggle: Callable[[bool], None] | None = None,
+        right_toggle: Callable[[bool], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -64,6 +66,26 @@ class StatusBar(QWidget):
         row.addWidget(self._make_sep())
         self._summary = QLabel("")
         row.addWidget(self._summary)
+
+        # Quick collapse/expand of the side panels (also in View and on shortcuts).
+        self._left_btn: QPushButton | None = None
+        self._right_btn: QPushButton | None = None
+        if left_toggle is not None or right_toggle is not None:
+            row.addWidget(self._make_sep())
+        if left_toggle is not None:
+            self._left_btn = QPushButton("◧")
+            self._left_btn.setCheckable(True)
+            self._left_btn.setToolTip("Show or hide the left Properties panel.")
+            self._left_btn.toggled.connect(left_toggle)
+            row.addWidget(self._left_btn)
+        if right_toggle is not None:
+            self._right_btn = QPushButton("◨")
+            self._right_btn.setCheckable(True)
+            self._right_btn.setToolTip(
+                "Show or hide the right Camera Info / People / Services panel."
+            )
+            self._right_btn.toggled.connect(right_toggle)
+            row.addWidget(self._right_btn)
 
         self._logs_btn: QPushButton | None = None
         if logs_toggle is not None:
@@ -115,6 +137,12 @@ class StatusBar(QWidget):
         self.set_logs_visible(shown)
         if self._logs_toggle is not None:
             self._logs_toggle(shown)
+
+    def set_left_visible(self, shown: bool) -> None:
+        _set_checked(self._left_btn, shown)
+
+    def set_right_visible(self, shown: bool) -> None:
+        _set_checked(self._right_btn, shown)
 
     # ── refreshers ───────────────────────────────────────────────────────────────
 
@@ -202,3 +230,11 @@ def _safe(fn: Any, default: Any) -> Any:
         return fn()
     except Exception:  # noqa: BLE001
         return default
+
+
+def _set_checked(btn: QPushButton | None, checked: bool) -> None:
+    """Set a checkable button's state without re-emitting ``toggled``."""
+    if btn is not None:
+        was = btn.blockSignals(True)
+        btn.setChecked(checked)
+        btn.blockSignals(was)
