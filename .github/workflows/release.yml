@@ -16,8 +16,33 @@ env:
   QT_QPA_PLATFORM: offscreen
 
 jobs:
+  # Refuse to build a release whose tag disagrees with the app's own version.
+  # autoptz.__version__ is the single source of truth; a tag like v2.1.0 must
+  # match it, or the installers would report the wrong version to users.
+  guard:
+    name: Verify tag matches __version__
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match autoptz.__version__
+        shell: bash
+        run: |
+          ver="$(sed -nE 's/^__version__ *= *"([^"]+)".*/\1/p' autoptz/__init__.py)"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            echo "tag=v$tag  __version__=$ver"
+            if [ "$tag" != "$ver" ]; then
+              echo "::error::Tag v$tag does not match autoptz.__version__ ($ver). Bump autoptz/__init__.py to match before tagging."
+              exit 1
+            fi
+            echo "OK: tag matches __version__"
+          else
+            echo "Manual dispatch (ref_type=$GITHUB_REF_TYPE); __version__=$ver — skipping tag match."
+          fi
+
   macos:
     name: Build macOS .dmg
+    needs: guard
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +62,7 @@ jobs:
 
   windows:
     name: Build Windows installer
+    needs: guard
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +84,7 @@ jobs:
 
   linux:
     name: Build Linux AppImage
+    needs: guard
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
