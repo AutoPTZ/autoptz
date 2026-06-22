@@ -348,23 +348,37 @@ class MainWindow(QMainWindow):
             act.toggled.connect(lambda on, k=key: self._client.setOverlay(k, on))
             overlays.addAction(act)
 
-        panels = bar.addMenu("&Panels")
+        # Panels (dock toggles) and Layouts are view concerns, so they live under
+        # View rather than as separate top-level menus.
+        view.addSeparator()
+        panels = view.addMenu("Panels")
         for key in ("properties", "camera_info", "people", "services", "logs"):
             panels.addAction(self._docks[key].toggleViewAction())
 
-        self._layouts_menu = bar.addMenu("&Layouts")
+        self._layouts_menu = view.addMenu("Layouts")
         self._layouts_menu.setToolTipsVisible(True)
         self._layouts_menu.aboutToShow.connect(self._populate_layouts_menu)
 
         helpm = bar.addMenu("&Help")
-        helpm.addAction(
+        updates = helpm.addMenu("Updates")
+        updates.setToolTipsVisible(True)
+        updates.addAction(
             _action(
                 self,
-                "Check for Updates…",
+                "Check Now…",
                 self._updates.check_now,
                 tip="Check GitHub for a newer AutoPTZ release.",
             )
         )
+        updates.addSeparator()
+        self._act_auto_check = QAction("Check Automatically on Startup", self, checkable=True)
+        self._act_auto_check.setChecked(self._updates.auto_check_enabled)
+        self._act_auto_check.setToolTip(
+            "Check GitHub for a newer release once a day when AutoPTZ starts."
+        )
+        self._act_auto_check.setStatusTip(self._act_auto_check.toolTip())
+        self._act_auto_check.toggled.connect(self._updates.set_auto_check)
+        updates.addAction(self._act_auto_check)
         self._act_prereleases = QAction("Include Pre-release (Beta) Updates", self, checkable=True)
         self._act_prereleases.setChecked(self._updates.include_prereleases)
         self._act_prereleases.setToolTip(
@@ -372,7 +386,7 @@ class MainWindow(QMainWindow):
         )
         self._act_prereleases.setStatusTip(self._act_prereleases.toolTip())
         self._act_prereleases.toggled.connect(self._updates.set_include_prereleases)
-        helpm.addAction(self._act_prereleases)
+        updates.addAction(self._act_prereleases)
         helpm.addSeparator()
         helpm.addAction(_action(self, "About AutoPTZ", self._show_about))
 
