@@ -37,7 +37,6 @@ fi
 if [[ "${SKIP_INSTALL:-0}" != "1" ]]; then
     echo "==> Installing dependencies"
     ACCELERATOR="${ACCELERATOR:-cpu}"
-
     # Force CPU-only torch for the portable CPU build. On Linux, PyPI's default
     # torch wheel bundles CUDA (~2.5 GB of nvidia libs), which both bloats the
     # AppImage and pushes it past GitHub's 2 GiB release-asset limit. Installing
@@ -50,7 +49,6 @@ if [[ "${SKIP_INSTALL:-0}" != "1" ]]; then
         "${PY}" -m pip install --index-url https://download.pytorch.org/whl/cpu \
             torch torchvision
     fi
-
     "${PY}" tools/install.py \
         --upgrade-pip \
         --packaging \
