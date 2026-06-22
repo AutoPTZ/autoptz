@@ -36,24 +36,37 @@ echo "    venv:  ${VENV}"
 SIGN_IDENTITY="${MACOS_SIGN_IDENTITY:-}"
 
 # Notarize + staple a signed artifact (.app or .dmg) with whichever credentials
-# are available; a no-op (with a note) when none are set.
+# are available; a no-op (with a note) when none are set. Fails the build (and
+# prints Apple's detailed log) if the submission is not Accepted, instead of
+# blindly stapling a rejected artifact.
 notarize_and_staple() {
     local target="$1"
+    local creds=()
     if [[ -n "${MACOS_NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
-        echo "==> Notarizing ${target} via keychain profile ${MACOS_NOTARY_KEYCHAIN_PROFILE}"
-        xcrun notarytool submit "${target}" \
-            --keychain-profile "${MACOS_NOTARY_KEYCHAIN_PROFILE}" --wait
+        creds=(--keychain-profile "${MACOS_NOTARY_KEYCHAIN_PROFILE}")
     elif [[ -n "${MACOS_NOTARY_APPLE_ID:-}" && -n "${MACOS_NOTARY_TEAM_ID:-}" \
             && -n "${MACOS_NOTARY_PASSWORD:-}" ]]; then
-        echo "==> Notarizing ${target} via Apple ID ${MACOS_NOTARY_APPLE_ID}"
-        xcrun notarytool submit "${target}" \
-            --apple-id "${MACOS_NOTARY_APPLE_ID}" \
-            --team-id "${MACOS_NOTARY_TEAM_ID}" \
-            --password "${MACOS_NOTARY_PASSWORD}" --wait
+        creds=(--apple-id "${MACOS_NOTARY_APPLE_ID}" --team-id "${MACOS_NOTARY_TEAM_ID}"
+               --password "${MACOS_NOTARY_PASSWORD}")
     else
         echo "==> Signed but NOT notarized (no notary credentials): ${target}"
         echo "    Set MACOS_NOTARY_APPLE_ID/TEAM_ID/PASSWORD or MACOS_NOTARY_KEYCHAIN_PROFILE."
         return 0
+    fi
+    echo "==> Submitting ${target} to Apple's notary service…"
+    local out submission_id
+    # `|| true`: notarytool exits non-zero on a rejected submission; we want to
+    # inspect the status and fetch the log ourselves rather than abort here.
+    out="$(xcrun notarytool submit "${target}" "${creds[@]}" --wait 2>&1)" || true
+    echo "${out}"
+    if ! printf '%s\n' "${out}" | grep -q "status: Accepted"; then
+        submission_id="$(printf '%s\n' "${out}" | awk -F'[: ]+' '/^[[:space:]]*id:/{print $3; exit}')"
+        echo "!! Notarization was NOT Accepted for ${target}."
+        if [[ -n "${submission_id}" ]]; then
+            echo "==> Apple notary log for ${submission_id}:"
+            xcrun notarytool log "${submission_id}" "${creds[@]}" || true
+        fi
+        return 1
     fi
     echo "==> Stapling ${target}"
     xcrun stapler staple "${target}"
@@ -107,7 +120,16 @@ plutil -lint "${APP}/Contents/Info.plist"
 # Must happen BEFORE the .dmg is built so the dmg ships the signed app.
 if [[ -n "${SIGN_IDENTITY}" ]]; then
     echo "==> Codesigning ${APP} with: ${SIGN_IDENTITY}"
-    codesign --deep --force --options runtime --timestamp \
+    # Sign every nested Mach-O (dylib/.so) first, inside-out. `codesign --deep` is
+    # unreliable for notarization — Apple returns "Invalid" when any nested binary
+    # is unsigned or carries an old signature — so sign them explicitly with the
+    # hardened runtime + a secure timestamp before sealing the bundle.
+    while IFS= read -r -d '' lib; do
+        codesign --force --options runtime --timestamp --sign "${SIGN_IDENTITY}" "${lib}" \
+            || { echo "!! codesign failed for ${lib}"; exit 1; }
+    done < <(find "${APP}/Contents" -type f \( -name "*.dylib" -o -name "*.so" \))
+    # Then the app bundle itself, carrying the entitlements.
+    codesign --force --options runtime --timestamp \
         --entitlements packaging/entitlements.plist \
         --sign "${SIGN_IDENTITY}" "${APP}"
     codesign --verify --deep --strict --verbose=2 "${APP}"
