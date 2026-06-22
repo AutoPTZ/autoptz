@@ -10,8 +10,11 @@ Outputs:
     Windows  -> dist/AutoPTZ/AutoPTZ.exe  (onedir; flip ONEFILE=1 for onefile)
 
 The entry point is autoptz/__main__.py so the frozen app behaves exactly like
-`python -m autoptz` (it calls multiprocessing.freeze_support() — REQUIRED for
-the spawn-based engine workers to start under a frozen build).
+`python -m autoptz` (it calls multiprocessing.freeze_support() — REQUIRED so the
+spawn-based multiprocessing the app uses, e.g. the selftest's shared-memory probe,
+starts correctly under a frozen build). The camera engine itself runs threads in
+this process today; the transport is process-safe for a future process-per-camera
+build.
 
 What gets bundled
 -----------------

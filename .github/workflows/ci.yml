@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: ["dev/v2-architecture-rework", "phase-*/**", "main"]
+    branches: ["main"]
   pull_request:
-    branches: ["dev/v2-architecture-rework", "main"]
+    branches: ["main"]
 
 concurrency:
   group: ci-${{ github.ref }}
