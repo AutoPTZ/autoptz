@@ -99,6 +99,40 @@ def test_asset_url_for_platform(monkeypatch) -> None:
     assert asset[1] == url
 
 
+def test_asset_for_platform_macos_prefers_matching_arch(monkeypatch) -> None:
+    import platform as _platform
+
+    monkeypatch.setattr(checker.sys, "platform", "darwin")
+    info = UpdateInfo(
+        version="2.1.0",
+        tag="v2.1.0",
+        name="x",
+        body="",
+        html_url="https://example/rel",
+        is_prerelease=False,
+        assets=(
+            ("AutoPTZ-2.1.0-macos-x86_64.dmg", "https://example/intel"),
+            ("AutoPTZ-2.1.0-macos-arm64.dmg", "https://example/arm"),
+        ),
+    )
+    monkeypatch.setattr(_platform, "machine", lambda: "arm64")
+    assert info.asset_for_platform() == ("AutoPTZ-2.1.0-macos-arm64.dmg", "https://example/arm")
+    monkeypatch.setattr(_platform, "machine", lambda: "x86_64")
+    assert info.asset_for_platform()[1] == "https://example/intel"
+
+    # An older single, unlabeled dmg still resolves via the fallback.
+    one = UpdateInfo(
+        version="2.0.0",
+        tag="v2.0.0",
+        name="x",
+        body="",
+        html_url="https://example/rel",
+        is_prerelease=False,
+        assets=(("AutoPTZ-2.0.0.dmg", "https://example/any"),),
+    )
+    assert one.asset_for_platform() == ("AutoPTZ-2.0.0.dmg", "https://example/any")
+
+
 def test_update_manager_prerelease_opt_in() -> None:
     """include_prereleases defaults to opt-out (False) and the setter persists.
 
