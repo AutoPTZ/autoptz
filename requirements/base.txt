@@ -8,7 +8,10 @@
 # ── inference runtime ─────────────────────────────────────────────────────────
 # CPU-only onnxruntime; replaced by onnxruntime-gpu on NVIDIA systems.
 # macOS arm64 onnxruntime wheel already includes the CoreML EP.
-onnxruntime==1.20.1
+# Pinned to 1.24.x to match onnx 1.21 (onnxruntime 1.20 maxes out at IR v10 and
+# can't load the IR v13 models onnx 1.21 writes). 1.24.1 is the newest version
+# available for every EP wheel (incl. onnxruntime-openvino).
+onnxruntime==1.24.1
 
 # ── computer vision ───────────────────────────────────────────────────────────
 numpy==2.2.6

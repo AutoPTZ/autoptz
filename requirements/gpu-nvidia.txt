@@ -8,4 +8,4 @@
 # TensorRT EP requires TensorRT 10.x installed separately from NVIDIA.
 # CUDA EP requires CUDA 12.x + cuDNN 9.x.
 
-onnxruntime-gpu==1.20.1
+onnxruntime-gpu==1.24.1
