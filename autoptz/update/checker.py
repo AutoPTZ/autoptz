@@ -39,11 +39,20 @@ class UpdateInfo:
     assets: tuple[tuple[str, str], ...] = ()  # (filename, browser_download_url)
 
     def asset_for_platform(self) -> tuple[str, str] | None:
-        """Return ``(filename, url)`` for this OS, or None if absent."""
+        """Return ``(filename, url)`` for this OS (and arch on macOS), or None."""
         if sys.platform == "darwin":
-            exts = (".dmg",)
-        elif sys.platform == "win32":
-            exts = ("setup.exe", ".msi", ".exe")
+            # Releases ship separate arm64 and x86_64 dmgs; prefer the one matching
+            # this Mac, falling back to any .dmg (e.g. an older single-arch release).
+            import platform
+
+            arch = platform.machine().lower()  # "arm64" or "x86_64"
+            dmgs = [(n, u) for n, u in self.assets if n.lower().endswith(".dmg")]
+            for name, url in dmgs:
+                if arch in name.lower():
+                    return name, url
+            return dmgs[0] if dmgs else None
+        if sys.platform == "win32":
+            exts: tuple[str, ...] = ("setup.exe", ".msi", ".exe")
         else:
             exts = (".appimage", ".deb", ".tar.gz")
         for name, url in self.assets:

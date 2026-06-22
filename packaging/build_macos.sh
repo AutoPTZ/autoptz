@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# build_macos.sh — build AutoPTZ.app on macOS (Apple Silicon).
+# build_macos.sh — build AutoPTZ.app for the host macOS architecture
+# (Apple Silicon arm64 or Intel x86_64; PyInstaller freezes host-native).
 #
 # Produces dist/AutoPTZ.app, an unsigned bundle whose Info.plist declares
 # CFBundleName=AutoPTZ — that is what makes the macOS app menu read "AutoPTZ"
@@ -119,7 +120,11 @@ fi
 # sets MAKE_DMG=1; local builds skip it by default.
 if [[ "${MAKE_DMG:-0}" == "1" ]]; then
     VER="$("${PY}" -c 'import autoptz; print(autoptz.__version__)')"
-    DMG="dist/AutoPTZ-${VER}-macos-arm64.dmg"
+    # Native host architecture: "arm64" on Apple Silicon, "x86_64" on Intel.
+    # PyInstaller (target_arch=None) freezes for the host, so the dmg name must
+    # follow suit instead of always claiming arm64.
+    ARCH="$(uname -m)"
+    DMG="dist/AutoPTZ-${VER}-macos-${ARCH}.dmg"
     echo "==> Building ${DMG}"
     STAGE="$(mktemp -d)"
     cp -R "${APP}" "${STAGE}/"
