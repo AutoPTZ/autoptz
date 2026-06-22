@@ -26,6 +26,38 @@ echo "==> AutoPTZ macOS build"
 echo "    repo:  ${ROOT}"
 echo "    venv:  ${VENV}"
 
+# ── signing config (opt-in) ──────────────────────────────────────────────────
+# Sign + notarize only when MACOS_SIGN_IDENTITY is set (CI sets it from repo
+# secrets; locally, export it to sign with your Developer ID, e.g.
+#   export MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+# Unset → unsigned build, and the manual sign/notarize commands are printed at
+# the end instead.
+SIGN_IDENTITY="${MACOS_SIGN_IDENTITY:-}"
+
+# Notarize + staple a signed artifact (.app or .dmg) with whichever credentials
+# are available; a no-op (with a note) when none are set.
+notarize_and_staple() {
+    local target="$1"
+    if [[ -n "${MACOS_NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
+        echo "==> Notarizing ${target} via keychain profile ${MACOS_NOTARY_KEYCHAIN_PROFILE}"
+        xcrun notarytool submit "${target}" \
+            --keychain-profile "${MACOS_NOTARY_KEYCHAIN_PROFILE}" --wait
+    elif [[ -n "${MACOS_NOTARY_APPLE_ID:-}" && -n "${MACOS_NOTARY_TEAM_ID:-}" \
+            && -n "${MACOS_NOTARY_PASSWORD:-}" ]]; then
+        echo "==> Notarizing ${target} via Apple ID ${MACOS_NOTARY_APPLE_ID}"
+        xcrun notarytool submit "${target}" \
+            --apple-id "${MACOS_NOTARY_APPLE_ID}" \
+            --team-id "${MACOS_NOTARY_TEAM_ID}" \
+            --password "${MACOS_NOTARY_PASSWORD}" --wait
+    else
+        echo "==> Signed but NOT notarized (no notary credentials): ${target}"
+        echo "    Set MACOS_NOTARY_APPLE_ID/TEAM_ID/PASSWORD or MACOS_NOTARY_KEYCHAIN_PROFILE."
+        return 0
+    fi
+    echo "==> Stapling ${target}"
+    xcrun stapler staple "${target}"
+}
+
 # ── 1. venv ─────────────────────────────────────────────────────────────────
 if [[ ! -x "${PY}" ]]; then
     echo "==> Creating venv at ${VENV}"
@@ -69,6 +101,18 @@ echo "==> Verifying CFBundleName (the app-name fix):"
 /usr/libexec/PlistBuddy -c 'Print :CFBundleName' "${APP}/Contents/Info.plist"
 plutil -lint "${APP}/Contents/Info.plist"
 
+# ── 5b. sign the .app (opt-in) ───────────────────────────────────────────────
+# Deep-sign with the hardened runtime + entitlements so the bundle is notarizable.
+# Must happen BEFORE the .dmg is built so the dmg ships the signed app.
+if [[ -n "${SIGN_IDENTITY}" ]]; then
+    echo "==> Codesigning ${APP} with: ${SIGN_IDENTITY}"
+    codesign --deep --force --options runtime --timestamp \
+        --entitlements packaging/entitlements.plist \
+        --sign "${SIGN_IDENTITY}" "${APP}"
+    codesign --verify --deep --strict --verbose=2 "${APP}"
+    echo "==> ${APP} signed"
+fi
+
 # ── 6. (optional) DMG ─────────────────────────────────────────────────────────
 # MAKE_DMG=1 produces a compressed, versioned dmg with an /Applications symlink
 # (drag-to-install).  Dependency-free (uses macOS hdiutil).  The release workflow
@@ -85,6 +129,19 @@ if [[ "${MAKE_DMG:-0}" == "1" ]]; then
         -ov -format UDZO "${DMG}"
     rm -rf "${STAGE}"
     echo "==> Built ${DMG}"
+
+    # Sign + notarize + staple the distributed .dmg (opt-in).
+    if [[ -n "${SIGN_IDENTITY}" ]]; then
+        echo "==> Codesigning ${DMG}"
+        codesign --force --timestamp --sign "${SIGN_IDENTITY}" "${DMG}"
+        notarize_and_staple "${DMG}"
+    fi
+fi
+
+if [[ -n "${SIGN_IDENTITY}" ]]; then
+    echo
+    echo "==> Signed build complete (notarized if notary credentials were provided)."
+    exit 0
 fi
 
 cat <<'EOF'

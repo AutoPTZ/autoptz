@@ -4,7 +4,7 @@
   packaging/entitlements.plist : macOS hardened-runtime entitlements.
 
   Applied at signing time via codesign (see packaging/build_macos.sh and
-  docs/v2-rework/11-packaging-and-distribution.md for the exact commands).
+  docs/building.md for the exact commands and the CI signing secrets).
 
   Hardened runtime is REQUIRED for Apple notarization. The JIT and
   unsigned-executable-memory entitlements below are what Python plus PySide6 / Qt

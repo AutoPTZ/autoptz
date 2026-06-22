@@ -6,9 +6,9 @@ Download the latest build for your OS from the
 [Releases page](https://github.com/AutoPTZ/autoptz/releases):
 
 - **macOS** — `AutoPTZ-<version>-macos-arm64.dmg`. Open it and drag **AutoPTZ**
-  to Applications. The builds are currently **unsigned**, so the first launch
-  needs: right-click the app → **Open** → **Open** (or System Settings → Privacy
-  & Security → *Open Anyway*).
+  to Applications. Signed + notarized releases open normally. If you build it
+  yourself unsigned, the first launch needs: right-click the app → **Open** →
+  **Open** (or System Settings → Privacy & Security → *Open Anyway*).
 - **Windows** — `AutoPTZ-<version>-windows-x64-setup.exe`. Run it; it installs
   Start-menu/desktop shortcuts and an uninstaller. SmartScreen may warn on the
   unsigned installer — **More info → Run anyway**.

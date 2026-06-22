@@ -16,9 +16,44 @@ bash packaging/build_macos.sh                 # dist/AutoPTZ.app
 MAKE_DMG=1 bash packaging/build_macos.sh      # + dist/AutoPTZ-<ver>-macos-arm64.dmg
 ```
 
-Produces an unsigned, correctly-named bundle (`CFBundleName=AutoPTZ`). Signing +
-notarization need your Apple Developer ID — the exact `codesign` / `notarytool` /
-`stapler` commands are printed at the end of the script.
+Produces a correctly-named bundle (`CFBundleName=AutoPTZ`). By default it is
+**unsigned** and the script prints the manual `codesign` / `notarytool` / `stapler`
+commands at the end.
+
+### Signing + notarization (opt-in)
+
+Set `MACOS_SIGN_IDENTITY` to your Developer ID and the script signs the `.app` (and,
+with `MAKE_DMG=1`, the `.dmg`). Add notary credentials and it also notarizes +
+staples:
+
+```bash
+export MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+# notarize too (either a stored profile, or Apple-ID creds):
+export MACOS_NOTARY_KEYCHAIN_PROFILE="AUTOPTZ_NOTARY"     # from `notarytool store-credentials`
+#   …or…
+export MACOS_NOTARY_APPLE_ID="you@example.com"
+export MACOS_NOTARY_TEAM_ID="TEAMID"
+export MACOS_NOTARY_PASSWORD="app-specific-password"
+MAKE_DMG=1 bash packaging/build_macos.sh                 # signed + notarized + stapled .dmg
+```
+
+`security find-identity -v -p codesigning` lists your identity + Team ID. Entitlements
+come from `packaging/entitlements.plist` (hardened runtime, required for notarization).
+
+### Signed releases in CI
+
+The [release workflow](../.github/workflows/release.yml) signs + notarizes the published
+`.dmg` automatically once these repository secrets are set (Settings → Secrets and
+variables → Actions); without them it still builds an unsigned `.dmg`:
+
+| Secret | What it is |
+| --- | --- |
+| `MACOS_CERTIFICATE_P12_BASE64` | Your "Developer ID Application" cert exported as `.p12`, base64-encoded (`base64 -i cert.p12 \| pbcopy`). |
+| `MACOS_CERTIFICATE_PASSWORD` | The password you set when exporting the `.p12`. |
+| `MACOS_SIGN_IDENTITY` | `Developer ID Application: Your Name (TEAMID)`. |
+| `MACOS_NOTARY_APPLE_ID` | Apple ID email for notarization. |
+| `MACOS_NOTARY_TEAM_ID` | Your 10-character Team ID. |
+| `MACOS_NOTARY_PASSWORD` | An app-specific password for that Apple ID. |
 
 ## Windows → `.exe` + installer
 
