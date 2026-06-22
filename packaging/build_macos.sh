@@ -143,6 +143,10 @@ if [[ -n "${SIGN_IDENTITY}" ]]; then
         --entitlements packaging/entitlements.plist \
         --sign "${SIGN_IDENTITY}" "${APP}"
     codesign --verify --deep --strict --verbose=2 "${APP}"
+    # Diagnostic: which certificate actually signed the bundle? Notarization needs
+    # "Authority=Developer ID Application: …"; "Apple Development: …" is rejected.
+    echo "==> Signing authority on ${APP}:"
+    codesign -dvv "${APP}" 2>&1 | grep -i "^Authority=" || true
     echo "==> ${APP} signed"
 fi
 
