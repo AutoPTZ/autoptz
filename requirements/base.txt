@@ -8,7 +8,10 @@
 # ── inference runtime ─────────────────────────────────────────────────────────
 # CPU-only onnxruntime; replaced by onnxruntime-gpu on NVIDIA systems.
 # macOS arm64 onnxruntime wheel already includes the CoreML EP.
-onnxruntime==1.20.1
+# Pinned to 1.24.x to match onnx 1.21 (onnxruntime 1.20 maxes out at IR v10 and
+# can't load the IR v13 models onnx 1.21 writes). 1.24.1 is the newest version
+# available for every EP wheel (incl. onnxruntime-openvino).
+onnxruntime==1.24.1
 
 # ── computer vision ───────────────────────────────────────────────────────────
 numpy==2.2.6
@@ -58,7 +61,7 @@ cyndilib>=0.1.1
 # ── detection + tracking ───────────────────────────────────────────
 # onnx is used to build synthetic test models, needed by boxmot, and used by
 # ModelManager's ultralytics export fallback (YOLO11 .pt → ONNX).
-onnx==1.17.0
+onnx==1.21.0
 
 # ── model bootstrap ─────────────────────────────────────────────────
 # By default the engine acquires the YOLO11 detector ONNX **torch-free**:
