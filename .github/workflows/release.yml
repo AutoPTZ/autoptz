@@ -57,14 +57,16 @@ jobs:
           notary-team-id: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
           notary-password: ${{ secrets.MACOS_NOTARY_PASSWORD }}
 
-  # Intel (x86_64) — best-effort. GitHub's macos-13 runners are scarce, so this is
-  # deliberately NOT a dependency of `release`: a missing/slow Intel runner can
-  # never hold up the arm64 + Windows + Linux release. continue-on-error keeps the
-  # run green if it fails; the x86_64 dmg ships whenever it finishes in time.
+  # Intel (x86_64) — best-effort. GitHub retired the macos-13 Intel image (Dec 2025);
+  # `macos-15-intel` is its standard-runner replacement and the last Intel image
+  # (x86_64 support ends ~Fall 2027). This job is deliberately NOT a dependency of
+  # `release`, so a missing/slow Intel runner can never hold up the arm64 + Windows +
+  # Linux release; continue-on-error keeps the run green if it fails, and the x86_64
+  # dmg ships whenever it finishes in time.
   macos-intel:
     name: Build macOS .dmg (x86_64, best-effort)
     needs: guard
-    runs-on: macos-13
+    runs-on: macos-15-intel
     continue-on-error: true
     timeout-minutes: 60
     steps:
