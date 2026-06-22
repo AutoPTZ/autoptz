@@ -109,7 +109,13 @@ class UpdateManager(QObject):
 
     @property
     def include_prereleases(self) -> bool:
-        return bool(self._get("update_include_prereleases", True))
+        # Opt-in: stable users are only offered stable releases. Matches the
+        # checker's own default (check_for_update(..., include_prereleases=False))
+        # and the release workflow's "opted into pre-releases" intent.
+        return bool(self._get("update_include_prereleases", False))
+
+    def set_include_prereleases(self, on: bool) -> None:
+        self._set("update_include_prereleases", bool(on))
 
     def skip_version(self, version: str) -> None:
         self._set("update_skip_version", version)

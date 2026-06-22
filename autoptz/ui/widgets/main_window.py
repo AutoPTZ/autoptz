@@ -365,6 +365,14 @@ class MainWindow(QMainWindow):
                 tip="Check GitHub for a newer AutoPTZ release.",
             )
         )
+        self._act_prereleases = QAction("Include Pre-release (Beta) Updates", self, checkable=True)
+        self._act_prereleases.setChecked(self._updates.include_prereleases)
+        self._act_prereleases.setToolTip(
+            "Also offer beta / release-candidate builds when checking for updates."
+        )
+        self._act_prereleases.setStatusTip(self._act_prereleases.toolTip())
+        self._act_prereleases.toggled.connect(self._updates.set_include_prereleases)
+        helpm.addAction(self._act_prereleases)
         helpm.addSeparator()
         helpm.addAction(_action(self, "About AutoPTZ", self._show_about))
 
