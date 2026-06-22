@@ -565,7 +565,12 @@ class TestControllerThread:
         ctrl = PTZController(backend, _cfg(kp=0.6), rate_hz=50.0)
         ctrl.start()
         ctrl.update((0.5, 0.0), (0.0, 0.0), 0.45, True)
-        time.sleep(0.1)
+        # Poll until the worker thread delivers rather than sleeping a fixed window:
+        # at 50 Hz a tick is ~20 ms, but a loaded CI runner can stall the thread, so
+        # a fixed 0.1 s sleep flakes. Allow a generous ceiling; return as soon as ready.
+        deadline = time.monotonic() + 2.0
+        while not backend.velocity_calls and time.monotonic() < deadline:
+            time.sleep(0.01)
         ctrl.stop()
         assert len(backend.velocity_calls) >= 1
 

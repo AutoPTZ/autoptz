@@ -188,7 +188,12 @@ class TestUSBAdapterReconnect:
         ):
             adapter.start()
             opened.wait(timeout=2.0)
-            time.sleep(0.1)
+            # Poll until a frame has actually been read (which implies RUNNING)
+            # rather than sleeping a fixed window, which flakes when a loaded CI
+            # runner stalls the adapter thread.
+            deadline = time.monotonic() + 2.0
+            while adapter.status.frames_total <= 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
             status = adapter.status
             adapter.stop()
 
