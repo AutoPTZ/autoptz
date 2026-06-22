@@ -17,6 +17,8 @@ htmlcov/
 # Environment / secrets
 .env
 *.env
+*.p12
+*.pfx
 
 # macOS
 .DS_Store

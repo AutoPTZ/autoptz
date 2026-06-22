@@ -145,13 +145,29 @@ for opt in (
 
 # Heavy optional deps: include their submodules ONLY if installed in the build
 # env (keeps a UI-only build from failing the analysis).
+_OPTIONAL_SUBMODULE_EXCLUDES = (
+    "boxmot.utils.evaluation",
+    "insightface.thirdparty.face3d",
+    "matplotlib",
+    "onnx.backend.test",
+    "pytest",
+)
+
+
+def _keep_optional_submodule(name: str) -> bool:
+    return not any(
+        name == prefix or name.startswith(f"{prefix}.")
+        for prefix in _OPTIONAL_SUBMODULE_EXCLUDES
+    )
+
+
 for opt_pkg in ("ultralytics", "boxmot", "insightface", "av", "onnx"):
     try:
         __import__(opt_pkg)
     except Exception:
         continue
     try:
-        hiddenimports += collect_submodules(opt_pkg)
+        hiddenimports += collect_submodules(opt_pkg, filter=_keep_optional_submodule)
         datas += collect_data_files(opt_pkg)
     except Exception:
         pass
