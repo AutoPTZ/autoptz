@@ -63,6 +63,11 @@ runs:
         security list-keychains -d user -s "$KEYCHAIN" \
           $(security list-keychains -d user | sed 's/["[:space:]]//g')
         rm -f "$RUNNER_TEMP/cert.p12"
+        # Diagnostic (identity names are not secret): show what the .p12 actually
+        # contains. Notarization needs a "Developer ID Application: …" identity here;
+        # an "Apple Development: …" identity will be rejected by Apple.
+        echo "==> Code-signing identities in the import keychain:"
+        security find-identity -v -p codesigning "$KEYCHAIN" || true
     - name: Build .app + .dmg
       shell: bash
       env:
