@@ -16,6 +16,20 @@ from autoptz.engine.discovery.ndi import NDIDiscovery, NDISource
 from autoptz.engine.discovery.onvif import ONVIFDevice, ONVIFDiscovery
 from autoptz.engine.discovery.usb import USBDevice, USBDiscovery, enumerate_cameras
 
+
+def _wait_until(predicate, timeout: float = 3.0, interval: float = 0.01) -> bool:
+    """Poll ``predicate`` until true or ``timeout`` elapses; return its final value.
+
+    Discovery runs a background poll thread, so waiting for the asserted condition
+    (rather than sleeping a fixed window) keeps these tests fast and immune to a
+    loaded CI runner stalling the thread.
+    """
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(interval)
+    return predicate()
+
+
 # ── USBDiscovery ───────────────────────────────────────────────────────────────
 
 
@@ -41,7 +55,7 @@ class TestUSBDiscovery:
             discovery = USBDiscovery(poll_interval=0.1)
             discovery.on_change(lambda ev, dev: events.append((ev, dev)))
             discovery.start()
-            time.sleep(0.3)
+            _wait_until(lambda: {0, 1} <= {e[1].index for e in events if e[0] == "added"})
             discovery.stop()
 
         added_indices = {e[1].index for e in events if e[0] == "added"}
@@ -64,7 +78,7 @@ class TestUSBDiscovery:
             discovery = USBDiscovery(poll_interval=0.05)
             discovery.on_change(lambda ev, dev: events.append((ev, dev)))
             discovery.start()
-            time.sleep(0.4)
+            _wait_until(lambda: 2 in {e[1].index for e in events if e[0] == "added"})
             discovery.stop()
 
         added = [e for e in events if e[0] == "added"]
@@ -86,7 +100,7 @@ class TestUSBDiscovery:
             discovery = USBDiscovery(poll_interval=0.05)
             discovery.on_change(lambda ev, dev: events.append((ev, dev)))
             discovery.start()
-            time.sleep(0.4)
+            _wait_until(lambda: any(e[0] == "removed" and e[1].index == 1 for e in events))
             discovery.stop()
 
         removed = [e for e in events if e[0] == "removed"]
@@ -99,7 +113,7 @@ class TestUSBDiscovery:
         with patch("autoptz.engine.discovery.usb._probe_indices", mock_probe):
             discovery = USBDiscovery(poll_interval=0.05)
             discovery.start()
-            time.sleep(0.2)
+            _wait_until(lambda: {0, 1, 3} <= {d.index for d in discovery.devices})
             devices = discovery.devices
             discovery.stop()
 
@@ -116,7 +130,7 @@ class TestUSBDiscovery:
             discovery = USBDiscovery(poll_interval=0.05)
             discovery.on_change(lambda ev, dev: events.append((ev, dev)))
             discovery.start()
-            time.sleep(0.3)
+            _wait_until(lambda: any(e[0] == "added" and e[1].index == 0 for e in events))
             discovery.stop()
 
         # Only the initial "added" event for device 0, nothing else
@@ -135,7 +149,7 @@ class TestUSBDiscovery:
             discovery.on_change(lambda ev, _: events1.append(ev))
             discovery.on_change(lambda ev, _: events2.append(ev))
             discovery.start()
-            time.sleep(0.2)
+            _wait_until(lambda: events1 and events2)
             discovery.stop()
 
         assert len(events1) > 0
@@ -314,7 +328,7 @@ class TestNDIDiscovery:
         discovery = NDIDiscovery(poll_interval=0.05)
         discovery.on_change(lambda ev, src: events.append((ev, src)))
         discovery.start()
-        time.sleep(0.5)
+        _wait_until(lambda: any(e[0] == "added" and e[1].name == "LAPTOP (TEST)" for e in events))
         discovery.stop()
 
         added = [e for e in events if e[0] == "added"]
@@ -334,7 +348,7 @@ class TestNDIDiscovery:
         discovery = NDIDiscovery(poll_interval=0.05)
         discovery.on_change(lambda ev, src: events.append((ev, src)))
         discovery.start()
-        time.sleep(0.5)
+        _wait_until(lambda: any(e[0] == "removed" and e[1].name == "NDI_CAM_1" for e in events))
         discovery.stop()
 
         removed = [e for e in events if e[0] == "removed"]
@@ -350,7 +364,7 @@ class TestNDIDiscovery:
 
         discovery = NDIDiscovery(poll_interval=0.05)
         discovery.start()
-        time.sleep(0.3)
+        _wait_until(lambda: {"SOURCE_A", "SOURCE_B"} <= {s.name for s in discovery.sources})
         sources = discovery.sources
         discovery.stop()
 
@@ -363,9 +377,8 @@ class TestNDIDiscovery:
         _remove_mock_cyndilib_for_discovery()  # ensure cyndilib not in sys.modules
 
         discovery = NDIDiscovery(poll_interval=0.05)
-        # Should NOT raise even without cyndilib
+        # Should NOT raise even without cyndilib (no poll thread starts).
         discovery.start()
-        time.sleep(0.1)
         discovery.stop()
 
         assert discovery.sources == []
@@ -383,10 +396,10 @@ class TestNDIDiscovery:
         discovery = NDIDiscovery(poll_interval=0.05)
         discovery.on_change(lambda ev, src: events.append((ev, src)))
         discovery.start()
-        time.sleep(0.3)
+        _wait_until(lambda: any(e[0] == "added" for e in events))
         discovery.stop()
 
-        # "STABLE" should appear as added exactly once
+        # "STABLE" should appear as added exactly once (dedup holds across polls).
         added = [e for e in events if e[0] == "added"]
         removed = [e for e in events if e[0] == "removed"]
         assert len(added) == 1
@@ -449,7 +462,7 @@ class TestONVIFDiscovery:
         discovery = ONVIFDiscovery(rescan_interval=60.0)
         discovery.on_change(lambda ev, dev: events.append((ev, dev)))
         discovery.start()
-        time.sleep(0.5)
+        _wait_until(lambda: any(e[0] == "added" for e in events))
         discovery.stop()
 
         added = [e for e in events if e[0] == "added"]
@@ -472,7 +485,7 @@ class TestONVIFDiscovery:
         discovery = ONVIFDiscovery(rescan_interval=0.05)
         discovery.on_change(lambda ev, dev: events.append((ev, dev)))
         discovery.start()
-        time.sleep(0.6)
+        _wait_until(lambda: any(e[0] == "removed" for e in events))
         discovery.stop()
 
         added = [e for e in events if e[0] == "added"]
@@ -495,10 +508,10 @@ class TestONVIFDiscovery:
         discovery = ONVIFDiscovery(rescan_interval=0.05)
         discovery.on_change(lambda ev, dev: events.append((ev, dev)))
         discovery.start()
-        time.sleep(0.4)
+        _wait_until(lambda: any(e[0] == "added" for e in events))
         discovery.stop()
 
-        # Should only fire "added" once, not on every rescan
+        # Should only fire "added" once, not on every rescan (dedup holds).
         added = [e for e in events if e[0] == "added"]
         assert len(added) == 1
 
@@ -507,7 +520,6 @@ class TestONVIFDiscovery:
 
         discovery = ONVIFDiscovery(rescan_interval=0.05)
         discovery.start()
-        time.sleep(0.1)
         discovery.stop()
 
         assert discovery.devices == []
@@ -518,7 +530,7 @@ class TestONVIFDiscovery:
 
         discovery = ONVIFDiscovery(rescan_interval=0.05)
         discovery.start()
-        time.sleep(0.3)
+        _wait_until(lambda: len(discovery.devices) >= 1)
         devices = discovery.devices
         discovery.stop()
 
@@ -535,7 +547,7 @@ class TestONVIFDiscovery:
         discovery.on_change(lambda ev, _: results1.append(ev))
         discovery.on_change(lambda ev, _: results2.append(ev))
         discovery.start()
-        time.sleep(0.5)
+        _wait_until(lambda: results1 and results2)
         discovery.stop()
 
         assert len(results1) > 0

@@ -311,7 +311,11 @@ class TestRTSPAdapterCV2Fallback:
             patch.object(RTSPAdapter, "_close", lambda self: None),
         ):
             adapter.start()
-            time.sleep(1.0)
+            # Poll for the stall-triggered reconnect (≥2 opens) instead of a fixed
+            # 1 s sleep, which flakes when a loaded CI runner is slow to reconnect.
+            deadline = time.monotonic() + 3.0
+            while open_count < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
             adapter.stop()
 
         assert open_count >= 2, f"Expected ≥ 2 opens after stall, got {open_count}"
