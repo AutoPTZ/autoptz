@@ -55,8 +55,11 @@ python -m autoptz                # launch the app
 python -m autoptz --selftest     # verify the foundations and exit
 ```
 
-The first launch downloads the detector model (YOLO11) into the platform app-data
-dir; without it the app still runs in live-preview-only mode.
+Use **Engine → Models...** to cache the detector tiers and pose model in
+the platform app-data dir. Without required models, AutoPTZ disables the affected
+feature controls and still keeps live preview available where possible. Missing
+detector tiers are not fetched on switch unless automatic model downloads are
+enabled in that window.
 
 ### Picking your accelerator
 
@@ -97,6 +100,8 @@ your OS asset, AutoPTZ opens the release page instead.
 | [Troubleshooting](docs/troubleshooting.md) | Common issues (no boxes, wrong camera, slow tracking). |
 | [Contributing](CONTRIBUTING.md)        | Dev setup, lint/type/test gates, branch policy. |
 
-## License
+## License And Models
 
-See [LICENSE.md](LICENSE.md).
+AutoPTZ is licensed under the GNU Affero General Public License v3.0. See
+[LICENSE.md](LICENSE.md) and [NOTICE.md](NOTICE.md) for third-party model and
+optional dependency notices.

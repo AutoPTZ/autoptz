@@ -142,6 +142,9 @@ class EngineClient(QObject):
     overlaysChanged = Signal()  # which on-video overlays are shown changed
     startupProgressChanged = Signal()  # startup active/phase/counts changed
     optionalComponentsChanged = Signal()  # optional model/dependency prompt state
+    modelDownloadStarted = Signal(str)  # label
+    modelDownloadProgress = Signal(str, int, int)  # label, done, total
+    modelDownloadFinished = Signal(bool, str)  # ok, message
     targetChanged = Signal(str)  # camera_id — the tracked target changed
     trackingChanged = Signal(str)  # camera_id — tracking on/off changed
     errorOccurred = Signal(str)  # human-readable message
@@ -199,6 +202,8 @@ class EngineClient(QObject):
             "reid": True,
         }
         self._detector_model_tier: str = "auto"
+        self._model_download_lock = threading.Lock()
+        self._model_download_running = False
 
         # Shared identity gallery (set by the supervisor when the engine starts).
         # When present, identity CRUD delegates to it so the running engine
@@ -411,10 +416,13 @@ class EngineClient(QObject):
             return
 
         self._engine_running = True
-        try:
-            self._engine_ep = self._supervisor.active_ep
-        except Exception:  # noqa: BLE001
-            self._engine_ep = ""
+        self._engine_ep = ""
+        if self.autoDownloadModels() and not self._detector_tier_cached(self._detector_model_tier):
+            switch = getattr(self._supervisor, "switch_detector_model_tier", None)
+            self._download_detector_tier_async(
+                self._detector_model_tier,
+                switch if callable(switch) else None,
+            )
         # Push the session-only global feature switches. They intentionally reset
         # to all-on at launch; Services-panel disables are testing overrides only.
         try:
@@ -1016,12 +1024,29 @@ class EngineClient(QObject):
         normalized = self._normalize_detector_model_tier(tier)
         if normalized == self._detector_model_tier:
             return
+        cached = self._detector_tier_cached(normalized)
+        if self._engine_running and not cached and not self.autoDownloadModels():
+            self.errorOccurred.emit(
+                f"Detector tier '{self._detector_tier_label(normalized)}' is not downloaded. "
+                "Open Engine > Models to download it, or enable automatic model downloads."
+            )
+            self.detectorModelTierChanged.emit()
+            return
         self._detector_model_tier = normalized
         self.setSetting("detector_model_tier", normalized)
         self.detectorModelTierChanged.emit()
         sup = self._supervisor
         switch = getattr(sup, "switch_detector_model_tier", None)
-        if self._engine_running and callable(switch):
+        if not cached:
+            if self.autoDownloadModels():
+                self._download_detector_tier_async(normalized, switch if callable(switch) else None)
+            else:
+                self.errorOccurred.emit(
+                    f"Detector tier '{self._detector_tier_label(normalized)}' is not downloaded. "
+                    "Open Engine > Models to download it, or enable automatic model downloads."
+                )
+                return
+        if cached and self._engine_running and callable(switch):
             try:
                 switch(
                     normalized,
@@ -1029,6 +1054,99 @@ class EngineClient(QObject):
                 )
             except Exception:  # noqa: BLE001
                 log.debug("detector hot-swap request failed", exc_info=True)
+
+    @Slot(result=bool)
+    def autoDownloadModels(self) -> bool:
+        return bool(self.getSetting("model_auto_download_missing", False))
+
+    @Slot(bool)
+    def setAutoDownloadModels(self, enabled: bool) -> None:
+        self.setSetting("model_auto_download_missing", bool(enabled))
+        self.optionalComponentsChanged.emit()
+
+    @Slot()
+    def applyModelCacheChanged(self) -> None:
+        """Unload + rebuild live models after the on-disk model cache changed.
+
+        Called by the Model Manager after a download/removal so a running engine
+        frees the ORT sessions for now-stale files and rebuilds from the fresh
+        cache — no manual restart needed.  Safe no-op when the engine is stopped.
+        """
+        sup = self._supervisor
+        if self._engine_running and sup is not None:
+            fn = getattr(sup, "apply_model_cache_changed", None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:  # noqa: BLE001
+                    log.debug("apply_model_cache_changed failed", exc_info=True)
+        self.optionalComponentsChanged.emit()
+
+    def _detector_tier_cached(self, tier: str) -> bool:
+        try:
+            from autoptz.engine.runtime.models import default_manager, detector_key_for_tier
+
+            key = detector_key_for_tier(tier)
+            for row in default_manager().app_model_statuses():
+                if row.get("key") == key:
+                    return bool(row.get("cached"))
+        except Exception:  # noqa: BLE001
+            log.debug("detector tier cache check failed", exc_info=True)
+        return False
+
+    @staticmethod
+    def _detector_tier_label(tier: str) -> str:
+        labels = {
+            "auto": "Auto / Fast",
+            "fast": "Fast",
+            "balanced": "Balanced",
+            "medium": "Accurate",
+        }
+        return labels.get(tier, tier)
+
+    def _download_detector_tier_async(self, tier: str, switch: Any | None) -> None:
+        with self._model_download_lock:
+            if self._model_download_running:
+                self.errorOccurred.emit("A model download is already running.")
+                return
+            self._model_download_running = True
+
+        def _run() -> None:
+            ok = False
+            message = ""
+            label = self._detector_tier_label(tier)
+            try:
+                from autoptz.engine.runtime.models import default_manager, detector_key_for_tier
+
+                key = detector_key_for_tier(tier)
+                self.modelDownloadStarted.emit(f"Downloading {label} detector")
+                rows = default_manager().ensure_app_models(
+                    keys=[key],
+                    include_pose=False,
+                    progress=lambda name, value, total: self.modelDownloadProgress.emit(
+                        name,
+                        value,
+                        total,
+                    ),
+                )
+                failed = [row for row in rows if row.get("state") != "ok"]
+                if failed:
+                    message = str(failed[0].get("error") or f"{label} download failed")
+                    return
+                ok = True
+                message = f"{label} detector downloaded."
+                if self._engine_running and callable(switch):
+                    switch(tier, reason=f"Downloaded and selected detector model tier {tier}.")
+            except Exception as exc:  # noqa: BLE001
+                message = str(exc) or f"{label} download failed"
+                log.warning("auto model download failed", exc_info=True)
+            finally:
+                with self._model_download_lock:
+                    self._model_download_running = False
+                self.modelDownloadFinished.emit(ok, message)
+                self.optionalComponentsChanged.emit()
+
+        threading.Thread(target=_run, name=f"model-download-{tier}", daemon=True).start()
 
     @staticmethod
     def _normalize_detector_model_tier(tier: Any) -> str:
@@ -1039,7 +1157,7 @@ class EngineClient(QObject):
 
     # ── optional component setup / ignore state ─────────────────────────────
 
-    _OPTIONAL_COMPONENTS = ("reid", "pose", "face")
+    _OPTIONAL_COMPONENTS = ("detector", "reid", "pose", "face")
 
     @Slot(result="QVariantList")
     def optionalComponents(self) -> list[dict[str, Any]]:
@@ -1083,20 +1201,10 @@ class EngineClient(QObject):
 
     @Slot(str)
     def retryOptionalComponent(self, key: str) -> None:
-        """Offer a retry hook without mutating the Python environment.
-
-        In-app setup intentionally downloads/prepares model assets only; Python
-        packages still come from requirements/installer.  The concrete download
-        command stays in ``tools/fetch_models.py`` until packaged model bundles
-        are wired.
-        """
+        """Clear the ignore state so the setup row is visible again."""
         if key not in self._OPTIONAL_COMPONENTS:
             return
         self.setOptionalComponentIgnored(key, False)
-        self.errorOccurred.emit(
-            "Optional setup is available via tools/fetch_models.py; "
-            "packaged model-bundle download will use this retry hook."
-        )
 
     def _missing_optional_components(self, *, promptable_only: bool) -> list[str]:
         missing: list[str] = []
@@ -1670,7 +1778,7 @@ class EngineClient(QObject):
 
     @Slot(result=bool)
     def ndiAvailable(self) -> bool:
-        """True iff the cyndilib + NDI SDK runtime is importable (NDI discovery possible)."""
+        """True iff cyndilib is importable (NDI discovery possible)."""
         import importlib.util
 
         return importlib.util.find_spec("cyndilib") is not None
@@ -1680,7 +1788,7 @@ class EngineClient(QObject):
         """Discover NDI sources on the LAN (one-shot blocking scan).
 
         Returns ``[{name, uri}]`` with ``uri = ndi://<name>``.  Returns ``[]``
-        when cyndilib / the NDI SDK runtime is unavailable (callers should check
+        when cyndilib is unavailable (callers should check
         :meth:`ndiAvailable` first to tell "not installed" from "none found").
         Uses the SDK ``Finder.iter_sources()`` — the same call the engine's
         :class:`~autoptz.engine.discovery.ndi.NDIDiscovery` polls — after a short

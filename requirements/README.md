@@ -16,6 +16,7 @@ accelerator file because pip requirements cannot inspect your GPU hardware.
 | File | When to install |
 | --- | --- |
 | `base.txt` | Always — full app: inference, tracking, PTZ, UI. Ships CPU ONNX Runtime (+ CoreML on macOS) and OS-specific camera helpers via markers. |
+| `requirements.txt` | Compatibility entry point for tools that expect the conventional filename, including GitHub Dependency Graph. Includes `base.txt`. |
 | `gpu-nvidia.txt` | NVIDIA GPU (Windows/Linux) — TensorRT + CUDA. Replaces the CPU `onnxruntime`. |
 | `gpu-directml.txt` | AMD/Intel GPU on Windows — DirectML. Replaces the CPU `onnxruntime`. |
 | `openvino.txt` | Intel CPU/iGPU (any OS) — OpenVINO. Replaces the CPU `onnxruntime`. |

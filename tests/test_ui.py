@@ -70,6 +70,19 @@ class _PreflightBridge:
         self.resolved = _PreflightSignal()
 
 
+class _ExplodingSignal:
+    def connect(self, _slot) -> None:
+        pass
+
+    def emit(self, _value: bool) -> None:
+        raise RuntimeError("emit failed")
+
+
+class _ExplodingBridge:
+    def __init__(self) -> None:
+        self.resolved = _ExplodingSignal()
+
+
 class TestAboutLinks:
     def test_public_profile_links(self, qapp) -> None:
         from autoptz.ui.widgets.dialogs.about import GITHUB_URL, LINKEDIN_URL
@@ -144,6 +157,67 @@ class TestMacOSCameraPreflight:
 
         app_mod._start_engine_after_macos_camera_preflight(client, bridge)
 
+        assert client.starts == 1
+        assert client.errors == []
+
+    def test_permission_callback_exceptions_do_not_escape_to_tcc(self, monkeypatch) -> None:
+        import autoptz.ui.app as app_mod
+
+        bridge = _ExplodingBridge()
+        fake = types.ModuleType("AVFoundation")
+        fake.AVMediaTypeVideo = "video"
+
+        class _CaptureDevice:
+            @staticmethod
+            def authorizationStatusForMediaType_(_media):
+                return 0
+
+            @staticmethod
+            def requestAccessForMediaType_completionHandler_(_media, handler):
+                handler(True)
+
+        fake.AVCaptureDevice = _CaptureDevice
+        monkeypatch.setattr(app_mod.sys, "platform", "darwin")
+        monkeypatch.setitem(sys.modules, "AVFoundation", fake)
+
+        app_mod._start_engine_after_macos_camera_preflight(_PreflightClient(), bridge)
+
+    def test_permission_result_is_delivered_on_qt_event_loop(self, monkeypatch, qapp) -> None:
+        from PySide6.QtCore import QObject, Signal, Slot
+
+        import autoptz.ui.app as app_mod
+
+        handlers = []
+        fake = types.ModuleType("AVFoundation")
+        fake.AVMediaTypeVideo = "video"
+
+        class _CaptureDevice:
+            @staticmethod
+            def authorizationStatusForMediaType_(_media):
+                return 0
+
+            @staticmethod
+            def requestAccessForMediaType_completionHandler_(_media, handler):
+                handlers.append(handler)
+
+        class _QtBridge(QObject):
+            resolved = Signal(bool)
+
+            @Slot(bool)
+            def resolve(self, granted: bool) -> None:
+                self.resolved.emit(bool(granted))
+
+        fake.AVCaptureDevice = _CaptureDevice
+        monkeypatch.setattr(app_mod.sys, "platform", "darwin")
+        monkeypatch.setitem(sys.modules, "AVFoundation", fake)
+        client = _PreflightClient()
+        bridge = _QtBridge()
+
+        app_mod._start_engine_after_macos_camera_preflight(client, bridge)
+        handlers[0](True)
+
+        assert client.starts == 0
+        qapp.processEvents()
         assert client.starts == 1
         assert client.errors == []
 
@@ -583,6 +657,31 @@ class TestEngineClient:
             assert c2.getDetectorModelTier() == "balanced"
         finally:
             store2.close()
+
+    def test_running_missing_detector_tier_without_auto_download_is_rejected(
+        self, qapp, monkeypatch
+    ) -> None:
+        import autoptz.engine.runtime.models as models
+
+        class FakeManager:
+            def app_model_statuses(self):
+                return [
+                    {"key": "detector_fast", "cached": True},
+                    {"key": "detector_balanced", "cached": False},
+                ]
+
+        c = _client(qapp)
+        c._engine_running = True
+        c._detector_model_tier = "fast"
+        errors = []
+        c.errorOccurred.connect(errors.append)
+        monkeypatch.setattr(models, "default_manager", lambda: FakeManager())
+
+        c.setDetectorModelTier("balanced")
+
+        assert c.getDetectorModelTier() == "fast"
+        assert errors
+        assert "not downloaded" in errors[-1]
 
     def test_overlay_prediction_toggle_persists(self, qapp, tmp_path) -> None:
         from autoptz.config.store import ConfigStore

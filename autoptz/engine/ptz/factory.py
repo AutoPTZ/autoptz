@@ -129,7 +129,7 @@ def _build_ndi(
         backend = NDIPTZBackend(ndi_name=name, receiver=ndi_source)
     except Exception:  # noqa: BLE001 - cyndilib missing / source not found
         log.warning(
-            "NDI PTZ unavailable (cyndilib/runtime missing or source %r not found); PTZ disabled.",
+            "NDI PTZ unavailable (cyndilib missing or source %r not found); PTZ disabled.",
             name,
             exc_info=True,
         )

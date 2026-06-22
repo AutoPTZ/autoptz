@@ -54,9 +54,9 @@ if (-not $SkipInstall) {
 #   & $Py -m tools.fetch_models --cache-dir autoptz\models
 
 # -- 4. NDI runtime (optional) ------------------------------------------------
-# Processing.NDI.Lib.x64.dll is a system install, not a pip wheel.  To bundle
-# it, drop the DLL in packaging\ndi\ (or set $env:NDI_RUNTIME) before building;
-# the spec picks it up.  Otherwise NDI ingest degrades gracefully.
+# cyndilib is installed from requirements/base.txt and collected by the spec when
+# present. If you need to add an external NDI runtime DLL, drop it in
+# packaging\ndi\ (or set $env:NDI_RUNTIME) before building.
 
 # -- 5. build -----------------------------------------------------------------
 Write-Host "==> Cleaning previous build"

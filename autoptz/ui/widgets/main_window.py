@@ -21,6 +21,8 @@ from PySide6.QtCore import QByteArray, QObject, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QDockWidget,
+    QFrame,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
@@ -32,10 +34,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from autoptz.ui import theme as T
 from autoptz.ui.widgets.camera_info_panel import CameraInfoPanel
 from autoptz.ui.widgets.camera_wall import CameraWall
 from autoptz.ui.widgets.common import on_theme_changed
-from autoptz.ui.widgets.dialogs import AboutDialog, NetworkCameraDialog
+from autoptz.ui.widgets.dialogs import AboutDialog, ModelManagerDialog, NetworkCameraDialog
+from autoptz.ui.widgets.dialogs.model_manager import (
+    model_setup_reminder_suppressed,
+    startup_missing_model_keys,
+)
 from autoptz.ui.widgets.dialogs.update_dialog import UpdateDialog
 from autoptz.ui.widgets.logs_panel import LogsPanel
 from autoptz.ui.widgets.people_panel import PeoplePanel
@@ -70,11 +77,13 @@ class MainWindow(QMainWindow):
         self._docks: dict[str, QDockWidget] = {}
         self._selected_camera: str = ""
         self._shown_optional_setup_prompt = False
-        # Discovery state: a running modal scan (USB rescan / NDI rescan), the
-        # single-use fresh USB result, and the NDI source list kept populated in
-        # the background so the Cameras → NDI Sources menu is never empty-by-lag.
+        # Discovery state: a running modal scan (USB rescan / NDI rescan), plus
+        # USB and NDI source lists kept populated in the background so opening
+        # the Cameras menu never probes devices on the GUI thread.
         self._scan_ctx: tuple | None = None
-        self._usb_scan_cache: list | None = None
+        self._usb_devices_cache: list = []
+        self._usb_scanning = False
+        self._usb_task: _ScanTask | None = None
         self._ndi_sources_cache: list = []
         self._ndi_scanning = False
         self._ndi_task: _ScanTask | None = None
@@ -103,20 +112,24 @@ class MainWindow(QMainWindow):
 
         _connect(client, "engineStateChanged", self._refresh_engine_state)
         _connect(client, "startupProgressChanged", self._refresh_startup_progress)
+        _connect(client, "modelDownloadStarted", self._on_model_download_started)
+        _connect(client, "modelDownloadProgress", self._on_model_download_progress)
+        _connect(client, "modelDownloadFinished", self._on_model_download_finished)
         _connect(client, "errorOccurred", self._on_error)
         # Segmented section tabs bake in literal palette colors, so restyle them
         # whenever the appearance flips.
         on_theme_changed(client, self._style_section_tabs)
+        on_theme_changed(client, self._style_startup_banner)
 
         self._ensure_desktop_window_chrome()
         self._restore_geometry()
         self._refresh_engine_state()
 
-        # Start NDI discovery in the background so the Cameras → NDI Sources list
-        # is already populated when first opened (deferred to the event loop; a
-        # no-op when cyndilib/NDI isn't installed).
+        # Start discovery in the background so the Cameras menu is already useful
+        # when first opened (deferred to the event loop).
         from PySide6.QtCore import QTimer
 
+        QTimer.singleShot(0, self._refresh_usb_async)
         QTimer.singleShot(0, self._refresh_ndi_async)
 
     # ── section title bars ──────────────────────────────────────────────────────
@@ -149,11 +162,29 @@ class MainWindow(QMainWindow):
         col = QVBoxLayout(holder)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(0)
-        self._startup_bar = QProgressBar(holder)
-        self._startup_bar.setTextVisible(True)
-        self._startup_bar.setFixedHeight(5 + self.fontMetrics().height())
-        self._startup_bar.setRange(0, 0)
+        self._startup_bar = QFrame(holder)
+        self._startup_bar.setObjectName("startupBar")
+        self._startup_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._startup_bar.setVisible(False)
+        bar_col = QVBoxLayout(self._startup_bar)
+        bar_col.setContentsMargins(14, 8, 14, 8)
+        bar_col.setSpacing(6)
+        text_row = QHBoxLayout()
+        text_row.setSpacing(8)
+        self._startup_dot = QLabel("●")
+        self._startup_dot.setObjectName("startupDot")
+        self._startup_banner = QLabel()
+        self._startup_banner.setObjectName("startupBanner")
+        self._startup_banner.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        text_row.addWidget(self._startup_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        text_row.addWidget(self._startup_banner, 1)
+        bar_col.addLayout(text_row)
+        self._startup_progress_bar = QProgressBar()
+        self._startup_progress_bar.setObjectName("startupProgress")
+        self._startup_progress_bar.setTextVisible(False)
+        self._startup_progress_bar.setFixedHeight(4)
+        bar_col.addWidget(self._startup_progress_bar)
+        self._style_startup_banner()
         col.addWidget(self._startup_bar)
         self._wall = CameraWall(self._client, self._frames, holder)
         self._wall.cameraSelected.connect(self._on_camera_selected)
@@ -253,6 +284,25 @@ class MainWindow(QMainWindow):
                 f" color: {pal.text}; }}"
             )
 
+    def _style_startup_banner(self) -> None:
+        bar = getattr(self, "_startup_bar", None)
+        if bar is None:
+            return
+        accent = T.ACCENT.name()
+        bar.setStyleSheet(
+            f"QFrame#startupBar {{ background: {T.CURRENT.surface_alt};"
+            f" border-left: 3px solid {accent};"
+            f" border-bottom: 1px solid {T.CURRENT.border}; }}"
+            f"QLabel#startupBanner {{ background: transparent; color: {T.CURRENT.text};"
+            " font-weight: 700; }"
+            f"QLabel#startupDot {{ background: transparent; color: {accent};"
+            f" font-size: {T.fs(13)}px; }}"
+            f"QProgressBar#startupProgress {{ background: {T.CURRENT.surface_hov};"
+            f" border: none; border-radius: 2px; }}"
+            f"QProgressBar#startupProgress::chunk {{ background: {accent};"
+            " border-radius: 2px; }"
+        )
+
     # ── menus ──────────────────────────────────────────────────────────────────
 
     def _build_menus(self) -> None:
@@ -287,6 +337,18 @@ class MainWindow(QMainWindow):
         engine.addAction(self._act_start)
         engine.addAction(self._act_stop)
         engine.addAction(self._act_restart)
+        engine.addSeparator()
+        engine.addAction(
+            _action(
+                self,
+                "Models...",
+                self._open_model_manager,
+                tip=(
+                    "Open model setup with selectable detector/pose models, "
+                    "cache status, download/remove actions, and reminder settings."
+                ),
+            )
+        )
         engine.addSeparator()
         self._act_stop_tracking = _action(
             self,
@@ -485,16 +547,10 @@ class MainWindow(QMainWindow):
         # source kinds read clearly; check to add, uncheck to remove.
         usb = menu.addMenu("USB Cameras")
         usb.setToolTipsVisible(True)
-        # A fresh off-thread Rescan stashes its result here so this reopen shows it
-        # without re-probing (which would block the GUI thread again); single-use.
-        cached = getattr(self, "_usb_scan_cache", None)
-        if cached is not None:
-            self._usb_scan_cache = None
-            devices = cached
-        else:
-            devices = _safe(lambda: self._client.scanUSBCameras(), []) or []
+        devices = list(getattr(self, "_usb_devices_cache", []) or [])
         if not devices:
-            none = usb.addAction("No USB cameras found")
+            label = "Scanning for USB cameras…" if self._usb_scanning else "No USB cameras found"
+            none = usb.addAction(label)
             none.setEnabled(False)
         for dev in devices:
             # Show the friendly source kind ("— Built-in" / "— External") rather
@@ -527,18 +583,17 @@ class MainWindow(QMainWindow):
                 tip="Re-probe connected USB cameras.",
             )
         )
+        self._refresh_usb_async()
 
         menu.addSeparator()
         ndi = menu.addMenu("NDI Sources")
         ndi.setToolTipsVisible(True)
         if not _safe(lambda: self._client.ndiAvailable(), False):
-            # Honest, persistent reason instead of a fleeting "none found" message:
-            # NDI needs cyndilib + the NDI SDK runtime, neither bundled by default.
-            unavail = ndi.addAction("NDI unavailable — install cyndilib + NDI SDK")
+            # Honest, persistent reason instead of a fleeting "none found" message.
+            unavail = ndi.addAction("NDI unavailable — install cyndilib")
             unavail.setEnabled(False)
             unavail.setToolTip(
-                "NDI discovery needs the 'cyndilib' package and the NDI SDK runtime. "
-                "Install both, then reopen this menu."
+                "NDI discovery needs the 'cyndilib' package. Install it, then reopen this menu."
             )
         else:
             # List discovered sources directly (check to add, uncheck to remove),
@@ -655,7 +710,7 @@ class MainWindow(QMainWindow):
         # Re-probe USB devices off the GUI thread (it opens VideoCapture handles
         # and can take ~1 s) with a busy indicator, then reopen the refreshed menu.
         def _done(devices: list) -> None:
-            self._usb_scan_cache = devices  # single-use: consumed by next populate
+            self._usb_devices_cache = devices or []
             self._open_cameras_menu()
 
         self._run_scan(
@@ -663,6 +718,21 @@ class MainWindow(QMainWindow):
             lambda: _safe(lambda: self._client.scanUSBCameras(), []) or [],
             _done,
         )
+
+    def _refresh_usb_async(self) -> None:
+        """Refresh the USB camera cache in the background without a dialog."""
+        if self._usb_scanning:
+            return
+        self._usb_scanning = True
+        task = _ScanTask(lambda: _safe(lambda: self._client.scanUSBCameras(), []) or [])
+        self._usb_task = task
+        task.done.connect(self._on_usb_refresh)
+        threading.Thread(target=task.run, name="ui-usb-scan", daemon=True).start()
+
+    def _on_usb_refresh(self, devices: list) -> None:
+        self._usb_scanning = False
+        self._usb_task = None
+        self._usb_devices_cache = devices or []
 
     def _toggle_ndi_camera(self, src: dict, checked: bool) -> None:
         uri = str(src.get("uri", ""))
@@ -696,9 +766,7 @@ class MainWindow(QMainWindow):
     def _rescan_ndi(self) -> None:
         """User-triggered NDI rescan with a visible busy indicator."""
         if not _safe(lambda: self._client.ndiAvailable(), False):
-            self.statusBar().showMessage(
-                "NDI unavailable — install cyndilib and the NDI SDK runtime.", 8000
-            )
+            self.statusBar().showMessage("NDI unavailable — install cyndilib.", 8000)
             return
 
         def _done(sources: list) -> None:
@@ -720,6 +788,35 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         AboutDialog(self._client, self).exec()
+
+    def _open_model_manager(
+        self,
+        *,
+        startup_prompt: bool = False,
+        selected_keys: list[str] | None = None,
+    ) -> None:
+        ModelManagerDialog(
+            self._client,
+            startup_prompt=startup_prompt,
+            selected_keys=selected_keys,
+            parent=self,
+        ).exec()
+        try:
+            self._services._refresh_optional_components()  # noqa: SLF001
+            self._services.refresh()
+        except Exception:  # noqa: BLE001
+            log.debug("refresh services after model dialog failed", exc_info=True)
+
+    def _maybe_show_model_setup_on_startup(self) -> None:
+        if self._shown_optional_setup_prompt:
+            return
+        if model_setup_reminder_suppressed(self._client):
+            return
+        missing = startup_missing_model_keys()
+        if not missing:
+            return
+        self._shown_optional_setup_prompt = True
+        self._open_model_manager(startup_prompt=True, selected_keys=missing)
 
     def _on_update_available(self, info: Any) -> None:
         from autoptz import version as _app_version
@@ -970,37 +1067,41 @@ class MainWindow(QMainWindow):
 
     def _refresh_startup_progress(self) -> None:
         bar = getattr(self, "_startup_bar", None)
-        if bar is None:
+        banner = getattr(self, "_startup_banner", None)
+        progress = getattr(self, "_startup_progress_bar", None)
+        if bar is None or banner is None or progress is None:
             return
         active = bool(_safe(lambda: self._client.startupActive, False))
         phase = str(_safe(lambda: self._client.startupPhase, "") or "")
         started = int(_safe(lambda: self._client.startupStartedCameras, 0) or 0)
         total = int(_safe(lambda: self._client.startupTotalCameras, 0) or 0)
-        missing = list(_safe(lambda: self._client.startupMissingComponents, []) or [])
-        if active:
-            if total > 0:
-                bar.setRange(0, total)
-                bar.setValue(max(0, min(total, started)))
-                bar.setFormat(f"{phase} · {started}/{total}")
-            else:
-                bar.setRange(0, 0)
-                bar.setFormat(phase or "Starting engine")
-            bar.setVisible(True)
-            if missing and not self._shown_optional_setup_prompt:
-                self._shown_optional_setup_prompt = True
-                dock = self._docks.get("services")
-                if dock is not None:
-                    dock.show()
-                    dock.raise_()
-                self.statusBar().showMessage(
-                    "Optional tracking components are missing. Review Services setup.",
-                    8000,
-                )
-        else:
+        if not active:
             bar.setVisible(False)
+            return
+        if total > 0:
+            banner.setText(f"{phase or 'Starting engine'} ({started}/{total})")
+            # Determinate while cameras open; full once they're all up (warmup).
+            progress.setRange(0, total)
+            progress.setValue(min(started, total))
+        else:
+            banner.setText(phase or "Starting engine")
+            # No camera count yet → indeterminate "working" sweep.
+            progress.setRange(0, 0)
+        bar.setVisible(True)
 
     def _on_error(self, message: str) -> None:
         self.statusBar().showMessage(message, 6000)
+
+    def _on_model_download_started(self, label: str) -> None:
+        self.statusBar().showMessage(label)
+
+    def _on_model_download_progress(self, label: str, value: int, total: int) -> None:
+        total = max(1, int(total))
+        value = max(0, min(total, int(value)))
+        self.statusBar().showMessage(f"{label} ({value}/{total})")
+
+    def _on_model_download_finished(self, ok: bool, message: str) -> None:
+        self.statusBar().showMessage(message, 7000 if ok else 10000)
 
     # ── geometry persistence ────────────────────────────────────────────────
 
@@ -1059,6 +1160,7 @@ class MainWindow(QMainWindow):
             self._startup_update_checked = True
             from PySide6.QtCore import QTimer
 
+            QTimer.singleShot(900, self._maybe_show_model_setup_on_startup)
             QTimer.singleShot(2500, self._updates.maybe_check_on_startup)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802

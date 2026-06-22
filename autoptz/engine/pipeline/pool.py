@@ -141,10 +141,17 @@ class InferencePool:
     and must stay per-worker.
     """
 
-    def __init__(self, *, detector_tier: str = "auto", unified_pose: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        detector_tier: str = "auto",
+        unified_pose: bool = False,
+        allow_model_download: bool = True,
+    ) -> None:
         # Guards the lazy *build* of each model (not their per-call use).
         self._build_lock = threading.Lock()
         self._detector_tier = str(detector_tier or "auto")
+        self._allow_model_download = bool(allow_model_download)
         # When set, the detector slot is a unified YOLO11-pose model that emits
         # boxes AND keypoints in one pass (the separate pose estimator is then
         # unused).  Env var wins so it's togglable without touching config.
@@ -341,7 +348,10 @@ class InferencePool:
             from autoptz.engine.runtime.models import default_manager
 
             manager = default_manager()
-            model_path = manager.ensure_detector(tier=self._detector_tier)
+            model_path = manager.ensure_detector(
+                tier=self._detector_tier,
+                allow_download=self._allow_model_download,
+            )
         except Exception:  # noqa: BLE001 — model bootstrap must never break startup
             self._detector_error = f"Model '{self._detector_tier}' resolution failed."
             log.warning("inference pool: detector model resolution failed.", exc_info=True)
@@ -361,7 +371,7 @@ class InferencePool:
             try:
                 from autoptz.engine.pipeline.pose_detect import PoseDetector
 
-                detector = PoseDetector()
+                detector = PoseDetector(allow_download=self._allow_model_download)
                 self._detector_ep = detector.ep
                 self._detector_model_path = "<yolo11-pose unified>"
                 self._detector_error = ""
@@ -455,11 +465,40 @@ class InferencePool:
         try:
             from autoptz.engine.pipeline.pose import PoseEstimator
 
-            estimator = PoseEstimator()
+            estimator = PoseEstimator(allow_download=self._allow_model_download)
             return _LockedPose(estimator, self._pose_call_lock)
         except Exception:  # noqa: BLE001 — pose must never break startup
             log.debug("inference pool: pose estimator init failed; bbox aim only.", exc_info=True)
             return None
+
+    # ── release (free a model so memory is reclaimed) ──────────────────────────────
+    #
+    # Dropping the pool's cached reference and resetting the ``_*_built`` flag lets
+    # the next accessor rebuild lazily.  The underlying ORT session is only freed
+    # by GC once EVERY holder lets go — workers also keep a reference, so the
+    # supervisor releases the workers' refs alongside these (see
+    # ``Supervisor._on_set_features`` / ``apply_model_cache_changed``).
+
+    def release_detector(self) -> None:
+        """Drop the shared detector so it is rebuilt (or stays gone) on next use."""
+        with self._build_lock:
+            self._detector = None
+            self._detector_built = False
+            self._detector_ep = ""
+            self._detector_model_path = ""
+            self._detector_error = ""
+
+    def release_face(self) -> None:
+        """Drop the shared face recogniser so it is rebuilt on next use."""
+        with self._build_lock:
+            self._face = None
+            self._face_built = False
+
+    def release_pose(self) -> None:
+        """Drop the shared pose estimator so it is rebuilt on next use."""
+        with self._build_lock:
+            self._pose = None
+            self._pose_built = False
 
     # ── warm-up ───────────────────────────────────────────────────────────────────
     #
@@ -513,7 +552,10 @@ class InferencePool:
 
 
 def build_inference_pool(
-    *, detector_tier: str = "auto", unified_pose: bool = False
+    *,
+    detector_tier: str = "auto",
+    unified_pose: bool = False,
+    allow_model_download: bool = True,
 ) -> InferencePool:
     """Return a fresh :class:`InferencePool` (models built lazily on first use).
 
@@ -523,4 +565,8 @@ def build_inference_pool(
     blocks startup and never raises.  ``unified_pose`` (or ``AUTOPTZ_UNIFIED_POSE``)
     makes the detector slot the one-backbone boxes+keypoints model.
     """
-    return InferencePool(detector_tier=detector_tier, unified_pose=unified_pose)
+    return InferencePool(
+        detector_tier=detector_tier,
+        unified_pose=unified_pose,
+        allow_model_download=allow_model_download,
+    )

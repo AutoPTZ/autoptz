@@ -38,8 +38,8 @@ class NDIDiscovery:
     Fires ``on_change`` callbacks from the discovery thread; callers
     should not do heavy work in callbacks.
 
-    cyndilib (and the NDI SDK runtime) must be installed.  If not present,
-    ``start()`` logs a warning and returns immediately without raising.
+    cyndilib must be installed.  If not present, ``start()`` logs a warning and
+    returns immediately without raising.
     """
 
     def __init__(self, poll_interval: float = 2.0) -> None:
@@ -67,8 +67,7 @@ class NDIDiscovery:
             import cyndilib  # noqa: F401  # verify available before starting thread
         except ImportError:
             log.warning(
-                "NDIDiscovery: cyndilib not available; NDI discovery disabled. "
-                "Install cyndilib and the NDI SDK runtime."
+                "NDIDiscovery: cyndilib not available; NDI discovery disabled. Install cyndilib."
             )
             return
 

@@ -31,9 +31,8 @@ Model file + path resolution
 Default filename ``yolo11n-pose.onnx``.  The path is resolved the same way the
 detector's model is, via the platform app-data ``…/AutoPTZ/models`` dir (see
 :class:`autoptz.engine.runtime.models.ModelManager`), plus an
-``AUTOPTZ_POSE_MODEL_PATH`` env override.  No auto-download is wired (pose is
-optional); drop ``yolo11n-pose.onnx`` into that models dir, or point the env var
-at one, to enable pose-stable framing.
+``AUTOPTZ_POSE_MODEL_PATH`` env override.  Use Engine → Models... or
+``python -m tools.fetch_models`` to cache it before running offline.
 
 Dependencies: onnxruntime + numpy + cv2 (all already required by the detector).
 """
@@ -110,7 +109,7 @@ def _model_input_size(shape: Any, fallback: int) -> int:
     return int(fallback)
 
 
-def resolve_pose_model_path() -> str | None:
+def resolve_pose_model_path(*, allow_download: bool = True) -> str | None:
     """Return a usable pose ONNX path, auto-provisioning it on first use.
 
     Delegates to :meth:`ModelManager.ensure_pose`, which resolves in order:
@@ -130,7 +129,7 @@ def resolve_pose_model_path() -> str | None:
     try:
         from autoptz.engine.runtime.models import default_manager
 
-        return default_manager().ensure_pose()
+        return default_manager().ensure_pose(allow_download=allow_download)
     except Exception:  # noqa: BLE001 — model provisioning must never break the worker
         log.debug("pose model path resolution failed", exc_info=True)
     return None
@@ -165,6 +164,7 @@ class PoseEstimator:
         input_size: int = 640,
         conf_threshold: float = 0.30,
         prefs: Any | None = None,
+        allow_download: bool = True,
         _session: Any | None = None,
     ) -> None:
         self._input_size = int(input_size)
@@ -176,7 +176,7 @@ class PoseEstimator:
         if _session is not None:
             self._session = _session
         else:
-            self._try_build_session(model_path, prefs)
+            self._try_build_session(model_path, prefs, allow_download=allow_download)
 
         if self._session is not None:
             try:
@@ -287,9 +287,15 @@ class PoseEstimator:
         self,
         model_path: str | Path | None,
         prefs: Any | None,
+        *,
+        allow_download: bool,
     ) -> None:
         """Resolve the model + build an ORT session; stay unavailable on failure."""
-        path = str(model_path) if model_path is not None else resolve_pose_model_path()
+        path = (
+            str(model_path)
+            if model_path is not None
+            else resolve_pose_model_path(allow_download=allow_download)
+        )
         if not path or not Path(path).is_file():
             _log_no_pose_once("no model file")
             return

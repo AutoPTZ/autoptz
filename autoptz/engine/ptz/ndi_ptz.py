@@ -1,7 +1,6 @@
 """NDI PTZ backend via cyndilib (``Receiver.ptz``).
 
-Requires the NDI SDK runtime and the cyndilib package; degrades gracefully with a
-clear error if absent.
+Requires cyndilib; degrades gracefully with a clear error if absent.
 
 Two ways to drive PTZ:
 
@@ -38,10 +37,7 @@ def _require_cyndilib() -> Any:
 
         return cyndilib
     except ImportError as exc:
-        raise ImportError(
-            "cyndilib is required for NDI PTZ control.  Install it and the NDI SDK "
-            "runtime: pip install cyndilib"
-        ) from exc
+        raise ImportError("cyndilib is required for NDI PTZ control: pip install cyndilib") from exc
 
 
 def _connect_ptz_receiver(ndi_name: str, timeout: float) -> tuple[Any, Any]:

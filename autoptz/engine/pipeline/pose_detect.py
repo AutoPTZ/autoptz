@@ -79,6 +79,7 @@ class PoseDetector:
         conf_threshold: float = 0.25,
         detect_interval: int = 1,
         prefs: HardwarePrefs | None = None,
+        allow_download: bool = True,
         _session: ort.InferenceSession | None = None,
     ) -> None:
         self._input_size = int(input_size)
@@ -89,7 +90,11 @@ class PoseDetector:
         if _session is not None:
             self._session = _session
         else:
-            path = str(model_path) if model_path is not None else _resolve_pose_model()
+            path = (
+                str(model_path)
+                if model_path is not None
+                else _resolve_pose_model(allow_download=allow_download)
+            )
             if not path or not Path(path).is_file():
                 raise ValueError("PoseDetector: no usable YOLO-pose model file.")
             self._session = make_session(Path(path), prefs)
@@ -298,11 +303,11 @@ def _model_input_size(shape: Any, fallback: int) -> int:
     return int(fallback)
 
 
-def _resolve_pose_model() -> str | None:
+def _resolve_pose_model(*, allow_download: bool = True) -> str | None:
     try:
         from autoptz.engine.pipeline.pose import resolve_pose_model_path
 
-        return resolve_pose_model_path()
+        return resolve_pose_model_path(allow_download=allow_download)
     except Exception:  # noqa: BLE001
         log.debug("pose-detect model resolution failed", exc_info=True)
         return None

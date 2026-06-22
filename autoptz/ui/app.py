@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import warnings
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +49,27 @@ def _set_macos_app_name(name: str) -> None:
                 info["CFBundleDisplayName"] = name
     except Exception:  # noqa: BLE001 — cosmetic only; never block launch
         log.debug("Could not set macOS bundle name via PyObjC", exc_info=True)
+
+
+def _queue_macos_camera_access_result(bridge: object, granted: bool) -> None:
+    """Deliver a TCC permission result on the Qt event loop when possible."""
+    resolve = getattr(bridge, "resolve", None)
+    if resolve is not None:
+        try:
+            from PySide6.QtCore import Q_ARG, QMetaObject, Qt  # noqa: PLC0415
+
+            queued = QMetaObject.invokeMethod(
+                bridge,
+                "resolve",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(bool, bool(granted)),
+            )
+            if queued:
+                return
+        except Exception:  # noqa: BLE001
+            log.debug("Could not queue macOS camera access result onto Qt", exc_info=True)
+
+    bridge.resolved.emit(bool(granted))  # type: ignore[attr-defined]
 
 
 def _start_engine_after_macos_camera_preflight(client: object, bridge: object | None) -> None:
@@ -101,9 +124,16 @@ def _start_engine_after_macos_camera_preflight(client: object, bridge: object | 
     try:
         bridge.resolved.connect(_on_resolved)  # type: ignore[attr-defined]
         log.info("Requesting macOS camera access before engine auto-start.")
+
+        def _completion_handler(granted: bool) -> None:
+            try:
+                _queue_macos_camera_access_result(bridge, bool(granted))
+            except Exception:  # noqa: BLE001 — never let Python escape into TCC
+                log.exception("macOS camera authorization callback failed")
+
         AVFoundation.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
             media,
-            lambda granted: bridge.resolved.emit(bool(granted)),  # type: ignore[attr-defined]
+            _completion_handler,
         )
     except Exception:  # noqa: BLE001
         log.debug("macOS camera authorization request failed", exc_info=True)
@@ -112,7 +142,7 @@ def _start_engine_after_macos_camera_preflight(client: object, bridge: object | 
 
 def run(argv: list[str] | None = None) -> int:
     """Launch the AutoPTZ UI.  Returns the process exit code."""
-    from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, Signal
+    from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, Signal, Slot
     from PySide6.QtWidgets import QApplication
 
     from autoptz.config.store import ConfigStore
@@ -167,12 +197,39 @@ def run(argv: list[str] | None = None) -> int:
     # ── engine wiring ──────────────────────────────────────────────────────────
     # The supervisor is created lazily on first start (defers heavy ML imports);
     # the engine defaults to STOPPED until auto-start fires below.
-    def _make_supervisor(engine_client: EngineClient):  # noqa: ANN202
+    supervisor_holder: dict[str, Any] = {}
+    supervisor_lock = threading.Lock()
+
+    def _load_supervisor_class() -> Any:
+        with supervisor_lock:
+            cls = supervisor_holder.get("cls")
+        if cls is not None:
+            return cls
         from autoptz.engine.supervisor import Supervisor
+
+        with supervisor_lock:
+            supervisor_holder["cls"] = Supervisor
+        return Supervisor
+
+    def _preload_supervisor_class() -> None:
+        try:
+            _load_supervisor_class()
+        except Exception as exc:  # noqa: BLE001
+            with supervisor_lock:
+                supervisor_holder["error"] = str(exc) or type(exc).__name__
+            log.exception("Engine preload failed")
+
+    def _make_supervisor(engine_client: EngineClient) -> Any:
+        Supervisor = _load_supervisor_class()
 
         return Supervisor(engine_client, store=store)
 
     client.set_supervisor_factory(_make_supervisor)
+    threading.Thread(
+        target=_preload_supervisor_class,
+        name="engine-supervisor-preload",
+        daemon=True,
+    ).start()
 
     # Bridge worker-side provider attach/detach onto the GUI thread.  Queued so
     # they run on the GUI thread even when emitted from a worker/pump thread.
@@ -235,13 +292,27 @@ def run(argv: list[str] | None = None) -> int:
         class _CameraAccessBridge(QObject):
             resolved = Signal(bool)
 
+            @Slot(bool)
+            def resolve(self, granted: bool) -> None:
+                self.resolved.emit(bool(granted))
+
         camera_access = _CameraAccessBridge(app)
 
+        def _auto_start_when_engine_ready() -> None:
+            with supervisor_lock:
+                ready = "cls" in supervisor_holder
+                error = str(supervisor_holder.get("error", "") or "")
+            if error:
+                client.errorOccurred.emit(f"Engine failed to load: {error}")
+                return
+            if not ready:
+                window.statusBar().showMessage("Preparing engine...", 1000)
+                QTimer.singleShot(100, _auto_start_when_engine_ready)
+                return
+            _start_engine_after_macos_camera_preflight(client, camera_access)
+
         QTimer.singleShot(50, _present_window)
-        QTimer.singleShot(
-            750,
-            lambda: _start_engine_after_macos_camera_preflight(client, camera_access),
-        )
+        QTimer.singleShot(750, _auto_start_when_engine_ready)
 
     exit_code = app.exec()
 

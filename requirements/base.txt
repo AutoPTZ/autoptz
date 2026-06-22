@@ -51,9 +51,9 @@ pyobjc-framework-libdispatch>=10.0; platform_system == "Darwin"
 
 # NDI source discovery + capture. cyndilib ships self-contained wheels (the NDI
 # runtime is bundled) for macOS/Windows/Linux, so a plain install enables the
-# Cameras → NDI Sources menu. If a wheel isn't available for your platform/Python
-# and the build can't find the NDI SDK, this line can be dropped (NDI then just
-# stays unavailable — the rest of the app is unaffected).
+# Cameras → NDI Sources menu. If a wheel isn't available for your platform/Python,
+# this line can be dropped (NDI then just stays unavailable — the rest of the app
+# is unaffected).
 cyndilib>=0.1.1
 
 # ── config & persistence ──────────────────────────────────────────
@@ -66,11 +66,10 @@ cyndilib>=0.1.1
 onnx==1.21.0
 
 # ── model bootstrap ─────────────────────────────────────────────────
-# By default the engine acquires the YOLO11 detector ONNX **torch-free**:
-# ModelManager (engine/runtime/models.py) downloads a prebuilt YOLO11 ONNX into
-# the models cache on first run (URL overridable via AUTOPTZ_MODEL_URL; path via
-# AUTOPTZ_MODEL_PATH).  Only the standard onnxruntime (above) is required for
-# detection to work.
+# ModelManager (engine/runtime/models.py) can download a prebuilt YOLO11 ONNX
+# into the models cache (URL overridable via AUTOPTZ_MODEL_URL; path via
+# AUTOPTZ_MODEL_PATH). The UI uses cached models unless the user explicitly
+# enables automatic downloads in Engine > Models.
 #
 # Ultralytics is an OPTIONAL *fallback* used only when the prebuilt download is
 # unreachable; it exports the YOLO11 .pt → ONNX but pulls in torch (heavy).  Omit

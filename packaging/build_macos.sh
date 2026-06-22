@@ -140,9 +140,9 @@ fi
 #   "${PY}" -m tools.fetch_models --cache-dir autoptz/models
 
 # ── 4. NDI runtime (optional) ────────────────────────────────────────────────
-# libndi is a system install, not a pip wheel.  To bundle it, drop the dylib in
-# packaging/ndi/ (or export NDI_RUNTIME=/path/to/dir) before building; the spec
-# picks it up automatically.  Otherwise NDI ingest degrades gracefully.
+# cyndilib is installed from requirements/base.txt and collected by the spec when
+# present. If you need to add an external NDI runtime dylib, drop it in
+# packaging/ndi/ (or export NDI_RUNTIME=/path/to/dir) before building.
 
 # ── 5. build ────────────────────────────────────────────────────────────────
 echo "==> Cleaning previous build"

@@ -52,11 +52,66 @@ class TestOptionalComponentDiagnostics:
 
         rows = optional_components()
         keys = {r["key"] for r in rows}
-        assert {"reid", "pose", "face"}.issubset(keys)
+        assert {"detector", "reid", "pose", "face"}.issubset(keys)
         for row in rows:
             assert row["source"]
             assert row["path"]
+            assert row["why"]
+            assert row["managed"]
             assert row["network"]
+
+
+class TestTrackerStatusNonBlocking:
+    """tracker_status must probe with find_spec, never a heavy ``import boxmot``.
+
+    Importing boxmot pulls in torch (multi-second); this probe runs on the GUI
+    thread's Services-panel poll, so a real import there froze the UI at launch.
+    """
+
+    def test_reflects_module_presence(self, monkeypatch) -> None:
+        from autoptz.engine.runtime import diagnostics as diag
+
+        monkeypatch.setattr(diag, "_module_present", lambda name: name == "boxmot")
+        row = diag.tracker_status()
+        assert row["state"] == "ok"
+        assert "boxmot" in row["detail"].lower()
+
+        monkeypatch.setattr(diag, "_module_present", lambda name: False)
+        assert diag.tracker_status()["state"] == "warn"
+
+    def test_does_not_import_boxmot(self) -> None:
+        import sys
+
+        from autoptz.engine.runtime import diagnostics as diag
+
+        had_boxmot = "boxmot" in sys.modules
+        diag.tracker_status()
+        if not had_boxmot:
+            assert "boxmot" not in sys.modules, "tracker_status must not import boxmot"
+
+
+class TestInferencePoolRelease:
+    """Releasing a pooled model drops the cached instance + re-arms the build."""
+
+    def test_release_resets_built_flags(self) -> None:
+        from autoptz.engine.pipeline.pool import InferencePool
+
+        pool = InferencePool(allow_model_download=False)
+        # Simulate "already built" without loading real models.
+        pool._detector = object()
+        pool._detector_built = True
+        pool._face = object()
+        pool._face_built = True
+        pool._pose = object()
+        pool._pose_built = True
+
+        pool.release_detector()
+        pool.release_face()
+        pool.release_pose()
+
+        assert pool._detector is None and pool._detector_built is False
+        assert pool._face is None and pool._face_built is False
+        assert pool._pose is None and pool._pose_built is False
 
 
 class _FakeSource:

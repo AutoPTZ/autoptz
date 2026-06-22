@@ -474,6 +474,83 @@ class TestCameraWorker:
         finally:
             worker.stop()
 
+    def test_disabling_detection_feature_releases_detector(self, qapp, monkeypatch) -> None:
+        """Turning the detection feature off frees the detector; on rebuilds it.
+
+        Regression for "models not unloaded": disabling a subsystem must drop the
+        worker's model reference (so its memory is reclaimed once the pool drops
+        its copy too), not merely skip running it.
+        """
+        from autoptz.engine.camera_worker import CameraWorker
+
+        det = _install_fake_detect_stack(monkeypatch)
+        worker = CameraWorker(
+            "lifetest01abc",
+            _camera_config("lifetest01abc"),
+            lambda m: None,
+            frame_source=FakeFrameSource(),
+            telemetry_hz=50.0,
+        )
+        worker.start()
+        try:
+            deadline = time.monotonic() + 3.0
+            while worker._detect is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert worker._detect is not None
+            while det.calls == 0 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert det.calls > 0
+
+            # Disable detection → lifecycle drops the worker's detector reference.
+            worker.set_features({"detection": False})
+            deadline = time.monotonic() + 3.0
+            while worker._detect is not None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert worker._detect is None, "detector not released after disabling detection"
+            calls_when_off = det.calls
+            time.sleep(0.2)
+            assert det.calls == calls_when_off, "detector still running while disabled"
+
+            # Re-enable → lifecycle rebuilds the detector stack.
+            worker.set_features({"detection": True})
+            deadline = time.monotonic() + 3.0
+            while worker._detect is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert worker._detect is not None, "detector not rebuilt after re-enabling"
+        finally:
+            worker.stop()
+
+    def test_pool_authoritative_detector_no_per_worker_download(
+        self, qapp, monkeypatch
+    ) -> None:
+        """With a pool present, a missing model must NOT trigger the per-worker
+        fallback (which resolves with allow_download=True and would silently
+        download/export, ignoring the operator's auto-download setting)."""
+        from autoptz.engine import camera_worker as cw
+        from autoptz.engine.camera_worker import CameraWorker
+
+        calls = {"n": 0}
+
+        def _recording_build(config):
+            calls["n"] += 1
+            return None
+
+        monkeypatch.setattr(cw, "_build_detect_stack", _recording_build)
+
+        class _NoModelPool:
+            def detector(self):  # pool has no model (e.g. all deleted)
+                return None
+
+        worker = CameraWorker(
+            "poolauth01ab",
+            _camera_config("poolauth01ab"),
+            lambda m: None,
+            frame_source=FakeFrameSource(),
+        )
+        worker.set_inference_pool(_NoModelPool())
+        assert worker._resolve_detect_stack() is None
+        assert calls["n"] == 0, "per-worker downloading build ran despite a pool being present"
+
     def test_telemetry_reports_resolution_and_dropped_frames(self, qapp) -> None:
         """Width/height come from the source frame; dropped counts read() misses."""
         from autoptz.engine.camera_worker import CameraWorker
@@ -1000,7 +1077,9 @@ class TestSupervisorRouting:
         finally:
             sup.stop()
 
-    def test_staged_start_spawns_preview_before_detector_warmup(self, qapp, monkeypatch) -> None:
+    def test_staged_start_releases_inference_without_forced_warmup(
+        self, qapp, monkeypatch
+    ) -> None:
         client = _make_client(qapp)
         client.addCamera("usb://0", "A")
         client.addCamera("usb://1", "B")
@@ -1036,21 +1115,23 @@ class TestSupervisorRouting:
         sup.start(staged=True, progress=lambda **_kw: None)
         try:
             deadline = time.monotonic() + 2.0
-            while "detector" not in events and time.monotonic() < deadline:
+            workers = []
+            while time.monotonic() < deadline:
+                workers = list(sup._workers.values())
+                if workers and all(
+                    w.inference_paused and w.inference_paused[-1] is False for w in workers
+                ):
+                    break
                 time.sleep(0.01)
             assert events[:2] == [
                 f"start:{client.cameraModel.camera_ids()[0]}",
                 f"start:{client.cameraModel.camera_ids()[1]}",
             ]
-            assert events[2] == "detector"
-            workers = list(sup._workers.values())
+            assert "detector" not in events
+            assert "face" not in events
+            assert "pose" not in events
+            assert "reid" not in events
             assert workers and all(w.inference_paused[0] is True for w in workers)
-            deadline = time.monotonic() + 2.0
-            while (
-                not all(w.inference_paused and w.inference_paused[-1] is False for w in workers)
-                and time.monotonic() < deadline
-            ):
-                time.sleep(0.01)
             assert all(w.inference_paused[-1] is False for w in workers)
         finally:
             sup.stop()
@@ -1257,3 +1338,102 @@ class TestTelemetryThreadSafety:
         c.push_telemetry(TelemetryMsg(camera_id=cid, seq=1, fps=30.0))
         # Same-thread push applies immediately (no event-loop spin needed).
         assert c.get_camera(cid).fps == pytest.approx(30.0)
+
+
+class _FeatureFakeWorker(FakeWorker):
+    """FakeWorker that records feature pushes + model-reload calls."""
+
+    def __init__(self, camera_id, config, on_telemetry):
+        super().__init__(camera_id, config, on_telemetry)
+        self.features_calls: list[dict] = []
+        self.reloads = 0
+
+    def set_features(self, features):
+        self.features_calls.append(dict(features))
+
+    def reload_inference_models(self):
+        self.reloads += 1
+
+
+class _FakePool:
+    """Records which shared models the supervisor asked to release."""
+
+    def __init__(self):
+        self.released: list[str] = []
+
+    def release_detector(self):
+        self.released.append("detector")
+
+    def release_face(self):
+        self.released.append("face")
+
+    def release_pose(self):
+        self.released.append("pose")
+
+
+def _all_features(**overrides):
+    feats = {
+        "detection": True,
+        "tracking": True,
+        "face_recognition": True,
+        "pose": True,
+        "reid": True,
+    }
+    feats.update(overrides)
+    return feats
+
+
+class TestSupervisorModelLifecycle:
+    def test_disabling_feature_releases_pool_model(self, qapp) -> None:
+        from autoptz.engine.runtime.messages import SetFeaturesCmd
+
+        client = _make_client(qapp)
+        cid = client.addCamera("usb://0", "A")
+        client.drain_commands()
+        captured: dict = {}
+        sup = _make_supervisor(
+            client,
+            factory=lambda c, cfg, t: captured.setdefault(c, _FeatureFakeWorker(c, cfg, t)),
+        )
+        sup.start()
+        try:
+            pool = _FakePool()
+            sup._inference_pool = pool  # inject fake shared pool post-start
+            sup._route(SetFeaturesCmd(camera_id=None, features=_all_features()))
+            sup._route(
+                SetFeaturesCmd(
+                    camera_id=None,
+                    features=_all_features(detection=False, pose=False, reid=False),
+                )
+            )
+            assert "detector" in pool.released
+            assert "pose" in pool.released
+            assert "face" not in pool.released  # face stayed on → not released
+            assert captured[cid].features_calls[-1]["detection"] is False
+        finally:
+            sup.stop()
+
+    def test_apply_model_cache_changed_reloads_workers(self, qapp) -> None:
+        client = _make_client(qapp)
+        cid = client.addCamera("usb://0", "A")
+        client.drain_commands()
+        captured: dict = {}
+        sup = _make_supervisor(
+            client,
+            factory=lambda c, cfg, t: captured.setdefault(c, _FeatureFakeWorker(c, cfg, t)),
+        )
+        sup.start()
+        try:
+            pool = _FakePool()
+            sup._inference_pool = pool
+            sup.apply_model_cache_changed()
+            assert "detector" in pool.released and "pose" in pool.released
+            assert captured[cid].reloads == 1
+        finally:
+            sup.stop()
+
+    def test_apply_model_cache_changed_noop_when_stopped(self, qapp) -> None:
+        client = _make_client(qapp)
+        sup = _make_supervisor(client, factory=_FeatureFakeWorker)
+        sup.apply_model_cache_changed()  # not started → safe no-op
+        assert sup.is_running is False

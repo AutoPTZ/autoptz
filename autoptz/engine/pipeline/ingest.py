@@ -857,7 +857,7 @@ class NDIAdapter(SourceAdapter):
 
     def _open(self) -> bool:
         if not _probe_ndi():
-            self._set_error("cyndilib not available — install it and the NDI SDK runtime.")
+            self._set_error("cyndilib not available — install cyndilib.")
             return False
 
         try:

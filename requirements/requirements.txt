@@ -1,0 +1,3 @@
+# Conventional pip entry point for GitHub Dependency Graph and plain
+# `pip install -r requirements/requirements.txt` installs.
+-r base.txt

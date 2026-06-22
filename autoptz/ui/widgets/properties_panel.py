@@ -343,6 +343,7 @@ class PropertiesPanel(QWidget):
             tile.restyle()
         # Cost chips re-resolve their semantic colors from the active palette.
         self._refresh_cost_chips()
+        self._refresh_reid_gating()
 
     # ── construction ─────────────────────────────────────────────────────────────
 
@@ -1378,6 +1379,18 @@ class PropertiesPanel(QWidget):
         if item is not None:
             item.setEnabled(reid_on)
             item.setToolTip("" if reid_on else "Enable ReID in Services to use Stable")
+            item.setData(QColor(T.CURRENT.text), Qt.ItemDataRole.ForegroundRole)
+            item.setData(QColor(T.CURRENT.surface), Qt.ItemDataRole.BackgroundRole)
+            if not reid_on:
+                item.setData(QColor(T.CURRENT.muted), Qt.ItemDataRole.ForegroundRole)
+                item.setData(QColor(T.CURRENT.surface_alt), Qt.ItemDataRole.BackgroundRole)
+        for value, _caption in _TRACKING_MODE_CHOICES:
+            row = self._tracking_mode.findData(value)
+            opt = model.item(row) if (row >= 0 and hasattr(model, "item")) else None
+            if opt is not None and value != "stable":
+                opt.setData(QColor(T.CURRENT.text), Qt.ItemDataRole.ForegroundRole)
+                opt.setData(QColor(T.CURRENT.surface), Qt.ItemDataRole.BackgroundRole)
+        self._tracking_mode.view().setPalette(self.palette())
         cur = self._tracking_mode.currentData()
         if not reid_on and cur == "stable":
             self._mode_caption.setText(

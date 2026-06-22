@@ -13,7 +13,6 @@ from typing import Any
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -70,14 +69,23 @@ _FEATURE_TOGGLES = (
     ),
 )
 
-# (stored value, display label). Values are stable for back-compat with saved
-# settings and the fetch_models / weight-map vocabulary; only labels are cosmetic.
-_DETECTOR_TIERS = (
-    ("auto", "Auto"),
-    ("fast", "Fast"),
-    ("balanced", "Balanced"),
-    ("medium", "Accurate"),
-)
+# Detector tier value → display label.  The combo that lets you *change* the tier
+# now lives in the Model Manager dialog; the Services panel only shows the active
+# tier read-only, so it just needs the label lookup.
+_DETECTOR_TIER_LABELS = {
+    "auto": "Auto",
+    "fast": "Fast",
+    "balanced": "Balanced",
+    "medium": "Accurate",
+}
+
+
+_FEATURE_COMPONENTS = {
+    "detection": "detector",
+    "face_recognition": "face",
+    "pose": "pose",
+    "reid": "reid",
+}
 
 
 def _state_color(state: str) -> str:
@@ -101,7 +109,8 @@ class ServicesPanel(QWidget):
         self._client = client
         self._rows: dict[str, tuple[QLabel, QLabel, QLabel]] = {}
         self._feature_boxes: dict[str, QCheckBox] = {}
-        self._detector_tier: QComboBox | None = None
+        self._feature_tips: dict[str, str] = {}
+        self._component_states: dict[str, str] = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -149,29 +158,11 @@ class ServicesPanel(QWidget):
         # ── testing controls ──────────────────────────────────────────────────
         root.addWidget(hline())
         root.addWidget(section_label("Testing Overrides"))
-        hint = QLabel("Services start enabled every launch. Disable modules here only for testing.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {T.CURRENT.subtext};")
-        root.addWidget(hint)
-
-        tier_row = QHBoxLayout()
-        tier_row.setSpacing(6)
-        tier_label = QLabel("Detector model")
-        self._detector_tier = QComboBox()
-        for value, label in _DETECTOR_TIERS:
-            self._detector_tier.addItem(label, value)
-        self._detector_tier.setToolTip(
-            "Detector model, shared by all cameras. Auto picks Fast. Fast (YOLO11n) "
-            "is lightest; Balanced (YOLO11s) and Accurate (YOLO11m) trade speed for "
-            "detection quality. When the engine is running, AutoPTZ builds the new "
-            "model in the background and swaps it in when ready; the active state is "
-            "shown in diagnostics."
+        self._hint = QLabel(
+            "Services start enabled every launch. Disable modules here only for testing."
         )
-        self._detector_tier.currentIndexChanged.connect(self._on_detector_tier_changed)
-        tier_row.addWidget(tier_label)
-        tier_row.addWidget(self._detector_tier, 1)
-        tier_row.addWidget(HelpBadge(self._detector_tier.toolTip()))
-        root.addLayout(tier_row)
+        self._hint.setWordWrap(True)
+        root.addWidget(self._hint)
 
         for key, label, tip in _FEATURE_TOGGLES:
             row = QHBoxLayout()
@@ -180,19 +171,37 @@ class ServicesPanel(QWidget):
             box.setToolTip(tip)
             box.toggled.connect(lambda checked, k=key: self._on_feature_toggled(k, checked))
             self._feature_boxes[key] = box
+            self._feature_tips[key] = tip
             row.addWidget(box)
             row.addWidget(HelpBadge(tip))
             row.addStretch(1)
             root.addLayout(row)
         _connect(client, "featuresChanged", self._refresh_features)
-        _connect(client, "detectorModelTierChanged", self._refresh_detector_tier)
 
+        # ── models (compact summary; full controls live in Manage Models) ────────
         root.addWidget(hline())
-        root.addWidget(section_label("Optional Setup"))
-        self._setup_list = QVBoxLayout()
-        self._setup_list.setSpacing(6)
-        root.addLayout(self._setup_list)
+        root.addWidget(section_label("Models"))
+        self._tier_label = QLabel()
+        self._tier_label.setWordWrap(True)
+        root.addWidget(self._tier_label)
+        self._model_summary = QLabel()
+        self._model_summary.setTextFormat(Qt.TextFormat.RichText)
+        self._model_summary.setWordWrap(True)
+        root.addWidget(self._model_summary)
+        model_row = QHBoxLayout()
+        model_row.setSpacing(6)
+        self._manage_models = QPushButton("Manage Models...")
+        self._manage_models.setToolTip(
+            "Open the model setup window: pick the detector tier, see cache status, "
+            "and download or remove the detector/pose models AutoPTZ manages."
+        )
+        self._manage_models.clicked.connect(self._open_model_manager)
+        model_row.addWidget(self._manage_models)
+        model_row.addWidget(HelpBadge(self._manage_models.toolTip()))
+        model_row.addStretch(1)
+        root.addLayout(model_row)
         _connect(client, "optionalComponentsChanged", self._refresh_optional_components)
+        _connect(client, "detectorModelTierChanged", self._refresh_detector_tier)
 
         root.addWidget(hline())
         self._list = QVBoxLayout()
@@ -220,7 +229,21 @@ class ServicesPanel(QWidget):
     def _restyle(self) -> None:
         """Re-apply literal-color styling (construction + theme change)."""
         # Rows bake theme colors at build time; refresh repaints them now.
+        self._style_emphasis_labels()
+        self._refresh_optional_components()
         self.refresh()
+
+    def _style_emphasis_labels(self) -> None:
+        """Colour the secondary text at full strength so it reads clearly.
+
+        ``subtext`` looked washed-out for these; the active-tier line and the
+        testing-overrides hint are real information, so they use ``text``.
+        """
+        hint = getattr(self, "_hint", None)
+        tier = getattr(self, "_tier_label", None)
+        for label in (hint, tier):
+            if label is not None:
+                label.setStyleSheet(f"color: {T.CURRENT.text};")
 
     def refresh(self) -> None:
         running = bool(_safe(lambda: self._client.engineRunning, False))
@@ -274,79 +297,97 @@ class ServicesPanel(QWidget):
                 box.blockSignals(True)
                 box.setChecked(on)
                 box.blockSignals(False)
+        self._apply_component_gating()
 
     def _refresh_detector_tier(self) -> None:
-        combo = self._detector_tier
-        if combo is None:
+        label = getattr(self, "_tier_label", None)
+        if label is None:
             return
         tier = str(_safe(lambda: self._client.getDetectorModelTier(), "auto") or "auto")
-        idx = combo.findData(tier)
-        if idx < 0:
-            idx = combo.findData("auto")
-        if idx >= 0 and combo.currentIndex() != idx:
-            combo.blockSignals(True)
-            combo.setCurrentIndex(idx)
-            combo.blockSignals(False)
-
-    def _on_detector_tier_changed(self, _index: int) -> None:
-        combo = self._detector_tier
-        if combo is None:
-            return
-        tier = str(combo.currentData() or "auto")
-        _safe(lambda: self._client.setDetectorModelTier(tier), None)
+        label.setText(f"Active detector model: {_DETECTOR_TIER_LABELS.get(tier, tier.title())}")
 
     def _refresh_optional_components(self) -> None:
-        while self._setup_list.count():
-            item = self._setup_list.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        summary = getattr(self, "_model_summary", None)
         rows = _safe(lambda: self._client.optionalComponents(), []) or []
-        visible = [r for r in rows if r.get("state") != "ok"]
-        if not visible:
-            lab = QLabel("All optional components are available.")
-            lab.setStyleSheet(f"color: {T.CURRENT.subtext};")
-            self._setup_list.addWidget(lab)
+        self._component_states = {
+            str(row.get("key", "")): str(row.get("state", "off")) for row in rows
+        }
+        self._apply_component_gating()
+        if summary is None:
             return
-        for row in visible:
-            self._setup_list.addWidget(self._setup_row(row))
+        states = self._component_states
+        missing = [
+            row.get("name", row.get("key", ""))
+            for row in rows
+            if row.get("key") in {"detector", "pose"} and row.get("state") != "ok"
+        ]
+        ok_color = T.TRACKING
+        warn_color = T.WARNING
 
-    def _setup_row(self, row: dict[str, Any]) -> QWidget:
-        key = str(row.get("key", ""))
-        box = QFrame()
-        box.setFrameShape(QFrame.Shape.NoFrame)
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(5)
-        box.setStyleSheet(
-            f"QFrame {{ background: {T.CURRENT.surface_hov};"
-            f" border: 1px solid {T.CURRENT.border}; border-radius: {T.RADIUS}px; }}"
+        def chip(key: str, text: str) -> str:
+            color = ok_color if states.get(key) == "ok" else warn_color
+            mark = "✓" if states.get(key) == "ok" else "•"
+            return f"<span style='color:{color}'>{mark} {text}</span>"
+
+        line = (
+            f"AutoPTZ-managed: {chip('detector', 'Detector')} · {chip('pose', 'Pose')}"
+            f"<br><span style='color:{T.CURRENT.subtext}'>"
+            "Face &amp; ReID weights are managed by their upstream packages.</span>"
         )
-        title = QLabel(f"<b>{row.get('name', key)}</b>")
-        title.setTextFormat(Qt.TextFormat.RichText)
-        detail = QLabel(
-            f"{row.get('detail', '')}<br>"
-            f"<span style='color:{T.CURRENT.subtext}'>"
-            f"Source: {row.get('source', '—')} · Size: {row.get('size', '—')}<br>"
-            f"Path: {row.get('path', '—')}<br>{row.get('network', '')}</span>"
-        )
-        detail.setTextFormat(Qt.TextFormat.RichText)
-        detail.setWordWrap(True)
-        lay.addWidget(title)
-        lay.addWidget(detail)
-        actions = QHBoxLayout()
-        retry = QPushButton("Retry setup")
-        retry.clicked.connect(lambda _=False, k=key: self._client.retryOptionalComponent(k))
-        ignore = QPushButton("Ignore forever")
-        ignore.setEnabled(not bool(row.get("ignored")))
-        ignore.clicked.connect(
-            lambda _=False, k=key: self._client.setOptionalComponentIgnored(k, True)
-        )
-        actions.addWidget(retry)
-        actions.addWidget(ignore)
-        actions.addStretch(1)
-        lay.addLayout(actions)
-        return box
+        if missing:
+            line += (
+                f"<br><span style='color:{warn_color}'>"
+                f"{', '.join(str(m) for m in missing)} not downloaded — open Manage Models."
+                "</span>"
+            )
+        summary.setText(line)
+
+    def _apply_component_gating(self) -> None:
+        """Grey out toggles whose required model/component is missing.
+
+        Purely **visual** — the engine's feature flags are left untouched.  The
+        detector is pool-authoritative now: a missing model means nothing runs
+        and nothing is drawn regardless of the flag, so there is no UI/engine
+        desync to "enforce".  Just as importantly, NOT forcing the flag off means
+        detection (and the downstream features) resume automatically once the
+        model is downloaded again, instead of sticking off — which previously
+        left the engine quiet after a delete→re-download.  The checked state
+        mirrors the engine via :meth:`_refresh_features`.
+        """
+        states = self._component_states
+        detector_ok = states.get("detector", "ok") == "ok"
+        # Everything visible flows from the body detector: face/pose/ReID only
+        # label or stabilise *already-detected* bodies, and tracking follows them —
+        # so without the detector model nothing is drawn no matter the individual
+        # switches.  Grey the downstream toggles too, with a tooltip that explains
+        # why, instead of leaving the operator wondering why "Face recognition" is
+        # on but nothing happens.
+        for feature in ("detection", "tracking", "face_recognition", "pose", "reid"):
+            box = self._feature_boxes.get(feature)
+            if box is None:
+                continue
+            component = _FEATURE_COMPONENTS.get(feature)
+            own_ok = component is None or states.get(component, "ok") == "ok"
+            needs_detector = feature != "detection"
+            available = own_ok and (detector_ok or not needs_detector)
+            box.setEnabled(available)
+            if available:
+                box.setToolTip(self._feature_tips.get(feature, ""))
+                continue
+            if needs_detector and not detector_ok:
+                reason = "Requires the detector model — open Manage Models to download it."
+            elif component is not None:
+                reason = f"Disabled until the {component} component is available."
+            else:
+                reason = "Unavailable."
+            box.setToolTip(f"{self._feature_tips.get(feature, '')}\n\n{reason}")
+
+    def _open_model_manager(self) -> None:
+        from autoptz.ui.widgets.dialogs.model_manager import ModelManagerDialog
+
+        ModelManagerDialog(self._client, parent=self).exec()
+        self._refresh_optional_components()
+        self.refresh()
 
     def _ensure_row(self, key: str) -> None:
         if key in self._rows:

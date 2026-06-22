@@ -35,8 +35,10 @@ import logging
 import os
 import tempfile
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +59,58 @@ _DETECTOR_TIER_TO_PT = {
     "rtdetr-l": "rtdetr-l.pt",
     "rtdetr-x": "rtdetr-x.pt",
 }
+_APP_MODEL_SUFFIXES = (".onnx", ".int8.onnx", ".onnx.part", ".pt")
+_APP_MODEL_CATALOG: tuple[dict[str, str], ...] = (
+    {
+        "key": "detector_fast",
+        "kind": "detector",
+        "tier": "fast",
+        "name": "Fast detector",
+        "weight": "yolo11n.pt",
+        "stem": "yolo11n",
+        "label": "YOLO11n",
+        "cost": "Light",
+        "description": "Lowest latency detector. Best default for most multi-camera setups.",
+        "why": "Person boxes, click-to-track, tracking, and automatic PTZ follow.",
+    },
+    {
+        "key": "detector_balanced",
+        "kind": "detector",
+        "tier": "balanced",
+        "name": "Balanced detector",
+        "weight": "yolo11s.pt",
+        "stem": "yolo11s",
+        "label": "YOLO11s",
+        "cost": "Medium",
+        "description": "Better detections than Fast with a moderate runtime cost.",
+        "why": "Useful when people are small, partially blocked, or lighting is uneven.",
+    },
+    {
+        "key": "detector_accurate",
+        "kind": "detector",
+        "tier": "medium",
+        "name": "Accurate detector",
+        "weight": "yolo11m.pt",
+        "stem": "yolo11m",
+        "label": "YOLO11m",
+        "cost": "Heavy",
+        "description": "Largest built-in detector tier. Best quality, highest CPU/GPU cost.",
+        "why": "Useful for difficult rooms or longer camera shots when hardware allows it.",
+    },
+    {
+        "key": "pose",
+        "kind": "pose",
+        "tier": "",
+        "name": "Pose model",
+        "weight": "yolo11n-pose.pt",
+        "stem": "yolo11n-pose",
+        "label": "YOLO11n-pose",
+        "cost": "Light",
+        "description": "Body keypoints for skeleton overlay and torso-stable framing.",
+        "why": "Pose overlay and steadier framing when the tracked person turns or bends.",
+    },
+)
+_APP_MODEL_STEMS = tuple(spec["stem"] for spec in _APP_MODEL_CATALOG)
 
 
 def detector_model_for_tier(tier: str | None) -> str:
@@ -83,6 +137,31 @@ _MIN_ONNX_BYTES = 1 << 18  # 256 KiB
 _EXPORT_KWARGS = {"format": "onnx", "nms": False, "dynamic": False, "opset": 12}
 _DISABLE_EXPORT_ENV = "AUTOPTZ_NO_MODEL_EXPORT"
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+ModelProgress = Callable[[str, int, int], None]
+
+
+def app_model_specs() -> list[dict[str, str]]:
+    """Return metadata for AutoPTZ-managed model files."""
+    return [dict(spec) for spec in _APP_MODEL_CATALOG]
+
+
+def detector_key_for_tier(tier: str | None) -> str:
+    """Return the catalog key for a detector tier."""
+    model_pt = detector_model_for_tier(tier)
+    stem = Path(model_pt).stem
+    for spec in _APP_MODEL_CATALOG:
+        if spec["kind"] == "detector" and spec["stem"] == stem:
+            return spec["key"]
+    return "detector_fast"
+
+
+def _format_bytes(value: int) -> str:
+    size = float(max(0, int(value)))
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024.0 or unit == "GB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024.0
+    return f"{size:.1f} GB"
 
 
 def _model_export_disabled() -> bool:
@@ -133,6 +212,7 @@ class ModelManager:
         *,
         model_pt: str | None = None,
         tier: str | None = None,
+        allow_download: bool = True,
     ) -> str | None:
         """Return a path to a YOLO11 person/COCO detection ONNX, or ``None``.
 
@@ -168,6 +248,12 @@ class ModelManager:
         if onnx_path.is_file():
             log.debug("Detector ONNX already cached at %s", onnx_path)
             return str(onnx_path)
+        if not allow_download:
+            self._last_error = (
+                f"{onnx_path.name}: not cached. Open Engine > Models to download it, "
+                "or enable automatic model downloads."
+            )
+            return None
 
         # 3+4. Acquire under a lock so concurrent camera workers don't race to
         #      fetch/export the same file.
@@ -225,7 +311,12 @@ class ModelManager:
                 except Exception:  # noqa: BLE001
                     log.debug("could not remove temp %s", tmp, exc_info=True)
 
-    def ensure_pose(self, *, model_pt: str = "yolo11n-pose.pt") -> str | None:
+    def ensure_pose(
+        self,
+        *,
+        model_pt: str = "yolo11n-pose.pt",
+        allow_download: bool = True,
+    ) -> str | None:
         """Return a path to a YOLO11 pose ONNX, downloading/exporting if needed.
 
         Mirrors :meth:`ensure_detector` for the COCO-17 pose model: env override
@@ -244,10 +335,196 @@ class ModelManager:
         onnx_path = self._cache_dir / (Path(model_pt).stem + ".onnx")
         if onnx_path.is_file():
             return str(onnx_path)
+        if not allow_download:
+            self._last_error = (
+                f"{onnx_path.name}: not cached. Open Engine > Models to download it, "
+                "or enable automatic model downloads."
+            )
+            return None
         with self._lock:
             if onnx_path.is_file():
                 return str(onnx_path)
             return self._download_and_export(model_pt, onnx_path)
+
+    def ensure_app_models(
+        self,
+        *,
+        include_pose: bool = True,
+        keys: list[str] | tuple[str, ...] | set[str] | None = None,
+        progress: ModelProgress | None = None,
+    ) -> list[dict[str, str]]:
+        """Ensure the ONNX models AutoPTZ can manage directly are cached.
+
+        This covers detector tiers exposed in Services plus the YOLO pose model.
+        Face and ReID assets are owned by their upstream packages and have
+        separate licensing/cache behavior, so diagnostics reports them but this
+        method does not fetch them.
+        """
+        selected = {str(k) for k in keys} if keys is not None else None
+        jobs: list[tuple[str, Callable[[], str | None], Callable[[], str]]] = []
+        seen_detector_weights: set[str] = set()
+        job_keys: list[str] = []
+        for spec in _APP_MODEL_CATALOG:
+            key = spec["key"]
+            kind = spec["kind"]
+            if selected is not None and key not in selected:
+                continue
+            if kind == "pose":
+                continue
+            tier = spec["tier"]
+            label = spec["name"]
+            model_pt = detector_model_for_tier(tier)
+            if model_pt in seen_detector_weights:
+                continue
+            seen_detector_weights.add(model_pt)
+
+            def _ensure_tier(selected_tier: str = tier) -> str | None:
+                return self.ensure_detector(tier=selected_tier)
+
+            def _detector_error(weight: str = model_pt) -> str:
+                return self.last_error or f"{weight}: unavailable"
+
+            jobs.append(
+                (
+                    label,
+                    _ensure_tier,
+                    _detector_error,
+                )
+            )
+            job_keys.append(key)
+        if include_pose and (selected is None or "pose" in selected):
+
+            def _pose_error() -> str:
+                return self.last_error or "yolo11n-pose.pt: unavailable"
+
+            jobs.append(
+                (
+                    "Pose model",
+                    self.ensure_pose,
+                    _pose_error,
+                )
+            )
+            job_keys.append("pose")
+
+        results: list[dict[str, str]] = []
+        total = len(jobs)
+        for index, (label, work, error) in enumerate(jobs, start=1):
+            if progress is not None:
+                progress(label, index - 1, total)
+            path = work()
+            key = job_keys[index - 1] if index - 1 < len(job_keys) else ""
+            results.append(
+                {
+                    "key": key,
+                    "name": label,
+                    "state": "ok" if path else "failed",
+                    "path": str(path or ""),
+                    "error": "" if path else error(),
+                }
+            )
+            if progress is not None:
+                progress(label, index, total)
+        return results
+
+    def app_model_statuses(self) -> list[dict[str, Any]]:
+        """Return model catalog rows with current AutoPTZ cache state."""
+        rows: list[dict[str, Any]] = []
+        for spec in _APP_MODEL_CATALOG:
+            row: dict[str, Any] = dict(spec)
+            stem = spec["stem"]
+            onnx_path = self._cache_dir / f"{stem}.onnx"
+            files = self._managed_files_for_stem(stem)
+            cached = onnx_path.is_file()
+            size = 0
+            for path in files:
+                try:
+                    size += path.stat().st_size
+                except OSError:
+                    pass
+            row["state"] = "ok" if cached else "missing"
+            row["cached"] = cached
+            row["path"] = str(onnx_path)
+            row["cache_dir"] = str(self._cache_dir)
+            row["size_bytes"] = size
+            row["size"] = _format_bytes(size) if size else ""
+            row["detail"] = (
+                f"Cached at {onnx_path}"
+                if cached
+                else f"Missing from AutoPTZ cache ({onnx_path.name})"
+            )
+            row["managed_files"] = [str(path) for path in files]
+            rows.append(row)
+        return rows
+
+    def managed_model_files(
+        self,
+        *,
+        keys: list[str] | tuple[str, ...] | set[str] | None = None,
+    ) -> list[Path]:
+        """Return AutoPTZ-managed model files currently present in the cache.
+
+        Only files that AutoPTZ itself downloads/exports are listed. Upstream
+        package caches such as ``~/.insightface`` are intentionally excluded so
+        the app does not delete model packs that may be shared by other tools.
+        """
+        try:
+            if not self._cache_dir.is_dir():
+                return []
+            out: list[Path] = []
+            selected = {str(k) for k in keys} if keys is not None else None
+            stems = [
+                spec["stem"]
+                for spec in _APP_MODEL_CATALOG
+                if selected is None or spec["key"] in selected
+            ]
+            for stem in stems:
+                out.extend(self._managed_files_for_stem(stem))
+            return sorted(out)
+        except Exception:  # noqa: BLE001
+            log.debug("managed model inventory failed", exc_info=True)
+            return []
+
+    def remove_app_models(
+        self,
+        *,
+        keys: list[str] | tuple[str, ...] | set[str] | None = None,
+    ) -> list[dict[str, str]]:
+        """Delete AutoPTZ-managed detector/pose model files from the cache."""
+        removed: list[dict[str, str]] = []
+        with self._lock:
+            for path in self.managed_model_files(keys=keys):
+                try:
+                    size = path.stat().st_size
+                    path.unlink()
+                    removed.append(
+                        {
+                            "name": path.name,
+                            "state": "removed",
+                            "path": str(path),
+                            "size": str(size),
+                            "error": "",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    removed.append(
+                        {
+                            "name": path.name,
+                            "state": "failed",
+                            "path": str(path),
+                            "size": "",
+                            "error": str(exc),
+                        }
+                    )
+                    log.warning("could not remove model file %s", path, exc_info=True)
+        return removed
+
+    def _managed_files_for_stem(self, stem: str) -> list[Path]:
+        out: list[Path] = []
+        for suffix in _APP_MODEL_SUFFIXES:
+            path = self._cache_dir / f"{stem}{suffix}"
+            if path.is_file():
+                out.append(path)
+        return out
 
     # ── internals ─────────────────────────────────────────────────────────────
 

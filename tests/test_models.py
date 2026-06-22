@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from autoptz.engine.runtime.models import ModelManager, detector_model_for_tier
+from autoptz.engine.runtime.models import ModelManager, app_model_specs, detector_model_for_tier
 
 
 @pytest.fixture(autouse=True)
@@ -50,6 +50,16 @@ def test_env_override_ignored_when_file_missing(tmp_path, monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "ultralytics", None)
     mgr = ModelManager(cache_dir=tmp_path / "cache")
     assert mgr.ensure_detector() is None
+
+
+def test_cached_only_detector_does_not_download_or_export(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPTZ_MODEL_PATH", raising=False)
+    captured = _install_fake_ultralytics(monkeypatch)
+
+    mgr = ModelManager(cache_dir=tmp_path / "cache")
+    assert mgr.ensure_detector(tier="balanced", allow_download=False) is None
+    assert "not cached" in mgr.last_error
+    assert "weights" not in captured
 
 
 # ── cached ONNX reuse ─────────────────────────────────────────────────────────
@@ -205,6 +215,116 @@ def test_export_disabled_env_applies_to_pose(tmp_path, monkeypatch) -> None:
     assert mgr.ensure_pose() is None
     assert "disabled" in mgr.last_error
     assert "export_kwargs" not in captured
+
+
+def test_ensure_app_models_fetches_detector_tiers_and_pose(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPTZ_MODEL_PATH", raising=False)
+    monkeypatch.delenv("AUTOPTZ_POSE_MODEL_PATH", raising=False)
+    captured = _install_fake_ultralytics(monkeypatch)
+    progress = []
+
+    mgr = ModelManager(cache_dir=tmp_path / "cache")
+    rows = mgr.ensure_app_models(
+        progress=lambda label, value, total: progress.append((label, value, total))
+    )
+
+    assert [r["state"] for r in rows] == ["ok", "ok", "ok", "ok"]
+    assert {Path(r["path"]).name for r in rows} == {
+        "yolo11n.onnx",
+        "yolo11s.onnx",
+        "yolo11m.onnx",
+        "yolo11n-pose.onnx",
+    }
+    assert progress[0] == ("Fast detector", 0, 4)
+    assert progress[-1] == ("Pose model", 4, 4)
+    assert captured["weights"] == "yolo11n-pose.pt"
+
+
+def test_ensure_app_models_can_skip_pose(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPTZ_MODEL_PATH", raising=False)
+    captured = _install_fake_ultralytics(monkeypatch)
+
+    mgr = ModelManager(cache_dir=tmp_path / "cache")
+    rows = mgr.ensure_app_models(include_pose=False)
+
+    assert [r["name"] for r in rows] == [
+        "Fast detector",
+        "Balanced detector",
+        "Accurate detector",
+    ]
+    assert captured["weights"] == "yolo11m.pt"
+
+
+def test_app_model_statuses_describe_catalog_and_cache(tmp_path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "yolo11n.onnx").write_bytes(b"model")
+
+    mgr = ModelManager(cache_dir=cache)
+    rows = mgr.app_model_statuses()
+
+    assert {row["key"] for row in rows} == {spec["key"] for spec in app_model_specs()}
+    fast = next(row for row in rows if row["key"] == "detector_fast")
+    pose = next(row for row in rows if row["key"] == "pose")
+    assert fast["cached"] is True
+    assert fast["state"] == "ok"
+    assert fast["size_bytes"] > 0
+    assert pose["cached"] is False
+    assert pose["state"] == "missing"
+
+
+def test_ensure_app_models_can_fetch_selected_keys(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPTZ_MODEL_PATH", raising=False)
+    monkeypatch.delenv("AUTOPTZ_POSE_MODEL_PATH", raising=False)
+    _install_fake_ultralytics(monkeypatch)
+
+    mgr = ModelManager(cache_dir=tmp_path / "cache")
+    rows = mgr.ensure_app_models(keys=["detector_balanced", "pose"])
+
+    assert [row["key"] for row in rows] == ["detector_balanced", "pose"]
+    assert {Path(row["path"]).name for row in rows} == {
+        "yolo11s.onnx",
+        "yolo11n-pose.onnx",
+    }
+
+
+def test_remove_app_models_deletes_only_managed_files(tmp_path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    managed = [
+        cache / "yolo11n.onnx",
+        cache / "yolo11s.pt",
+        cache / "yolo11m.int8.onnx",
+        cache / "yolo11n-pose.onnx",
+    ]
+    for path in managed:
+        path.write_bytes(b"model")
+    custom = cache / "custom.onnx"
+    custom.write_bytes(b"keep")
+
+    mgr = ModelManager(cache_dir=cache)
+    rows = mgr.remove_app_models()
+
+    assert {row["name"] for row in rows} == {path.name for path in managed}
+    assert all(row["state"] == "removed" for row in rows)
+    assert not any(path.exists() for path in managed)
+    assert custom.read_bytes() == b"keep"
+
+
+def test_remove_app_models_can_target_selected_keys(tmp_path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    fast = cache / "yolo11n.onnx"
+    pose = cache / "yolo11n-pose.onnx"
+    fast.write_bytes(b"model")
+    pose.write_bytes(b"model")
+
+    mgr = ModelManager(cache_dir=cache)
+    rows = mgr.remove_app_models(keys=["pose"])
+
+    assert {row["name"] for row in rows} == {"yolo11n-pose.onnx"}
+    assert fast.exists()
+    assert not pose.exists()
 
 
 def test_export_does_not_change_cwd(tmp_path, monkeypatch) -> None:

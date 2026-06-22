@@ -470,6 +470,11 @@ class CameraWorker:
         # face_recognition / pose); default all-on until the supervisor narrows
         # them.  Read under ``_cmd_lock`` snapshots in the tick.
         self._features: dict[str, bool] = dict(_DEFAULT_FEATURES)
+        # Feature snapshot from the previous inference tick.  Comparing it against
+        # the live flags lets ``_apply_model_lifecycle`` act only on transitions
+        # (build on enable / free on disable) instead of every frame.  Seeded in
+        # the inference loop right after the initial stacks are built.
+        self._prev_model_features: dict[str, bool] = dict(_DEFAULT_FEATURES)
 
         # owned resources (created in thread)
         self._source: FrameSource | None = None
@@ -645,6 +650,18 @@ class CameraWorker:
         with self._cmd_lock:
             self._cmd_queue.append(("refresh_detector", None))
 
+    def reload_inference_models(self) -> None:
+        """Drop + rebuild detector/pose after the on-disk model cache changed.
+
+        Unlike ``refresh_detector_from_pool`` (a hot-swap that keeps the old
+        model if the new one isn't ready), this force-drops the worker's model
+        references so a *removed* model truly stops drawing boxes, then rebuilds
+        from the (now-refreshed) shared pool — yielding the new model, or nothing
+        when the files were deleted.
+        """
+        with self._cmd_lock:
+            self._cmd_queue.append(("reload_models", None))
+
     def set_inference_start_paused(self, paused: bool) -> None:
         """Pause/release heavy inference startup while preview/capture opens."""
         if paused:
@@ -778,6 +795,8 @@ class CameraWorker:
             self._apply_target_fps(float(payload))
         elif kind == "refresh_detector":
             self._refresh_detector_from_pool()
+        elif kind == "reload_models":
+            self._reload_inference_models()
         elif kind == "save_ptz_preset":
             self._save_ptz_preset(int(payload))
         elif kind == "recall_ptz_preset":
@@ -811,6 +830,29 @@ class CameraWorker:
             self._last_applied_fps = float(fps)
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s set_target_fps failed", self.camera_id, exc_info=True)
+
+    def _reload_inference_models(self) -> None:
+        """Force-drop + rebuild detector/pose to match the current model cache."""
+        self._detect = None
+        self._unified_pose_active = False
+        self._last_detections = []
+        self._pose = None
+        self._pose_probed = False
+        self._pose_keypoints = None
+        self._pose_kp_track_id = None
+        if self._feature("detection"):
+            self._ensure_detect_stack()
+            model = (
+                getattr(self._pool, "detector_model_name", "")
+                or getattr(self._pool, "detector_tier", "")
+                if self._pool is not None
+                else ""
+            )
+            if self._detect is None:
+                self._add_event("detector", "Detector model removed; live-preview only.", level="warning")
+            else:
+                self._add_event("detector", f"Detector reloaded: {model or self._ep or 'shared model'}.")
+        # Pose rebuilds lazily through _ensure_pose on its next use.
 
     def _refresh_detector_from_pool(self) -> None:
         """Replace the detector pointer with the pool's active detector."""
@@ -858,7 +900,7 @@ class CameraWorker:
                 coast_window=self.config.tracking.coast_window_ms / 1000.0,
             )
             if self._detect is None:
-                self._detect = self._build_detect_stack_pooled() or _build_detect_stack(self.config)
+                self._detect = self._resolve_detect_stack()
             if self._detect is not None:
                 self._detect.tracker = tracker
             # Manual track ids are backend-local and may not survive a rebuild.
@@ -2131,6 +2173,8 @@ class CameraWorker:
         if self._stop_event.is_set():
             return
         self._build_inference_stacks()
+        # Seed so the first lifecycle pass sees no spurious transition.
+        self._prev_model_features = self._features_snapshot()
         self._start_appearance_thread()
         last_id = 0
         while not self._stop_event.is_set():
@@ -2142,6 +2186,7 @@ class CameraWorker:
             if self._stop_event.is_set():
                 break
             self._drain_commands()
+            self._apply_model_lifecycle()
             with self._frame_lock:
                 frame = self._latest_frame
                 fid = self._latest_frame_id
@@ -2328,15 +2373,43 @@ class CameraWorker:
         warm up here.  In production the shared inference pool returns models
         that were built once at supervisor start, so this is near-instant; the
         per-worker build (insightface compile) is only the no-pool fallback.
+
+        Feature-aware: only the subsystems whose global switch is on are built,
+        so a worker that starts with (say) detection disabled never loads the
+        detector.  ``_apply_model_lifecycle`` keeps presence in sync afterwards.
         """
-        # Detection stack (graceful: None → live-preview-only).  Prefer the
-        # shared inference pool's detector (one ONNX session for all cameras) +
-        # a fresh PER-WORKER tracker; fall back to the per-worker build (which
-        # builds its own detector) when no pool was injected (tests/fakes).
-        detect = self._build_detect_stack_pooled()
-        if detect is None:
-            self._pooled_detector = False
-            detect = _build_detect_stack(self.config)
+        if self._feature("detection"):
+            self._ensure_detect_stack()
+        if self._feature("face_recognition"):
+            self._ensure_face_stack()
+
+    def _resolve_detect_stack(self) -> _DetectStack | None:
+        """Build a detect stack honouring pool authority.
+
+        When a shared :class:`InferencePool` is injected it is *authoritative*:
+        it already enforces the model-cache + auto-download policy
+        (``allow_download=False``), so a missing model means live-preview-only —
+        we must NOT fall back to the per-worker ``_build_detect_stack`` here,
+        because that resolves the model with ``allow_download=True`` and would
+        silently download/export a model on the inference thread (ignoring the
+        operator's auto-download setting, and stalling startup/toggles).  The
+        per-worker build is only for the no-pool path (tests/fakes).
+        """
+        if self._pool is not None:
+            return self._build_detect_stack_pooled()
+        self._pooled_detector = False
+        return _build_detect_stack(self.config)
+
+    def _ensure_detect_stack(self) -> None:
+        """Build the detect stack if not present (graceful: ``None``).
+
+        Prefers the shared inference pool's detector (one ONNX session for all
+        cameras) + a fresh PER-WORKER tracker; the per-worker build is only used
+        when no pool was injected.  See :meth:`_resolve_detect_stack`.
+        """
+        if self._detect is not None:
+            return
+        detect = self._resolve_detect_stack()
         if detect is not None:
             self._ep = detect.ep
         self._detect = detect
@@ -2351,18 +2424,68 @@ class CameraWorker:
             except Exception:  # noqa: BLE001
                 self._unified_pose_active = False
 
-        # Face / identity stack (graceful: None → no identity features).  Prefer
-        # the pool's shared recogniser; fall back to a per-worker build.
+    def _ensure_face_stack(self) -> None:
+        """Build the face/identity stack if not present (graceful: ``None``)."""
+        if self._face is not None:
+            return
         if self._injected_face_stack is not None:
             self._face = self._injected_face_stack
-        else:
-            face = self._build_face_stack_pooled()
-            if face is None and detection_runtime_available():
-                face = _build_face_stack(
-                    self.config,
-                    self._injected_identity_service,
-                )
-            self._face = face
+            return
+        face = self._build_face_stack_pooled()
+        if face is None and detection_runtime_available():
+            face = _build_face_stack(
+                self.config,
+                self._injected_identity_service,
+            )
+        self._face = face
+
+    def _features_snapshot(self) -> dict[str, bool]:
+        """Atomic read of all global feature flags (default True when unset)."""
+        with self._cmd_lock:
+            return {k: bool(self._features.get(k, True)) for k in _DEFAULT_FEATURES}
+
+    def _apply_model_lifecycle(self) -> None:
+        """Free / rebuild heavy models to match the global feature switches.
+
+        Acts only on transitions (compared against ``_prev_model_features``):
+        turning a subsystem off drops this worker's reference so the model's
+        memory is reclaimed once the shared pool releases its copy too (the
+        supervisor does that in ``_on_set_features``); turning it back on
+        rebuilds.  Pose and ReID rebuild lazily through ``_ensure_pose`` /
+        ``_ensure_reid``, so "off" only drops the cached instance and re-arms
+        their probe flags.
+        """
+        cur = self._features_snapshot()
+        prev = self._prev_model_features
+        if cur == prev:
+            return
+
+        if cur["detection"] != prev["detection"]:
+            if cur["detection"]:
+                self._ensure_detect_stack()
+            else:
+                self._detect = None
+                self._unified_pose_active = False
+                self._last_detections = []
+
+        if cur["face_recognition"] != prev["face_recognition"]:
+            if cur["face_recognition"]:
+                self._ensure_face_stack()
+            elif self._injected_face_stack is None:
+                self._face = None
+
+        if prev["pose"] and not cur["pose"]:
+            self._pose = None
+            self._pose_probed = False
+            self._pose_keypoints = None
+            self._pose_kp_track_id = None
+
+        if prev["reid"] and not cur["reid"]:
+            self._reset_reid()
+            self._reid = None
+            self._reid_probed = False
+
+        self._prev_model_features = cur
 
     def _build_detect_stack_pooled(self) -> _DetectStack | None:
         """Build a detect stack from the pool's SHARED detector + a fresh tracker.

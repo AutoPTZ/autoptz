@@ -30,12 +30,12 @@ Notes
 * macOS: the BUNDLE step writes packaging/Info.plist into
   AutoPTZ.app/Contents/Info.plist.  CFBundleName=AutoPTZ there is the real fix
   for the app menu showing "Python".
-* NDI: the NDI runtime (libndi) is a system install, not a pip wheel.  To ship
-  it inside the app, drop the dylib/dll next to this spec (or point NDI_RUNTIME
-  at it) and it will be added to the bundle's Frameworks/binaries — see below.
-* Models: the YOLO11 detector ONNX auto-downloads on first run via
-  ModelManager, OR pre-fetch it with `python -m tools.fetch_models` and copy it
-  into autoptz/models/ before building to ship it inside the app.
+* NDI: cyndilib is collected when installed in the build venv. If you need to
+  add an external NDI runtime DLL/dylib/so, drop it next to this spec (or point
+  NDI_RUNTIME at it) and it will be added to the bundle's binaries — see below.
+* Models: detector and pose ONNX files can be prepared by ModelManager, OR
+  pre-fetch them with `python -m tools.fetch_models` and copy them into
+  autoptz/models/ before building to ship them inside the app.
 """
 from __future__ import annotations
 
@@ -116,8 +116,9 @@ for mod in ("onnxruntime", "cv2"):
     except Exception:
         pass
 
-# Optional: bundle an NDI runtime if present beside the spec (NDI_RUNTIME env or
-# packaging/ndi/).  libndi is NOT a pip wheel; see docs/building.md.
+# Optional: add an external NDI runtime if present beside the spec
+# (NDI_RUNTIME env or packaging/ndi/). cyndilib itself is collected below when
+# installed in the build venv.
 _ndi = os.environ.get("NDI_RUNTIME")
 _ndi_dir = Path(_ndi) if _ndi else (SPEC_DIR / "ndi")
 if _ndi_dir.exists():
@@ -161,7 +162,7 @@ def _keep_optional_submodule(name: str) -> bool:
     )
 
 
-for opt_pkg in ("ultralytics", "boxmot", "insightface", "av", "onnx"):
+for opt_pkg in ("ultralytics", "boxmot", "insightface", "av", "onnx", "cyndilib"):
     try:
         __import__(opt_pkg)
     except Exception:
@@ -169,6 +170,7 @@ for opt_pkg in ("ultralytics", "boxmot", "insightface", "av", "onnx"):
     try:
         hiddenimports += collect_submodules(opt_pkg, filter=_keep_optional_submodule)
         datas += collect_data_files(opt_pkg)
+        binaries += collect_dynamic_libs(opt_pkg)
     except Exception:
         pass
 

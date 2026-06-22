@@ -63,13 +63,29 @@ uninstall all `onnxruntime*` packages, then install exactly one of
 ### Platform notes
 
 - **macOS** — `requirements/base.txt` installs PyObjC AVFoundation packages via
-  markers, so native capture can bind cameras by stable uniqueID. NDI
-  (`cyndilib`) still needs the NDI SDK runtime first.
+  markers, so native capture can bind cameras by stable uniqueID. NDI support is
+  provided by the `cyndilib` package from `requirements/base.txt`.
 - **Windows** — DirectML is the default GPU path because it works without CUDA.
   Force `--accelerator nvidia` only on machines with CUDA 12.x + cuDNN 9.x, and
   TensorRT 10.x if you want TensorRT.
 - **Linux** — install Qt's system libs: `libegl1 libgl1 libxkbcommon0
   libdbus-1-3` and the `libxcb-*` set (see `docs/building.md`).
+
+### Model setup
+
+Release builds may start without bundled model weights. Use **Engine →
+Models...** or run `python -m tools.fetch_models` to cache the detector
+tiers and pose model before going offline. Use **Engine → Models...** to
+delete AutoPTZ-managed detector/pose files from the local cache.
+AutoPTZ does not silently fetch a missing detector tier when you switch models
+unless **Automatically download a missing detector tier when I select it** is
+enabled in that window.
+
+The Services panel labels why each model is needed and disables feature controls
+whose required model/dependency is missing. Face recognition and ReID model packs
+are managed by their upstream packages and are not bundled or deleted by AutoPTZ
+by default; review upstream model licenses before redistributing them. See
+[`NOTICE.md`](../NOTICE.md).
 
 ## Verify
 

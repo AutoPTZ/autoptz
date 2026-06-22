@@ -159,8 +159,8 @@ class Supervisor:
         ``staged=True`` preserves the public "running" state immediately but
         opens cameras on a background startup thread in small adaptive batches.
         Workers are started with inference paused; preview shared memory and
-        capture come up first, then the shared models warm once before inference
-        is released. That keeps launch responsive while preserving all services
+        capture come up first, then inference is released without a forced model
+        warmup gate. That keeps launch responsive while preserving all services
         as logically enabled.
         The UI uses this path so camera opens/model warmup do not freeze the
         main window; direct tests/headless callers keep the synchronous default.
@@ -169,26 +169,32 @@ class Supervisor:
             if self._running:
                 return
             self._running = True
-
             camera_ids = self._client.cameraModel.camera_ids()
-            self._apply_hardware_env(len(camera_ids))
-            log.info("supervisor starting — %d camera(s), ep=%s", len(camera_ids), self.active_ep)
-            _log_macos_capture_path()
-            if staged:
-                self._start_pump_if_needed(run_pump)
-                self._startup_thread = threading.Thread(
-                    target=self._startup_loop,
-                    args=(camera_ids, progress),
-                    name="engine-startup",
-                    daemon=True,
-                )
-                self._startup_thread.start()
-                return
 
-            for camera_id in camera_ids:
-                self._spawn_worker(camera_id)
-
+        # Spawning happens OUTSIDE the lock: worker.start() opens the camera
+        # (which can block for seconds), and holding self._lock across it would
+        # stall any GUI-thread call that routes through the command pump.
+        # _spawn_worker takes the lock only to register the worker.
+        self._apply_hardware_env(len(camera_ids))
+        if staged:
+            log.info("supervisor starting — %d camera(s)", len(camera_ids))
             self._start_pump_if_needed(run_pump)
+            startup_thread = threading.Thread(
+                target=self._startup_loop,
+                args=(camera_ids, progress),
+                name="engine-startup",
+                daemon=True,
+            )
+            self._startup_thread = startup_thread
+            startup_thread.start()
+            return
+
+        log.info("supervisor starting — %d camera(s), ep=%s", len(camera_ids), self.active_ep)
+        _log_macos_capture_path()
+        for camera_id in camera_ids:
+            self._spawn_worker(camera_id)
+
+        self._start_pump_if_needed(run_pump)
 
     def stop(self) -> None:
         """Stop the pump and tear down all workers.  Idempotent."""
@@ -236,7 +242,7 @@ class Supervisor:
             self._pump_thread.start()
 
     def _startup_loop(self, camera_ids: list[str], progress: Any | None) -> None:
-        """Preview-first staged camera start + model warmup."""
+        """Preview-first staged camera start."""
         total = len(camera_ids)
         adaptive_concurrency = self._adaptive_startup_concurrency()
         concurrency = 1
@@ -246,12 +252,12 @@ class Supervisor:
             return
         started = 0
         for camera_id in camera_ids:
-            with self._lock:
-                if not self._running:
-                    self._progress(progress, active=False, phase="")
-                    return
-                if camera_id not in self._workers:
-                    self._spawn_worker(camera_id, defer_inference=True)
+            if not self._running:
+                self._progress(progress, active=False, phase="")
+                return
+            # _spawn_worker re-checks running + dedupes under the lock, and runs
+            # the slow worker.start() outside it so this loop never blocks the UI.
+            self._spawn_worker(camera_id, defer_inference=True)
             started += 1
             self._progress(
                 progress, active=True, phase="Opening cameras", started=started, total=total
@@ -262,44 +268,9 @@ class Supervisor:
             if started % concurrency == 0 and started < total:
                 time.sleep(0.35)
 
-        pool = self._ensure_inference_pool()
         self._progress(
-            progress, active=True, phase="Warming detector", started=started, total=total
+            progress, active=True, phase="Starting detection", started=started, total=total
         )
-        if pool is not None:
-            try:
-                # Prefer warmup_* (build + a dummy forward pass so the EP compiles
-                # now); fall back to the bare builder on older pools.
-                warm = getattr(pool, "warmup_detector", None) or getattr(pool, "detector", None)
-                if callable(warm):
-                    warm()
-            except Exception:  # noqa: BLE001
-                log.debug("startup detector warmup failed", exc_info=True)
-
-        self._progress(progress, active=True, phase="Warming ReID", started=started, total=total)
-        self._warm_reid()
-
-        if pool is not None:
-            self._progress(
-                progress, active=True, phase="Warming face", started=started, total=total
-            )
-            try:
-                warm = getattr(pool, "warmup_face", None) or getattr(pool, "face", None)
-                if callable(warm):
-                    warm()
-            except Exception:  # noqa: BLE001
-                log.debug("startup face warmup failed", exc_info=True)
-
-            self._progress(
-                progress, active=True, phase="Warming pose", started=started, total=total
-            )
-            try:
-                warm = getattr(pool, "warmup_pose", None) or getattr(pool, "pose", None)
-                if callable(warm):
-                    warm()
-            except Exception:  # noqa: BLE001
-                log.debug("startup pose warmup failed", exc_info=True)
-
         self._release_worker_inference()
         self._progress(progress, active=False, phase="Ready", started=started, total=total)
 
@@ -472,9 +443,10 @@ class Supervisor:
         # here so the pump never errors on them.
 
     def _on_add_camera(self, cmd: AddCameraCmd) -> None:
-        with self._lock:
-            if cmd.camera_id and cmd.camera_id not in self._workers:
-                self._spawn_worker(cmd.camera_id)
+        # _spawn_worker dedupes + registers under the lock and starts the worker
+        # outside it (camera open can block).
+        if cmd.camera_id:
+            self._spawn_worker(cmd.camera_id)
 
     def _on_remove_camera(self, cmd: RemoveCameraCmd) -> None:
         with self._lock:
@@ -558,15 +530,77 @@ class Supervisor:
 
     def _on_set_features(self, cmd: SetFeaturesCmd) -> None:
         """Global feature switches → cache + apply to every worker live."""
-        self._features = dict(cmd.features or {})
+        prev = dict(self._features)
+        new_features = dict(cmd.features or {})
+        self._features = new_features
         with self._lock:
             workers = list(self._workers.values())
         for worker in workers:
             if hasattr(worker, "set_features"):
                 try:
-                    worker.set_features(dict(self._features))
+                    worker.set_features(dict(new_features))
                 except Exception:  # noqa: BLE001
                     log.debug("worker.set_features failed", exc_info=True)
+        # Free the shared pool's copy of any subsystem just switched off so its
+        # ORT session is reclaimed once the workers drop their refs too.  ReID is
+        # per-worker (not pooled), so the workers' own release is sufficient.
+        self._release_disabled_pool_models(prev, new_features)
+
+    def _release_disabled_pool_models(
+        self,
+        prev: dict[str, bool],
+        cur: dict[str, bool],
+    ) -> None:
+        pool = self._inference_pool
+        if pool is None:
+            return
+
+        def turned_off(key: str) -> bool:
+            return bool(prev.get(key, True)) and not bool(cur.get(key, True))
+
+        releases = (
+            ("detection", "release_detector"),
+            ("face_recognition", "release_face"),
+            ("pose", "release_pose"),
+        )
+        for feature, method in releases:
+            if not turned_off(feature):
+                continue
+            fn = getattr(pool, method, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:  # noqa: BLE001
+                    log.debug("pool %s failed", method, exc_info=True)
+
+    def apply_model_cache_changed(self) -> None:
+        """Drop + rebuild detector/pose after the on-disk model cache changed.
+
+        Called when models are downloaded/removed while the engine is running so
+        live ORT sessions for now-stale files are freed: the pool drops its
+        cached models and each worker force-reloads, rebuilding from the fresh
+        cache (the new model, or live-preview-only when files were removed).
+        """
+        if not self._running:
+            return
+        pool = self._inference_pool
+        if pool is not None:
+            for method in ("release_detector", "release_pose"):
+                fn = getattr(pool, method, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:  # noqa: BLE001
+                        log.debug("pool %s failed", method, exc_info=True)
+        with self._lock:
+            workers = list(self._workers.values())
+        for worker in workers:
+            reload = getattr(worker, "reload_inference_models", None)
+            if callable(reload):
+                try:
+                    reload()
+                except Exception:  # noqa: BLE001
+                    log.debug("worker model reload failed", exc_info=True)
 
     def _on_update_config(self, cmd: UpdateCameraConfigCmd) -> None:
         worker = self._get(cmd.camera_id)
@@ -618,12 +652,15 @@ class Supervisor:
             except Exception:  # noqa: BLE001
                 tier = "auto"
             self._inference_pool = build_inference_pool(
-                detector_tier=tier, unified_pose=self._any_unified_pose()
+                detector_tier=tier,
+                unified_pose=self._any_unified_pose(),
+                allow_model_download=False,
             )
         except Exception:  # noqa: BLE001 — pool is an optimisation, never load-bearing
             log.warning("inference pool init failed; using per-worker models.", exc_info=True)
             self._inference_pool = None
         return self._inference_pool
+
 
     def _apply_hardware_env(self, camera_count: int) -> None:
         """Publish global hardware prefs into the environment before workers start.
@@ -673,12 +710,18 @@ class Supervisor:
             log.warning("cannot spawn worker for %s: no config", camera_id)
             return
         worker = self._worker_factory(camera_id, config, self._client.push_telemetry)
-        self._workers[camera_id] = worker
+        # Register under the lock only; bail if we lost a race or the engine
+        # stopped meanwhile.  Everything heavy (worker.start) runs outside it.
+        with self._lock:
+            if not self._running or camera_id in self._workers:
+                return
+            self._workers[camera_id] = worker
+            worker_count = len(self._workers)
         log.info(
             "spawned worker camera_id=%s name=%s (workers=%d)",
             camera_id,
             getattr(config, "name", "?"),
-            len(self._workers),
+            worker_count,
         )
 
         # Share the gallery + wire the worker→client identity push (mirrors
@@ -703,6 +746,11 @@ class Supervisor:
         if defer_inference and hasattr(worker, "set_inference_start_paused"):
             worker.set_inference_start_paused(True)
 
+        # If stop() ran while we were wiring this worker up, it has already been
+        # pulled from _workers — skip start() so we don't resurrect a dead worker.
+        with self._lock:
+            if not self._running or self._workers.get(camera_id) is not worker:
+                return
         shm_name = getattr(worker, "shm_name", f"cam_{camera_id[:8]}_preview")
         try:
             worker.start()

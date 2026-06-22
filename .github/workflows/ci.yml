@@ -58,12 +58,15 @@ jobs:
         run: python tools/install.py --ci --dev --editable
 
       - name: Lint (ruff)
+        if: matrix.os == 'ubuntu-latest'
         run: ruff check autoptz/ tests/ tools/
 
       - name: Format check (ruff format)
+        if: matrix.os == 'ubuntu-latest'
         run: ruff format --check autoptz/ tests/ tools/
 
       - name: Type check (mypy)
+        if: matrix.os == 'ubuntu-latest'
         # Strict gate on the typed core (runtime + config). The UI/pipeline are
         # mid typing-migration and excluded in pyproject; expand this as they land.
         run: mypy autoptz/engine/runtime/ autoptz/config/

@@ -104,6 +104,7 @@ jobs:
           name: windows
           path: dist/*-setup.exe
           if-no-files-found: error
+          compression-level: 0
 
   linux:
     name: Build Linux AppImage
@@ -131,6 +132,7 @@ jobs:
           name: linux
           path: dist/*.AppImage
           if-no-files-found: error
+          compression-level: 0
 
   release:
     name: Publish GitHub Release
@@ -163,4 +165,4 @@ jobs:
       - name: Upload x86_64 dmg to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" artifacts/macos-x86_64/*.dmg --clobber
+        run: gh release upload "${GITHUB_REF_NAME}" artifacts/macos-x86_64/*.dmg --clobber --repo "${GITHUB_REPOSITORY}"

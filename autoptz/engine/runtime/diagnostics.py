@@ -62,29 +62,38 @@ def detector_model_status() -> dict[str, str]:
     try:
         from autoptz.engine.runtime.models import default_manager  # noqa: PLC0415
 
-        onnx = default_manager().cache_dir / "yolo11n.onnx"
-        if onnx.is_file():
-            size_mb = onnx.stat().st_size / (1 << 20)
-            return _entry("detector", "Detector model", "ok", f"{onnx.name} · {size_mb:.1f} MB")
+        rows = [
+            row
+            for row in default_manager().app_model_statuses()
+            if row.get("kind") == "detector" and row.get("cached")
+        ]
+        if rows:
+            names = ", ".join(str(row.get("label") or row.get("name")) for row in rows)
+            return _entry(
+                "detector",
+                "Detector model",
+                "ok",
+                f"{len(rows)} detector tier(s) cached · {names}",
+            )
         return _entry(
-            "detector", "Detector model", "off", "not downloaded — run tools/fetch_models.py"
+            "detector", "Detector model", "off", "not downloaded - open Engine > Models"
         )
     except Exception:  # noqa: BLE001
         return _entry("detector", "Detector model", "off", "lookup failed")
 
 
 def tracker_status() -> dict[str, str]:
-    """Tracker backend: BoT-SORT (boxmot) or the built-in lightweight fallback."""
-    try:
-        from autoptz.engine.pipeline.track import boxmot_available  # noqa: PLC0415
+    """Tracker backend: BoT-SORT (boxmot) or the built-in lightweight fallback.
 
-        if boxmot_available():
-            return _entry("tracker", "Tracker", "ok", "BoT-SORT (boxmot)")
-        return _entry(
-            "tracker", "Tracker", "warn", "Lightweight IoU fallback · install boxmot for BoT-SORT"
-        )
-    except Exception:  # noqa: BLE001
-        return _entry("tracker", "Tracker", "off", "tracker module unavailable")
+    Detected with ``find_spec`` only — importing boxmot pulls in torch (multi-
+    second) and this probe runs on the GUI thread's Services-panel poll, so a
+    real import here would freeze the event loop during startup.
+    """
+    if _module_present("boxmot"):
+        return _entry("tracker", "Tracker", "ok", "BoT-SORT (boxmot)")
+    return _entry(
+        "tracker", "Tracker", "warn", "Lightweight IoU fallback · install boxmot for BoT-SORT"
+    )
 
 
 def reid_status() -> dict[str, str]:
@@ -135,8 +144,8 @@ def optional_components() -> list[dict[str, str]]:
     """Detailed optional setup rows for ServicesPanel setup actions.
 
     These rows intentionally describe model/download details without performing
-    downloads or package installs; the app stays usable and the retry action can
-    later be backed by packaged model bundles.
+    downloads or package installs; the app stays usable while Services can offer
+    an explicit model setup action with progress.
     """
     rows = []
     try:
@@ -146,6 +155,19 @@ def optional_components() -> list[dict[str, str]]:
     except Exception:  # noqa: BLE001
         cache = Path("AutoPTZ/models")
 
+    detector = detector_model_status()
+    rows.append(
+        {
+            **detector,
+            "source": "YOLO11 detector ONNX tiers",
+            "size": "varies by selected tier",
+            "path": str(cache),
+            "why": "Person boxes, click-to-track, and all automatic PTZ following.",
+            "managed": "AutoPTZ-managed cache; can be downloaded or removed here.",
+            "network": "Can be bundled offline or exported from ultralytics.",
+        }
+    )
+
     reid = reid_status()
     rows.append(
         {
@@ -153,6 +175,11 @@ def optional_components() -> list[dict[str, str]]:
             "source": "boxmot OSNet weights",
             "size": "varies by tracker package",
             "path": str(cache / "reid"),
+            "why": "Stable re-acquire after occlusion or crowds.",
+            "managed": (
+                "Managed by boxmot/torch upstream caches; AutoPTZ never deletes the "
+                "files but unloads ReID from memory when its feature is off."
+            ),
             "network": "May contact package/model hosts when prepared.",
         }
     )
@@ -164,6 +191,8 @@ def optional_components() -> list[dict[str, str]]:
             "source": "YOLO11n-pose ONNX",
             "size": "small model bundle",
             "path": str(cache / "yolo11n-pose.onnx"),
+            "why": "Skeleton overlay and torso-stable framing.",
+            "managed": "AutoPTZ-managed cache; can be downloaded or removed here.",
             "network": "Can be bundled offline or exported from ultralytics.",
         }
     )
@@ -175,6 +204,11 @@ def optional_components() -> list[dict[str, str]]:
             "source": "insightface buffalo_l (SCRFD + ArcFace)",
             "size": "face model pack",
             "path": str(Path.home() / ".insightface" / "models"),
+            "why": "Named-person confirmation and face identity matching.",
+            "managed": (
+                "Managed by the insightface upstream cache; AutoPTZ never deletes the "
+                "files but unloads face recognition from memory when its feature is off."
+            ),
             "network": "insightface may download its model pack on first prepare.",
         }
     )

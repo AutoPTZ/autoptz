@@ -5,13 +5,14 @@ detection working even when later run offline:
 
     python -m tools.fetch_models                # default cache dir
     python -m tools.fetch_models --cache-dir /tmp/m
+    python -m tools.fetch_models --remove       # delete AutoPTZ-managed models
 
-It downloads the YOLO11 ``.pt`` via ultralytics and exports the NMS-free ONNX
-into the platform app-data ``…/AutoPTZ/models`` dir (the same dir
+It downloads/exports the detector tiers and pose model into the platform
+app-data ``…/AutoPTZ/models`` dir (the same dir
 :class:`autoptz.engine.runtime.models.ModelManager` reads at engine start).
 
-Face (insightface) and ReID (boxmot) weights auto-download into their own
-caches on first use and are out of scope for this CLI.
+Face (insightface) and ReID (boxmot) weights use their upstream caches and are
+not removed by this CLI.
 
 Exit code 0 if a usable detector ONNX is available afterwards, 1 otherwise.
 """
@@ -27,7 +28,7 @@ from pathlib import Path
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="fetch_models",
-        description="Pre-download/export AutoPTZ detection models for offline use.",
+        description="Pre-download/export AutoPTZ detector and pose models for offline use.",
     )
     parser.add_argument(
         "--cache-dir",
@@ -36,11 +37,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Override the model cache directory (default: platform app-data …/AutoPTZ/models).",
     )
     parser.add_argument(
-        "--tier",
-        choices=("all", "auto", "fast", "balanced", "medium"),
-        default="all",
-        help="Which detector tier(s) to fetch (default: all, so the Balanced "
-        "and Medium tiers work offline too).",
+        "--detector-only",
+        action="store_true",
+        help="Fetch detector tiers only; skip the pose model.",
+    )
+    parser.add_argument(
+        "--remove",
+        action="store_true",
+        help="Delete AutoPTZ-managed detector/pose model files from the cache.",
     )
     parser.add_argument(
         "-v",
@@ -57,30 +61,36 @@ def main(argv: list[str] | None = None) -> int:
     log = logging.getLogger("fetch_models")
 
     # Import lazily so --help works without the engine package importable.
-    from autoptz.engine.runtime.models import ModelManager, detector_model_for_tier
+    from autoptz.engine.runtime.models import ModelManager
 
     mgr = ModelManager(cache_dir=args.cache_dir)
     log.info("Model cache dir: %s", mgr.cache_dir)
 
-    # Resolve the requested tier(s) to their distinct weight files so we don't
-    # export the same .pt twice (auto and fast both map to yolo11n).
-    tiers = ("auto", "fast", "balanced", "medium") if args.tier == "all" else (args.tier,)
-    seen_models: set[str] = set()
-    ok_any = False
+    if args.remove:
+        rows = mgr.remove_app_models()
+        if not rows:
+            log.info("No AutoPTZ-managed model files found.")
+            return 0
+        remove_failed = [row for row in rows if row["state"] != "removed"]
+        for row in rows:
+            if row["state"] == "removed":
+                log.info("  → removed: %s", row["path"])
+            else:
+                log.error("  → FAILED: %s (%s)", row["path"], row["error"])
+        return 1 if remove_failed else 0
+
     failed: list[str] = []
-    for tier in tiers:
-        model_pt = detector_model_for_tier(tier)
-        if model_pt in seen_models:
-            continue
-        seen_models.add(model_pt)
-        log.info("Fetching detector tier %r (%s)…", tier, model_pt)
-        path = mgr.ensure_detector(tier=tier)
-        if path is None:
-            failed.append(f"{tier} ({model_pt}): {mgr.last_error or 'unavailable'}")
-            log.error("  → FAILED: %s", mgr.last_error or "unavailable")
-        else:
+    ok_any = False
+    for row in mgr.ensure_app_models(
+        include_pose=not args.detector_only,
+        progress=lambda label, value, total: log.info("[%d/%d] %s", value, total, label),
+    ):
+        if row["state"] == "ok":
             ok_any = True
-            log.info("  → ready: %s", path)
+            log.info("  → ready: %s", row["path"])
+        else:
+            failed.append(f"{row['name']}: {row['error']}")
+            log.error("  → FAILED: %s", row["error"])
 
     if failed:
         log.error(
