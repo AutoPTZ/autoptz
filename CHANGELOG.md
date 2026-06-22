@@ -4,6 +4,37 @@ All notable changes to AutoPTZ are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Quick-collapse side panels** — hide/show the left (Properties) and right
+  (Camera Info / People / Services) panels from the View menu, the status-bar
+  ◧ / ◨ buttons, or `Ctrl+Alt+[` / `Ctrl+Alt+]`.
+- **Signed + notarized macOS builds** — opt-in locally via `MACOS_SIGN_IDENTITY`
+  (and notary credentials), and automatic in the release workflow once the signing
+  secrets are configured; unsigned otherwise.
+
+### Changed
+
+- Detector-tier UI labels simplified to **Auto / Fast / Balanced / Accurate**.
+- Menu bar consolidated from six top-level menus to four — Panels and Layouts moved
+  under **View**; update controls grouped under **Help → Updates** (with a new
+  startup auto-check toggle).
+- Removed the unused per-camera `model_tier` and the redundant `aim_region` config
+  fields; the worker reads the unified `framing` control directly.
+
+### Fixed
+
+- Linux CI no longer fails when a native library aborts at interpreter shutdown
+  after the tests have already passed.
+
+### Dependencies
+
+- onnxruntime 1.20.1 → 1.24.1 (required to load the IR v13 models onnx 1.21 writes),
+  onnx 1.17.0 → 1.21.0, pytest 8.3.5 → 9.0.3, Pillow 11.2.1 → 12.2.0,
+  msgpack 1.1.0 → 1.2.1.
+
 ## [2.0.0] — 2026-06-21
 
 First stable release of the v2 architecture: a native Qt Widgets app with a
@@ -55,4 +86,5 @@ multi-threaded, multi-camera real-time tracking engine.
   `ui/list_models`, `camera_tile` → `ui/widgets/tile_helpers`, `properties_panel`
   → `ui/widgets/properties_helpers`.
 
+[Unreleased]: https://github.com/AutoPTZ/autoptz/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/AutoPTZ/autoptz/releases/tag/v2.0.0
