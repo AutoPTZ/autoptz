@@ -79,8 +79,8 @@ class TestModels:
         with pytest.raises(ValidationError):
             TrackingConfig(detect_interval=0)
 
-    def test_tracking_aim_region_defaults_to_upper_body(self) -> None:
-        assert TrackingConfig().aim_region == "upper_body"
+    def test_tracking_framing_defaults_to_upper_body(self) -> None:
+        assert TrackingConfig().framing == "upper_body"
 
     def test_tracking_coast_window_defaults_short(self) -> None:
         assert TrackingConfig().coast_window_ms == 300
@@ -99,27 +99,29 @@ class TestModels:
         with pytest.raises(ValidationError):
             TrackingConfig(aim_body_mode="arms_only")
 
-    def test_tracking_aim_region_rejects_unknown(self) -> None:
+    def test_tracking_framing_rejects_unknown(self) -> None:
         with pytest.raises(ValidationError):
-            TrackingConfig(aim_region="elbow")
+            TrackingConfig(framing="elbow")
 
-    def test_aim_region_fraction_table_covers_all_choices(self) -> None:
+    def test_aim_region_fraction_table_covers_all_framing_choices(self) -> None:
         from autoptz.config.models import AIM_REGION_FRACTION
 
         for region in ("face", "head_shoulders", "upper_body", "full_body"):
             assert region in AIM_REGION_FRACTION
             assert 0.0 <= AIM_REGION_FRACTION[region] <= 1.0
-        # Aim point must rise (smaller fraction) as the region tightens toward the
+        # Aim point must rise (smaller fraction) as the framing tightens toward the
         # face, and full_body must be the geometric centre.
         f = AIM_REGION_FRACTION
         assert f["face"] < f["head_shoulders"] < f["upper_body"] < f["full_body"]
         assert f["full_body"] == 0.5
 
-    def test_legacy_config_without_aim_region_loads_as_default(self) -> None:
-        """A config persisted before aim_region existed must still validate."""
+    def test_legacy_aim_region_key_is_ignored(self) -> None:
+        """A config persisted with the old ``aim_region`` key (folded into
+        ``framing``) must still validate; the extra key is simply ignored."""
         data = CameraConfig(name="Legacy").model_dump()
-        del data["tracking"]["aim_region"]
-        assert CameraConfig.model_validate(data).tracking.aim_region == "upper_body"
+        data["tracking"]["aim_region"] = "face"
+        cam = CameraConfig.model_validate(data)
+        assert cam.tracking.framing == "upper_body"
 
     def test_ptz_preset_name_blank_raises(self) -> None:
         with pytest.raises(Exception, match="name"):
@@ -225,14 +227,14 @@ class TestCameraStore:
         assert reloaded.name == cam.name
         assert reloaded.source.address == cam.source.address
         assert reloaded.tracking.detect_interval == cam.tracking.detect_interval
-        assert reloaded.tracking.aim_region == cam.tracking.aim_region
+        assert reloaded.tracking.framing == cam.tracking.framing
         assert reloaded.ptz.backend == cam.ptz.backend
 
-    def test_aim_region_survives_store_round_trip(self, store: ConfigStore) -> None:
-        c = CameraConfig(name="Framed", tracking=TrackingConfig(aim_region="face"))
+    def test_framing_survives_store_round_trip(self, store: ConfigStore) -> None:
+        c = CameraConfig(name="Framed", tracking=TrackingConfig(framing="face"))
         store.save_camera(c)
         reloaded = store.load_cameras()[0]
-        assert reloaded.tracking.aim_region == "face"
+        assert reloaded.tracking.framing == "face"
 
     def test_simulated_restart(self, tmp_path: Path, cam: CameraConfig) -> None:
         """CameraConfig must survive a store close-and-reopen (simulated restart)."""
@@ -427,13 +429,13 @@ class TestAppConfig:
     def test_save_and_reload_app_config(self, store: ConfigStore, cam: CameraConfig) -> None:
         cfg = AppConfig(
             theme=ThemeConfig(name="light"),
-            hardware=HardwarePrefs(model_tier="small"),
+            hardware=HardwarePrefs(precision="fp16"),
             cameras=[cam],
         )
         store.save_app_config(cfg)
         reloaded = store.load_app_config()
         assert reloaded.theme.name == "light"
-        assert reloaded.hardware.model_tier == "small"
+        assert reloaded.hardware.precision == "fp16"
         assert len(reloaded.cameras) == 1
         assert reloaded.cameras[0].id == cam.id
 

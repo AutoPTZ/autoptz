@@ -636,11 +636,11 @@ class TestCameraWorker:
 
 
 class TestTrackErrorAimRegion:
-    """The vertical aim point must follow ``tracking.aim_region`` while the
+    """The vertical aim point must follow ``tracking.framing`` while the
     horizontal aim stays on the box centre."""
 
     @staticmethod
-    def _worker(aim_region: str, aim_body_mode: str = "torso"):
+    def _worker(framing: str, aim_body_mode: str = "torso"):
         from autoptz.config.models import (
             CameraConfig,
             SourceConfig,
@@ -652,7 +652,7 @@ class TestTrackErrorAimRegion:
             id="aimcam012345",
             name="Aim",
             source=SourceConfig(type="usb", address="usb://0"),
-            tracking=TrackingConfig(aim_region=aim_region, aim_body_mode=aim_body_mode),
+            tracking=TrackingConfig(framing=framing, aim_body_mode=aim_body_mode),
         )
         # No frame source / shm needed — we never start(); we call the pure method.
         return CameraWorker("aimcam012345", cfg, lambda _m: None)
