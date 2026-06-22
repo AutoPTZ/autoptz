@@ -31,7 +31,6 @@ def _now() -> datetime:
 
 class HardwarePrefs(BaseModel, frozen=True):
     force_ep: str | None = None  # "CoreMLExecutionProvider", etc.; None = auto
-    model_tier: Literal["nano", "small", "medium", "large"] = "nano"
     max_workers: int = Field(default=4, ge=1, le=32)
     # Inference precision. "auto" lets each accelerator pick (GPU EPs use FP16);
     # "fp32"/"fp16" force it; "int8" runs a dynamically-quantized detector (CPU win,
@@ -95,18 +94,13 @@ class TrackingConfig(BaseModel, frozen=True):
     coast_window_ms: int = Field(default=300, ge=0)
     face_confirm: bool = False
     quality_floor: Literal["auto", "high", "balanced", "low"] = "auto"
-    # Which part of the detected person box the PTZ aims at (vertically). The
-    # horizontal aim is always the box centre; this picks how high up the box the
-    # vertical aim point sits, so the camera frames the face / upper body / whole
-    # person.  See ``AIM_REGION_FRACTION`` for the actual fractions used by the
-    # controller.  (True arm/leg exclusion would need pose keypoints; this is the
+    # "Framing" preset — the single user-facing control for how the shot is composed.
+    # It sets the vertical aim point (how high up the person box the camera centres:
+    # face / head & shoulders / upper body / whole person) and is mirrored into
+    # ``ptz.zoom_framing`` to set how tightly auto-zoom frames the subject. The
+    # horizontal aim is always the box centre. See ``AIM_REGION_FRACTION`` for the aim
+    # fractions. (True arm/leg exclusion would need pose keypoints; this is the
     # pragmatic bbox-fraction approximation.)
-    aim_region: Literal["face", "head_shoulders", "upper_body", "full_body"] = "upper_body"
-    # Unified "Framing" preset — the single user-facing control that drives BOTH
-    # where the camera aims (``aim_region``) and how tightly it zooms
-    # (``ptz.zoom_framing``).  The 4 names line up 1:1 with both legacy controls,
-    # so consumers read ``framing`` directly and map through the matching constant
-    # (``AIM_REGION_FRACTION`` for aim, the controller's zoom targets for zoom).
     framing: Literal["face", "head_shoulders", "upper_body", "full_body"] = "upper_body"
     # Whether pose-aware aiming ignores arms/limbs and tracks the torso, or uses
     # the whole detection silhouette. Torso is the default because it prevents an

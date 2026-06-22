@@ -25,18 +25,11 @@ log = logging.getLogger(__name__)
 
 
 def _resolve_framing(tracking: TrackingConfig) -> str:
-    """Return the effective framing preset for aim/pose.
+    """Return the framing preset for aim/pose.
 
-    ``tracking.framing`` is the unified user-facing control; when it has been
-    moved off its default it wins. ``tracking.aim_region`` is honoured as a
-    fallback when ``framing`` is still at its default (the Properties panel still
-    writes ``aim_region``), so both controls keep working without disagreeing.
+    ``tracking.framing`` is the single user-facing control for shot composition.
     """
-    default = TrackingConfig.model_fields["framing"].default
-    framing = getattr(tracking, "framing", default)
-    if framing != default:
-        return framing
-    return getattr(tracking, "aim_region", default)
+    return getattr(tracking, "framing", TrackingConfig.model_fields["framing"].default)
 
 
 # ── frame source abstraction ───────────────────────────────────────────────────

@@ -70,11 +70,13 @@ _FEATURE_TOGGLES = (
     ),
 )
 
+# (stored value, display label). Values are stable for back-compat with saved
+# settings and the fetch_models / weight-map vocabulary; only labels are cosmetic.
 _DETECTOR_TIERS = (
     ("auto", "Auto"),
-    ("fast", "Fast / Nano"),
-    ("balanced", "Balanced / Small"),
-    ("medium", "Medium"),
+    ("fast", "Fast"),
+    ("balanced", "Balanced"),
+    ("medium", "Accurate"),
 )
 
 
@@ -159,9 +161,11 @@ class ServicesPanel(QWidget):
         for value, label in _DETECTOR_TIERS:
             self._detector_tier.addItem(label, value)
         self._detector_tier.setToolTip(
-            "Choose the shared detector model tier. When the engine is running, "
-            "AutoPTZ builds the new detector in the background and swaps it in "
-            "when ready; the active state is shown in diagnostics."
+            "Detector model, shared by all cameras. Auto picks Fast. Fast (YOLO11n) "
+            "is lightest; Balanced (YOLO11s) and Accurate (YOLO11m) trade speed for "
+            "detection quality. When the engine is running, AutoPTZ builds the new "
+            "model in the background and swaps it in when ready; the active state is "
+            "shown in diagnostics."
         )
         self._detector_tier.currentIndexChanged.connect(self._on_detector_tier_changed)
         tier_row.addWidget(tier_label)

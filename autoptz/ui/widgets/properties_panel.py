@@ -1318,8 +1318,8 @@ class PropertiesPanel(QWidget):
             self._detect_interval.setValue(int(tr.get("detect_interval", 1) or 1))
             _set_combo_data(self._tracking_mode, tr.get("tracking_mode", "stable"))
             _set_combo(self._tracker, tr.get("tracker", "botsort"))
-            # Unified Framing: prefer ``tracking.framing``; fall back to the legacy
-            # ``aim_region`` so an un-migrated config still selects sensibly.
+            # Framing: read ``tracking.framing``; fall back to a legacy ``aim_region``
+            # key from older configs so the selection migrates instead of resetting.
             _set_combo_data(
                 self._framing,
                 tr.get("framing") or tr.get("aim_region") or "upper_body",
@@ -1499,13 +1499,12 @@ class PropertiesPanel(QWidget):
         cfg["tracking"]["detect_interval"] = self._detect_interval.value()
         cfg["tracking"]["tracking_mode"] = self._tracking_mode.currentData() or "stable"
         cfg["tracking"]["tracker"] = self._tracker.currentText()
-        # The single Framing control drives both aim and zoom: store it as the new
-        # unified ``tracking.framing`` and ALSO mirror it into the existing
-        # consumers — ``tracking.aim_region`` (worker aim) and ``ptz.zoom_framing``
-        # (controller zoom) — so both honor it without a separate worker bridge.
+        # The single Framing control drives both aim and zoom. The worker reads
+        # ``tracking.framing`` for aim; the PTZ controller reads ``ptz.zoom_framing``
+        # for zoom, so mirror the value there too (zoom_framing also offers a "wide"
+        # option that the controller can use).
         framing = self._framing.currentData() or "upper_body"
         cfg["tracking"]["framing"] = framing
-        cfg["tracking"]["aim_region"] = framing
         cfg["tracking"]["aim_body_mode"] = (
             "torso" if self._ignore_arms.isChecked() else "full_silhouette"
         )

@@ -51,6 +51,8 @@ to strict annotations (see the `tests.*` mypy override).
 
 ## Branching
 
-Active development happens on `dev/v2-architecture-rework`. Branch from it, keep
-the suite green, and open a PR back into it. See [docs/architecture.md](docs/architecture.md)
-for the layout and [docs/building.md](docs/building.md) for release/installer builds.
+`main` is the trunk. Branch from `main`, keep the suite green, and open a PR back
+into `main`. Releases are cut by pushing a `vX.Y.Z` tag, which must match
+`autoptz.__version__` (CI enforces this). See
+[docs/architecture.md](docs/architecture.md) for the layout and
+[docs/building.md](docs/building.md) for release/installer builds.

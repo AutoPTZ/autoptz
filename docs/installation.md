@@ -14,7 +14,7 @@ Download the latest build for your OS from the
   unsigned installer — **More info → Run anyway**.
 - **Linux** — `AutoPTZ-<version>-linux-x86_64.AppImage`. `chmod +x` it and run.
 
-The app checks GitHub Releases on startup and from **Help -> Check for Updates...**.
+The app checks GitHub Releases on startup and from **Help → Updates → Check Now…**.
 When a newer version exists, AutoPTZ downloads the matching asset for your OS,
 starts it, and closes so the installer/new AppImage can finish. If that release
 does not include your OS asset, AutoPTZ opens the release page instead.

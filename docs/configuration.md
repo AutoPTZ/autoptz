@@ -2,9 +2,10 @@
 
 Settings live in a per-user SQLite database in the platform app-data dir
 (`~/Library/Application Support/AutoPTZ` on macOS, `%APPDATA%\AutoPTZ` on Windows,
-`~/.config/AutoPTZ` on Linux) and are edited from the app's **Properties** panel.
-This page documents what each knob does. Defaults are the validated, broadcast-sane
-starting point; one concept = one control.
+`~/.config/AutoPTZ` on Linux). Per-camera settings (source, tracking, PTZ) are edited
+in the **Properties** panel; app-wide settings (hardware/EP and the shared detector
+model) are in the **Services** panel. This page documents what each knob does.
+Defaults are the validated, broadcast-sane starting point; one concept = one control.
 
 ## Source
 
@@ -24,7 +25,7 @@ starting point; one concept = one control.
 | `quality_floor` | `auto` | `auto` adapts the detect interval to the frame budget; `high`/`balanced`/`low` pin it. |
 | `reid_threshold_hi` / `lo` | `0.60` / `0.35` | Hysteresis for appearance re-acquisition (enter / maintain lock). |
 | `coast_window_ms` | `300` | How long a lost track is coasted before it's dropped. |
-| `framing` | `upper_body` | Unified preset driving aim height + zoom tightness: `face`, `head_shoulders`, `upper_body`, `full_body`. |
+| `framing` | `upper_body` | The single "shot composition" control. Sets the vertical aim point and (mirrored into `zoom_framing`) the auto-zoom tightness: `face`, `head_shoulders`, `upper_body`, `full_body`. |
 | `aim_body_mode` | `torso` | `torso` ignores arms/limbs (steadier aim); `full_silhouette` uses the whole box. |
 | `min_detection_size_frac` | `0.05` | Drop people smaller than this fraction of frame height (ignore distant specks). |
 | `face_confirm` | `false` | Require a face match before binding a target. |
@@ -42,7 +43,7 @@ starting point; one concept = one control.
 | `safe_zone_roundness` | `1.0` | 0 = rectangle … 1 = full oval. |
 | `deadzone_x` / `deadzone_y` | `0.05` | Per-axis circular deadzone (used when the safe zone is off). |
 | `auto_zoom` | `true` | Drive zoom to keep the subject at the framing target height. |
-| `zoom_framing` | `upper_body` | Target subject height for auto-zoom. |
+| `zoom_framing` | `upper_body` | Auto-zoom target height: `face`, `head_shoulders`, `upper_body`, `full_body`, or `wide`. Mirrors `framing`; `wide` is the one extra (looser) option. |
 | `loss_zoom_out` / `reacquire_window_s` | `0.25` / `4.0` | On loss, gently zoom out to widen the view and re-find the subject. |
 | `soft_limits` | none | Optional pan/tilt/zoom travel clamps. |
 
@@ -51,8 +52,8 @@ starting point; one concept = one control.
 | Setting | Default | Notes |
 | --- | --- | --- |
 | `force_ep` | auto | Pin an execution provider (e.g. `CoreMLExecutionProvider`); falls back to auto if unavailable. |
-| `precision` | `auto` | `auto`/`fp32`/`fp16`. Accelerator EPs use FP16 unless forced to fp32; CPU is always fp32. |
-| `model_tier` | `nano` | `nano` (fastest) → `small` → `medium`. |
+| `precision` | `auto` | `auto`/`fp32`/`fp16`/`int8`. Accelerator EPs use FP16 unless forced to fp32; CPU is always fp32; `int8` runs a quantized detector (see [Performance](performance.md)). |
+| `detector_model_tier` | `auto` | Detector model shared by all cameras (Services panel). `auto` picks Fast (YOLO11n); `fast`/`balanced`/`medium` map to YOLO11n/s/m — bigger detects better but costs more. Shown in the UI as Auto / Fast / Balanced / Accurate. |
 | `max_workers` | `4` | Parallel camera workers (also informs the per-worker thread cap). |
 | `intra_op_threads` | auto | Override ORT intra-op threads per worker (auto = cores ÷ cameras). |
 

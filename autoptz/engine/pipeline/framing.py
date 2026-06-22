@@ -115,7 +115,7 @@ def torso_aim_point(
 
     The point is derived from the shoulders/hips only, so raising or extending
     an arm — which would grow the YOLO person bbox and shift its centre — does
-    not move the aim.  *bias* maps the configured ``tracking.aim_region`` onto a
+    not move the aim.  *bias* maps the configured ``tracking.framing`` onto a
     sensible torso anchor:
 
     - ``face`` / ``head_shoulders`` → just above the shoulder line (head sits a

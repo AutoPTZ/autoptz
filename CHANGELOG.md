@@ -7,12 +7,12 @@ follow [Semantic Versioning](https://semver.org/).
 ## [2.0.0] — 2026-06-21
 
 First stable release of the v2 architecture: a native Qt Widgets app with a
-multi-process, multi-camera real-time tracking engine.
+multi-threaded, multi-camera real-time tracking engine.
 
 ### Added
 
-- **Multi-camera engine** — one worker per camera (capture + inference threads),
-  supervised, with shared-memory preview and typed command/telemetry.
+- **Multi-camera engine** — one threaded worker per camera (capture + inference
+  threads), supervised, with shared-memory preview and typed command/telemetry.
 - **Vision pipeline** — YOLO11 person detection (ONNX Runtime), BoT-SORT/ByteTrack
   tracking with an IoU fallback, OSNet appearance ReID re-acquisition, YOLO11
   pose, and face-recognition identity binding.
@@ -25,8 +25,10 @@ multi-process, multi-camera real-time tracking engine.
   graph optimization and CPU-oversubscription-aware thread capping. Optional
   `gpu-nvidia` / `gpu-directml` / `openvino` requirement sets. Opt-in INT8
   detector quantization and drop-in RT-DETR support.
-- **In-app updates** — notify-only GitHub Releases check on startup and via
-  **Help → Check for Updates…**, with skip-version + prerelease support.
+- **In-app updates** — checks GitHub Releases on startup and via
+  **Help → Updates**; when a newer build exists it can download the matching OS
+  asset and launch the installer. Stable releases by default, with an opt-in for
+  pre-releases (beta/RC) and a skip-this-version option.
 - **Installers** — macOS `.dmg`, Windows Inno Setup `.exe`, Linux AppImage, built
   and published by a tag-triggered release workflow.
 - **Tooling** — `tools/bench/ep_compare.py` (per-EP latency) and `track_clip.py`

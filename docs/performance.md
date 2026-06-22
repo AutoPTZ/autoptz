@@ -54,16 +54,18 @@ back to FP32 automatically if quantization fails.
 ### RT-DETR (drop-in)
 
 The detector's pre-NMS parser already understands RT-DETR's (NMS-free) COCO
-output. To try it, export an RT-DETR ONNX (`rtdetr-l`/`rtdetr-x` are in the tier
-map for `tools.fetch_models`) and point `AUTOPTZ_MODEL_PATH` at it. Benchmark vs
-YOLO11 with `ep_compare`/`track_clip` on your hardware before switching.
+output. The in-app detector tier only offers the YOLO11 sizes, so to try RT-DETR
+export an `rtdetr-l`/`rtdetr-x` ONNX yourself (e.g. via Ultralytics) and point
+`AUTOPTZ_MODEL_PATH` at it. Benchmark vs YOLO11 with `ep_compare`/`track_clip` on
+your hardware before switching.
 
 ## Tuning for stability
 
 For the smoothest tracking on constrained machines (see
 [Configuration](configuration.md) for all knobs):
 
-- Lower the **model tier** (`nano` is default and fastest) and/or input size.
+- Lower the **detector tier** (Fast/YOLO11n is the lightest; Auto picks it) and/or
+  input size.
 - Raise **detect interval** (run detection every N frames; the Kalman tracker
   interpolates between) or let **quality floor = auto** adapt it to the frame
   budget.

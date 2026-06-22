@@ -14,27 +14,12 @@ All tests use QCoreApplication (no display) so they run cleanly in CI.
 from __future__ import annotations
 
 import logging
-import sys
 import threading
 import time
 
 import numpy as np
 import PySide6  # noqa: F401
 import pytest
-
-# ── one QCoreApplication for the whole module ─────────────────────────────────
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    from PySide6.QtCore import QCoreApplication
-
-    existing = QCoreApplication.instance()
-    if existing is not None:
-        yield existing
-        return
-    app = QCoreApplication(sys.argv[:1])
-    yield app
 
 
 def _telemetry(camera_id: str, **kw):
