@@ -50,7 +50,7 @@ See [Configuration](configuration.md). Quick levers:
 
 - **Laggy follow** — lower `aim_smoothing`, raise `lead_time_s` or `kp`.
 - **Jittery** — raise `aim_smoothing`, enlarge the framing safe zone.
-- **CPU-bound** — drop the model tier, raise `detect_interval` (or leave
+- **CPU-bound** — drop the detector tier, raise `detect_interval` (or leave
   `quality_floor=auto`), cap source `fps`.
 
 ## App menu shows "Python" (macOS, source run)

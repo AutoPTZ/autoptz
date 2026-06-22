@@ -70,6 +70,7 @@ choose the right download for the current OS, launch it, and close AutoPTZ.
 
 `packaging/autoptz.spec` is the shared PyInstaller spec: it bundles the package,
 assets (logo), optional pre-fetched models, and PySide6 plugins; sets the
-app/exe/bundle icon; and runs `multiprocessing.freeze_support()` for spawned
-workers. Set `ONEFILE=1` for a single-file Windows exe (not used by the
-installer, which packages the onedir tree).
+app/exe/bundle icon; and runs `multiprocessing.freeze_support()` so the
+spawn-based multiprocessing the app uses (e.g. the selftest's shared-memory probe)
+works under a frozen build. Set `ONEFILE=1` for a single-file Windows exe (not used
+by the installer, which packages the onedir tree).

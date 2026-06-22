@@ -32,8 +32,9 @@ device is missing (it always keeps live preview).
   with per-EP tuning (FP16, persistent TensorRT engine cache, full graph
   optimization). See [Performance](docs/performance.md).
 - **PTZ backends** — VISCA over USB, VISCA over IP, ONVIF, and NDI.
-- **In-app updates** — downloads the matching GitHub Release asset for your OS
-  and starts the installer/new AppImage.
+- **In-app updates** — checks GitHub Releases and downloads the matching asset for
+  your OS to launch the installer/new AppImage. Stable builds by default; opt into
+  pre-releases under **Help → Updates**.
 
 ## Quick start (from source)
 
@@ -80,7 +81,7 @@ Pre-built installers are published on the
 Windows installer (`.exe`), and a Linux `AppImage`. To build them yourself see
 [docs/building.md](docs/building.md).
 
-After install, **Help -> Check for Updates...** downloads the matching OS asset,
+After install, **Help → Updates → Check Now…** downloads the matching OS asset,
 starts it, and closes AutoPTZ so the update can finish. If a release is missing
 your OS asset, AutoPTZ opens the release page instead.
 
@@ -89,7 +90,7 @@ your OS asset, AutoPTZ opens the release page instead.
 | Doc | What's in it |
 | --- | --- |
 | [Installation](docs/installation.md)   | From source + pre-built installers, per platform. |
-| [Configuration](docs/configuration.md) | Every tuning knob: model tier, detect interval, framing, smoothing, PTZ gains. |
+| [Configuration](docs/configuration.md) | Every tuning knob: detector tier, detect interval, framing, smoothing, PTZ gains. |
 | [Performance](docs/performance.md)     | Cross-platform device/precision matrix + the `ep_compare` benchmark. |
 | [Building](docs/building.md)           | PyInstaller bundles → DMG / Windows installer / AppImage. |
 | [Architecture](docs/architecture.md)   | Module map and the per-frame data flow. |
