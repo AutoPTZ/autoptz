@@ -281,6 +281,25 @@ class TestControllerMath:
         pan_ff, _, _ = ctrl_ff.step((0.2, 0.0), (0.5, 0.0), 0.45, True, t=0.0)
         assert pan_ff > pan_noff
 
+    def test_predict_accel_gain_off_by_default(self) -> None:
+        # Phase C predictive lead must be opt-in: default config keeps it disabled.
+        assert _cfg().predict_accel_gain == 0.0
+
+    def test_acceleration_prediction_anticipates_when_enabled(self) -> None:
+        # An accelerating subject (velocity rising tick-to-tick): with
+        # predict_accel_gain the controller projects the change in velocity and
+        # commands a larger move than the velocity-only (gain=0) controller.  The
+        # first tick only seeds the previous velocity (accel term skipped).
+        c0 = PTZController(MockBackend(), _cfg(kv=0.0, safe_zone_enabled=False))
+        c1 = PTZController(
+            MockBackend(), _cfg(kv=0.0, safe_zone_enabled=False, predict_accel_gain=1.0)
+        )
+        c0.step((0.4, 0.0), (0.3, 0.0), 0.45, True, t=0.0)
+        c1.step((0.4, 0.0), (0.3, 0.0), 0.45, True, t=0.0)
+        pan0, _, _ = c0.step((0.4, 0.0), (0.8, 0.0), 0.45, True, t=0.1)
+        pan1, _, _ = c1.step((0.4, 0.0), (0.8, 0.0), 0.45, True, t=0.1)
+        assert pan1 > pan0
+
     def test_deadzone_suppresses_small_error(self) -> None:
         ctrl = PTZController(MockBackend(), _cfg(kp=0.6, deadzone_x=0.1, deadzone_y=0.1))
         pan, tilt, _ = ctrl.step((0.05, 0.08), (0.0, 0.0), 0.45, True, t=0.0)

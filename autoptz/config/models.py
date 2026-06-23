@@ -194,6 +194,12 @@ class PTZConfig(BaseModel, frozen=True):
     # the target's measured velocity, so the camera anticipates motion instead of
     # always chasing where the subject *was* (which reads as laggy following).
     lead_time_s: float = Field(default=0.15, ge=0.0, le=1.0)
+    # Second-order (acceleration) prediction gain, 0..1.  When > 0 the lead also
+    # extrapolates the change in the subject's velocity (½·a·lead²·gain), so the
+    # camera anticipates a subject *starting* or *stopping* — sharper "leading"
+    # feel — instead of only constant-velocity motion.  Opt-in (default 0 = off):
+    # acceleration is noisier than velocity, so it wants per-rig tuning before use.
+    predict_accel_gain: float = Field(default=0.0, ge=0.0, le=1.0)
     # Aim smoothing 0..1 (0 = most responsive, 1 = smoothest).  Maps to the
     # one-euro filter's minimum cutoff inside the controller; 0.5 ≈ the original.
     aim_smoothing: float = Field(default=0.5, ge=0.0, le=1.0)

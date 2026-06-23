@@ -59,6 +59,7 @@ _OSC_DECAY = 0.6  # per-tick score decay (lower = forgets flips faster)
 _OSC_GAIN = 0.6  # how hard the score damps the command
 _OSC_MAX = 4.0  # score ceiling (caps the strongest damping)
 _LEAD_MAX_S = 0.8  # hard cap on total lead time (avoid runaway extrapolation)
+_ACCEL_LEAD_MAX = 0.3  # hard cap on the acceleration-term contribution to the aim
 # Framing-box hold hysteresis: once parked inside the box, the subject must move
 # this fraction *beyond* the box edge before following resumes — kills the
 # start/stop chatter when they hover right on the boundary.
@@ -219,6 +220,11 @@ class PTZController:
         self._prev_ex_f: float = 0.0
         self._prev_ey_f: float = 0.0
         self._last_t: float = -1.0
+
+        # Previous (ego-corrected) target velocity, for the opt-in acceleration
+        # term of the predictive lead (predict_accel_gain > 0).
+        self._prev_vx: float = 0.0
+        self._prev_vy: float = 0.0
 
         # PID integral accumulators (anti-windup clamped in _pd_step)
         self._int_ex: float = 0.0
@@ -447,6 +453,8 @@ class PTZController:
                 self._apply_smoothing()
                 self._prev_ex_f = 0.0
                 self._prev_ey_f = 0.0
+                self._prev_vx = 0.0
+                self._prev_vy = 0.0
                 self._last_t = -1.0
                 # Fresh acquire: drop accumulated integral + hunting history so a
                 # stale wind-up or flip score can't kick the new target.
@@ -531,6 +539,17 @@ class PTZController:
             if lead > 0.0:
                 ex += vx * lead
                 ey += vy * lead
+                # Opt-in 2nd-order term: anticipate a subject starting/stopping by
+                # projecting the *change* in velocity (½·a·lead²·gain), clamped so a
+                # noisy acceleration spike can't fling the aim off the subject.
+                g = float(getattr(cfg, "predict_accel_gain", 0.0))
+                if g > 0.0 and self._last_t >= 0.0:
+                    dt_v = max(t - self._last_t, 1e-3)
+                    half_l2 = 0.5 * lead * lead * g
+                    ax = (vx - self._prev_vx) / dt_v
+                    ay = (vy - self._prev_vy) / dt_v
+                    ex += _clamp(ax * half_l2, -_ACCEL_LEAD_MAX, _ACCEL_LEAD_MAX)
+                    ey += _clamp(ay * half_l2, -_ACCEL_LEAD_MAX, _ACCEL_LEAD_MAX)
 
         # 2. one-euro filter
         ex_f = self._filt_ex(ex, t)
@@ -614,6 +633,9 @@ class PTZController:
 
         self._prev_ex_f = ex_f
         self._prev_ey_f = ey_f
+        # Store the raw measured velocity (not the hold-zeroed locals) so the next
+        # tick's acceleration term reflects real subject dynamics.
+        self._prev_vx, self._prev_vy = p.velocity
         self._last_t = t
 
         return pan_cmd, tilt_cmd
