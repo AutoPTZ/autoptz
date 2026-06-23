@@ -242,6 +242,26 @@ class ShmReader:
             raw.reshape((self.height, self.width, self.channels)),
         )
 
+    def peek_seq(self) -> int:
+        """Latest committed frame seq in the ring, WITHOUT consuming it (no copy).
+
+        Cheap (reads one u64 header field) so the UI can ask "is there a new frame
+        to paint?" every repaint tick without doing the full torn-read-safe copy in
+        :meth:`latest`.  Returns -1 when nothing has been committed yet.
+        """
+        try:
+            slot = struct.unpack_from(_IDX_FMT, self._idx_shm.buf, 0)[0]
+            if slot < 0:
+                return -1
+            return int(struct.unpack_from("=Q", self._shm.buf, slot * self._slot_size)[0])
+        except Exception:  # noqa: BLE001 — peek must never raise into the paint tick
+            return -1
+
+    def has_new(self) -> bool:
+        """True iff a frame newer than the last one :meth:`latest` consumed exists."""
+        seq = self.peek_seq()
+        return seq >= 0 and seq != self._last_seq
+
     def close(self) -> None:
         if self._closed:
             return
