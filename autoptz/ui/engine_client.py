@@ -1775,6 +1775,21 @@ class EngineClient(QObject):
 
     # ── source discovery ──────────────────────────────────────────────────────
 
+    @Slot(result=bool)
+    def usbEnumerationCheap(self) -> bool:
+        """True when USB enumeration is cheap enough to poll for hotplug.
+
+        macOS/AVFoundation lists devices without opening them; the cross-platform
+        fallback opens each index, so the UI should only background-poll when this
+        is True (otherwise it refreshes the camera menu on-demand).
+        """
+        try:
+            from autoptz.engine.discovery.usb import usb_enumeration_is_cheap
+
+            return bool(usb_enumeration_is_cheap())
+        except Exception:  # noqa: BLE001
+            return False
+
     @Slot(result="QVariantList")
     def scanUSBCameras(self) -> list[dict[str, Any]]:
         """Return USB cameras as ``[{name, uri, unique_id, in_use, source_label}]``.

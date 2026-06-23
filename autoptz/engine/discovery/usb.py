@@ -304,6 +304,24 @@ def _enumerate_macos_cameras() -> list[dict] | None:
     return cameras
 
 
+def usb_enumeration_is_cheap() -> bool:
+    """True when camera enumeration is a cheap metadata listing (no device opens).
+
+    macOS + AVFoundation lists devices via a discovery session *without* opening
+    them, so it is safe for the UI to poll periodically for hotplug.  The
+    cross-platform fallback (:func:`_probed_fallback_cameras`) instead OPENS each
+    ``VideoCapture`` index to confirm a real frame — far too costly to poll — so
+    callers should refresh on-demand only when this returns ``False``.
+    """
+    if platform.system() != "Darwin":
+        return False
+    try:
+        import AVFoundation  # type: ignore  # noqa: F401, PLC0415
+    except Exception:  # noqa: BLE001 — PyObjC / framework not installed
+        return False
+    return True
+
+
 def enumerate_cameras() -> list[dict]:
     """Return discovered video cameras as ``{name, unique_id, index, is_continuity}``.
 

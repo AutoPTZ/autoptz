@@ -264,6 +264,26 @@ class TestEnumerateCameras:
         assert enumerate_cameras() == []
 
 
+class TestEnumerationIsCheap:
+    """``usb_enumeration_is_cheap`` gates the UI's background hotplug poll: only
+    the AVFoundation listing (no device opens) is cheap enough to poll."""
+
+    def test_non_darwin_is_never_cheap(self, monkeypatch) -> None:
+        monkeypatch.setattr(usb_mod.platform, "system", lambda: "Linux")
+        assert usb_mod.usb_enumeration_is_cheap() is False
+
+    def test_darwin_with_avfoundation_is_cheap(self, monkeypatch) -> None:
+        monkeypatch.setattr(usb_mod.platform, "system", lambda: "Darwin")
+        # AVFoundation importable → cheap (stub the module so it "imports").
+        monkeypatch.setitem(sys.modules, "AVFoundation", types.ModuleType("AVFoundation"))
+        assert usb_mod.usb_enumeration_is_cheap() is True
+
+    def test_darwin_without_avfoundation_is_not_cheap(self, monkeypatch) -> None:
+        monkeypatch.setattr(usb_mod.platform, "system", lambda: "Darwin")
+        monkeypatch.setitem(sys.modules, "AVFoundation", None)  # import → ImportError
+        assert usb_mod.usb_enumeration_is_cheap() is False
+
+
 # ── NDIDiscovery ───────────────────────────────────────────────────────────────
 
 

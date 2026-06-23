@@ -134,6 +134,19 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._refresh_usb_async)
         QTimer.singleShot(0, self._refresh_ndi_async)
 
+        # Keep the USB cache hot in the background so plugging/unplugging a camera
+        # is reflected the FIRST time the menu is opened — previously the menu showed
+        # the stale cache and only kicked off a scan on open, so a hotplug took a few
+        # reopens to appear.  Only when enumeration is cheap (macOS/AVFoundation lists
+        # devices without opening them); the cross-platform fallback opens each device,
+        # which is too costly to poll, so there we keep the on-open refresh.
+        self._usb_poll_timer: QTimer | None = None
+        if _safe(lambda: self._client.usbEnumerationCheap(), False):
+            self._usb_poll_timer = QTimer(self)
+            self._usb_poll_timer.setInterval(3000)
+            self._usb_poll_timer.timeout.connect(self._refresh_usb_async)
+            self._usb_poll_timer.start()
+
     # ── section title bars ──────────────────────────────────────────────────────
 
     def _install_section_title_bars(self) -> None:
