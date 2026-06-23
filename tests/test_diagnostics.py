@@ -220,6 +220,26 @@ class TestSystemMetricsShape:
         assert "app_mem_percent" in metrics
         assert isinstance(metrics["app_mem_percent"], int | float)
 
+    def test_app_memory_is_honest_footprint_not_inflated_rss(self) -> None:
+        # "App Mem" must reflect real memory pressure: on macOS that's
+        # phys_footprint (<= RSS, since RSS counts reclaimable mmap'd model files);
+        # elsewhere it falls back to RSS.
+        import os
+        import sys
+
+        import psutil
+
+        from autoptz.engine.runtime.diagnostics import _app_memory_bytes
+
+        proc = psutil.Process(os.getpid())
+        mem = _app_memory_bytes(proc)
+        rss = proc.memory_info().rss
+        assert mem > 0
+        if sys.platform == "darwin":
+            assert mem <= rss  # footprint excludes clean/reclaimable mapped pages
+        else:
+            assert mem == rss
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EngineClient.setLogLevel
