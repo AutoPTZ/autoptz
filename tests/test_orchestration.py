@@ -704,6 +704,23 @@ class TestCameraWorker:
             worker.stop()
         assert backend.stopped is True
 
+    def test_ptz_nudge_uses_low_latency_queue(self, qapp) -> None:
+        # Manual nudges must ride the dedicated PTZ queue (drained on the capture
+        # thread), NOT the inference command queue — otherwise a heavy detect+track
+        # pass adds tens of ms of lag to every joystick move.
+        from autoptz.engine.camera_worker import CameraWorker
+
+        worker = CameraWorker(
+            "ptzcam01abcd",
+            _camera_config("ptzcam01abcd"),
+            lambda m: None,
+            frame_source=FakeFrameSource(),
+        )
+        worker.ptz_nudge(0.5, 0.0, 0.0)
+        assert len(worker._ptz_cmd_queue) == 1
+        assert worker._ptz_cmd_queue[0][0] == "ptz_nudge"
+        assert len(worker._cmd_queue) == 0
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CameraWorker._track_error — region-aware aim point
