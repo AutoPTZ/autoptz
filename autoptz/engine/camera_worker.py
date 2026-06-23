@@ -415,6 +415,13 @@ class CameraWorker:
         self._inference_thread: threading.Thread | None = None
         self._cmd_lock = threading.Lock()
         self._cmd_queue: deque[tuple[str, Any]] = deque()
+        # Manual PTZ commands (nudge/home/menu) ride a SEPARATE queue drained on
+        # the capture thread, not the inference thread — a detect+track pass can
+        # be tens of ms, so routing the joystick/D-pad through it added that lag
+        # to every move.  The capture loop ticks at the full source rate, so this
+        # makes manual PTZ feel immediate (the NDI-Studio-like responsiveness).
+        self._ptz_cmd_lock = threading.Lock()
+        self._ptz_cmd_queue: deque[tuple[str, Any]] = deque()
 
         # ── async pipeline handoff ───────────────────────────────────────────────
         # The capture thread reads frames, pushes the live preview, and emits
@@ -706,18 +713,20 @@ class CameraWorker:
             return bool(self._features.get(name, True))
 
     def ptz_home(self) -> None:
-        """Drive the PTZ backend to its optical home position (queued command)."""
-        with self._cmd_lock:
-            self._cmd_queue.append(("ptz_home", None))
+        """Drive the PTZ backend to its optical home position (low-latency path)."""
+        with self._ptz_cmd_lock:
+            self._ptz_cmd_queue.append(("ptz_home", None))
 
     def ptz_menu(self) -> None:
-        """Toggle the camera's on-screen-display (OSD) menu (queued command)."""
-        with self._cmd_lock:
-            self._cmd_queue.append(("ptz_menu", None))
+        """Toggle the camera's on-screen-display (OSD) menu (low-latency path)."""
+        with self._ptz_cmd_lock:
+            self._ptz_cmd_queue.append(("ptz_menu", None))
 
     def ptz_nudge(self, pan: float, tilt: float, zoom: float) -> None:
-        with self._cmd_lock:
-            self._cmd_queue.append(("ptz_nudge", (float(pan), float(tilt), float(zoom))))
+        # Fast path: drained on the capture thread so the move isn't delayed by an
+        # in-flight inference pass (see _drain_ptz_commands / _ptz_cmd_queue).
+        with self._ptz_cmd_lock:
+            self._ptz_cmd_queue.append(("ptz_nudge", (float(pan), float(tilt), float(zoom))))
 
     def set_target_fps(self, fps: float) -> None:
         """Change capture/detection pacing **live** (no engine restart)."""
@@ -747,6 +756,31 @@ class CameraWorker:
                 self._apply_command(kind, payload)
             except Exception:  # noqa: BLE001
                 log.warning("camera_id=%s command %s failed", self.camera_id, kind, exc_info=True)
+
+    def _drain_ptz_commands(self) -> None:
+        """Apply manual PTZ commands on the CAPTURE thread for minimal latency.
+
+        Drives the backend under ``_ptz_lock`` (serialised with the auto loop and
+        the telemetry position read), at the full capture tick — so the joystick/
+        D-pad moves the camera without waiting on the inference thread.  Safe
+        no-op until the backend is built (``_drive_ptz_nudge`` guards ``None``).
+        """
+        with self._ptz_cmd_lock:
+            if not self._ptz_cmd_queue:
+                return
+            pending = list(self._ptz_cmd_queue)
+            self._ptz_cmd_queue.clear()
+        for kind, payload in pending:
+            try:
+                with self._ptz_lock:
+                    if kind == "ptz_nudge":
+                        self._drive_ptz_nudge(*payload)
+                    elif kind == "ptz_home":
+                        self._ptz_home()
+                    elif kind == "ptz_menu":
+                        self._ptz_menu()
+            except Exception:  # noqa: BLE001
+                log.warning("camera_id=%s ptz cmd %s failed", self.camera_id, kind, exc_info=True)
 
     def _apply_command(self, kind: str, payload: Any) -> None:
         if kind == "enable_tracking":
@@ -2120,6 +2154,10 @@ class CameraWorker:
             self._emit_telemetry(tracks=[], health=last_health, last_error=last_error)
 
         while not self._stop_event.is_set():
+            # Apply any pending manual PTZ first thing each tick (low-latency path,
+            # independent of inference) so the joystick/D-pad feels immediate.
+            self._drain_ptz_commands()
+
             tick_t0 = time.perf_counter()
             frame: NDArray[np.uint8] | None = None
             if self._source is not None:
