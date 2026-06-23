@@ -553,3 +553,133 @@ class TestDeliverToShm:
         adapter._deliver(frame)
         adapter._deliver(frame)
         assert adapter.status.frames_total == 2
+
+
+# ── NDI native color format (fastest path) ─────────────────────────────────────
+
+
+class TestNDIColorFormatPref:
+    def test_default_is_fastest(self, monkeypatch) -> None:  # noqa: ANN001
+        from autoptz.engine.pipeline.ingest import _ndi_color_format_pref
+
+        monkeypatch.delenv("AUTOPTZ_NDI_COLOR_FORMAT", raising=False)
+        assert _ndi_color_format_pref() == "fastest"
+
+    def test_bgra_escape_hatch(self, monkeypatch) -> None:  # noqa: ANN001
+        from autoptz.engine.pipeline.ingest import _ndi_color_format_pref
+
+        for val in ("bgra", "BGRA", " bgrx ", "bgr"):
+            monkeypatch.setenv("AUTOPTZ_NDI_COLOR_FORMAT", val)
+            assert _ndi_color_format_pref() == "bgra"
+
+    def test_unknown_value_is_fastest(self, monkeypatch) -> None:  # noqa: ANN001
+        from autoptz.engine.pipeline.ingest import _ndi_color_format_pref
+
+        monkeypatch.setenv("AUTOPTZ_NDI_COLOR_FORMAT", "purple")
+        assert _ndi_color_format_pref() == "fastest"
+
+
+class TestNDIFrameToBGR:
+    """The native-format converter must dispatch on the actual FourCC and return
+    a contiguous (H, W, 3) BGR image for every layout the SDK can hand back."""
+
+    def test_bgra_exact_channels(self) -> None:
+        from autoptz.engine.pipeline.ingest import _ndi_frame_to_bgr
+
+        # One known pixel: B=10 G=20 R=30 A=40 → BGR must be (10, 20, 30).
+        arr = np.tile(np.array([10, 20, 30, 40], dtype=np.uint8), _H * _W)
+        out = _ndi_frame_to_bgr(arr, "BGRA", _H, _W)
+        assert out is not None
+        assert out.shape == (_H, _W, 3)
+        assert tuple(int(c) for c in out[0, 0]) == (10, 20, 30)
+
+    def test_rgba_swaps_to_bgr(self) -> None:
+        from autoptz.engine.pipeline.ingest import _ndi_frame_to_bgr
+
+        # R=30 G=20 B=10 A=40 → BGR must be (10, 20, 30).
+        arr = np.tile(np.array([30, 20, 10, 40], dtype=np.uint8), _H * _W)
+        out = _ndi_frame_to_bgr(arr, "RGBA", _H, _W)
+        assert out is not None
+        assert tuple(int(c) for c in out[0, 0]) == (10, 20, 30)
+
+    def test_uyvy_two_bytes_per_pixel(self) -> None:
+        from autoptz.engine.pipeline.ingest import _ndi_frame_to_bgr
+
+        arr = np.full(_H * _W * 2, 128, dtype=np.uint8)
+        out = _ndi_frame_to_bgr(arr, "UYVY", _H, _W)
+        assert out is not None
+        assert out.shape == (_H, _W, 3)
+        assert out.dtype == np.uint8
+
+    def test_uyva_drops_alpha_plane(self) -> None:
+        from autoptz.engine.pipeline.ingest import _ndi_frame_to_bgr
+
+        # 3 bytes/pixel total (UYVY + 8-bit alpha); converter uses the UYVY part.
+        arr = np.full(_H * _W * 3, 128, dtype=np.uint8)
+        out = _ndi_frame_to_bgr(arr, "UYVA", _H, _W)
+        assert out is not None
+        assert out.shape == (_H, _W, 3)
+
+    def test_planar_420_formats(self) -> None:
+        from autoptz.engine.pipeline.ingest import _ndi_frame_to_bgr
+
+        for fourcc in ("NV12", "I420", "YV12"):
+            arr = np.full(_H * _W * 3 // 2, 128, dtype=np.uint8)
+            out = _ndi_frame_to_bgr(arr, fourcc, _H, _W)
+            assert out is not None, fourcc
+            assert out.shape == (_H, _W, 3), fourcc
+
+    def test_16bit_formats_return_none_for_fallback(self) -> None:
+        from autoptz.engine.pipeline.ingest import _ndi_frame_to_bgr
+
+        for fourcc in ("P216", "PA16"):
+            arr = np.full(_H * _W * 4, 128, dtype=np.uint8)  # 16-bit 4:2:2
+            assert _ndi_frame_to_bgr(arr, fourcc, _H, _W) is None, fourcc
+
+    def test_unknown_fourcc_falls_back_to_size_heuristic(self) -> None:
+        from autoptz.engine.pipeline.ingest import _ndi_frame_to_bgr
+
+        # Empty FourCC (older cyndilib): 4 bytes/px must still decode as BGRA.
+        arr = np.tile(np.array([10, 20, 30, 40], dtype=np.uint8), _H * _W)
+        out = _ndi_frame_to_bgr(arr, "", _H, _W)
+        assert out is not None
+        assert tuple(int(c) for c in out[0, 0]) == (10, 20, 30)
+
+    def test_mismatched_size_returns_none(self) -> None:
+        from autoptz.engine.pipeline.ingest import _ndi_frame_to_bgr
+
+        arr = np.full(_H * _W * 4 + 7, 128, dtype=np.uint8)  # not a clean layout
+        assert _ndi_frame_to_bgr(arr, "", _H, _W) is None
+
+
+class TestNDIReadFrame:
+    """`_read_frame` end-to-end with a mocked receiver + video frame."""
+
+    def _adapter(self, fourcc: str, buf: np.ndarray, pref: str) -> NDIAdapter:
+        adapter = NDIAdapter("cam-ndi", ndi_name="SRC (CAM)")
+        adapter._color_format_pref = pref
+        vf = MagicMock()
+        vf.xres = _W
+        vf.yres = _H
+        vf.get_array.return_value = buf
+        vf.get_fourcc.return_value = types.SimpleNamespace(name=fourcc)
+        adapter._video_frame = vf
+        adapter._receiver = MagicMock()
+        return adapter
+
+    def test_fastest_uyvy_returns_bgr(self) -> None:
+        buf = np.full(_H * _W * 2, 128, dtype=np.uint8)
+        adapter = self._adapter("UYVY", buf, pref="fastest")
+        out = adapter._read_frame()
+        assert out is not None
+        assert out.shape == (_H, _W, 3)
+        # Supported format must NOT trip the fallback.
+        assert adapter._color_format_pref == "fastest"
+
+    def test_unsupported_native_format_self_heals_to_bgra(self) -> None:
+        buf = np.full(_H * _W * 4, 128, dtype=np.uint8)  # 16-bit P216 layout
+        adapter = self._adapter("P216", buf, pref="fastest")
+        out = adapter._read_frame()
+        assert out is None
+        # Flipped so the next reconnect re-opens with the universal BGRA format.
+        assert adapter._color_format_pref == "bgra"
