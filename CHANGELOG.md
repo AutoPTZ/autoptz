@@ -69,6 +69,11 @@ follow [Semantic Versioning](https://semver.org/).
   cross via process queues. Each process loads its own models, so it trades RAM
   for parallelism — hence opt-in. Marked experimental: the plumbing is tested, but
   the throughput/RAM/real-camera behaviour wants validation on a multi-camera rig.
+- **Face recognition uses far less memory** — it now runs on CPU and loads only
+  the two models AutoPTZ uses (SCRFD detection + ArcFace embedding) instead of the
+  full insightface pack on CoreML. Measured on macOS, AutoPTZ's real memory for two
+  live cameras with all AI on dropped from ~1.1 GB to ~440 MB. Face runs only a few
+  Hz on one target, so CPU costs nothing perceptible.
 
 - **Torch-free model acquisition** — when a model isn't bundled, AutoPTZ downloads
   a prebuilt ONNX from the project's `models-v1` release instead of exporting via
@@ -121,6 +126,17 @@ follow [Semantic Versioning](https://semver.org/).
   usage entitlement; macOS attributes camera use to the launching terminal), so the
   message now says to grant the terminal or use the packaged app, instead of the
   misleading "denied" that only applies to the packaged build.
+- **"App Mem" now reflects real memory** (macOS) — the status bar reported RSS,
+  which counts memory-mapped model/framework files that are clean and reclaimable
+  and inflated the figure ~3× (it looked like AutoPTZ was eating gigabytes it
+  wasn't). It now reports `phys_footprint` — the same number Activity Monitor's
+  "Memory" column shows — falling back to RSS off-macOS.
+- **Selecting log lines is visible again** — selected rows in the Logs panel had no
+  highlight (a per-item style was overriding the selection colour), so "select rows
+  → Copy Selected" looked broken; selected rows now highlight properly.
+- **Smoother Properties section expand/collapse** — the collapsible sections no
+  longer stutter mid-motion or pop at the start/end: the content is pinned to one
+  exact height per frame and animated to its true measured size.
 
 ### Dependencies
 
