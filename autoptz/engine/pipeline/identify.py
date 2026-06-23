@@ -178,25 +178,31 @@ class FaceRecognizer:
         try:
             from insightface.app import FaceAnalysis  # noqa: PLC0415
 
-            from autoptz.engine.runtime.inference import EP, get_best_ep  # noqa: PLC0415
+            from autoptz.engine.runtime.inference import EP  # noqa: PLC0415
 
-            best = get_best_ep()
-            providers = [best.value]
-            if best != EP.CPU:
-                providers.append(EP.CPU.value)
-            ctx_id = -1 if best == EP.CPU else 0
+            # Force CPU for face on purpose.  insightface/CoreML balloons the
+            # buffalo pack to ~1.9 GB (CoreML compiles every sub-model + ANE/GPU
+            # buffers); CPU keeps the same models at ~1.3 GB.  Face runs only a few
+            # Hz on a single target (~12-15 ms/run on CPU), so the GPU buys nothing
+            # here and the memory saving is large — the dominant cost in the app.
+            providers = [EP.CPU.value]
+            ctx_id = -1
 
+            # Load ONLY the modules AutoPTZ uses — SCRFD detection (with its 5
+            # keypoints) + the ArcFace embedding.  The default pack also loads 2D/3D
+            # landmark + gender/age models we never use; skipping them trims memory
+            # and load time.
             app = FaceAnalysis(
                 name=self._model_name,
                 providers=providers,
+                allowed_modules=["detection", "recognition"],
             )
             app.prepare(ctx_id=ctx_id, det_size=(self._det_size, self._det_size))
             self._app = app
             self._available = True
             log.info(
-                "FaceRecognizer ready (insightface %s, ep=%s)",
+                "FaceRecognizer ready (insightface %s, ep=CPU, modules=detection+recognition)",
                 self._model_name,
-                best.value,
             )
         except Exception:  # noqa: BLE001 — missing dep/model/network must not raise
             self._app = None
