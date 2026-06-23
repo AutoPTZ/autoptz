@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 
 _QWIDGETSIZE_MAX = (1 << 24) - 1
 _ANIM_MS = 125
+_COLLAPSE_MS = 180  # expand/collapse height anim — a touch longer reads as smoother
 
 
 def animate_widget_visibility(widget: QWidget, visible: bool, *, duration: int = _ANIM_MS) -> None:
@@ -295,9 +296,14 @@ class CollapsibleGroup(QWidget):
         self._content.setMaximumHeight(_QWIDGETSIZE_MAX if expanded else 0)
         outer.addWidget(self._content)
         self._height_anim = QPropertyAnimation(self._content, b"maximumHeight", self)
-        self._height_anim.setDuration(_ANIM_MS)
+        self._height_anim.setDuration(_COLLAPSE_MS)
         self._height_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._height_anim.finished.connect(self._on_anim_finished)
+        # Drive minimumHeight in lockstep with the animated maximumHeight so the
+        # widget is pinned to ONE exact height each frame.  Animating only the max
+        # (min stayed 0) let the layout pick any in-between height per frame, which
+        # is what made the expand/collapse stutter and jump.
+        self._height_anim.valueChanged.connect(self._on_anim_value)
 
     def _natural_height(self) -> int:
         """Accurate expanded height, including height-for-width (word-wrap) content.
@@ -313,6 +319,11 @@ class CollapsibleGroup(QWidget):
             hfw = lay.heightForWidth(width)
         return max(1, self._content.sizeHint().height(), hfw)
 
+    def _on_anim_value(self, value: int) -> None:
+        # Pin the widget to exactly the animated height (min == max) so the parent
+        # layout can't reflow it to an in-between size mid-frame.
+        self._content.setMinimumHeight(int(value))
+
     def _on_toggle(self, checked: bool) -> None:
         self._expanded = checked
         self._toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
@@ -321,17 +332,22 @@ class CollapsibleGroup(QWidget):
         current = max(0, self._content.height() if self._content.isVisible() else 0)
         if checked:
             self._content.setVisible(True)
-            self._content.setMaximumHeight(current)
-            self._height_anim.setStartValue(current)
-            self._height_anim.setEndValue(natural)
+            start = current
+            end = natural
         else:
             start = current or min(self._content.maximumHeight(), natural)
-            self._content.setMaximumHeight(start)
-            self._height_anim.setStartValue(start)
-            self._height_anim.setEndValue(0)
+            end = 0
+        # Pin both bounds to the start height so the first frame doesn't pop.
+        self._content.setMinimumHeight(start)
+        self._content.setMaximumHeight(start)
+        self._height_anim.setStartValue(start)
+        self._height_anim.setEndValue(end)
         self._height_anim.start()
 
     def _on_anim_finished(self) -> None:
+        # Release the min floor so static content can size naturally; the content is
+        # already at its natural height, so releasing max to MAX causes no jump.
+        self._content.setMinimumHeight(0)
         if self._expanded:
             self._content.setVisible(True)
             self._content.setMaximumHeight(_QWIDGETSIZE_MAX)
