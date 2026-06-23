@@ -75,6 +75,25 @@ class TestShmWriterReader:
 
         assert result is None
 
+    def test_peek_seq_and_has_new_do_not_consume(self) -> None:
+        # The repaint-throttle relies on peek_seq/has_new reporting a new frame
+        # WITHOUT consuming it (so latest() still returns the frame afterwards).
+        H, W, C = 60, 80, 3
+        name = _unique_name()
+        frame = np.zeros((H, W, C), dtype=np.uint8)
+
+        with ShmWriter(name, H, W, C) as w, ShmReader(name, H, W, C) as r:
+            assert r.peek_seq() == -1  # nothing pushed yet
+            assert r.has_new() is False
+            w.push(frame)
+            # A new frame is visible to peek, repeatedly, without consuming it.
+            assert r.peek_seq() == 0
+            assert r.has_new() is True
+            assert r.has_new() is True
+            assert r.latest() is not None  # peeking didn't consume it
+            assert r.has_new() is False  # now consumed
+            assert r.peek_seq() == 0  # seq still readable, just not "new"
+
     def test_sequence_numbers_increment(self) -> None:
         H, W, C = 60, 80, 3
         name = _unique_name()

@@ -187,6 +187,13 @@ class CameraTile(QWidget):
         self._pred_hits: dict[int, int] = {}  # consecutive frames of real motion
         self._target_choices: list[tuple[str, str]] = [("Anyone", "")]
         self._hover = False
+        # Repaint throttling: the timer ticks at the stream rate but we only need to
+        # repaint when a new frame arrived or a visible state changed — repainting an
+        # unchanged tile every tick (esp. while idle/no-signal) wastes GUI-thread CPU.
+        # ``_dirty`` forces a paint (set on first tick + any explicit state change);
+        # ``_last_paint_state`` catches stream/health transitions with no new frame.
+        self._dirty = True
+        self._last_paint_state: tuple[bool, str] | None = None
 
         self.setMinimumSize(220, 124)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -492,7 +499,17 @@ class CameraTile(QWidget):
         if interval != self._timer.interval():
             self._timer.setInterval(interval)
         self._info_badge.set_help(self._compose_perf_tooltip(rec))
-        self.update()
+        # Repaint only when something visible could have changed: a new preview
+        # frame, a stream/health transition, or an explicit dirty flag.  Skipping
+        # otherwise-identical repaints is the per-tile GUI-thread CPU win.
+        streaming = bool(getattr(rec, "streaming", False)) if rec else False
+        health = str(getattr(rec, "health", "ok")) if rec else "ok"
+        state = (streaming, health)
+        new_frame = self._frames.has_new_frame(self.camera_id) if self._frames else True
+        if new_frame or self._dirty or state != self._last_paint_state:
+            self._dirty = False
+            self._last_paint_state = state
+            self.update()
 
     def _compose_perf_tooltip(self, rec: Any) -> str:
         """Per-stage performance text for the "?" badge.

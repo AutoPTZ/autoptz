@@ -69,6 +69,42 @@ class TestBgrToQImage:
         assert (gc.red(), gc.green(), gc.blue()) == (0, 255, 0)
 
 
+class TestHasNewFrame:
+    """``has_new_frame`` drives the tile repaint-throttle: True only when a new
+    preview frame is waiting, and it must lazily open the reader so the first
+    frame is never missed."""
+
+    def test_false_before_writer_true_after_push(self) -> None:
+        from autoptz.engine.runtime.shm import ShmWriter
+        from autoptz.ui.frames import ShmFrameSource
+
+        h, w = 16, 24
+        cid = "cam-" + uuid.uuid4().hex[:8]
+        shm_name = f"hnf_{uuid.uuid4().hex[:8]}"
+        _cleanup_shm(shm_name)
+
+        src = ShmFrameSource()
+        src.attach(cid, shm_name, h, w)
+        # No writer yet → nothing new to paint.
+        assert src.has_new_frame(cid) is False
+
+        writer = None
+        try:
+            writer = ShmWriter(shm_name, h, w)
+            writer.push(np.full((h, w, 3), 5, dtype=np.uint8))
+            # New frame waiting (lazy-opens the reader) — reported without consuming.
+            assert src.has_new_frame(cid) is True
+            assert src.has_new_frame(cid) is True
+            # Consuming it via latest_qimage clears "new".
+            assert src.latest_qimage(cid) is not None
+            assert src.has_new_frame(cid) is False
+        finally:
+            src.detach_all()
+            if writer is not None:
+                writer.close()
+            _cleanup_shm(shm_name)
+
+
 # ── The self-healing provider regression ──────────────────────────────────────
 
 

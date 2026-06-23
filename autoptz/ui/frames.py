@@ -84,6 +84,26 @@ class ShmFrameSource:
 
     # ── frame access ───────────────────────────────────────────────────────────
 
+    def has_new_frame(self, camera_id: str) -> bool:
+        """True iff a new preview frame is waiting for *camera_id* (cheap; no copy).
+
+        Lets a tile skip its repaint when nothing changed — the camera worker pushes
+        at the source rate, but the tile's timer can tick faster (or keep ticking
+        while the stream is idle), so repainting every tick wastes GUI-thread CPU.
+        Lazily opens the reader (like :meth:`latest_qimage`) so the first frame is
+        never missed; returns ``False`` only when no writer exists yet.
+        """
+        with self._lock:
+            reader = self._readers.get(camera_id)
+            if reader is None:
+                reader = self._try_open_reader_locked(camera_id)
+            if reader is None:
+                return False
+        try:
+            return bool(reader.has_new())
+        except Exception:  # noqa: BLE001 — fail safe: repaint rather than freeze
+            return True
+
     def latest_qimage(self, camera_id: str) -> QImage | None:
         """Return the freshest frame for *camera_id*, or the last-good, or None.
 
