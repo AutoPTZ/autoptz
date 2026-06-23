@@ -576,7 +576,15 @@ class MainWindow(QMainWindow):
             if src_label and not dev.get("is_continuity") and src_label not in label:
                 label = f"{label} — {src_label}"
             act = QAction(label, self, checkable=True)
-            act.setChecked(bool(dev.get("in_use")))
+            # Check state from the LIVE camera model (like the NDI rows below), not
+            # the scan cache's ``in_use`` — that field is only recomputed when a
+            # scan finishes, so right after toggling a camera the checkmark lagged
+            # by a scan cycle (you had to reopen the menu a few times).  add/remove
+            # update the model synchronously, so a live lookup is always current.
+            act.setChecked(
+                self._find_camera(str(dev.get("uri", "")), str(dev.get("unique_id", "") or ""))
+                is not None
+            )
             if dev.get("is_continuity"):
                 act.setToolTip(
                     "iPhone Continuity Camera. Matched by device id so reconnects "
