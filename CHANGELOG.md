@@ -54,6 +54,14 @@ follow [Semantic Versioning](https://semver.org/).
   (smoothing/anti-aliasing only on HUD overlays), the preview converter does one
   fewer full-frame copy per frame (`Format_BGR888`), and ORT reserves a core for
   the capture/UI threads.
+- **Idle preview costs almost nothing** — each camera tile now repaints only when
+  a new frame arrives or its state changes, instead of on every timer tick. On an
+  Apple-Silicon Mac an idle / no-signal tile dropped from ~12% CPU to ~2–3%; live
+  streams still update every frame.
+- **Stalled cameras stop spinning the CPU** — when a source goes offline or
+  returns no frames, the capture loop backs its retry off (up to 0.5 s) instead of
+  polling at ~100 Hz, while a manual PTZ command still wakes it instantly so the
+  joystick stays responsive during a reconnect.
 
 - **Torch-free model acquisition** — when a model isn't bundled, AutoPTZ downloads
   a prebuilt ONNX from the project's `models-v1` release instead of exporting via
@@ -101,6 +109,11 @@ follow [Semantic Versioning](https://semver.org/).
   so a plugged/unplugged camera appears the first time you open the menu, and each
   row's checkmark now reflects the live camera list (it read a stale scan cache, so
   it lagged when toggling and could show cameras checked with none on the wall).
+- **Accurate camera-permission message when running from source** (macOS) — a
+  source run can't trigger the camera consent prompt (the bare Python binary has no
+  usage entitlement; macOS attributes camera use to the launching terminal), so the
+  message now says to grant the terminal or use the packaged app, instead of the
+  misleading "denied" that only applies to the packaged build.
 
 ### Dependencies
 
