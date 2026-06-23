@@ -753,12 +753,53 @@ class Supervisor:
             camera_count,
         )
 
+    def _make_worker(self, camera_id: str, config: CameraConfig) -> Any:
+        """Build a camera worker — a thread-based one, or (opt-in) a child process.
+
+        Process-per-camera is used only when ``AUTOPTZ_PROCESS_PER_CAMERA`` is set
+        AND no test/custom worker factory was injected, so the default and all
+        tests keep the in-process threaded worker.
+        """
+        on_telemetry = self._client.push_telemetry
+        from autoptz.engine.process_worker import (
+            ProcessWorkerHandle,
+            process_per_camera_enabled,
+        )
+
+        use_process = (
+            self._worker_factory is self._default_worker_factory and process_per_camera_enabled()
+        )
+        if not use_process:
+            return self._worker_factory(camera_id, config, on_telemetry)
+
+        tier = "auto"
+        try:
+            getter = getattr(self._client, "getDetectorModelTier", None)
+            if callable(getter):
+                tier = str(getter() or "auto")
+        except Exception:  # noqa: BLE001
+            tier = "auto"
+        db_path = ""
+        try:
+            db_path = str(getattr(self._store, "_path", "") or "")
+        except Exception:  # noqa: BLE001
+            db_path = ""
+        log.info("spawning camera %s as its own PROCESS (experimental)", camera_id)
+        return ProcessWorkerHandle(
+            camera_id,
+            config,
+            on_telemetry,
+            db_path=db_path,
+            detector_tier=tier,
+            unified_pose=self._any_unified_pose(),
+        )
+
     def _spawn_worker(self, camera_id: str, *, defer_inference: bool = False) -> None:
         config = self._resolve_config(camera_id)
         if config is None:
             log.warning("cannot spawn worker for %s: no config", camera_id)
             return
-        worker = self._worker_factory(camera_id, config, self._client.push_telemetry)
+        worker = self._make_worker(camera_id, config)
         # Register under the lock only; bail if we lost a race or the engine
         # stopped meanwhile.  Everything heavy (worker.start) runs outside it.
         with self._lock:

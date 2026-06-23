@@ -1,0 +1,200 @@
+"""Tests for the experimental opt-in process-per-camera mode.
+
+Covers the IPC/lifecycle plumbing that CAN be validated without a real camera or
+models: WorkerSpec pickle-safety, the supervisor-side handle proxying method calls
+to the command queue, and one end-to-end spawn of a child process driving a
+synthetic frame source (frames must reach shared memory and telemetry must flow
+back), then a clean stop.
+"""
+
+from __future__ import annotations
+
+import multiprocessing as mp
+import pickle
+import time
+import uuid
+
+from autoptz.config.models import CameraConfig, SourceConfig
+from autoptz.engine.process_worker import (
+    _STOP,
+    ProcessWorkerHandle,
+    WorkerSpec,
+    process_per_camera_enabled,
+)
+
+
+def _config(camera_id: str) -> CameraConfig:
+    return CameraConfig(
+        id=camera_id,
+        name="ProcCam",
+        source=SourceConfig(type="usb", address="usb://0"),
+    )
+
+
+def _cleanup_shm(name: str) -> None:
+    from multiprocessing.shared_memory import SharedMemory
+
+    for n in (name, f"{name}__idx"):
+        try:
+            s = SharedMemory(name=n, create=False)
+            s.close()
+            s.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+
+class TestWorkerSpec:
+    def test_spec_is_picklable(self) -> None:
+        # spawn (macOS default) pickles the spec to the child — it must round-trip.
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        spec = WorkerSpec(
+            camera_id=cid,
+            config=_config(cid),
+            db_path="/tmp/x.db",
+            detector_tier="fast",
+            features={"detection": False},
+        )
+        restored = pickle.loads(pickle.dumps(spec))
+        assert restored.camera_id == cid
+        assert restored.config.source.address == "usb://0"
+        assert restored.features == {"detection": False}
+        assert restored.detector_tier == "fast"
+
+
+class TestEnabledFlag:
+    def test_disabled_by_default(self, monkeypatch) -> None:
+        monkeypatch.delenv("AUTOPTZ_PROCESS_PER_CAMERA", raising=False)
+        assert process_per_camera_enabled() is False
+
+    def test_enabled_by_env(self, monkeypatch) -> None:
+        for val in ("1", "true", "on", "YES"):
+            monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", val)
+            assert process_per_camera_enabled() is True
+
+
+class TestHandleProxy:
+    """The handle must serialize each supervisor method call onto the command queue
+    (post-start), and buffer pre-start feature/defer config into the spec."""
+
+    def _handle(self) -> ProcessWorkerHandle:
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        return ProcessWorkerHandle(cid, _config(cid), on_telemetry=lambda _m: None, db_path="")
+
+    def test_pre_start_set_features_buffers_not_sends(self) -> None:
+        h = self._handle()
+        h.set_features({"detection": False, "pose": False})
+        # Buffered (no queue yet), applied via the spec at start().
+        assert h._features == {"detection": False, "pose": False}
+        assert h._cmd_q is None
+
+    def test_post_start_methods_enqueue_commands(self) -> None:
+        h = self._handle()
+
+        class _FakeQ:
+            def __init__(self) -> None:
+                self.items: list = []
+
+            def put(self, item) -> None:
+                self.items.append(item)
+
+        q = _FakeQ()
+        h._cmd_q = q
+        h._started = True
+
+        h.ptz_nudge(0.5, -0.2, 0.1)
+        h.enable_tracking(True)
+        h.set_features({"pose": False})
+        h.set_target("track-7")
+
+        assert ("ptz_nudge", (0.5, -0.2, 0.1), {}) in q.items
+        assert ("enable_tracking", (True,), {}) in q.items
+        assert ("set_features", ({"pose": False},), {}) in q.items
+        assert ("set_target", ("track-7",), {}) in q.items
+
+    def test_injection_setters_are_noops(self) -> None:
+        # The shared pool/service can't cross to a child; these must not raise.
+        h = self._handle()
+        h.set_inference_pool(object())
+        h.set_identity_service(object())
+        h.set_identity_callback(lambda _r: None)
+        assert h._on_identity is not None
+
+    def test_shm_name_matches_camera_worker_format(self) -> None:
+        cid = "abcd1234ef"
+        h = ProcessWorkerHandle(cid, _config(cid), on_telemetry=lambda _m: None, db_path="")
+        assert h.shm_name == f"cam_{cid[:8]}_preview"
+
+
+class TestEndToEndSpawn:
+    """Spawn a real child process with a synthetic source (no camera, no models):
+    frames must reach shared memory and telemetry must flow back, then stop cleanly."""
+
+    def test_child_delivers_frames_and_telemetry_then_stops(self) -> None:
+        from autoptz.engine.camera_worker import _PREVIEW_H, _PREVIEW_W
+        from autoptz.engine.process_worker import run_camera_process
+        from autoptz.engine.runtime.shm import ShmReader
+
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        shm_name = f"cam_{cid[:8]}_preview"
+        _cleanup_shm(shm_name)
+
+        spec = WorkerSpec(
+            camera_id=cid,
+            config=_config(cid),
+            db_path="",
+            features={  # all off → pure capture/preview, no model loading in the child
+                "detection": False,
+                "tracking": False,
+                "face_recognition": False,
+                "pose": False,
+                "reid": False,
+            },
+            synthetic=True,
+        )
+        ctx = mp.get_context("spawn")
+        cmd_q = ctx.Queue()
+        tel_q = ctx.Queue()
+        idn_q = ctx.Queue()
+        proc = ctx.Process(
+            target=run_camera_process,
+            args=(spec, cmd_q, tel_q, idn_q),
+            daemon=True,
+        )
+        proc.start()
+        try:
+            # Telemetry should arrive once the child finishes its (heavy) imports;
+            # generous timeout so a slow CI runner spawning + importing the full
+            # stack doesn't flake.
+            msg = tel_q.get(timeout=45.0)
+            assert getattr(msg, "camera_id", None) == cid
+
+            # A real frame should land in the child's shm preview ring.
+            reader = None
+            frame = None
+            deadline = time.monotonic() + 15.0
+            while time.monotonic() < deadline and frame is None:
+                try:
+                    if reader is None:
+                        reader = ShmReader(shm_name, _PREVIEW_H, _PREVIEW_W)
+                    result = reader.latest()
+                    if result is not None:
+                        frame = result[1]
+                except Exception:
+                    reader = None
+                time.sleep(0.1)
+            assert frame is not None, "no frame reached shared memory from the child process"
+            assert frame.shape == (_PREVIEW_H, _PREVIEW_W, 3)
+            assert int(frame.mean()) == 123  # the synthetic source's solid colour
+            if reader is not None:
+                reader.close()
+        finally:
+            cmd_q.put((_STOP, (), {}))
+            proc.join(timeout=10.0)
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=3.0)
+            _cleanup_shm(shm_name)
+
+        assert not proc.is_alive(), "child process did not stop on the _STOP sentinel"
