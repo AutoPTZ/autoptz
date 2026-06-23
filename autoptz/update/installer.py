@@ -126,23 +126,31 @@ def _copy_stream(
 def launch_update(path: Path) -> None:
     """Launch a downloaded installer/app bundle for the current OS.
 
-    Windows installs **silently** (Inno Setup ``/VERYSILENT``): it closes the
-    running app, updates in place, and relaunches — no wizard clicks, the
-    closest to a seamless "it just updated" experience.  macOS opens the ``.dmg``
-    (the user drags to Applications) and Linux runs the new AppImage.
+    Windows installs with Inno Setup ``/SILENT``: **no wizard pages**, but a
+    visible progress window so the update is obviously happening (``/VERYSILENT``
+    showed nothing at all, so the user couldn't tell it was working or done).  The
+    installer closes the running app, updates in place, and **relaunches it
+    itself** via a silent-only ``[Run]`` entry — see ``packaging/autoptz.iss``.
+
+    We deliberately do *not* pass ``/RESTARTAPPLICATIONS``: the app self-quits
+    right after launching the installer, so the Restart Manager never registers it
+    and that flag was a no-op — worse, it could double-launch once the installer's
+    own relaunch entry works.  macOS opens the ``.dmg`` (the user drags to
+    Applications) and Linux runs the new AppImage.
     """
     try:
         if sys.platform == "win32":
             if path.suffix.lower() == ".exe":
-                # Inno Setup silent flags: no wizard, auto-close the running app,
-                # relaunch when done.  Detached so this process can quit.
+                # Inno Setup silent flags: no wizard pages, suppress prompts (so
+                # closing the running app is automatic), don't reboot.  The
+                # installer relaunches AutoPTZ when done (its silent [Run] entry).
+                # Detached so this process can quit.
                 subprocess.Popen(  # noqa: S603
                     [
                         str(path),
-                        "/VERYSILENT",
+                        "/SILENT",
                         "/SUPPRESSMSGBOXES",
                         "/NORESTART",
-                        "/RESTARTAPPLICATIONS",
                     ]
                 )
             else:
