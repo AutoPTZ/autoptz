@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 MODEL_SETUP_REMINDER_KEY = "model_setup_dont_remind"
 _DETECTOR_TIERS = (
-    ("auto", "Auto"),
+    ("auto", "Auto (recommended)"),
     ("fast", "Fast"),
     ("balanced", "Balanced"),
     ("medium", "Accurate"),
@@ -68,12 +68,22 @@ class _ModelTask(QObject):
     progress = Signal(str, int, int)
     done = Signal(object)
 
-    def __init__(self, action: str, keys: list[str]) -> None:
+    def __init__(self, action: str, keys: list[str], client: Any | None = None) -> None:
         super().__init__()
         self._action = action
         self._keys = list(keys)
+        self._client = client
 
     def run(self) -> None:
+        # Free the engine's ORT sessions BEFORE touching the files: Windows refuses
+        # to delete/replace a model onnxruntime still has open (POSIX tolerates it,
+        # which is why this only failed on Windows).  Rebuild from the fresh cache
+        # afterwards so a removed model stops drawing and a new one is picked up.
+        if self._client is not None:
+            try:
+                self._client.releaseModelSessions()
+            except Exception:  # noqa: BLE001
+                log.debug("releaseModelSessions before model op failed", exc_info=True)
         try:
             from autoptz.engine.runtime.models import default_manager
 
@@ -100,6 +110,12 @@ class _ModelTask(QObject):
                     "error": str(exc),
                 }
             ]
+        finally:
+            if self._client is not None:
+                try:
+                    self._client.rebuildModelSessions()
+                except Exception:  # noqa: BLE001
+                    log.debug("rebuildModelSessions after model op failed", exc_info=True)
         self.done.emit({"action": self._action, "results": results})
 
 
@@ -275,12 +291,23 @@ class ModelManagerDialog(QDialog):
         for value, label in _DETECTOR_TIERS:
             self._tier.addItem(label, value)
         self._tier.setToolTip(
-            "The detector model tier the engine uses (Auto maps to Fast). Tiers "
-            "that aren't downloaded are greyed out unless automatic download is on."
+            "Which detector the engine runs. Auto always works — it uses the Fast "
+            "model that ships with AutoPTZ and automatically upgrades to a heavier "
+            "tier once you download one. Fast/Balanced/Accurate trade speed for "
+            "accuracy; a tier you haven't downloaded is greyed out unless automatic "
+            "download is on."
         )
         self._tier.currentIndexChanged.connect(self._on_tier_changed)
         tier_row.addWidget(self._tier, 1)
         root.addLayout(tier_row)
+
+        tier_help = QLabel(
+            "Auto is recommended and always available — no download required. "
+            "Pick a specific tier only if you want to pin speed vs. accuracy."
+        )
+        tier_help.setWordWrap(True)
+        tier_help.setStyleSheet(f"color: {T.CURRENT.subtext};")
+        root.addWidget(tier_help)
 
         self._auto_download = QCheckBox(
             "Automatically download a missing detector tier when I select it"
@@ -412,16 +439,20 @@ class ModelManagerDialog(QDialog):
                 value = str(combo.itemData(i) or "auto")
                 key = _detector_key_for_tier(value)
                 cached = bool(self._status_by_key.get(key, {}).get("cached"))
-                if cached:
-                    suffix = ""
+                # Auto always works: it falls back to the bundled Fast model and
+                # upgrades automatically, so it is never greyed or flagged missing.
+                if value == "auto":
+                    suffix, enabled = "", True
+                elif cached:
+                    suffix, enabled = "", True
                 elif auto_dl:
-                    suffix = "  (will download)"
+                    suffix, enabled = "  (will download)", True
                 else:
-                    suffix = "  (not downloaded)"
+                    suffix, enabled = "  (not downloaded)", False
                 combo.setItemText(i, labels.get(value, value) + suffix)
                 item = model.item(i) if hasattr(model, "item") else None
                 if item is not None:
-                    item.setEnabled(cached or auto_dl)
+                    item.setEnabled(enabled)
         finally:
             combo.blockSignals(False)
 
@@ -596,7 +627,7 @@ class ModelManagerDialog(QDialog):
         if not keys:
             QMessageBox.information(self, "No Models Selected", "Select at least one model first.")
             return
-        task = _ModelTask(action, keys)
+        task = _ModelTask(action, keys, client=self._client)
         self._task = task
         task.progress.connect(self._on_progress)
         task.done.connect(self._on_done)
@@ -641,13 +672,9 @@ class ModelManagerDialog(QDialog):
             for row in results
             if isinstance(row, dict) and row.get("state") not in {"ok", "removed"}
         ]
-        # Tell a running engine to unload + rebuild from the new cache state so a
-        # removed model stops drawing boxes (and a freshly downloaded one is
-        # picked up) without a manual restart.
-        try:
-            self._client.applyModelCacheChanged()
-        except Exception:  # noqa: BLE001
-            log.debug("applyModelCacheChanged failed", exc_info=True)
+        # Model sessions were released before the mutation and rebuilt after (see
+        # _ModelTask.run), so a removed model has already stopped drawing boxes and
+        # a freshly downloaded one is live — no manual restart, no extra reload here.
         self._refresh_rows()
         if failed:
             detail = "\n".join(

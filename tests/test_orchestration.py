@@ -1284,6 +1284,46 @@ class TestEngineLifecycleApi:
             c.stopEngine()
         assert c.engineEp == ""
 
+    def test_engine_ep_updates_from_telemetry(self, qapp) -> None:
+        # Regression: engineEp must reflect the worker-reported EP, not stay blank.
+        from autoptz.engine.runtime.messages import TelemetryMsg
+
+        c = _make_client(qapp)
+        cid = c.addCamera("usb://0", "X")
+        c.drain_commands()
+        c.set_supervisor(_make_supervisor(c, factory=FakeWorker))
+        c.startEngine()
+        try:
+            c.push_telemetry(TelemetryMsg(camera_id=cid, seq=1, ep="CoreMLExecutionProvider"))
+            assert c.engineEp == "CoreML"
+        finally:
+            c.stopEngine()
+
+    def test_model_task_releases_sessions_before_mutating(self, qapp, monkeypatch) -> None:
+        # Regression: on Windows the model file can't be deleted/replaced while
+        # onnxruntime holds it open, so sessions must be released BEFORE the
+        # on-disk mutation and rebuilt after.
+        import autoptz.engine.runtime.models as models_mod
+        from autoptz.ui.widgets.dialogs.model_manager import _ModelTask
+
+        order: list[str] = []
+
+        class _SpyClient:
+            def releaseModelSessions(self):
+                order.append("release")
+
+            def rebuildModelSessions(self):
+                order.append("rebuild")
+
+        class _FakeManager:
+            def remove_app_models(self, *, keys=None):
+                order.append("remove")
+                return [{"name": "m", "state": "removed", "path": "", "size": "0", "error": ""}]
+
+        monkeypatch.setattr(models_mod, "default_manager", lambda: _FakeManager())
+        _ModelTask("remove", ["detector_fast"], client=_SpyClient()).run()
+        assert order == ["release", "remove", "rebuild"]
+
     def test_engine_state_changed_emitted(self, qapp) -> None:
         c = _make_client(qapp)
         c.set_supervisor(_make_supervisor(c, factory=FakeWorker))

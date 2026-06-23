@@ -194,13 +194,11 @@ class EngineClient(QObject):
         self._startup_started_cameras: int = 0
         self._startup_total_cameras: int = 0
         self._startup_missing_components: list[str] = []
-        self._features: dict[str, bool] = {
-            "detection": True,
-            "tracking": True,
-            "face_recognition": True,
-            "pose": True,
-            "reid": True,
-        }
+        # Persisted ML-subsystem switches.  A service the operator turns off stays
+        # off across launches AND is never built at spin-up (see startEngine →
+        # prime_features), so disabling e.g. detection genuinely reclaims the
+        # CPU/RAM that model would cost — not just hides its output.
+        self._features: dict[str, bool] = self._load_persisted_features()
         self._detector_model_tier: str = "auto"
         self._model_download_lock = threading.Lock()
         self._model_download_running = False
@@ -393,7 +391,17 @@ class EngineClient(QObject):
             total=len(self._model.camera_ids()),
             missing=self._missing_optional_components(promptable_only=True),
         )
-        self.resetFeatureOverrides()
+        # Seed the supervisor with the persisted feature switches BEFORE it spawns
+        # workers, so a disabled service is never built at spin-up (the worker
+        # gates model construction on these flags).  Without priming, workers
+        # would spawn all-on and only release disabled models afterward — paying
+        # the build cost we are trying to avoid.
+        prime = getattr(self._supervisor, "prime_features", None)
+        if callable(prime):
+            try:
+                prime(self.features())
+            except Exception:  # noqa: BLE001
+                log.debug("prime_features failed", exc_info=True)
         try:
             try:
                 self._supervisor.start(
@@ -416,15 +424,19 @@ class EngineClient(QObject):
             return
 
         self._engine_running = True
-        self._engine_ep = ""
+        # Seed the EP label from a cheap probe so the status bar shows something
+        # immediately (and even when detection is disabled and no detector session
+        # is ever built).  Telemetry later corrects this to the session's real EP.
+        self._engine_ep = self._probe_best_ep()
         if self.autoDownloadModels() and not self._detector_tier_cached(self._detector_model_tier):
             switch = getattr(self._supervisor, "switch_detector_model_tier", None)
             self._download_detector_tier_async(
                 self._detector_model_tier,
                 switch if callable(switch) else None,
             )
-        # Push the session-only global feature switches. They intentionally reset
-        # to all-on at launch; Services-panel disables are testing overrides only.
+        # Re-assert the persisted feature switches to every worker (belt-and-
+        # suspenders alongside prime_features, and the source of truth for any
+        # worker that spawned before priming).
         try:
             self._enqueue(SetFeaturesCmd(camera_id=None, features=self.features()))
         except Exception:  # noqa: BLE001
@@ -970,42 +982,65 @@ class EngineClient(QObject):
         """Toggle the camera's on-screen (OSD) menu (safe no-op when unsupported)."""
         self._enqueue(PtzMenuCmd(camera_id=camera_id))
 
-    # ── session-only feature switches + detector model tier ────────────────────
+    # ── persisted feature switches + detector model tier ───────────────────────
 
     _FEATURE_KEYS = ("detection", "tracking", "face_recognition", "pose", "reid")
+    _FEATURE_SETTING_KEY = "feature_overrides"
+
+    def _load_persisted_features(self) -> dict[str, bool]:
+        """Load the saved feature switches (all default True) from the store."""
+        raw: Any = {}
+        try:
+            if self._store is not None:
+                raw = self._store.get_setting(self._FEATURE_SETTING_KEY, {}) or {}
+        except Exception:  # noqa: BLE001
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        return {k: bool(raw.get(k, True)) for k in self._FEATURE_KEYS}
+
+    def _persist_features(self) -> None:
+        try:
+            if self._store is not None:
+                self._store.set_setting(self._FEATURE_SETTING_KEY, dict(self._features))
+        except Exception:  # noqa: BLE001
+            log.debug("persist feature overrides failed", exc_info=True)
 
     @Slot(result="QVariant")
     def features(self) -> dict[str, bool]:
-        """Return the session-only ML-subsystem switches (all default True).
+        """Return the persisted ML-subsystem switches (all default True).
 
         Keys: ``detection``, ``tracking``, ``face_recognition``, ``pose``,
-        ``reid``.  These do not persist; they are testing/runtime overrides that
-        reset each launch.
+        ``reid``.  These persist across launches; a disabled service is also
+        skipped at spin-up so it costs no CPU/RAM (see :meth:`startEngine`).
         """
         return {k: bool(self._features.get(k, True)) for k in self._FEATURE_KEYS}
 
     @Slot(str, bool)
     def setFeatureEnabled(self, name: str, enabled: bool) -> None:
-        """Enable/disable a global subsystem for this session.
+        """Enable/disable a global subsystem and persist the choice.
 
         ``name`` is one of ``detection``/``tracking``/``face_recognition``/``pose``/
         ``reid``.  Broadcasts a :class:`SetFeaturesCmd` so every worker turns the
-        subsystem on/off without a restart, but does not persist across launches.
+        subsystem on/off without a restart, and saves it so it sticks next launch
+        (and the model isn't rebuilt at spin-up).
         """
         if name not in self._FEATURE_KEYS:
             return
         feats = self.features()
         feats[name] = bool(enabled)
         self._features = feats
+        self._persist_features()
         self._enqueue(SetFeaturesCmd(camera_id=None, features=feats))
         self.featuresChanged.emit()
 
     @Slot()
     def resetFeatureOverrides(self) -> None:
-        """Reset all session-only module testing overrides to enabled."""
+        """Re-enable every subsystem and persist the reset."""
         feats = {k: True for k in self._FEATURE_KEYS}
         changed = feats != self._features
         self._features = feats
+        self._persist_features()
         if self._engine_running:
             self._enqueue(SetFeaturesCmd(camera_id=None, features=feats))
         if changed:
@@ -1065,22 +1100,47 @@ class EngineClient(QObject):
         self.optionalComponentsChanged.emit()
 
     @Slot()
-    def applyModelCacheChanged(self) -> None:
-        """Unload + rebuild live models after the on-disk model cache changed.
+    def releaseModelSessions(self) -> None:
+        """Free the engine's ORT sessions *before* the model cache is mutated.
 
-        Called by the Model Manager after a download/removal so a running engine
-        frees the ORT sessions for now-stale files and rebuilds from the fresh
-        cache — no manual restart needed.  Safe no-op when the engine is stopped.
+        The Model Manager calls this prior to a download/removal so onnxruntime
+        no longer holds the files open — without it, delete/replace fails on
+        Windows (POSIX tolerates unlink-while-open, which is why it only broke
+        there).  Safe no-op when the engine is stopped.
         """
         sup = self._supervisor
         if self._engine_running and sup is not None:
-            fn = getattr(sup, "apply_model_cache_changed", None)
+            fn = getattr(sup, "release_model_sessions", None)
             if callable(fn):
                 try:
                     fn()
                 except Exception:  # noqa: BLE001
-                    log.debug("apply_model_cache_changed failed", exc_info=True)
+                    log.debug("release_model_sessions failed", exc_info=True)
+
+    @Slot()
+    def rebuildModelSessions(self) -> None:
+        """Rebuild live models from the fresh cache after a download/removal."""
+        sup = self._supervisor
+        if self._engine_running and sup is not None:
+            fn = getattr(sup, "rebuild_model_sessions", None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:  # noqa: BLE001
+                    log.debug("rebuild_model_sessions failed", exc_info=True)
         self.optionalComponentsChanged.emit()
+
+    @Slot()
+    def applyModelCacheChanged(self) -> None:
+        """Unload + rebuild live models after the on-disk model cache changed.
+
+        Release-then-rebuild in one call, retained for any caller that mutates the
+        cache and only signals afterward.  The Model Manager instead brackets the
+        mutation with :meth:`releaseModelSessions` / :meth:`rebuildModelSessions`.
+        Safe no-op when the engine is stopped.
+        """
+        self.releaseModelSessions()
+        self.rebuildModelSessions()
 
     def _detector_tier_cached(self, tier: str) -> bool:
         try:
@@ -1093,6 +1153,24 @@ class EngineClient(QObject):
         except Exception:  # noqa: BLE001
             log.debug("detector tier cache check failed", exc_info=True)
         return False
+
+    @staticmethod
+    def _probe_best_ep() -> str:
+        """Best available EP label (e.g. ``CoreMLExecutionProvider``) without a session.
+
+        A cheap probe so the UI can show an EP before any model loads; returns ""
+        if onnxruntime can't be queried.  Telemetry overrides this with the EP the
+        live session actually used.
+        """
+        try:
+            from autoptz.engine.runtime.inference import get_best_ep
+
+            # Store the short label (UI strips this too, defensively) so the
+            # property is "CoreML"/"CPU"/"Dml", never the raw provider id.
+            return str(get_best_ep().value).replace("ExecutionProvider", "")
+        except Exception:  # noqa: BLE001 — never block engine start on a probe
+            log.debug("EP probe failed", exc_info=True)
+            return ""
 
     @staticmethod
     def _detector_tier_label(tier: str) -> str:
@@ -1885,6 +1963,17 @@ class EngineClient(QObject):
                     row["state"] = "ok" if state == "active" else "warn"
                     row["detail"] = detail
                     break
+        pose = _find_runtime_row(getattr(live, "runtime_services", []), "pose")
+        if pose is not None and str(_obj_field(pose, "state", "")) == "failed":
+            # The model is on disk but the live session failed to load (common on
+            # Windows when the EP/onnx can't initialise).  Surface it as a warning
+            # with the reason so it stops reading as a healthy "ok" pose row.
+            reason = str(_obj_field(pose, "detail", "")) or "pose model present but failed to load"
+            for row in rows:
+                if row.get("key") == "pose":
+                    row["state"] = "warn"
+                    row["detail"] = reason
+                    break
         switch = getattr(live, "model_switch", None)
         if switch is not None:
             state = str(_obj_field(switch, "state", "idle"))
@@ -2029,6 +2118,14 @@ class EngineClient(QObject):
     def _on_telemetry_main(self, msg: TelemetryMsg) -> None:
         """Apply telemetry on the owning (GUI) thread."""
         self._model.update_telemetry(msg)
+        # Surface the actually-active inference EP reported by the worker.  Without
+        # this the status bar / camera-info panel showed a blank EP on every
+        # platform (the value was only ever seeded empty); the user noticed it on
+        # Windows.  Telemetry carries the real provider (CoreML / Dml / CPU / …).
+        ep = (getattr(msg, "ep", "") or "").replace("ExecutionProvider", "")
+        if ep and ep != self._engine_ep:
+            self._engine_ep = ep
+            self.engineStateChanged.emit()
         self.telemetryUpdated.emit(msg.camera_id)
 
     # ── identity ingest (called from engine/worker thread) ─────────────────────

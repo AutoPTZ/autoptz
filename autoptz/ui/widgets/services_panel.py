@@ -41,31 +41,36 @@ _STATE_LABEL = {
     "off": "OFF",
 }
 
-# Session-only ML-subsystem testing overrides: (feature key, label, help text). The keys match
+# Persisted ML-subsystem switches: (feature key, label, help text). The keys match
 # ``EngineClient.features()`` / ``setFeatureEnabled`` exactly.
 _FEATURE_TOGGLES = (
     (
         "detection",
         "Person detection",
-        "Testing override: disable person detection for this session. It resets on launch.",
+        "Disable person detection. Your choice persists and the detector model is "
+        "skipped at startup (no CPU/RAM) until you re-enable it.",
     ),
     (
         "tracking",
         "Tracking",
-        "Testing override: disable track association/PTZ follow for this session.",
+        "Disable track association / PTZ follow. Persists across launches.",
     ),
     (
         "face_recognition",
         "Face recognition",
-        "Testing override: disable face matching for this session.",
+        "Disable face matching. Persists; the face model is skipped at startup while off.",
     ),
-    ("pose", "Pose", "Testing override: disable pose keypoints for this session."),
+    (
+        "pose",
+        "Pose",
+        "Disable pose keypoints. Persists; the pose model is skipped at startup while off.",
+    ),
     (
         "reid",
         "ReID (stable tracking)",
         "Master switch for appearance ReID. A camera only uses it when this is on "
         "AND its tracking Mode is “Stable”. Turn it off to disable Stable mode "
-        "everywhere. Resets to on each launch.",
+        "everywhere. Persists across launches.",
     ),
 )
 
@@ -155,15 +160,26 @@ class ServicesPanel(QWidget):
             head.addWidget(b)
         root.addLayout(head)
 
-        # ── testing controls ──────────────────────────────────────────────────
+        # ── module switches ─────────────────────────────────────────────────────
         root.addWidget(hline())
-        root.addWidget(section_label("Testing Overrides"))
+        mod_head = QHBoxLayout()
+        mod_head.setSpacing(6)
+        mod_head.addWidget(section_label("Modules"))
+        mod_head.addStretch(1)
+        self._enable_all = QPushButton("Enable all")
+        self._enable_all.setToolTip("Re-enable every module (clears your disabled choices).")
+        self._enable_all.setMinimumHeight(22)
+        self._enable_all.clicked.connect(lambda: _safe(self._client.resetFeatureOverrides, None))
+        mod_head.addWidget(self._enable_all)
+        root.addLayout(mod_head)
         self._hint = QLabel(
-            "Services start enabled every launch. Disable modules here only for testing."
+            "Your choices persist across launches. A disabled module is skipped at "
+            "startup, so it uses no CPU or memory until you turn it back on."
         )
         self._hint.setWordWrap(True)
         root.addWidget(self._hint)
 
+        self._feature_pills: dict[str, QLabel] = {}
         for key, label, tip in _FEATURE_TOGGLES:
             row = QHBoxLayout()
             row.setSpacing(6)
@@ -175,6 +191,10 @@ class ServicesPanel(QWidget):
             row.addWidget(box)
             row.addWidget(HelpBadge(tip))
             row.addStretch(1)
+            pill = QLabel()
+            pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._feature_pills[key] = pill
+            row.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
             root.addLayout(row)
         _connect(client, "featuresChanged", self._refresh_features)
 
@@ -281,7 +301,7 @@ class ServicesPanel(QWidget):
     # ── testing overrides ────────────────────────────────────────────────────
 
     def _on_feature_toggled(self, key: str, checked: bool) -> None:
-        """Apply a session-only subsystem switch live via the client."""
+        """Apply + persist a subsystem switch live via the client."""
         _safe(lambda: self._client.setFeatureEnabled(key, checked), None)
 
     def _refresh_features(self) -> None:
@@ -304,7 +324,9 @@ class ServicesPanel(QWidget):
         if label is None:
             return
         tier = str(_safe(lambda: self._client.getDetectorModelTier(), "auto") or "auto")
-        label.setText(f"Active detector model: {_DETECTOR_TIER_LABELS.get(tier, tier.title())}")
+        name = _DETECTOR_TIER_LABELS.get(tier, tier.title())
+        suffix = " — always available, no download needed" if tier == "auto" else ""
+        label.setText(f"Active detector model: {name}{suffix}")
 
     def _refresh_optional_components(self) -> None:
         summary = getattr(self, "_model_summary", None)
@@ -342,20 +364,27 @@ class ServicesPanel(QWidget):
             )
         summary.setText(line)
 
-    def _apply_component_gating(self) -> None:
-        """Grey out toggles whose required model/component is missing.
+    def _set_feature_pill(self, pill: QLabel, text: str, color: str) -> None:
+        """Render a small state badge (ON / OFF / UNAVAILABLE) next to a toggle."""
+        pill.setText(text)
+        pill.setStyleSheet(
+            f"color: {color}; border: 1px solid {color}; border-radius: 8px;"
+            f" padding: 1px 8px; font-size: {T.fs(9)}px; font-weight: 700;"
+        )
 
-        Purely **visual** — the engine's feature flags are left untouched.  The
-        detector is pool-authoritative now: a missing model means nothing runs
-        and nothing is drawn regardless of the flag, so there is no UI/engine
-        desync to "enforce".  Just as importantly, NOT forcing the flag off means
-        detection (and the downstream features) resume automatically once the
-        model is downloaded again, instead of sticking off — which previously
-        left the engine quiet after a delete→re-download.  The checked state
-        mirrors the engine via :meth:`_refresh_features`.
+    def _apply_component_gating(self) -> None:
+        """Show each module's state clearly and grey what its model can't back.
+
+        A status pill makes off-vs-on unmistakable at a glance (the bare checkbox
+        was too subtle): ``ON`` (green) when enabled and backed, ``OFF`` (muted)
+        when the operator disabled it, ``UNAVAILABLE`` (amber) when the required
+        model/component is missing.  Gating stays **visual** — the engine's flags
+        are untouched, so a module resumes automatically once its model is back;
+        the checked state mirrors the engine via :meth:`_refresh_features`.
         """
         states = self._component_states
         detector_ok = states.get("detector", "ok") == "ok"
+        pills = getattr(self, "_feature_pills", {})
         # Everything visible flows from the body detector: face/pose/ReID only
         # label or stabilise *already-detected* bodies, and tracking follows them —
         # so without the detector model nothing is drawn no matter the individual
@@ -371,16 +400,24 @@ class ServicesPanel(QWidget):
             needs_detector = feature != "detection"
             available = own_ok and (detector_ok or not needs_detector)
             box.setEnabled(available)
-            if available:
-                box.setToolTip(self._feature_tips.get(feature, ""))
+            pill = pills.get(feature)
+            if not available:
+                if needs_detector and not detector_ok:
+                    reason = "Requires the detector model — open Manage Models to download it."
+                elif component is not None:
+                    reason = f"Disabled until the {component} component is available."
+                else:
+                    reason = "Unavailable."
+                box.setToolTip(f"{self._feature_tips.get(feature, '')}\n\n{reason}")
+                if pill is not None:
+                    self._set_feature_pill(pill, "UNAVAILABLE", T.WARNING)
                 continue
-            if needs_detector and not detector_ok:
-                reason = "Requires the detector model — open Manage Models to download it."
-            elif component is not None:
-                reason = f"Disabled until the {component} component is available."
-            else:
-                reason = "Unavailable."
-            box.setToolTip(f"{self._feature_tips.get(feature, '')}\n\n{reason}")
+            box.setToolTip(self._feature_tips.get(feature, ""))
+            if pill is not None:
+                if box.isChecked():
+                    self._set_feature_pill(pill, "ON", T.TRACKING)
+                else:
+                    self._set_feature_pill(pill, "OFF", T.CURRENT.muted)
 
     def _open_model_manager(self) -> None:
         from autoptz.ui.widgets.dialogs.model_manager import ModelManagerDialog

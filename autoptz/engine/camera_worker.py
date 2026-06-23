@@ -662,6 +662,21 @@ class CameraWorker:
         with self._cmd_lock:
             self._cmd_queue.append(("reload_models", None))
 
+    def release_inference_models(self, *, wait: float = 0.0) -> None:
+        """Drop the worker's detector/pose refs so their ORT sessions can be freed.
+
+        Unlike :meth:`reload_inference_models` this does *not* rebuild — it only
+        releases, so the OS file handles are gone before the on-disk model cache
+        is mutated (delete/replace fails on Windows while a handle is open).  Pass
+        ``wait > 0`` to block until the inference thread confirms the release (or
+        the timeout elapses); the caller then GCs and mutates the files.
+        """
+        done = threading.Event() if wait > 0 else None
+        with self._cmd_lock:
+            self._cmd_queue.append(("release_models", done))
+        if done is not None:
+            done.wait(timeout=wait)
+
     def set_inference_start_paused(self, paused: bool) -> None:
         """Pause/release heavy inference startup while preview/capture opens."""
         if paused:
@@ -797,6 +812,10 @@ class CameraWorker:
             self._refresh_detector_from_pool()
         elif kind == "reload_models":
             self._reload_inference_models()
+        elif kind == "release_models":
+            self._release_inference_models()
+            if isinstance(payload, threading.Event):
+                payload.set()
         elif kind == "save_ptz_preset":
             self._save_ptz_preset(int(payload))
         elif kind == "recall_ptz_preset":
@@ -830,6 +849,21 @@ class CameraWorker:
             self._last_applied_fps = float(fps)
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s set_target_fps failed", self.camera_id, exc_info=True)
+
+    def _release_inference_models(self) -> None:
+        """Drop detector/pose refs *without* rebuilding so their ORT sessions free.
+
+        Called before the on-disk model cache is mutated: once these refs and the
+        shared pool's are gone (and GC runs), Windows can delete/replace the files
+        that onnxruntime had open.  The subsequent ``reload_models`` rebuilds.
+        """
+        self._detect = None
+        self._unified_pose_active = False
+        self._last_detections = []
+        self._pose = None
+        self._pose_probed = False
+        self._pose_keypoints = None
+        self._pose_kp_track_id = None
 
     def _reload_inference_models(self) -> None:
         """Force-drop + rebuild detector/pose to match the current model cache."""
@@ -3758,19 +3792,7 @@ class CameraWorker:
                 ),
                 detail="recognition and identity reacquire",
             ),
-            RuntimeServiceInfo(
-                key="pose",
-                name="Pose",
-                configured="on",
-                enabled=self._feature("pose"),
-                active=bool(self._feature("pose") and self._pose is not None),
-                state=self._stage_status(
-                    "pose",
-                    enabled=self._feature("pose"),
-                    available=self._pose is not None or not self._pose_probed,
-                ),
-                detail="PTZ aim point" if self._feature("pose") else "disabled",
-            ),
+            self._pose_service_row(pool),
             RuntimeServiceInfo(
                 key="framing",
                 name="Framing",
@@ -3793,6 +3815,38 @@ class CameraWorker:
                 confidence="trusted" if cap else "unknown",
             ),
         ]
+
+    def _pose_service_row(self, pool: Any) -> RuntimeServiceInfo:
+        """Pose status, surfacing a 'present but failed to load' reason.
+
+        Mirrors the detector row: when pose is on and the model was probed but the
+        estimator is unavailable with a known reason (e.g. the ORT session failed
+        on this platform), report ``failed`` + that reason instead of a silent
+        idle — so "downloaded but not working" explains itself.
+        """
+        enabled = self._feature("pose")
+        pose_obj = self._pose
+        loaded = pose_obj is not None and bool(getattr(pose_obj, "available", True))
+        error = str(getattr(pool, "pose_error", "") or "") if pool is not None else ""
+        if not error:
+            error = str(getattr(pose_obj, "error", "") or "")
+        failed = enabled and self._pose_probed and not loaded and bool(error)
+        if failed:
+            state, detail = "failed", error
+        else:
+            state = self._stage_status(
+                "pose", enabled=enabled, available=loaded or not self._pose_probed
+            )
+            detail = "PTZ aim point" if enabled else "disabled"
+        return RuntimeServiceInfo(
+            key="pose",
+            name="Pose",
+            configured="on",
+            enabled=enabled,
+            active=bool(enabled and loaded),
+            state=state,
+            detail=detail,
+        )
 
     def _reid_service_row(self, tracking: Any) -> RuntimeServiceInfo:
         """ReID status with the resolved on/off state and a plain reason.

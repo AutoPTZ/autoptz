@@ -143,6 +143,16 @@ class Supervisor:
 
     # ── lifecycle ───────────────────────────────────────────────────────────────
 
+    def prime_features(self, features: dict[str, bool] | None) -> None:
+        """Seed the global feature switches *before* :meth:`start` spawns workers.
+
+        ``_spawn_worker`` applies ``self._features`` to each new worker, so seeding
+        them here means a disabled service is never built at spin-up (the worker
+        gates model construction on these flags).  Must be called before ``start``;
+        a no-op mid-run since workers already exist.
+        """
+        self._features = {str(k): bool(v) for k, v in (features or {}).items()}
+
     def start(
         self,
         *,
@@ -573,13 +583,15 @@ class Supervisor:
                 except Exception:  # noqa: BLE001
                     log.debug("pool %s failed", method, exc_info=True)
 
-    def apply_model_cache_changed(self) -> None:
-        """Drop + rebuild detector/pose after the on-disk model cache changed.
+    def release_model_sessions(self) -> None:
+        """Free every detector/pose ORT session (pool + workers) before a cache mutation.
 
-        Called when models are downloaded/removed while the engine is running so
-        live ORT sessions for now-stale files are freed: the pool drops its
-        cached models and each worker force-reloads, rebuilding from the fresh
-        cache (the new model, or live-preview-only when files were removed).
+        Windows refuses to delete/replace a model file while onnxruntime still has
+        it open, so the UI calls this *before* downloading/removing files: the pool
+        drops its shared models and each worker synchronously releases its refs,
+        then a ``gc.collect()`` finalises the sessions so the OS handles are gone.
+        POSIX tolerates unlink-while-open, which is why the old (release-after)
+        order only failed on Windows.
         """
         if not self._running:
             return
@@ -595,12 +607,47 @@ class Supervisor:
         with self._lock:
             workers = list(self._workers.values())
         for worker in workers:
+            release = getattr(worker, "release_inference_models", None)
+            if callable(release):
+                try:
+                    # Block briefly so the inference thread actually drops its refs
+                    # before we GC + mutate; the file-op retry covers any residual.
+                    release(wait=1.0)
+                except Exception:  # noqa: BLE001
+                    log.debug("worker model release failed", exc_info=True)
+        import gc
+
+        gc.collect()
+
+    def rebuild_model_sessions(self) -> None:
+        """Rebuild detector/pose from the (now-refreshed) cache after a mutation.
+
+        Each worker force-reloads from the shared pool — yielding the new model, or
+        live-preview-only when the files were removed.  Pairs with
+        :meth:`release_model_sessions`.
+        """
+        if not self._running:
+            return
+        with self._lock:
+            workers = list(self._workers.values())
+        for worker in workers:
             reload = getattr(worker, "reload_inference_models", None)
             if callable(reload):
                 try:
                     reload()
                 except Exception:  # noqa: BLE001
                     log.debug("worker model reload failed", exc_info=True)
+
+    def apply_model_cache_changed(self) -> None:
+        """Release then rebuild model sessions in one call (release-before-rebuild).
+
+        Retained for callers that mutate the cache and only signal afterward; the
+        Model Manager now calls :meth:`release_model_sessions` *before* the mutation
+        and :meth:`rebuild_model_sessions` after, which is what makes delete/replace
+        work on Windows.
+        """
+        self.release_model_sessions()
+        self.rebuild_model_sessions()
 
     def _on_update_config(self, cmd: UpdateCameraConfigCmd) -> None:
         worker = self._get(cmd.camera_id)
@@ -688,9 +735,12 @@ class Supervisor:
         if hw.intra_op_threads:
             threads = int(hw.intra_op_threads)
         else:
-            # Spread cores across cameras so several workers don't oversubscribe.
+            # Spread cores across cameras so several workers don't oversubscribe,
+            # and reserve one core for the capture/UI/paint threads so inference
+            # can't starve the very pipeline that feeds it (keeps preview smooth).
             cores = os.cpu_count() or 4
-            threads = max(1, cores // max(1, camera_count))
+            usable = max(1, cores - 1)
+            threads = max(1, usable // max(1, camera_count))
         os.environ["AUTOPTZ_ORT_INTRA_THREADS"] = str(threads)
 
         log.info(

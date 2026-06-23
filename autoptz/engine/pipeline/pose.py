@@ -172,6 +172,10 @@ class PoseEstimator:
         self._session: Any | None = None
         self._input_name: str = ""
         self._output_name: str = ""
+        #: Human-readable reason the estimator is unavailable, surfaced to the UI
+        #: so a "downloaded but not working" pose model explains *why* (e.g. the
+        #: ORT/EP session failed to build) instead of silently disappearing.
+        self._error: str = ""
 
         if _session is not None:
             self._session = _session
@@ -197,8 +201,9 @@ class PoseEstimator:
                     out.name,
                     self._input_size,
                 )
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 log.debug("pose session introspection failed", exc_info=True)
+                self._error = f"pose session introspection failed: {exc}"
                 self._session = None
 
     # ── public API ──────────────────────────────────────────────────────────────
@@ -207,6 +212,11 @@ class PoseEstimator:
     def available(self) -> bool:
         """True iff a pose session loaded and is ready to infer."""
         return self._session is not None
+
+    @property
+    def error(self) -> str:
+        """Reason the estimator is unavailable ("" when it loaded or never tried)."""
+        return self._error if self._session is None else ""
 
     @property
     def ep(self) -> str:
@@ -298,14 +308,16 @@ class PoseEstimator:
         )
         if not path or not Path(path).is_file():
             _log_no_pose_once("no model file")
+            self._error = "no pose model file found (download or bundle it)"
             return
         try:
             from autoptz.engine.runtime.inference import make_session
 
             self._session = make_session(Path(path), prefs)
-        except Exception:  # noqa: BLE001 — load failure → estimator stays disabled
+        except Exception as exc:  # noqa: BLE001 — load failure → estimator stays disabled
             _log_no_pose_once("session load failed")
             log.debug("pose session load failed for %s", path, exc_info=True)
+            self._error = f"pose model present but the ORT session failed to load: {exc}"
             self._session = None
 
     def _letterbox(

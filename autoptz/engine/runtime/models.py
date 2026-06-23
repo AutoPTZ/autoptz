@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -169,6 +170,46 @@ def _format_bytes(value: int) -> str:
 def _model_export_disabled() -> bool:
     """Return True when runtime model export is explicitly disabled."""
     return os.environ.get(_DISABLE_EXPORT_ENV, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+# Windows refuses to delete/replace a file while another handle is open and,
+# unlike POSIX, can briefly lock a freshly-written file behind antivirus scanning.
+# The engine releases its ORT sessions before mutating the cache, but the OS
+# handle can linger a beat after GC — so retry the mutation through these helpers
+# instead of failing the whole operation on the first transient lock.
+_FILE_OP_ATTEMPTS = 10
+_FILE_OP_DELAY_S = 0.2
+
+
+def _retry_file_op(op: Callable[[], None], *, attempts: int = _FILE_OP_ATTEMPTS) -> None:
+    """Run a file mutation, retrying transient Windows locks; re-raise the last error.
+
+    Only sharing-violation-style errors are retried — a missing file (or other
+    permanent error) is re-raised immediately rather than waited on.
+    """
+    last: Exception | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            op()
+            return
+        except FileNotFoundError:  # permanent — nothing to wait for
+            raise
+        except (PermissionError, OSError) as exc:  # locked by ORT handle / antivirus
+            last = exc
+            if attempt + 1 < attempts:
+                time.sleep(_FILE_OP_DELAY_S)
+    if last is not None:
+        raise last
+
+
+def _replace_with_retry(src: Path, dst: Path) -> None:
+    """``src.replace(dst)`` with Windows lock retries (see :func:`_retry_file_op`)."""
+    _retry_file_op(lambda: src.replace(dst))
+
+
+def _unlink_with_retry(path: Path) -> None:
+    """``path.unlink()`` with Windows lock retries (see :func:`_retry_file_op`)."""
+    _retry_file_op(path.unlink)
 
 
 def _models_cache_dir() -> Path:
@@ -317,7 +358,7 @@ class ModelManager:
                 if not tmp.is_file() or tmp.stat().st_size < _MIN_ONNX_BYTES:
                     log.warning("INT8 quantization of %s produced no/!tiny file", src.name)
                     return None
-                tmp.replace(dst)
+                _replace_with_retry(tmp, dst)
                 log.info("INT8 detector ready at %s (%.1f MB)", dst, dst.stat().st_size / (1 << 20))
                 return str(dst)
             except Exception:  # noqa: BLE001 — quantization is best-effort
@@ -532,7 +573,7 @@ class ModelManager:
             for path in self.managed_model_files(keys=keys):
                 try:
                     size = path.stat().st_size
-                    path.unlink()
+                    _unlink_with_retry(path)
                     removed.append(
                         {
                             "name": path.name,
@@ -630,7 +671,7 @@ class ModelManager:
                 )
                 return None
 
-            tmp_path.replace(onnx_path)
+            _replace_with_retry(tmp_path, onnx_path)
             log.info(
                 "Model ONNX ready at %s (%.1f MB, prebuilt, torch-free)",
                 onnx_path,
@@ -710,7 +751,7 @@ class ModelManager:
             exported_path = Path(exported) if exported else (self._cache_dir / onnx_path.name)
             if exported_path.is_file() and exported_path != onnx_path:
                 try:
-                    exported_path.replace(onnx_path)
+                    _replace_with_retry(exported_path, onnx_path)
                 except Exception:  # noqa: BLE001
                     # If the rename fails, fall back to whatever path exists.
                     if exported_path.is_file():
