@@ -15,9 +15,10 @@ follow [Semantic Versioning](https://semver.org/).
 - **Model Manager** (Engine → Models) — review every AutoPTZ-managed model with
   per-row status, download or remove the ones you want, pick the active detector
   tier (un-downloaded tiers are greyed out), with live download progress.
-- **Seamless in-app updates** — the updater now shows a **download progress bar**,
-  and on Windows installs **silently** (no setup wizard) and restarts, the
-  closest to a "it just updated" experience.
+- **Seamless in-app updates** — the updater shows a **download progress bar**, and
+  on Windows installs with **no setup wizard** (just a progress window) then
+  **relaunches AutoPTZ automatically**, the closest to a "it just updated"
+  experience.
 - **Copy selected log lines** — select a range of rows in the Logs panel and copy
   just those with `Ctrl`/`Cmd`+`C` or right-click → *Copy Selected*; the toolbar
   button is now *Copy All*.
@@ -112,6 +113,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Windows updates are visible and relaunch the app** — the silent install used
+  `/VERYSILENT` (no window at all) and the installer's launch step was flagged
+  `skipifsilent`, so an in-app update showed no installer/progress *and* never
+  reopened AutoPTZ — you couldn't tell it had finished. It now installs with
+  `/SILENT` (a progress window, still no wizard) and the installer relaunches
+  AutoPTZ itself when done.
 - **UI no longer hangs while cameras launch** — service probes use `find_spec`
   instead of importing boxmot/torch on the GUI thread, worker startup runs off the
   GUI thread (no lock held during camera open), and the detector never silently

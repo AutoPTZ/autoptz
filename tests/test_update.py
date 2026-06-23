@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import autoptz.update.checker as checker
+import autoptz.update.installer as installer
 from autoptz.update.checker import UpdateInfo, check_for_update
-from autoptz.update.installer import download_update
+from autoptz.update.installer import download_update, launch_update
 
 
 def _release(tag: str, *, prerelease: bool = False, assets: list[str] | None = None) -> dict:
@@ -239,3 +242,36 @@ def test_download_update_reports_progress(tmp_path, monkeypatch) -> None:
     assert [d for d, _ in seen] == [1000, 2000, 2500]
     assert all(t == total for _, t in seen)
     assert seen[-1] == (total, total)
+
+
+# ── launch_update: Windows silent-install flags ─────────────────────────────────
+
+
+def _capture_windows_launch(monkeypatch) -> list[str]:  # noqa: ANN001
+    monkeypatch.setattr(installer.sys, "platform", "win32")
+    captured: list[list[str]] = []
+    monkeypatch.setattr(installer.subprocess, "Popen", lambda args, *a, **k: captured.append(args))
+    launch_update(Path("C:/Users/x/Downloads/AutoPTZ-2.1.0-windows-x64-setup.exe"))
+    assert captured, "Popen was not called"
+    return captured[0]
+
+
+def test_windows_launch_uses_silent_not_verysilent(monkeypatch) -> None:  # noqa: ANN001
+    args = _capture_windows_launch(monkeypatch)
+    # /SILENT shows a progress window (visible feedback); /VERYSILENT showed nothing.
+    assert "/SILENT" in args
+    assert "/VERYSILENT" not in args
+
+
+def test_windows_launch_drops_restartapplications(monkeypatch) -> None:  # noqa: ANN001
+    # The installer now relaunches via its own silent [Run] entry; passing
+    # /RESTARTAPPLICATIONS was a no-op (app self-quits) and risks a double launch.
+    args = _capture_windows_launch(monkeypatch)
+    assert "/RESTARTAPPLICATIONS" not in args
+
+
+def test_windows_launch_keeps_no_wizard_and_no_reboot(monkeypatch) -> None:  # noqa: ANN001
+    args = _capture_windows_launch(monkeypatch)
+    assert "/SUPPRESSMSGBOXES" in args
+    assert "/NORESTART" in args
+    assert str(args[0]).endswith(".exe")

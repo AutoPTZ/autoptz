@@ -34,6 +34,12 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
+; In-app updates run this installer silently.  Let Setup close the running
+; AutoPTZ so its files can be replaced, but don't let the Restart Manager
+; relaunch it — the silent [Run] entry below does the relaunch deterministically
+; (avoids a double launch when an older app build also passed /RESTARTAPPLICATIONS).
+CloseApplications=yes
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -50,4 +56,16 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+; Interactive installs: the usual "launch AutoPTZ" checkbox on the Finished page.
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+; Silent installs (the in-app auto-updater): relaunch AutoPTZ automatically, since
+; the Finished-page checkbox above is skipped when silent.  runasoriginaluser so
+; the relaunched app runs as the user, not the elevated installer.
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser; Check: IsSilentInstall
+
+[Code]
+function IsSilentInstall(): Boolean;
+begin
+  { True for both /SILENT and /VERYSILENT — i.e. an in-app auto-update. }
+  Result := WizardSilent();
+end;
