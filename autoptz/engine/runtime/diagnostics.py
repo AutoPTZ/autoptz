@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -258,6 +259,43 @@ _CACHE: dict[str, Any] | None = None
 _CACHE_T: float = 0.0
 _CACHE_TTL_S = 1.0
 
+# macOS reports a process's "Memory" (Activity Monitor) as phys_footprint — private
+# dirty + compressed + IOKit — NOT RSS.  RSS counts memory-mapped model/framework
+# files that are clean and reclaimable, which inflates an app that mmaps big ONNX
+# models ~3x (e.g. 3.7 GB RSS vs ~1.1 GB real).  We report phys_footprint so the
+# "App Mem" readout reflects real memory pressure and matches Activity Monitor;
+# other platforms fall back to RSS.
+_RUSAGE_INFO_V2 = 2
+
+
+def _app_memory_bytes(proc: Any) -> int:
+    """Honest process memory: macOS phys_footprint, else RSS.
+
+    *proc* is a ``psutil.Process`` used for the cross-platform RSS fallback.
+    """
+    if sys.platform == "darwin":
+        try:
+            import ctypes  # noqa: PLC0415
+
+            class _RUsageV2(ctypes.Structure):
+                # rusage_info_v2: ri_uuid[16], then 18 uint64; ri_phys_footprint is
+                # the 8th (after user/system time, pkg/intr wkups, pageins,
+                # wired_size, resident_size).
+                _fields_ = [("ri_uuid", ctypes.c_uint8 * 16)] + [
+                    (f"_f{i}", ctypes.c_uint64) for i in range(18)
+                ]
+
+            libc = ctypes.CDLL("/usr/lib/libSystem.dylib")
+            buf = _RUsageV2()
+            rc = libc.proc_pid_rusage(
+                ctypes.c_int(os.getpid()), ctypes.c_int(_RUSAGE_INFO_V2), ctypes.byref(buf)
+            )
+            if rc == 0:
+                return int(buf._f7)  # ri_phys_footprint
+        except Exception:  # noqa: BLE001 — fall back to RSS on any failure
+            pass
+    return int(proc.memory_info().rss)
+
 
 def system_metrics() -> dict[str, Any]:
     """Return live CPU / memory metrics (system-wide + this process).
@@ -308,10 +346,12 @@ def system_metrics() -> dict[str, Any]:
             float(_PROC.cpu_percent(interval=None)) / float(ncpu),
             1,
         )
-        rss = _PROC.memory_info().rss
-        out["app_rss_mb"] = round(rss / (1 << 20), 1)
+        # Honest "App Mem" — phys_footprint on macOS (matches Activity Monitor),
+        # not the RSS that mmap'd model files inflate.
+        app_mem = _app_memory_bytes(_PROC)
+        out["app_rss_mb"] = round(app_mem / (1 << 20), 1)
         total = max(1, int(getattr(vm, "total", 0) or 0))
-        out["app_mem_percent"] = round((float(rss) / float(total)) * 100.0, 1)
+        out["app_mem_percent"] = round((float(app_mem) / float(total)) * 100.0, 1)
     except Exception:  # noqa: BLE001
         log.debug("system_metrics sampling failed", exc_info=True)
     _CACHE, _CACHE_T = out, now
