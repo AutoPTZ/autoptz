@@ -28,8 +28,32 @@ follow [Semantic Versioning](https://semver.org/).
 - **Signed + notarized macOS builds** — opt-in locally via `MACOS_SIGN_IDENTITY`
   (and notary credentials), and automatic in the release workflow once the signing
   secrets are configured; unsigned otherwise.
+- **Inference EP is shown again** — the status bar and Camera Info display the
+  active execution provider (CoreML / DirectML / CPU …); it was previously blank
+  on every platform because the value was never populated from telemetry.
+- **Module state badges** — each Services module shows an **ON / OFF /
+  UNAVAILABLE** badge (the bare checkbox was too easy to misread), with an
+  **Enable all** reset.
+- **Low-latency manual PTZ** — joystick/D-pad nudges apply on the capture thread
+  instead of waiting for the next inference pass, so manual moves feel immediate.
+- **Opt-in acceleration-aware PTZ lead** — `predict_accel_gain` (default off, in
+  PTZ tuning) anticipates a subject *starting or stopping* for sharper following.
 
 ### Changed
+
+- **Module switches persist and skip loading when off** — Detection / Tracking /
+  Face / Pose / ReID choices are remembered across launches, and a disabled
+  module's model is **never built at startup**, so turning one off genuinely
+  reclaims its CPU and memory instead of resetting to all-on every launch.
+- **Auto detector tier always works** — Auto is never greyed out or shown as "not
+  downloaded" (it uses the bundled Fast model and auto-upgrades to a heavier tier
+  once you download one), with clearer labels; if a selected heavier tier's file
+  goes missing at runtime the engine falls back to the bundled default instead of
+  going silent.
+- **Lighter preview path** — the live video repaints with the cheap transform
+  (smoothing/anti-aliasing only on HUD overlays), the preview converter does one
+  fewer full-frame copy per frame (`Format_BGR888`), and ORT reserves a core for
+  the capture/UI threads.
 
 - **Torch-free model acquisition** — when a model isn't bundled, AutoPTZ downloads
   a prebuilt ONNX from the project's `models-v1` release instead of exporting via
@@ -64,6 +88,19 @@ follow [Semantic Versioning](https://semver.org/).
   downloads are off.
 - Linux CI no longer fails when a native library aborts at interpreter shutdown
   after the tests have already passed.
+- **Deleting and downloading models works on Windows** — model files are no longer
+  held open by onnxruntime when you remove or re-download them (the engine releases
+  its sessions first, then mutates the cache, with a short retry for transient
+  antivirus/handle locks). This previously failed on Windows while working on
+  macOS/Linux, because only Windows refuses to delete an open file.
+- **Pose "downloaded but not working" now explains itself** — a pose model that's
+  present but whose runtime session fails to load is reported with the concrete
+  reason (and a bundled pose model is recognized), instead of silently producing
+  no keypoints.
+- **USB camera menu stays current** — the device list refreshes in the background
+  so a plugged/unplugged camera appears the first time you open the menu, and each
+  row's checkmark now reflects the live camera list (it read a stale scan cache, so
+  it lagged when toggling and could show cameras checked with none on the wall).
 
 ### Dependencies
 
