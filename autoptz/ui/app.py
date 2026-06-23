@@ -97,10 +97,26 @@ def _start_engine_after_macos_camera_preflight(client: object, bridge: object | 
         return
 
     def _report_blocked(reason: str) -> None:
-        message = (
-            f"Camera access is {reason}. Grant access in System Settings > "
-            "Privacy & Security > Camera, then restart AutoPTZ."
-        )
+        if getattr(sys, "frozen", False):
+            # Packaged app: it has the camera-usage entitlement and can be granted
+            # directly in the Camera privacy pane.
+            message = (
+                f"Camera access is {reason}. Grant access in System Settings > "
+                "Privacy & Security > Camera, then restart AutoPTZ."
+            )
+        else:
+            # Source run: the bare Python binary has no NSCameraUsageDescription, so
+            # macOS can't show the consent prompt for it — it attributes camera use
+            # to the *terminal* that launched AutoPTZ. Grant camera access to that
+            # terminal app (Terminal / iTerm / VS Code / PyCharm …), or run the
+            # packaged AutoPTZ app, then restart.
+            message = (
+                "Camera access is unavailable when running AutoPTZ from source: the "
+                "Python interpreter can't request camera permission directly. Grant "
+                "camera access to the terminal app you launched it from (System "
+                "Settings > Privacy & Security > Camera), or use the packaged AutoPTZ "
+                "app, then restart."
+            )
         log.warning(message)
         try:
             client.errorOccurred.emit(message)  # type: ignore[attr-defined]
