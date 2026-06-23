@@ -2318,7 +2318,11 @@ class CameraWorker:
                 # control loop.  Shared target/identity state is serialised by
                 # _appearance_lock inside those methods; the hot loop re-reads the
                 # (possibly rebound) target via _apply_target_lock each tick.
-                self._publish_appearance_input(frame, tracks, now, fid)
+                # Only publish when there's actually appearance work — otherwise we
+                # wake the appearance thread every frame for two passes that both
+                # immediately no-op with face + ReID off (pure idle overhead).
+                if self._feature("face_recognition") or self._feature("reid"):
+                    self._publish_appearance_input(frame, tracks, now, fid)
             else:
                 # Inline (sync) path — preserves the exact original ordering.
                 self._maybe_reid_recover(tracks, frame, now)
@@ -2342,7 +2346,17 @@ class CameraWorker:
             # feed-forward follows the subject's world motion, not the frame shift.
             # (_ptz_last_cmd still holds the *previous* command here — exactly the
             # one that produced this frame's observed shift.)
-            self._update_ego_motion(tracks, frame, now)
+            #
+            # Ego-motion runs sparse optical flow on every frame, but its only
+            # consumer is the aim-velocity feed-forward, which only runs while
+            # actively following (tracking on).  With tracking off it burned ~15%
+            # of a core computing a value nothing reads — so gate it on tracking
+            # and keep the estimate zeroed otherwise.
+            if self._feature("tracking"):
+                self._update_ego_motion(tracks, frame, now)
+            elif self._ego_source != "none":
+                self._ego_vel = (0.0, 0.0)
+                self._ego_source = "none"
 
             # Auto PTZ control (suspended during a manual-override window).  Lock
             # the backend so a concurrent telemetry position read can't interleave.
