@@ -132,7 +132,9 @@ class TestMacOSCameraPreflight:
         app_mod._start_engine_after_macos_camera_preflight(client, object())
 
         assert client.starts == 0
-        assert "Camera access is denied" in client.errors[-1]
+        # Message wording differs for packaged ("denied") vs source runs ("from
+        # source"), but both must surface a camera-access error and not start.
+        assert "Camera access" in client.errors[-1]
 
     def test_requests_access_then_starts_when_granted(self, monkeypatch) -> None:
         import autoptz.ui.app as app_mod

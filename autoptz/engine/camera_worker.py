@@ -117,6 +117,15 @@ _HARVEST_COOLDOWN_S = 2.0
 # spamming a line per missed frame.
 _DROP_LOG_INTERVAL_S = 10.0
 
+# Capture idle/reconnect backoff: a stalled, offline, or permission-denied source
+# returns no frame, and a flat 10 ms retry then spins the capture thread at ~100 Hz
+# (real, measurable idle CPU per camera).  Retry fast for a short window to ride out
+# a transient decode miss on a healthy source, then ramp the sleep up to a cap so a
+# truly dead source costs almost nothing — resetting instantly when a frame returns
+# (so recovery still happens within ~one cap interval).
+_RECONNECT_FAST_RETRIES = 20  # ~0.2 s of 10 ms retries before backing off
+_RECONNECT_BACKOFF_MAX_S = 0.5  # sleep cap for a sustained no-frame source
+
 
 def _async_appearance_enabled() -> bool:
     """Run face + ReID on their own thread (default on; AUTOPTZ_ASYNC_APPEARANCE=0 off)."""
@@ -2142,6 +2151,7 @@ class CameraWorker:
         self._inference_thread.start()
 
         last_telemetry = 0.0
+        miss_streak = 0  # consecutive no-frame reads, drives the reconnect backoff
         fps_window_start = time.monotonic()
         fps_window_frames = 0
         self._next_drop_log_t = time.monotonic() + _DROP_LOG_INTERVAL_S
@@ -2187,6 +2197,7 @@ class CameraWorker:
                 self._record_frame_dims(frame)
                 self._push_frame(frame)
                 fps_window_frames += 1
+                miss_streak = 0  # got a frame → drop back to fast retries
                 last_health = HealthState.OK
                 last_error = None
 
@@ -2218,9 +2229,17 @@ class CameraWorker:
                 )
                 last_telemetry = now
 
-            # Small idle sleep when there is no frame to avoid a busy-spin.
+            # No frame: retry fast briefly (transient decode miss on a healthy
+            # source), then back off a sustained no-frame source up to the cap so a
+            # stalled/offline/denied camera doesn't spin the capture thread.
             if frame is None:
-                self._stop_event.wait(timeout=0.01)
+                miss_streak += 1
+                if miss_streak <= _RECONNECT_FAST_RETRIES:
+                    wait = 0.01
+                else:
+                    over = miss_streak - _RECONNECT_FAST_RETRIES
+                    wait = min(_RECONNECT_BACKOFF_MAX_S, 0.01 + 0.05 * over)
+                self._stop_event.wait(timeout=wait)
 
         # Shutdown: wake + join the inference thread, then release resources.
         self._frame_ready.set()
