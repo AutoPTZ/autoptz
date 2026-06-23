@@ -431,6 +431,11 @@ class CameraWorker:
         # makes manual PTZ feel immediate (the NDI-Studio-like responsiveness).
         self._ptz_cmd_lock = threading.Lock()
         self._ptz_cmd_queue: deque[tuple[str, Any]] = deque()
+        # Wakes the capture loop's no-frame backoff sleep early so a manual PTZ
+        # command (or shutdown) is applied immediately instead of waiting out the
+        # backoff — keeps the joystick responsive even when the video feed is
+        # stalled/reconnecting while the PTZ control channel is still live.
+        self._capture_wake = threading.Event()
 
         # ── async pipeline handoff ───────────────────────────────────────────────
         # The capture thread reads frames, pushes the live preview, and emits
@@ -586,6 +591,7 @@ class CameraWorker:
     def stop(self, timeout: float = 5.0) -> None:
         """Signal stop and block until the thread exits; releases all resources."""
         self._stop_event.set()
+        self._capture_wake.set()  # break a backed-off no-frame sleep promptly
         self._inference_start.set()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
@@ -725,17 +731,21 @@ class CameraWorker:
         """Drive the PTZ backend to its optical home position (low-latency path)."""
         with self._ptz_cmd_lock:
             self._ptz_cmd_queue.append(("ptz_home", None))
+        self._capture_wake.set()
 
     def ptz_menu(self) -> None:
         """Toggle the camera's on-screen-display (OSD) menu (low-latency path)."""
         with self._ptz_cmd_lock:
             self._ptz_cmd_queue.append(("ptz_menu", None))
+        self._capture_wake.set()
 
     def ptz_nudge(self, pan: float, tilt: float, zoom: float) -> None:
         # Fast path: drained on the capture thread so the move isn't delayed by an
-        # in-flight inference pass (see _drain_ptz_commands / _ptz_cmd_queue).
+        # in-flight inference pass (see _drain_ptz_commands / _ptz_cmd_queue).  Wake
+        # a backed-off capture sleep so the move applies now, not after the backoff.
         with self._ptz_cmd_lock:
             self._ptz_cmd_queue.append(("ptz_nudge", (float(pan), float(tilt), float(zoom))))
+        self._capture_wake.set()
 
     def set_target_fps(self, fps: float) -> None:
         """Change capture/detection pacing **live** (no engine restart)."""
@@ -2239,7 +2249,11 @@ class CameraWorker:
                 else:
                     over = miss_streak - _RECONNECT_FAST_RETRIES
                     wait = min(_RECONNECT_BACKOFF_MAX_S, 0.01 + 0.05 * over)
-                self._stop_event.wait(timeout=wait)
+                # Interruptible: a manual PTZ command (or stop) wakes this early so
+                # the joystick stays responsive even while the video feed is stalled
+                # (the next loop iteration drains the PTZ queue at the top).
+                self._capture_wake.wait(timeout=wait)
+                self._capture_wake.clear()
 
         # Shutdown: wake + join the inference thread, then release resources.
         self._frame_ready.set()
