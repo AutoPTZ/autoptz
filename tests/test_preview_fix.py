@@ -33,6 +33,42 @@ def _cleanup_shm(name: str) -> None:
             pass
 
 
+# ── bgr_to_qimage: color correctness (Format_BGR888, no reversal copy) ─────────
+
+
+class TestBgrToQImage:
+    """The preview converter must render BGR frames with correct colors — the
+    Format_BGR888 fast path must not swap the red/blue channels."""
+
+    def test_red_and_blue_channels_not_swapped(self) -> None:
+        from autoptz.ui.frames import bgr_to_qimage
+
+        # Pure red in BGR is (B=0, G=0, R=255) in the third channel.
+        red_bgr = np.zeros((4, 6, 3), dtype=np.uint8)
+        red_bgr[:, :, 2] = 255
+        red_img = bgr_to_qimage(red_bgr)
+        assert (red_img.width(), red_img.height()) == (6, 4)
+        rc = red_img.pixelColor(0, 0)
+        assert (rc.red(), rc.green(), rc.blue()) == (255, 0, 0)
+
+        # Pure blue in BGR is the first channel.
+        blue_bgr = np.zeros((4, 6, 3), dtype=np.uint8)
+        blue_bgr[:, :, 0] = 255
+        bc = bgr_to_qimage(blue_bgr).pixelColor(3, 2)
+        assert (bc.red(), bc.green(), bc.blue()) == (0, 0, 255)
+
+    def test_non_contiguous_input_is_handled(self) -> None:
+        from autoptz.ui.frames import bgr_to_qimage
+
+        # A non-contiguous (sliced) view must still render correctly.
+        base = np.zeros((4, 12, 3), dtype=np.uint8)
+        base[:, :, 1] = 255  # green
+        view = base[:, ::2, :]  # non-contiguous
+        assert not view.flags["C_CONTIGUOUS"]
+        gc = bgr_to_qimage(view).pixelColor(0, 0)
+        assert (gc.red(), gc.green(), gc.blue()) == (0, 255, 0)
+
+
 # ── The self-healing provider regression ──────────────────────────────────────
 
 

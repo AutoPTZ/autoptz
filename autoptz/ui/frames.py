@@ -28,10 +28,17 @@ log = logging.getLogger(__name__)
 
 
 def bgr_to_qimage(bgr: np.ndarray) -> QImage:  # type: ignore[type-arg]
-    """Convert a BGR numpy frame to an owned RGB :class:`QImage`."""
-    rgb = bgr[..., ::-1].copy()  # BGR→RGB; copy gives data ownership
-    h, w = rgb.shape[:2]
-    img = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888)
+    """Convert a BGR numpy frame to an owned :class:`QImage` that renders correctly.
+
+    Wraps the BGR bytes directly with ``Format_BGR888`` (no channel-reversal copy)
+    and ``.copy()`` to detach from the numpy buffer — halving the per-frame
+    GUI-thread copy work versus reversing BGR→RGB first.  The rendered pixels are
+    identical; only the redundant copy is gone.
+    """
+    if not bgr.flags["C_CONTIGUOUS"]:
+        bgr = np.ascontiguousarray(bgr)  # no-op for the normal (already-packed) path
+    h, w = bgr.shape[:2]
+    img = QImage(bgr.data, w, h, w * 3, QImage.Format.Format_BGR888)
     return img.copy()  # detach from the numpy buffer
 
 
