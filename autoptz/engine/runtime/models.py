@@ -181,7 +181,7 @@ _FILE_OP_ATTEMPTS = 10
 _FILE_OP_DELAY_S = 0.2
 
 
-def _retry_file_op(op: Callable[[], None], *, attempts: int = _FILE_OP_ATTEMPTS) -> None:
+def _retry_file_op(op: Callable[[], Any], *, attempts: int = _FILE_OP_ATTEMPTS) -> None:
     """Run a file mutation, retrying transient Windows locks; re-raise the last error.
 
     Only sharing-violation-style errors are retried — a missing file (or other
