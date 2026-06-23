@@ -116,6 +116,10 @@ class _LockedPose:
     def ep(self) -> str:
         return str(getattr(self._estimator, "ep", ""))
 
+    @property
+    def error(self) -> str:
+        return str(getattr(self._estimator, "error", ""))
+
     def estimate(
         self,
         frame: NDArray[np.uint8],
@@ -174,6 +178,9 @@ class InferencePool:
         self._pose: _LockedPose | None = None
         self._pose_built = False
         self._pose_call_lock = threading.Lock()
+        # Reason the shared pose estimator is unavailable ("" = fine / not tried),
+        # surfaced so a "downloaded but not working" pose model explains itself.
+        self._pose_error = ""
 
     # ── detector ────────────────────────────────────────────────────────────────
 
@@ -201,6 +208,17 @@ class InferencePool:
     def detector_error(self) -> str:
         """Why the shared detector failed to build ("" = built or not tried)."""
         return self._detector_error
+
+    @property
+    def pose_error(self) -> str:
+        """Why the shared pose estimator is unavailable ("" = ok / not tried).
+
+        Prefers the live estimator's own reason (e.g. ORT session load failure)
+        and falls back to the build-time reason when the estimator couldn't even
+        be constructed.
+        """
+        live = str(getattr(self._pose, "error", "") or "") if self._pose is not None else ""
+        return live or self._pose_error
 
     @property
     def detector_tier(self) -> str:
@@ -357,12 +375,27 @@ class InferencePool:
             log.warning("inference pool: detector model resolution failed.", exc_info=True)
             return None
         if model_path is None:
-            self._detector_error = (
-                manager.last_error
-                or f"Model '{self._detector_tier}' unavailable (live-preview-only)."
+            # Never go silent: if the selected tier can't be resolved, fall back to
+            # the always-present bundled default (Auto/Fast) so detection keeps
+            # running.  Only the explicitly-chosen heavier tiers can hit this.
+            fallback = None
+            if self._detector_tier not in ("auto", "fast"):
+                try:
+                    fallback = manager.ensure_detector(tier="auto", allow_download=False)
+                except Exception:  # noqa: BLE001
+                    fallback = None
+            if fallback is None:
+                self._detector_error = (
+                    manager.last_error
+                    or f"Model '{self._detector_tier}' unavailable (live-preview-only)."
+                )
+                log.debug("inference pool: no detector model; live-preview-only.")
+                return None
+            log.warning(
+                "inference pool: tier %s unavailable; using bundled default detector.",
+                self._detector_tier,
             )
-            log.debug("inference pool: no detector model; live-preview-only.")
-            return None
+            model_path = fallback
 
         # Unified path: one YOLO11-pose backbone emitting boxes + keypoints.  If
         # its model can't be resolved/built we fall through to the plain detector
@@ -458,17 +491,22 @@ class InferencePool:
         """Build the shared PoseEstimator wrapped in a serialising proxy."""
         try:
             from autoptz.engine.camera_worker import detection_runtime_available
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            self._pose_error = f"pose runtime import failed: {exc}"
             return None
         if not detection_runtime_available():
+            self._pose_error = "detection runtime (onnxruntime/opencv) unavailable"
             return None
         try:
             from autoptz.engine.pipeline.pose import PoseEstimator
 
             estimator = PoseEstimator(allow_download=self._allow_model_download)
+            # Carry the estimator's own load reason ("" when it loaded fine).
+            self._pose_error = str(getattr(estimator, "error", "") or "")
             return _LockedPose(estimator, self._pose_call_lock)
-        except Exception:  # noqa: BLE001 — pose must never break startup
+        except Exception as exc:  # noqa: BLE001 — pose must never break startup
             log.debug("inference pool: pose estimator init failed; bbox aim only.", exc_info=True)
+            self._pose_error = f"pose estimator init failed: {exc}"
             return None
 
     # ── release (free a model so memory is reclaimed) ──────────────────────────────
@@ -499,6 +537,7 @@ class InferencePool:
         with self._build_lock:
             self._pose = None
             self._pose_built = False
+            self._pose_error = ""
 
     # ── warm-up ───────────────────────────────────────────────────────────────────
     #

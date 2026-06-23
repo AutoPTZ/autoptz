@@ -120,19 +120,29 @@ def face_status() -> dict[str, str]:
 def pose_status() -> dict[str, str]:
     """Pose model/dependency availability for skeleton + torso-stable aim."""
     try:
-        from autoptz.engine.runtime.models import default_manager  # noqa: PLC0415
+        from autoptz.engine.runtime.models import (  # noqa: PLC0415
+            bundled_models_dir,
+            default_manager,
+        )
 
-        onnx = default_manager().cache_dir / "yolo11n-pose.onnx"
-        if onnx.is_file():
-            size_mb = onnx.stat().st_size / (1 << 20)
-            return _entry("pose", "Pose model", "ok", f"{onnx.name} · {size_mb:.1f} MB")
+        name = "yolo11n-pose.onnx"
+        cached = default_manager().cache_dir / name
+        bundled = bundled_models_dir() / name
+        # The pose model can ship *inside* the app (bundled) as well as be
+        # downloaded into the user cache.  Only checking the cache made a bundled
+        # model read as "not cached" even though pose loads fine from the bundle.
+        present = cached if cached.is_file() else (bundled if bundled.is_file() else None)
+        if present is not None:
+            size_mb = present.stat().st_size / (1 << 20)
+            where = "cached" if present == cached else "bundled"
+            return _entry("pose", "Pose model", "ok", f"{name} · {size_mb:.1f} MB · {where}")
         if _module_present("ultralytics"):
-            return _entry("pose", "Pose model", "warn", f"not cached · can export to {onnx}")
+            return _entry("pose", "Pose model", "warn", f"not cached · can export to {cached}")
         return _entry(
             "pose",
             "Pose model",
             "off",
-            f"not cached · needs bundled model or ultralytics export to {onnx}",
+            f"not cached · needs bundled model or ultralytics export to {cached}",
         )
     except Exception:  # noqa: BLE001
         return _entry("pose", "Pose model", "off", "lookup failed")

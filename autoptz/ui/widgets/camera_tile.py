@@ -546,9 +546,12 @@ class CameraTile(QWidget):
     # ── painting ───────────────────────────────────────────────────────────────
 
     def paintEvent(self, _event: Any) -> None:  # noqa: N802
+        # Render hints are scoped, not global: the live video is drawn with the
+        # cheap (nearest) transform — bilinear SmoothPixmapTransform on every
+        # repaint of every tile was a real GUI-thread cost and motion hides the
+        # difference — while Antialiasing + smoothing are turned on only for the
+        # HUD shapes/text below, where crispness actually matters.
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         w, h = self.width(), self.height()
 
         # backing: real frames cover this, while no-signal/letterbox areas still
@@ -571,6 +574,11 @@ class CameraTile(QWidget):
             p.drawImage(self._painted_rect, img, QRectF(img.rect()))
         else:
             self._painted_rect = QRectF(0, 0, w, h)
+
+        # From here on we draw vector shapes + text (no-signal label, HUD) — enable
+        # smoothing only for those, not the per-frame video blit above.
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         if not streaming:
             self._paint_no_signal(p, health)
