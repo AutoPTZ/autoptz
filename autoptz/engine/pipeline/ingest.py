@@ -831,6 +831,89 @@ class RTSPAdapter(SourceAdapter):
 # ── NDI Adapter ────────────────────────────────────────────────────────────────
 
 
+def _ndi_color_format_pref() -> str:
+    """Which NDI receive color format to request (``AUTOPTZ_NDI_COLOR_FORMAT``).
+
+    * ``bgra`` (default) — ``RecvColorFormat.BGRX_BGRA``: the NDI SDK converts the
+      source's native YUV to BGRA on the CPU for every frame, then we strip alpha
+      to BGR.  Universal but pays a full-frame color conversion inside the SDK.
+    * ``fastest`` — ``RecvColorFormat.fastest``: the SDK hands back its cheapest
+      native format (usually 8-bit UYVY); we do the single YUV→BGR pass ourselves,
+      skipping the SDK's extra conversion.  This is the lighter path (closer to how
+      NDI Monitor takes native YUV to the GPU) and is what to A/B on a real NDI rig.
+
+    Default stays ``bgra`` so behaviour is unchanged until explicitly opted in for
+    testing; ``_read_frame`` dispatches on the actual FourCC either way.
+    """
+    import os
+
+    val = os.environ.get("AUTOPTZ_NDI_COLOR_FORMAT", "bgra").strip().lower()
+    return "fastest" if val in ("fastest", "fast", "native") else "bgra"
+
+
+def _ndi_fourcc_name(vf: object) -> str:
+    """Best-effort FourCC name for a captured video frame (e.g. ``"UYVY"``).
+
+    Empty string when cyndilib can't report it (older builds), so the converter
+    falls back to its size-based heuristic.
+    """
+    try:
+        fc = vf.get_fourcc()  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(getattr(fc, "name", fc)).upper()
+
+
+def _ndi_frame_to_bgr(
+    arr: NDArray[np.uint8], fourcc: str, h: int, w: int
+) -> NDArray[np.uint8] | None:
+    """Convert a flat NDI frame buffer to a contiguous BGR image.
+
+    Dispatches on the actual FourCC so the ``fastest`` (native-format) receive
+    path is correct for every layout the SDK can hand back — not just the BGRA we
+    used to assume.  Returns ``None`` for the 16-bit P216/PA16 families (no cheap
+    OpenCV path) so the caller can fall back to the universal BGRA receive format.
+
+    Falls back to the original size-based heuristic when the FourCC is unknown, so
+    the default BGRA path is byte-for-byte unchanged.
+    """
+    size = int(arr.size)
+    px = h * w
+    f = fourcc.upper() if fourcc else ""
+
+    # Packed 32-bit (4 bytes/pixel): BGRA/BGRX vs RGBA/RGBX.
+    if f in ("BGRA", "BGRX") and size == px * 4:
+        return cv2.cvtColor(arr.reshape((h, w, 4)), cv2.COLOR_BGRA2BGR)
+    if f in ("RGBA", "RGBX") and size == px * 4:
+        return cv2.cvtColor(arr.reshape((h, w, 4)), cv2.COLOR_RGBA2BGR)
+    # Packed 4:2:2, 8-bit (2 bytes/pixel).
+    if f == "UYVY" and size == px * 2:
+        return cv2.cvtColor(arr.reshape((h, w, 2)), cv2.COLOR_YUV2BGR_UYVY)
+    # UYVY + 8-bit alpha plane (3 bytes/pixel): convert the UYVY part, drop alpha.
+    if f == "UYVA" and size == px * 3:
+        return cv2.cvtColor(arr[: px * 2].reshape((h, w, 2)), cv2.COLOR_YUV2BGR_UYVY)
+    # Planar / semi-planar 4:2:0 (1.5 bytes/pixel).
+    if f in ("NV12", "I420", "YV12") and size == px * 3 // 2:
+        code = {
+            "NV12": cv2.COLOR_YUV2BGR_NV12,
+            "I420": cv2.COLOR_YUV2BGR_I420,
+            "YV12": cv2.COLOR_YUV2BGR_YV12,
+        }[f]
+        return cv2.cvtColor(arr.reshape((h * 3 // 2, w)), code)
+    # 16-bit YUV (P216/PA16): no cheap OpenCV path — signal a BGRA fall back.
+    if f in ("P216", "PA16"):
+        return None
+
+    # Unknown FourCC (older cyndilib): preserve the original size-based heuristic.
+    if size == px * 4:
+        return cv2.cvtColor(arr.reshape((h, w, 4)), cv2.COLOR_BGRA2BGR)
+    if size == px * 2:
+        return cv2.cvtColor(arr.reshape((h, w, 2)), cv2.COLOR_YUV2BGR_UYVY)
+    if size == px * 3:
+        return arr.reshape((h, w, 3))
+    return None
+
+
 class NDIAdapter(SourceAdapter):
     """Capture from an NDI source using cyndilib FrameSync.
 
@@ -854,6 +937,10 @@ class NDIAdapter(SourceAdapter):
         self._receiver: object | None = None
         self._finder: object | None = None
         self._video_frame: object | None = None
+        # "bgra" | "fastest" — see _ndi_color_format_pref. Flipped to "bgra" at
+        # runtime if a source delivers a format we can't convert cheaply, so the
+        # next reconnect self-heals to the universal SDK-converted path.
+        self._color_format_pref = _ndi_color_format_pref()
 
     def _open(self) -> bool:
         if not _probe_ndi():
@@ -889,9 +976,18 @@ class NDIAdapter(SourceAdapter):
                 )
                 return False
 
+            if self._color_format_pref == "fastest":
+                color_format = RecvColorFormat.fastest
+            else:
+                color_format = RecvColorFormat.BGRX_BGRA
             receiver = Receiver(
-                color_format=RecvColorFormat.BGRX_BGRA,
+                color_format=color_format,
                 bandwidth=RecvBandwidth.highest,
+            )
+            log.info(
+                "camera_id=%s NDIAdapter color_format=%s",
+                self.camera_id,
+                self._color_format_pref,
             )
             video_frame = VideoFrameSync()
             receiver.frame_sync.set_video_frame(video_frame)
@@ -953,14 +1049,25 @@ class NDIAdapter(SourceAdapter):
                 return None
             arr: NDArray[np.uint8] = np.asarray(data, dtype=np.uint8).reshape(-1)
 
-            # BGRX_BGRA → 4 bytes/pixel (BGRA); some sources still hand back UYVY
-            # (2 bytes/pixel).  Pick the layout from the actual buffer size.
-            if arr.size == h * w * 4:
-                return cv2.cvtColor(arr.reshape((h, w, 4)), cv2.COLOR_BGRA2BGR)
-            if arr.size == h * w * 2:
-                return cv2.cvtColor(arr.reshape((h, w, 2)), cv2.COLOR_YUV2BGR_UYVY)
-            if arr.size == h * w * 3:
-                return arr.reshape((h, w, 3))
+            # Dispatch on the actual FourCC so the native ("fastest") receive path
+            # is correct for whatever the SDK hands back, not just BGRA.
+            fourcc = _ndi_fourcc_name(vf)
+            bgr = _ndi_frame_to_bgr(arr, fourcc, h, w)
+            if bgr is not None:
+                return np.ascontiguousarray(bgr)
+
+            # Unsupported native format (16-bit P216/PA16) on the fastest path:
+            # self-heal by flipping to the universal BGRA format so the next
+            # reconnect re-opens with the SDK doing the conversion.  Drop this
+            # frame (the stall/reconnect path will re-open shortly).
+            if self._color_format_pref != "bgra":
+                log.warning(
+                    "camera_id=%s NDI native format %r has no cheap BGR path; "
+                    "falling back to BGRA on reconnect",
+                    self.camera_id,
+                    fourcc or f"{arr.size // max(1, h * w)}bpp",
+                )
+                self._color_format_pref = "bgra"
             return None
 
         except Exception as exc:  # noqa: BLE001
