@@ -62,6 +62,13 @@ follow [Semantic Versioning](https://semver.org/).
   returns no frames, the capture loop backs its retry off (up to 0.5 s) instead of
   polling at ~100 Hz, while a manual PTZ command still wakes it instantly so the
   joystick stays responsive during a reconnect.
+- **Experimental: process-per-camera mode** (`AUTOPTZ_PROCESS_PER_CAMERA=1`, off by
+  default) — runs each camera in its own OS process for true multi-core
+  parallelism (GIL bypass) under many cameras, instead of threads in the UI
+  process. Frames already cross via shared memory; commands/telemetry/identity
+  cross via process queues. Each process loads its own models, so it trades RAM
+  for parallelism — hence opt-in. Marked experimental: the plumbing is tested, but
+  the throughput/RAM/real-camera behaviour wants validation on a multi-camera rig.
 
 - **Torch-free model acquisition** — when a model isn't bundled, AutoPTZ downloads
   a prebuilt ONNX from the project's `models-v1` release instead of exporting via
