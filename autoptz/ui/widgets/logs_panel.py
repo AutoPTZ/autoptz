@@ -295,6 +295,11 @@ class LogsPanel(QWidget):
             f" selection-background-color: {T.SELECTION}; selection-color: {pal.text};"
             f" outline: none; }}"
             f"QTableView::item {{ background-color: {pal.surface}; color: {pal.text}; }}"
+            # A per-item background overrides selection-background-color, so selected
+            # rows looked unselected (the "selection does nothing" bug) — restate the
+            # highlight explicitly for :selected so a click/drag is actually visible.
+            f"QTableView::item:selected {{ background-color: {T.SELECTION};"
+            f" color: {pal.text}; }}"
         )
         self._table.viewport().setStyleSheet(f"background-color: {pal.surface};")
         self._table.viewport().update()
