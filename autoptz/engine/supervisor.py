@@ -767,8 +767,7 @@ class Supervisor:
         )
 
         use_process = (
-            self._worker_factory is self._default_worker_factory
-            and process_per_camera_enabled()
+            self._worker_factory is self._default_worker_factory and process_per_camera_enabled()
         )
         if not use_process:
             return self._worker_factory(camera_id, config, on_telemetry)
