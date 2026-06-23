@@ -20,16 +20,22 @@ from autoptz.engine.runtime.models import ModelManager, app_model_specs, detecto
 
 
 @pytest.fixture(autouse=True)
-def _disable_prebuilt_by_default(monkeypatch) -> None:
+def _disable_prebuilt_by_default(monkeypatch, tmp_path) -> None:
     """Disable the prebuilt-download path by default for the export-focused tests.
 
     Tests that specifically exercise the prebuilt path re-enable it locally by
     setting ``AUTOPTZ_MODEL_URL`` and mocking ``urllib.request.urlopen``.  With
     no URL set, :meth:`ModelManager._download_prebuilt` returns ``None`` without
     touching the network, so the existing ultralytics-export assertions hold.
+
+    Also points the bundled-models lookup at an empty dir so a local dev build
+    that populated ``autoptz/models/`` can't shadow the download/export paths.
     """
     monkeypatch.setenv("AUTOPTZ_MODEL_URL", "")
     monkeypatch.delenv("AUTOPTZ_NO_MODEL_EXPORT", raising=False)
+    empty = tmp_path / "no-bundled-models"
+    empty.mkdir()
+    monkeypatch.setattr("autoptz.engine.runtime.models.bundled_models_dir", lambda: empty)
 
 
 # ── env override ──────────────────────────────────────────────────────────────
@@ -60,6 +66,40 @@ def test_cached_only_detector_does_not_download_or_export(tmp_path, monkeypatch)
     assert mgr.ensure_detector(tier="balanced", allow_download=False) is None
     assert "not cached" in mgr.last_error
     assert "weights" not in captured
+
+
+# ── bundled (shipped-inside-the-app) models ───────────────────────────────────
+
+
+def test_bundled_model_resolves_without_cache_download_or_export(tmp_path, monkeypatch) -> None:
+    """A model shipped in autoptz/models resolves offline — no cache, net, or torch."""
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    (bundled / "yolo11n.onnx").write_bytes(b"x" * (1 << 19))
+    monkeypatch.setattr("autoptz.engine.runtime.models.bundled_models_dir", lambda: bundled)
+    # Neither ultralytics nor a download URL is available.
+    monkeypatch.setitem(sys.modules, "ultralytics", None)
+
+    mgr = ModelManager(cache_dir=tmp_path / "cache")
+    assert mgr.ensure_detector(tier="fast") == str(bundled / "yolo11n.onnx")
+    # Even with allow_download=False (the in-app default), a bundled model is fine.
+    assert mgr.ensure_detector(tier="fast", allow_download=False) == str(bundled / "yolo11n.onnx")
+
+
+def test_bundled_model_reported_included_and_not_removable(tmp_path, monkeypatch) -> None:
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    (bundled / "yolo11n.onnx").write_bytes(b"x" * (1 << 19))
+    monkeypatch.setattr("autoptz.engine.runtime.models.bundled_models_dir", lambda: bundled)
+
+    mgr = ModelManager(cache_dir=tmp_path / "cache")
+    rows = {r["key"]: r for r in mgr.app_model_statuses()}
+    assert rows["detector_fast"]["state"] == "ok"
+    assert rows["detector_fast"]["cached"] is True  # available
+    assert rows["detector_fast"]["bundled"] is True
+    assert rows["detector_fast"]["removable"] is False
+    # A non-bundled tier is still missing (would need a download).
+    assert rows["detector_accurate"]["state"] == "missing"
 
 
 # ── cached ONNX reuse ─────────────────────────────────────────────────────────

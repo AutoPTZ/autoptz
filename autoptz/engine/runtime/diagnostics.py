@@ -75,9 +75,7 @@ def detector_model_status() -> dict[str, str]:
                 "ok",
                 f"{len(rows)} detector tier(s) cached · {names}",
             )
-        return _entry(
-            "detector", "Detector model", "off", "not downloaded - open Engine > Models"
-        )
+        return _entry("detector", "Detector model", "off", "not downloaded - open Engine > Models")
     except Exception:  # noqa: BLE001
         return _entry("detector", "Detector model", "off", "lookup failed")
 

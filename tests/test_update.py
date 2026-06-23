@@ -198,3 +198,44 @@ def test_download_update_writes_platform_asset(tmp_path, monkeypatch) -> None:
     assert result.version == "2.1.0"
     assert result.path.name == "AutoPTZ-2.1.0-linux-x86_64.AppImage"
     assert result.path.read_bytes() == b"appimage-bytes"
+
+
+def test_download_update_reports_progress(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(checker.sys, "platform", "linux")
+    info = UpdateInfo(
+        version="2.1.0",
+        tag="v2.1.0",
+        name="x",
+        body="",
+        html_url="https://example/rel",
+        is_prerelease=False,
+        assets=(("AutoPTZ-2.1.0-linux-x86_64.AppImage", "https://example/appimage"),),
+    )
+    chunks = [b"a" * 1000, b"b" * 1000, b"c" * 500]
+    total = sum(len(c) for c in chunks)
+
+    class _Response:
+        headers = {"Content-Length": str(total)}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _n: int) -> bytes:
+            return chunks.pop(0) if chunks else b""
+
+    seen: list[tuple[int, int]] = []
+    result = download_update(
+        info,
+        dest_dir=tmp_path,
+        opener=lambda *_a, **_k: _Response(),
+        progress=lambda d, t: seen.append((d, t)),
+    )
+
+    assert result.path.read_bytes() == b"a" * 1000 + b"b" * 1000 + b"c" * 500
+    # Cumulative byte counts, each carrying the known total, ending exactly at total.
+    assert [d for d, _ in seen] == [1000, 2000, 2500]
+    assert all(t == total for _, t in seen)
+    assert seen[-1] == (total, total)

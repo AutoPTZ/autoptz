@@ -133,11 +133,13 @@ else
     echo "==> SKIP_INSTALL=1 — using existing venv as-is"
 fi
 
-# ── 3. (optional) pre-fetch the detector model so it ships inside the app ─────
-# The app also auto-downloads on first run, but bundling makes it work offline.
-# Uncomment to bake the YOLO11 ONNX into autoptz/models before building:
-#   echo "==> Pre-fetching detector model"
-#   "${PY}" -m tools.fetch_models --cache-dir autoptz/models
+# ── 3. pre-fetch the detector + pose models so they ship inside the app ───────
+# Bundling the YOLO11 ONNX into autoptz/models makes detection work on first
+# launch with no download / network / setup.  Best-effort: if the fetch fails the
+# app still downloads the prebuilt ONNX on demand (see engine/runtime/models.py).
+echo "==> Pre-fetching models into autoptz/models (bundled, zero-setup)"
+"${PY}" -m tools.fetch_models --cache-dir autoptz/models \
+    || echo "!! model pre-fetch failed; the app will download them on first run"
 
 # ── 4. NDI runtime (optional) ────────────────────────────────────────────────
 # cyndilib is installed from requirements/base.txt and collected by the spec when

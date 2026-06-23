@@ -520,9 +520,7 @@ class TestCameraWorker:
         finally:
             worker.stop()
 
-    def test_pool_authoritative_detector_no_per_worker_download(
-        self, qapp, monkeypatch
-    ) -> None:
+    def test_pool_authoritative_detector_no_per_worker_download(self, qapp, monkeypatch) -> None:
         """With a pool present, a missing model must NOT trigger the per-worker
         fallback (which resolves with allow_download=True and would silently
         download/export, ignoring the operator's auto-download setting)."""
@@ -1077,9 +1075,7 @@ class TestSupervisorRouting:
         finally:
             sup.stop()
 
-    def test_staged_start_releases_inference_without_forced_warmup(
-        self, qapp, monkeypatch
-    ) -> None:
+    def test_staged_start_releases_inference_without_forced_warmup(self, qapp, monkeypatch) -> None:
         client = _make_client(qapp)
         client.addCamera("usb://0", "A")
         client.addCamera("usb://1", "B")

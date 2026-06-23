@@ -109,6 +109,8 @@ class _ModelRow(QFrame):
         self.key = str(row.get("key", ""))
         self.display_name = str(row.get("name", self.key))
         self.cached = bool(row.get("cached"))
+        self.bundled = bool(row.get("bundled"))
+        self.removable = bool(row.get("removable", self.cached and not self.bundled))
         self.active = bool(row.get("active"))
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setObjectName("modelRow")
@@ -125,7 +127,12 @@ class _ModelRow(QFrame):
         lay.setVerticalSpacing(4)
 
         self.checkbox = QCheckBox()
-        self.checkbox.setToolTip("Include this model in Download Selected or Remove Selected.")
+        if self.bundled:
+            # Shipped inside the app: nothing to download or remove.
+            self.checkbox.setEnabled(False)
+            self.checkbox.setToolTip("Included with AutoPTZ — always available, nothing to do.")
+        else:
+            self.checkbox.setToolTip("Include this model in Download Selected or Remove Selected.")
         lay.addWidget(self.checkbox, 0, 0, 2, 1, Qt.AlignmentFlag.AlignTop)
 
         title = QLabel(f"<b>{self.display_name}</b>")
@@ -137,6 +144,8 @@ class _ModelRow(QFrame):
 
         if self.active:
             status_text = "ACTIVE"
+        elif self.bundled:
+            status_text = "INCLUDED"
         elif self.cached:
             status_text = "DOWNLOADED"
         else:
@@ -174,7 +183,9 @@ class _ModelRow(QFrame):
         return bool(self.checkbox.isChecked())
 
     def set_checked(self, checked: bool) -> None:
-        self.checkbox.setChecked(bool(checked))
+        # Bundled rows have a disabled checkbox — Select All/Missing skip them.
+        if self.checkbox.isEnabled():
+            self.checkbox.setChecked(bool(checked))
 
     def set_controls_enabled(self, enabled: bool) -> None:
         self.checkbox.setEnabled(bool(enabled))
@@ -477,11 +488,11 @@ class ModelManagerDialog(QDialog):
         self._refresh_tier_item_states()
 
     def _add_model_row(self, row: dict[str, Any], selected: set[str]) -> None:
-            widget = _ModelRow(row)
-            widget.set_checked(str(row.get("key", "")) in selected)
-            widget.checkbox.toggled.connect(lambda _checked: self._refresh_action_state())
-            self._rows[widget.key] = widget
-            self._list.addWidget(widget)
+        widget = _ModelRow(row)
+        widget.set_checked(str(row.get("key", "")) in selected)
+        widget.checkbox.toggled.connect(lambda _checked: self._refresh_action_state())
+        self._rows[widget.key] = widget
+        self._list.addWidget(widget)
 
     def _add_section_label(self, text: str, *, first: bool = False) -> None:
         """Add a section caption with breathing room above it (except the first)."""
@@ -540,18 +551,18 @@ class ModelManagerDialog(QDialog):
         selected = [row for row in self._rows.values() if row.is_checked()]
         idle = self._task is None
         has_missing = any(not row.cached for row in selected)
-        has_cached = any(row.cached for row in selected)
+        has_removable = any(row.removable for row in selected)
         self._download.setEnabled(has_missing and idle)
-        self._remove.setEnabled(has_cached and idle)
+        self._remove.setEnabled(has_removable and idle)
         self._download.setToolTip(
-            "Download the selected models that aren't cached yet."
+            "Download the selected models that aren't available yet."
             if has_missing
             else "Select a model that isn't downloaded yet to enable this."
         )
         self._remove.setToolTip(
             "Remove the selected downloaded models from the local cache."
-            if has_cached
-            else "Select a downloaded model to enable this."
+            if has_removable
+            else "Select a downloaded model to enable this (included models can't be removed)."
         )
 
     def _set_reminder_suppressed(self, checked: bool) -> None:
@@ -628,8 +639,7 @@ class ModelManagerDialog(QDialog):
         failed = [
             row
             for row in results
-            if isinstance(row, dict)
-            and row.get("state") not in {"ok", "removed"}
+            if isinstance(row, dict) and row.get("state") not in {"ok", "removed"}
         ]
         # Tell a running engine to unload + rebuild from the new cache state so a
         # removed model stops drawing boxes (and a freshly downloaded one is
@@ -641,8 +651,7 @@ class ModelManagerDialog(QDialog):
         self._refresh_rows()
         if failed:
             detail = "\n".join(
-                f"- {row.get('name', 'Model')}: {row.get('error', 'failed')}"
-                for row in failed[:6]
+                f"- {row.get('name', 'Model')}: {row.get('error', 'failed')}" for row in failed[:6]
             )
             self._status.setText("Some model operations failed.")
             QMessageBox.warning(
@@ -658,12 +667,7 @@ class ModelManagerDialog(QDialog):
 
 
 def _strip_html(text: str) -> str:
-    return (
-        text.replace("<b>", "")
-        .replace("</b>", "")
-        .replace("<br>", "\n")
-        .replace("&amp;", "&")
-    )
+    return text.replace("<b>", "").replace("</b>", "").replace("<br>", "\n").replace("&amp;", "&")
 
 
 def _detector_key_for_tier(tier: str) -> str:

@@ -8,15 +8,42 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Models ship inside the installer** — the detector tiers (Fast / Balanced /
+  Accurate) and the pose model are now bundled with the app, so detection and
+  pose work on first launch with **no download, network, or setup**. They appear
+  in the Model Manager as *Included* and can't be removed.
+- **Model Manager** (Engine → Models) — review every AutoPTZ-managed model with
+  per-row status, download or remove the ones you want, pick the active detector
+  tier (un-downloaded tiers are greyed out), with live download progress.
+- **Seamless in-app updates** — the updater now shows a **download progress bar**,
+  and on Windows installs **silently** (no setup wizard) and restarts, the
+  closest to a "it just updated" experience.
+- **Copy selected log lines** — select a range of rows in the Logs panel and copy
+  just those with `Ctrl`/`Cmd`+`C` or right-click → *Copy Selected*; the toolbar
+  button is now *Copy All*.
 - **Quick-collapse side panels** — hide/show the left (Properties) and right
   (Camera Info / People / Services) panels from the View menu, the status-bar
   ◧ / ◨ buttons, or `Ctrl+Alt+[` / `Ctrl+Alt+]`.
+- **Startup banner** — a progress banner steps through engine/camera startup.
 - **Signed + notarized macOS builds** — opt-in locally via `MACOS_SIGN_IDENTITY`
   (and notary credentials), and automatic in the release workflow once the signing
   secrets are configured; unsigned otherwise.
 
 ### Changed
 
+- **Torch-free model acquisition** — when a model isn't bundled, AutoPTZ downloads
+  a prebuilt ONNX from the project's `models-v1` release instead of exporting via
+  ultralytics. ultralytics is now a source-only fallback and is no longer shipped
+  in installers (smaller builds; fixes the "ultralytics not installed" failure on
+  packaged Windows/macOS/Linux).
+- **Disabling a subsystem frees its model** — turning off Detection / Face / Pose /
+  ReID (or removing a model) now unloads the in-memory session and reclaims its
+  memory, instead of leaving it running until a restart.
+- **The detector is the foundation** — face/pose/ReID and tracking are gated on a
+  present detector model (greyed with a clear reason when it's missing), and a
+  missing model degrades to live preview instead of silently still drawing boxes.
+- Services panel: compact, higher-contrast model summary + read-only active tier.
+- Model Manager dialog: flat list rows, dynamic tier enable/disable, bigger window.
 - Detector-tier UI labels simplified to **Auto / Fast / Balanced / Accurate**.
 - Menu bar consolidated from six top-level menus to four — Panels and Layouts moved
   under **View**; update controls grouped under **Help → Updates** (with a new
@@ -26,6 +53,15 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **UI no longer hangs while cameras launch** — service probes use `find_spec`
+  instead of importing boxmot/torch on the GUI thread, worker startup runs off the
+  GUI thread (no lock held during camera open), and the detector never silently
+  downloads/exports on the inference thread.
+- **Detection/ReID stop when you delete models or disable them** — the shared
+  inference sessions are released, so boxes stop being drawn and ReID stops; a
+  re-downloaded model resumes automatically.
+- Enabling Detection no longer triggers a surprise model download when automatic
+  downloads are off.
 - Linux CI no longer fails when a native library aborts at interpreter shutdown
   after the tests have already passed.
 
@@ -34,6 +70,8 @@ follow [Semantic Versioning](https://semver.org/).
 - onnxruntime 1.20.1 → 1.24.1 (required to load the IR v13 models onnx 1.21 writes),
   onnx 1.17.0 → 1.21.0, pytest 8.3.5 → 9.0.3, Pillow 11.2.1 → 12.2.0,
   msgpack 1.1.0 → 1.2.1.
+- Installers no longer bundle `ultralytics` (and the `matplotlib`/`pandas` it
+  dragged in); models are bundled or downloaded prebuilt instead.
 
 ## [2.0.0] — 2026-06-21
 

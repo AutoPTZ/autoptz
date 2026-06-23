@@ -13,14 +13,16 @@ import logging
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QTableView,
     QVBoxLayout,
@@ -234,7 +236,11 @@ class LogsPanel(QWidget):
         self._autoscroll_btn.setCheckable(True)
         self._autoscroll_btn.setChecked(True)
         self._autoscroll_btn.toggled.connect(self._toggle_autoscroll)
-        copy_btn = QPushButton("Copy")
+        copy_btn = QPushButton("Copy All")
+        copy_btn.setToolTip(
+            "Copy the whole log buffer. To copy just some lines, select rows in "
+            "the table and press Ctrl/Cmd+C (or right-click → Copy Selected)."
+        )
         copy_btn.clicked.connect(client.copyLogsToClipboard)
         export_btn = QPushButton("Export…")
         export_btn.clicked.connect(self._export)
@@ -253,8 +259,15 @@ class LogsPanel(QWidget):
         self._table.setShowGrid(False)
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        # Let the operator drag / shift-click / ctrl-click a range of log lines
+        # and copy just those (Ctrl/Cmd+C or the context menu).
+        self._table.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
         self._table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self._table.setWordWrap(False)
+        copy_shortcut = QShortcut(QKeySequence.StandardKey.Copy, self._table)
+        copy_shortcut.activated.connect(self._copy_selection)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_table_menu)
         mono = self._table.font()
         mono.setFamily("Menlo")
         mono.setPixelSize(11)
@@ -315,6 +328,42 @@ class LogsPanel(QWidget):
         )
         if path:
             self._client.exportLogs(path)
+
+    # ── selection copy ───────────────────────────────────────────────────────────
+
+    def _selected_rows_text(self) -> str:
+        """Tab-separated text for the currently selected log rows (time-ordered)."""
+        sel = self._table.selectionModel()
+        if sel is None or not sel.hasSelection():
+            return ""
+        cols = self._proxy.columnCount()
+        lines = []
+        for r in sorted({idx.row() for idx in sel.selectedIndexes()}):
+            cells = [str(self._proxy.index(r, c).data() or "") for c in range(cols)]
+            lines.append("\t".join(cells))
+        return "\n".join(lines)
+
+    def _copy_selection(self) -> None:
+        """Copy the selected rows to the clipboard (falls back to the whole buffer)."""
+        text = self._selected_rows_text()
+        if text:
+            QApplication.clipboard().setText(text)
+        else:
+            # Nothing selected → behave like Copy All for a friendlier Ctrl+C.
+            self._client.copyLogsToClipboard()
+
+    def _show_table_menu(self, pos: Any) -> None:
+        menu = QMenu(self._table)
+        has_sel = bool(self._selected_rows_text())
+        act_copy = menu.addAction("Copy Selected")
+        act_copy.setEnabled(has_sel)
+        act_copy.triggered.connect(self._copy_selection)
+        act_copy_all = menu.addAction("Copy All")
+        act_copy_all.triggered.connect(self._client.copyLogsToClipboard)
+        menu.addSeparator()
+        act_select_all = menu.addAction("Select All")
+        act_select_all.triggered.connect(self._table.selectAll)
+        menu.exec(self._table.viewport().mapToGlobal(pos))
 
 
 def _level_color(level: str) -> str:

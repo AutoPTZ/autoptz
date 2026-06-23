@@ -661,7 +661,6 @@ class Supervisor:
             self._inference_pool = None
         return self._inference_pool
 
-
     def _apply_hardware_env(self, camera_count: int) -> None:
         """Publish global hardware prefs into the environment before workers start.
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QUrl
@@ -81,10 +82,14 @@ class UpdateDialog(QDialog):
         later = QPushButton("Later")
         later.clicked.connect(self.reject)
         buttons.addWidget(later)
-        download = QPushButton("Download and Restart" if info.asset_for_platform() else "Download")
+        has_asset = info.asset_for_platform() is not None
+        download = QPushButton("Download & Install" if has_asset else "Open Releases Page")
         download.setProperty("accent", True)
-        if info.asset_for_platform():
-            download.setToolTip("Download the installer for this OS, launch it, then quit AutoPTZ.")
+        if has_asset:
+            download.setToolTip(
+                "Download the update with a progress bar, then install it and "
+                "restart AutoPTZ" + (" — no setup wizard." if sys.platform == "win32" else ".")
+            )
         else:
             download.setToolTip("Open the release page because this OS has no matching asset.")
         download.clicked.connect(self._download)

@@ -15,7 +15,7 @@ Design
     1. ``AUTOPTZ_MODEL_PATH`` env override (existing file → returned verbatim).
     2. A previously-cached ONNX in the cache dir.
     3. **Download a prebuilt YOLO11 ONNX** (no torch / ultralytics needed) from
-       a reliable HuggingFace-hosted export.  URL overridable via
+       the project's ``models-v1`` GitHub release.  URL overridable via
        ``AUTOPTZ_MODEL_URL``.
     4. Fall back to the ultralytics ``.pt`` → ONNX export only when the prebuilt
        download is unreachable *and* ultralytics is installed.
@@ -119,12 +119,14 @@ def detector_model_for_tier(tier: str | None) -> str:
     return _DETECTOR_TIER_TO_PT.get(key, _DEFAULT_DETECTOR_PT)
 
 
-# Optional prebuilt, torch-free YOLO11n ONNX URL.  No reliable public URL is
-# wired by default (HuggingFace `resolve` links for community exports returned
-# 401), so this is empty and acquisition falls through to the ultralytics export.
-# Set AUTOPTZ_MODEL_URL to a reachable .onnx to enable the torch-free path
-# (air-gapped / mirror / bundled deployments).
-_DEFAULT_PREBUILT_URL = ""
+# Prebuilt, torch-free YOLO11 ONNX models served from the project's own
+# ``models-v1`` GitHub release (exported with nms=False/opset=12 to match
+# detect.py).  ``{stem}`` is filled per tier (yolo11n / yolo11s / yolo11m /
+# yolo11n-pose), so the in-app Model Manager downloads work on packaged builds
+# without bundling ultralytics + torch.  Override with AUTOPTZ_MODEL_URL (a
+# ``{stem}`` template, or a single .onnx for the default tier) to point at a
+# mirror / air-gapped host.
+_DEFAULT_PREBUILT_URL = "https://github.com/AutoPTZ/autoptz/releases/download/models-v1/{stem}.onnx"
 
 # Download chunk size (bytes) when streaming the prebuilt ONNX to disk.
 _DOWNLOAD_CHUNK = 1 << 16
@@ -178,6 +180,18 @@ def _models_cache_dir() -> Path:
     from autoptz.config.store import default_config_dir
 
     return default_config_dir() / "models"
+
+
+def bundled_models_dir() -> Path:
+    """Return the ``autoptz/models`` dir shipped *inside* the app/package.
+
+    Release installers bake the detector + pose ONNX here (see
+    ``packaging/autoptz.spec`` + the build scripts), so a packaged app finds its
+    models with **no download** — detection works on first launch.  Empty for a
+    plain source checkout (the ``.gitkeep``-only dir), where the prebuilt
+    download / ultralytics export still provision models on demand.
+    """
+    return Path(__file__).resolve().parents[2] / "models"
 
 
 class ModelManager:
@@ -248,6 +262,11 @@ class ModelManager:
         if onnx_path.is_file():
             log.debug("Detector ONNX already cached at %s", onnx_path)
             return str(onnx_path)
+        # 2b. Shipped inside the app/package → use it, no download needed.
+        bundled = bundled_models_dir() / onnx_path.name
+        if bundled.is_file():
+            log.debug("Using bundled detector ONNX at %s", bundled)
+            return str(bundled)
         if not allow_download:
             self._last_error = (
                 f"{onnx_path.name}: not cached. Open Engine > Models to download it, "
@@ -320,11 +339,12 @@ class ModelManager:
         """Return a path to a YOLO11 pose ONNX, downloading/exporting if needed.
 
         Mirrors :meth:`ensure_detector` for the COCO-17 pose model: env override
-        (``AUTOPTZ_POSE_MODEL_PATH``) → cached ``yolo11n-pose.onnx`` → ultralytics
-        ``.pt`` → ONNX export (one-time).  Unlike the original "never download"
-        pose policy, pose now auto-provisions on first use so enabling the pose
-        overlay / pose-stable framing actually works out of the box.  Never raises;
-        returns ``None`` when ultralytics/network are unavailable (pose stays off).
+        (``AUTOPTZ_POSE_MODEL_PATH``) → cached ``yolo11n-pose.onnx`` → **prebuilt
+        torch-free download** → ultralytics ``.pt`` → ONNX export (one-time).
+        Unlike the original "never download" pose policy, pose now auto-provisions
+        on first use so enabling the pose overlay / pose-stable framing actually
+        works out of the box.  Never raises; returns ``None`` when the model can't
+        be obtained (pose stays off).
         """
         env = os.environ.get("AUTOPTZ_POSE_MODEL_PATH")
         if env:
@@ -335,6 +355,9 @@ class ModelManager:
         onnx_path = self._cache_dir / (Path(model_pt).stem + ".onnx")
         if onnx_path.is_file():
             return str(onnx_path)
+        bundled = bundled_models_dir() / onnx_path.name
+        if bundled.is_file():
+            return str(bundled)
         if not allow_download:
             self._last_error = (
                 f"{onnx_path.name}: not cached. Open Engine > Models to download it, "
@@ -344,6 +367,10 @@ class ModelManager:
         with self._lock:
             if onnx_path.is_file():
                 return str(onnx_path)
+            # Prefer the torch-free prebuilt download; fall back to ultralytics.
+            prebuilt = self._download_prebuilt(onnx_path)
+            if prebuilt is not None:
+                return prebuilt
             return self._download_and_export(model_pt, onnx_path)
 
     def ensure_app_models(
@@ -429,29 +456,39 @@ class ModelManager:
     def app_model_statuses(self) -> list[dict[str, Any]]:
         """Return model catalog rows with current AutoPTZ cache state."""
         rows: list[dict[str, Any]] = []
+        bundled_dir = bundled_models_dir()
         for spec in _APP_MODEL_CATALOG:
             row: dict[str, Any] = dict(spec)
             stem = spec["stem"]
             onnx_path = self._cache_dir / f"{stem}.onnx"
+            bundled_path = bundled_dir / f"{stem}.onnx"
             files = self._managed_files_for_stem(stem)
             cached = onnx_path.is_file()
+            # A model shipped inside the app counts as available with no download;
+            # it lives in the read-only package dir, so it is NOT user-removable.
+            bundled = bundled_path.is_file() and not cached
+            available = cached or bundled
+            active_path = onnx_path if cached else (bundled_path if bundled else onnx_path)
             size = 0
-            for path in files:
+            for path in files if cached else [bundled_path] if bundled else []:
                 try:
                     size += path.stat().st_size
                 except OSError:
                     pass
-            row["state"] = "ok" if cached else "missing"
-            row["cached"] = cached
-            row["path"] = str(onnx_path)
+            row["state"] = "ok" if available else "missing"
+            row["cached"] = available
+            row["bundled"] = bundled
+            row["removable"] = cached
+            row["path"] = str(active_path)
             row["cache_dir"] = str(self._cache_dir)
             row["size_bytes"] = size
             row["size"] = _format_bytes(size) if size else ""
-            row["detail"] = (
-                f"Cached at {onnx_path}"
-                if cached
-                else f"Missing from AutoPTZ cache ({onnx_path.name})"
-            )
+            if bundled:
+                row["detail"] = f"Included with AutoPTZ ({bundled_path.name})"
+            elif cached:
+                row["detail"] = f"Cached at {onnx_path}"
+            else:
+                row["detail"] = f"Missing from AutoPTZ cache ({onnx_path.name})"
             row["managed_files"] = [str(path) for path in files]
             rows.append(row)
         return rows
@@ -575,7 +612,7 @@ class ModelManager:
         )
         tmp_path = Path(tmp_name)
         try:
-            log.info("Downloading prebuilt detector ONNX from %s (first run, ~one-time)", url)
+            log.info("Downloading prebuilt model ONNX from %s (~one-time)", url)
             written = 0
             with urllib.request.urlopen(url) as resp, os.fdopen(tmp_fd, "wb") as out:  # noqa: S310
                 while True:
@@ -587,7 +624,7 @@ class ModelManager:
 
             if written < _MIN_ONNX_BYTES:
                 log.warning(
-                    "Prebuilt detector download from %s looked truncated (%d bytes); ignoring.",
+                    "Prebuilt model download from %s looked truncated (%d bytes); ignoring.",
                     url,
                     written,
                 )
@@ -595,14 +632,14 @@ class ModelManager:
 
             tmp_path.replace(onnx_path)
             log.info(
-                "Detector ONNX ready at %s (%.1f MB, prebuilt, torch-free)",
+                "Model ONNX ready at %s (%.1f MB, prebuilt, torch-free)",
                 onnx_path,
                 written / (1 << 20),
             )
             return str(onnx_path)
         except Exception:  # noqa: BLE001 — network / disk / URL errors
             log.warning(
-                "Prebuilt detector download failed; will try ultralytics export.",
+                "Prebuilt model download failed; will try ultralytics export.",
                 exc_info=True,
             )
             return None

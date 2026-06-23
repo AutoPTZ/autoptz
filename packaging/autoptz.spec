@@ -162,7 +162,13 @@ def _keep_optional_submodule(name: str) -> bool:
     )
 
 
-for opt_pkg in ("ultralytics", "boxmot", "insightface", "av", "onnx", "cyndilib"):
+# ultralytics is intentionally NOT bundled (see excludes below): the app's only
+# use of it is the ModelManager .pt→ONNX export fallback, which is redundant now
+# that detectors/pose download as prebuilt torch-free ONNX, AND it can't even
+# import in the frozen app because it requires matplotlib (excluded for size).
+# It stays a source/dev dependency (offline export + generating the prebuilt
+# ONNX via tools/fetch_models); the packaged app gets models via the download.
+for opt_pkg in ("boxmot", "insightface", "av", "onnx", "cyndilib"):
     try:
         __import__(opt_pkg)
     except Exception:
@@ -174,7 +180,15 @@ for opt_pkg in ("ultralytics", "boxmot", "insightface", "av", "onnx", "cyndilib"
     except Exception:
         pass
 
-# Trim obvious bloat that PySide6 pulls in but AutoPTZ never uses.
+# Trim bloat that the ML/UI deps pull in but AutoPTZ never uses at runtime.
+#   - ultralytics: export-only fallback, redundant with the prebuilt download and
+#     unimportable without matplotlib (see above).  Excluding it also drops the
+#     pandas/matplotlib it alone dragged in (boxmot has no pandas use; insightface
+#     is onnxruntime-based), so those aren't excluded explicitly — that would risk
+#     silently disabling a dep that legitimately needs them.
+#   - matplotlib: plotting lib pulled only by ultralytics' tooling; excluded since
+#     rc1 (face/ReID work without it) and kept excluded for size.
+#   - PySide6 QtWebEngine/Qt3D/Charts/DataVisualization/Multimedia: unused Qt modules.
 excludes = [
     "tkinter",
     "PySide6.QtWebEngineCore",
@@ -183,6 +197,7 @@ excludes = [
     "PySide6.QtCharts",
     "PySide6.QtDataVisualization",
     "PySide6.QtMultimedia",
+    "ultralytics",
     "matplotlib",
     "pytest",
 ]

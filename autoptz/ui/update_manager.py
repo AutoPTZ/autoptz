@@ -25,6 +25,7 @@ class _CheckSignals(QObject):
 
 
 class _DownloadSignals(QObject):
+    progress = Signal(int, int)  # (bytes_downloaded, total_bytes)
     finished = Signal(object)  # DownloadedUpdate
     failed = Signal(str)
 
@@ -60,7 +61,10 @@ class _DownloadTask(QRunnable):
         from autoptz.update.installer import download_update
 
         try:
-            result = download_update(self._info)  # type: ignore[arg-type]
+            result = download_update(
+                self._info,  # type: ignore[arg-type]
+                progress=lambda done, total: self._signals.progress.emit(int(done), int(total)),
+            )
         except Exception as exc:  # noqa: BLE001
             log.debug("update download failed", exc_info=True)
             self._signals.failed.emit(str(exc) or "Update download failed.")
@@ -74,6 +78,7 @@ class UpdateManager(QObject):
     updateAvailable = Signal(object)  # UpdateInfo
     upToDate = Signal(bool)  # manual?
     downloadStarted = Signal(object)  # UpdateInfo
+    downloadProgress = Signal(int, int)  # (bytes_downloaded, total_bytes)
     downloadFinished = Signal(object)  # DownloadedUpdate
     downloadFailed = Signal(str)
 
@@ -84,6 +89,7 @@ class UpdateManager(QObject):
         self._signals = _CheckSignals(self)
         self._download_signals = _DownloadSignals(self)
         self._signals.finished.connect(self._on_finished)
+        self._download_signals.progress.connect(self.downloadProgress.emit)
         self._download_signals.finished.connect(self.downloadFinished.emit)
         self._download_signals.failed.connect(self.downloadFailed.emit)
 

@@ -13,6 +13,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -23,6 +24,10 @@ log = logging.getLogger(__name__)
 
 _TIMEOUT_S = 30.0
 _CHUNK_SIZE = 1024 * 1024
+
+#: ``progress(bytes_downloaded, total_bytes)`` — ``total`` is 0 when the server
+#: doesn't send Content-Length.
+DownloadProgress = Callable[[int, int], None]
 
 
 @dataclass(frozen=True)
@@ -53,8 +58,12 @@ def download_update(
     *,
     dest_dir: Path | None = None,
     opener: object | None = None,
+    progress: DownloadProgress | None = None,
 ) -> DownloadedUpdate:
     """Download this OS's release asset and return its local path.
+
+    ``progress(downloaded, total)`` is called as bytes arrive so the UI can show
+    a real progress bar (``total`` is 0 when the server omits Content-Length).
 
     Raises ``RuntimeError`` with a user-readable message when the release has no
     usable asset for this OS or the network/file write fails.
@@ -72,8 +81,9 @@ def download_update(
     opener_obj = opener or urllib.request.urlopen
     try:
         with opener_obj(request, timeout=_TIMEOUT_S) as response:  # type: ignore[misc]  # noqa: S310
+            total = _content_length(response)
             with tmp_path.open("wb") as out:
-                _copy_stream(response, out)
+                _copy_stream(response, out, total, progress)
         tmp_path.replace(path)
     except (OSError, urllib.error.URLError, TimeoutError) as exc:
         try:
@@ -85,20 +95,58 @@ def download_update(
     return DownloadedUpdate(path=path, asset_name=asset_name, version=info.version)
 
 
-def _copy_stream(src: BinaryIO, dst: BinaryIO) -> None:
-    """Copy bytes without loading the installer into memory."""
+def _content_length(response: object) -> int:
+    try:
+        return int(response.headers.get("Content-Length") or 0)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _copy_stream(
+    src: BinaryIO,
+    dst: BinaryIO,
+    total: int = 0,
+    progress: DownloadProgress | None = None,
+) -> None:
+    """Copy bytes without loading the installer into memory, reporting progress."""
+    done = 0
     while True:
         chunk = src.read(_CHUNK_SIZE)
         if not chunk:
             return
         dst.write(chunk)
+        done += len(chunk)
+        if progress is not None:
+            try:
+                progress(done, total)
+            except Exception:  # noqa: BLE001 — a UI callback must never break the download
+                pass
 
 
 def launch_update(path: Path) -> None:
-    """Launch a downloaded installer/app bundle for the current OS."""
+    """Launch a downloaded installer/app bundle for the current OS.
+
+    Windows installs **silently** (Inno Setup ``/VERYSILENT``): it closes the
+    running app, updates in place, and relaunches — no wizard clicks, the
+    closest to a seamless "it just updated" experience.  macOS opens the ``.dmg``
+    (the user drags to Applications) and Linux runs the new AppImage.
+    """
     try:
         if sys.platform == "win32":
-            os.startfile(path)  # type: ignore[attr-defined]
+            if path.suffix.lower() == ".exe":
+                # Inno Setup silent flags: no wizard, auto-close the running app,
+                # relaunch when done.  Detached so this process can quit.
+                subprocess.Popen(  # noqa: S603
+                    [
+                        str(path),
+                        "/VERYSILENT",
+                        "/SUPPRESSMSGBOXES",
+                        "/NORESTART",
+                        "/RESTARTAPPLICATIONS",
+                    ]
+                )
+            else:
+                os.startfile(path)  # type: ignore[attr-defined]
             return
         if sys.platform == "darwin":
             subprocess.Popen(["open", str(path)])  # noqa: S603,S607

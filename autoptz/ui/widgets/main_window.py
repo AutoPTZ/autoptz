@@ -101,8 +101,10 @@ class MainWindow(QMainWindow):
         self._updates.updateAvailable.connect(self._on_update_available)
         self._updates.upToDate.connect(self._on_up_to_date)
         self._updates.downloadStarted.connect(self._on_update_download_started)
+        self._updates.downloadProgress.connect(self._on_update_download_progress)
         self._updates.downloadFinished.connect(self._on_update_download_finished)
         self._updates.downloadFailed.connect(self._on_update_download_failed)
+        self._update_progress: Any | None = None
         self._startup_update_checked = False
 
         self._build_central()
@@ -830,12 +832,47 @@ class MainWindow(QMainWindow):
         ).exec()
 
     def _on_update_download_started(self, info: Any) -> None:
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import QProgressDialog
+
         version = str(getattr(info, "version", "") or "new version")
+        self._close_update_progress()
+        dlg = QProgressDialog(f"Downloading AutoPTZ {version}…", "", 0, 100, self)
+        dlg.setWindowTitle("Updating AutoPTZ")
+        dlg.setWindowModality(_Qt.WindowModality.WindowModal)
+        dlg.setCancelButton(None)  # the download runs to completion in the background
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setMinimumDuration(0)
+        dlg.setRange(0, 0)  # indeterminate until the first progress tick
+        dlg.setValue(0)
+        self._update_progress = dlg
+        dlg.show()
         self.statusBar().showMessage(f"Downloading AutoPTZ {version}…")
+
+    def _on_update_download_progress(self, done: int, total: int) -> None:
+        dlg = self._update_progress
+        if dlg is None:
+            return
+        if total > 0:
+            pct = max(0, min(100, int(done * 100 / total)))
+            dlg.setRange(0, 100)
+            dlg.setValue(pct)
+            dlg.setLabelText(f"Downloading AutoPTZ update…  {done >> 20} / {total >> 20} MB")
+        else:
+            dlg.setRange(0, 0)  # unknown size → keep the busy indicator
+            dlg.setLabelText(f"Downloading AutoPTZ update…  {done >> 20} MB")
+
+    def _close_update_progress(self) -> None:
+        dlg = self._update_progress
+        self._update_progress = None
+        if dlg is not None:
+            dlg.close()
+            dlg.deleteLater()
 
     def _on_update_download_finished(self, result: Any) -> None:
         from PySide6.QtCore import QTimer
-        from PySide6.QtWidgets import QApplication, QMessageBox
+        from PySide6.QtWidgets import QApplication
 
         from autoptz.update.installer import launch_update
 
@@ -845,23 +882,24 @@ class MainWindow(QMainWindow):
                 "The update downloaded, but no installer path was returned."
             )
             return
+        dlg = self._update_progress
+        if dlg is not None:
+            dlg.setRange(0, 100)
+            dlg.setValue(100)
+            dlg.setLabelText("Installing update… AutoPTZ will restart.")
         try:
             launch_update(path)
         except Exception as exc:  # noqa: BLE001
             self._on_update_download_failed(str(exc))
             return
         self.statusBar().showMessage("Update started. AutoPTZ will close now.", 5000)
-        QMessageBox.information(
-            self,
-            "Update Started",
-            "The AutoPTZ update has started. AutoPTZ will close so the installer "
-            "or new app can finish safely.",
-        )
-        QTimer.singleShot(250, QApplication.quit)
+        QTimer.singleShot(700, self._close_update_progress)
+        QTimer.singleShot(900, QApplication.quit)
 
     def _on_update_download_failed(self, message: str) -> None:
         from PySide6.QtWidgets import QMessageBox
 
+        self._close_update_progress()
         self.statusBar().clearMessage()
         QMessageBox.warning(
             self,

@@ -849,9 +849,13 @@ class CameraWorker:
                 else ""
             )
             if self._detect is None:
-                self._add_event("detector", "Detector model removed; live-preview only.", level="warning")
+                self._add_event(
+                    "detector", "Detector model removed; live-preview only.", level="warning"
+                )
             else:
-                self._add_event("detector", f"Detector reloaded: {model or self._ep or 'shared model'}.")
+                self._add_event(
+                    "detector", f"Detector reloaded: {model or self._ep or 'shared model'}."
+                )
         # Pose rebuilds lazily through _ensure_pose on its next use.
 
     def _refresh_detector_from_pool(self) -> None:
