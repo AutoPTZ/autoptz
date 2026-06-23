@@ -559,24 +559,24 @@ class TestDeliverToShm:
 
 
 class TestNDIColorFormatPref:
-    def test_default_is_bgra(self, monkeypatch) -> None:  # noqa: ANN001
+    def test_default_is_fastest(self, monkeypatch) -> None:  # noqa: ANN001
         from autoptz.engine.pipeline.ingest import _ndi_color_format_pref
 
         monkeypatch.delenv("AUTOPTZ_NDI_COLOR_FORMAT", raising=False)
-        assert _ndi_color_format_pref() == "bgra"
+        assert _ndi_color_format_pref() == "fastest"
 
-    def test_fastest_aliases(self, monkeypatch) -> None:  # noqa: ANN001
+    def test_bgra_escape_hatch(self, monkeypatch) -> None:  # noqa: ANN001
         from autoptz.engine.pipeline.ingest import _ndi_color_format_pref
 
-        for val in ("fastest", "FAST", " native ", "Fastest"):
+        for val in ("bgra", "BGRA", " bgrx ", "bgr"):
             monkeypatch.setenv("AUTOPTZ_NDI_COLOR_FORMAT", val)
-            assert _ndi_color_format_pref() == "fastest"
+            assert _ndi_color_format_pref() == "bgra"
 
-    def test_unknown_value_is_bgra(self, monkeypatch) -> None:  # noqa: ANN001
+    def test_unknown_value_is_fastest(self, monkeypatch) -> None:  # noqa: ANN001
         from autoptz.engine.pipeline.ingest import _ndi_color_format_pref
 
         monkeypatch.setenv("AUTOPTZ_NDI_COLOR_FORMAT", "purple")
-        assert _ndi_color_format_pref() == "bgra"
+        assert _ndi_color_format_pref() == "fastest"
 
 
 class TestNDIFrameToBGR:

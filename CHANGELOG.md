@@ -54,6 +54,13 @@ follow [Semantic Versioning](https://semver.org/).
   (smoothing/anti-aliasing only on HUD overlays), the preview converter does one
   fewer full-frame copy per frame (`Format_BGR888`), and ORT reserves a core for
   the capture/UI threads.
+- **NDI cameras decode lighter on the CPU** — the receiver now requests the
+  source's native format (usually 8-bit UYVY) instead of asking the NDI SDK to
+  convert every frame to BGRA, so AutoPTZ does a single YUV→BGR pass instead of
+  the SDK's conversion *plus* an alpha strip. The frame reader dispatches on the
+  actual format (UYVY/UYVA/NV12/I420/YV12/BGRA/RGBA…) and falls back to the old
+  universal BGRA path automatically for the rare 16-bit sources. Set
+  `AUTOPTZ_NDI_COLOR_FORMAT=bgra` to force the previous behaviour.
 - **Idle preview costs almost nothing** — each camera tile now repaints only when
   a new frame arrives or its state changes, instead of on every timer tick. On an
   Apple-Silicon Mac an idle / no-signal tile dropped from ~12% CPU to ~2–3%; live

@@ -834,21 +834,24 @@ class RTSPAdapter(SourceAdapter):
 def _ndi_color_format_pref() -> str:
     """Which NDI receive color format to request (``AUTOPTZ_NDI_COLOR_FORMAT``).
 
-    * ``bgra`` (default) — ``RecvColorFormat.BGRX_BGRA``: the NDI SDK converts the
-      source's native YUV to BGRA on the CPU for every frame, then we strip alpha
-      to BGR.  Universal but pays a full-frame color conversion inside the SDK.
-    * ``fastest`` — ``RecvColorFormat.fastest``: the SDK hands back its cheapest
-      native format (usually 8-bit UYVY); we do the single YUV→BGR pass ourselves,
-      skipping the SDK's extra conversion.  This is the lighter path (closer to how
-      NDI Monitor takes native YUV to the GPU) and is what to A/B on a real NDI rig.
+    * ``fastest`` (default) — ``RecvColorFormat.fastest``: the SDK hands back its
+      cheapest native format (usually 8-bit UYVY); we do the single YUV→BGR pass
+      ourselves, skipping a full-frame color conversion.  This is the lighter path,
+      closer to how NDI Monitor takes native YUV to the GPU.
+    * ``bgra`` — ``RecvColorFormat.BGRX_BGRA``: the NDI SDK converts the source's
+      native YUV to BGRA on the CPU for every frame, then we strip alpha to BGR.
+      Universal but pays that extra conversion inside the SDK; kept as an escape
+      hatch (set ``AUTOPTZ_NDI_COLOR_FORMAT=bgra``) for any source the native path
+      misbehaves on.
 
-    Default stays ``bgra`` so behaviour is unchanged until explicitly opted in for
-    testing; ``_read_frame`` dispatches on the actual FourCC either way.
+    ``_read_frame`` dispatches on the actual FourCC either way, and self-heals to
+    ``bgra`` on reconnect if a source delivers a 16-bit format we can't convert
+    cheaply — so ``fastest`` is safe as the default.
     """
     import os
 
-    val = os.environ.get("AUTOPTZ_NDI_COLOR_FORMAT", "bgra").strip().lower()
-    return "fastest" if val in ("fastest", "fast", "native") else "bgra"
+    val = os.environ.get("AUTOPTZ_NDI_COLOR_FORMAT", "fastest").strip().lower()
+    return "bgra" if val in ("bgra", "bgrx", "bgr") else "fastest"
 
 
 def _ndi_fourcc_name(vf: object) -> str:
