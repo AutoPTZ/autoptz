@@ -720,6 +720,9 @@ class TestCameraWorker:
         assert len(worker._ptz_cmd_queue) == 1
         assert worker._ptz_cmd_queue[0][0] == "ptz_nudge"
         assert len(worker._cmd_queue) == 0
+        # The nudge must wake a backed-off capture sleep so it applies immediately
+        # even when the video feed is stalled (not just at the next loop tick).
+        assert worker._capture_wake.is_set()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
