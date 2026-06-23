@@ -62,6 +62,14 @@ follow [Semantic Versioning](https://semver.org/).
   returns no frames, the capture loop backs its retry off (up to 0.5 s) instead of
   polling at ~100 Hz, while a manual PTZ command still wakes it instantly so the
   joystick stays responsive during a reconnect.
+- **Tracking-off cameras spin up less work** — the inference loop ran camera
+  ego-motion (per-frame optical flow) and woke the appearance thread on *every*
+  frame even with nothing to track. Both are now gated on what's actually on
+  (ego-motion only while tracking, appearance only with Face/ReID on), so a camera
+  with services off no longer burns a chunk of a core computing values nothing
+  reads. Measured on a synthetic 1080p60 source with services off, the worker's
+  idle CPU dropped from ~47% to ~29% of one core, with no change to follow
+  behaviour.
 - **Experimental: process-per-camera mode** (`AUTOPTZ_PROCESS_PER_CAMERA=1`, off by
   default) — runs each camera in its own OS process for true multi-core
   parallelism (GIL bypass) under many cameras, instead of threads in the UI
