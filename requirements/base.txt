@@ -102,3 +102,7 @@ watchdog==6.0.0
 # Services panel. Optional — diagnostics.system_metrics() degrades to
 # placeholders if absent.
 psutil>=5.9
+
+# Optional — virtual-camera output for Center Stage (needs a system virtual-camera
+# driver such as OBS Virtual Camera). Install manually if you want this:
+#   pip install pyvirtualcam

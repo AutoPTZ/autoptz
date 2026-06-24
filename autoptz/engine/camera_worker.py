@@ -72,6 +72,18 @@ _PREVIEW_H = 720
 _PREVIEW_PUSH_FPS = 20.0
 _PREVIEW_PUSH_MIN_PERIOD_S = 1.0 / _PREVIEW_PUSH_FPS
 
+# Center Stage crop tightness per "Framing" preset → (subject fill of crop,
+# max crop as a fraction of the frame). A smaller ``max_frac`` forces a tighter
+# zoom even on a close subject that already fills the sensor; the live "Framing"
+# dropdown (tracking.framing) picks the preset, so the user dials the shot
+# without a restart. ``upper_body`` is the default head-and-shoulders look.
+_CENTERSTAGE_FRAMING: dict[str, tuple[float, float]] = {
+    "face": (0.86, 0.50),  # tight head/face closeup (~2.0x on a close subject)
+    "head_shoulders": (0.80, 0.62),  # head + shoulders (~1.6x)
+    "upper_body": (0.70, 0.74),  # head + chest (~1.35x) — default
+    "full_body": (0.58, 0.94),  # whole person, gentle crop
+}
+
 _DEFAULT_TELEMETRY_HZ = 10.0
 
 # How long a manual PTZ nudge suspends auto control before auto resumes.
@@ -204,6 +216,11 @@ _REID_RECOVERY_CONFIRM_STABLE = 3
 _REID_RECOVERY_CONFIRM_RESPONSIVE = 1
 _REID_RECOVERY_MARGIN = 0.08
 _IDENTITY_TARGET_CONFIRM = 2
+# Occlusion coast: the target box height (frame fraction) must drop below this
+# fraction of its recent *healthy* height to count as a sudden collapse (the
+# subject covered by something) rather than the subject simply walking away.
+_OCCLUSION_COLLAPSE_FRAC = 0.55
+_OCCLUSION_REF_ALPHA = 0.10  # how fast the healthy-height reference tracks a gradual change
 
 # EMA weight for the pose-derived aim point: lower = smoother/laggier.  Light
 # smoothing so noisy keypoint regression doesn't jitter the framing.
@@ -342,6 +359,9 @@ class CameraWorker:
         # target per camera — supersedes an explicit track id when its identity
         # is detected on a live track.
         self._target_identity_id: str | None = config.target.identity_id
+        # Slowly-tracked "healthy" target box height (frame fraction); lets the
+        # drive loop tell a sudden occlusion collapse from a gradual walk-away.
+        self._target_h_ref: float | None = None
 
         self.shm_name = f"cam_{camera_id[:8]}_preview"
 
@@ -437,6 +457,10 @@ class CameraWorker:
         # This tick's ego velocity (error-space units/sec) and last full estimate.
         self._ego_vel: tuple[float, float] = (0.0, 0.0)
         self._ego_source: str = "none"
+        # True only on a tick where ego-motion was *freshly measured*; the aim
+        # feed-forward only subtracts ego when fresh, never a stale/decimated
+        # estimate (subtracting a decayed value made the camera ping-pong).
+        self._ego_fresh: bool = False
 
         # ── fused target associator (flag-gated, default OFF) ────────────────────
         # Cheap stateless instance — always constructed; only consulted when
@@ -527,6 +551,9 @@ class CameraWorker:
         # owned resources (created in thread)
         self._source: FrameSource | None = None
         self._shm: ShmWriter | None = None
+        self._vcam: Any | None = None  # VirtualCamSink (lazily created when vcam_out enabled)
+        self._digital_framer: Any | None = None  # Center Stage auto-framer (lazy)
+        self._cs_diag_t: float = 0.0  # throttle for the Center Stage diagnostic log
         self._detect: _DetectStack | None = None
         self._pooled_detector = False
         # True when the detector is the unified YOLO11-pose model (boxes+keypoints
@@ -534,9 +561,18 @@ class CameraWorker:
         # detections instead of running a separate pose forward pass.
         self._unified_pose_active = False
         self._detect_frame_index = 0
+        # Tracks whether the detector actually ran this inference tick (vs. a
+        # skip/coast frame). Used by _pose_allowed_this_tick to spread the two
+        # heavy stages across separate frames when stage_spread is enabled.
+        self._detected_this_tick: bool = False
         # Last detections, re-fed to the tracker on detector-skip frames (when
         # detect_interval > 1) so tracks don't age out into "no boxes".
         self._last_detections: list[Any] = []
+
+        # System-wide CPU pressure (0–100 %) pushed by the supervisor ~1 Hz.
+        # Consulted by _effective_detect_interval to throttle when the whole
+        # machine is hot, even if this camera's local cost looks fine.
+        self._system_cpu_pressure: float = 0.0
 
         self._seq = 0
         self._fps = 0.0
@@ -625,6 +661,9 @@ class CameraWorker:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=timeout)
         self._thread = None
+        if self._vcam is not None:
+            self._vcam.close()
+            self._vcam = None
 
     @property
     def is_running(self) -> bool:
@@ -761,6 +800,10 @@ class CameraWorker:
         with self._cmd_lock:
             self._features = merged
 
+    def set_system_cpu_pressure(self, pct: float) -> None:
+        """Latest system CPU% (set by the supervisor ~1 Hz), used by the governor."""
+        self._system_cpu_pressure = max(0.0, float(pct))
+
     def _feature(self, name: str) -> bool:
         """Thread-safe read of one feature flag (default True when unset)."""
         with self._cmd_lock:
@@ -868,7 +911,17 @@ class CameraWorker:
             prev_fps = getattr(self.config.source, "fps", None)
             prev_tracker = getattr(self.config.tracking, "tracker", "")
             prev_mode = getattr(self.config.tracking, "tracking_mode", "stable")
+            prev_backend = getattr(self.config.ptz, "backend", "")
+            prev_addr = getattr(self.config.ptz, "address", "")
             self.config = payload
+            # Rebuild the PTZ backend live when the transport changes — e.g. toggling
+            # Center Stage flips backend to/from "digital". Without this the digital
+            # backend is never created on a live switch and Center Stage does nothing
+            # until an app restart.
+            new_backend = getattr(payload.ptz, "backend", "")
+            new_addr = getattr(payload.ptz, "address", "")
+            if new_backend != prev_backend or new_addr != prev_addr:
+                self._rebuild_ptz_backend()
             # Apply an fps change from a full-config push live too, so the UI's
             # fps slider takes effect whether it routes through updateCameraConfig
             # or the dedicated setTargetFps slot.
@@ -1228,10 +1281,17 @@ class CameraWorker:
             and self._tracking_enabled
             and tracking_on
         ):
+            fh = max(1, int(frame.shape[0]))
+            box_h_frac = (float(target.bbox.y2) - float(target.bbox.y1)) / fh
+            occluded = self._target_box_collapsed(box_h_frac)
             err, height = self._track_error(target, frame, now, tracks=tracks)
             vel = self._estimate_aim_velocity(err, now)
             try:
-                pan, tilt, zoom = ctrl.step(err, vel, height, track_active=True, t=now)
+                # A box that suddenly collapsed (occlusion → only a partial body
+                # visible) is not a trustworthy aim — coast (track_active=False) so
+                # the controller holds instead of chasing it onto the legs/last-known
+                # partial position, and resumes when the subject reappears in full.
+                pan, tilt, zoom = ctrl.step(err, vel, height, track_active=not occluded, t=now)
                 self._ptz_last_cmd = (pan, tilt, zoom)
                 self._log_ptz_cmd("auto", pan, tilt, zoom)
             except Exception:  # noqa: BLE001
@@ -1261,6 +1321,17 @@ class CameraWorker:
         if frame is None or not getattr(self.config.ptz, "ego_comp_enabled", True):
             self._ego_vel = (0.0, 0.0)
             self._ego_source = "none"
+            self._ego_fresh = False
+            return
+        # Sentinel default 1 so a serialized config missing this field falls back to legacy
+        # every-frame behaviour; the normal Pydantic path always supplies the field default of 3.
+        interval = max(1, int(getattr(self.config.ptz, "ego_comp_interval", 1)))
+        if interval > 1 and (self._frames_inferred % interval) != 0:
+            # Off-cadence: no fresh measurement this tick. Mark not-fresh so the aim
+            # feed-forward zero-subtracts ego instead of subtracting a stale value —
+            # subtracting a decayed estimate every tick is what made the camera
+            # ping-pong when it and the subject both moved.
+            self._ego_fresh = False
             return
         boxes = [
             (t.bbox.x1, t.bbox.y1, t.bbox.x2, t.bbox.y2)
@@ -1273,9 +1344,11 @@ class CameraWorker:
             log.debug("camera_id=%s ego-motion estimate failed", self.camera_id, exc_info=True)
             self._ego_vel = (0.0, 0.0)
             self._ego_source = "none"
+            self._ego_fresh = False
             return
         self._ego_vel = (ego.vx, ego.vy)
         self._ego_source = ego.source
+        self._ego_fresh = True
 
     def _estimate_aim_velocity(
         self,
@@ -1295,7 +1368,9 @@ class CameraWorker:
         if prev is not None:
             dt = now - self._prev_aim_t
             if dt > 1e-3:
-                ego_vx, ego_vy = self._ego_vel
+                # Only trust ego-motion on a freshly-measured tick; a stale/decimated
+                # estimate would inject a phantom world-velocity (the ping-pong).
+                ego_vx, ego_vy = self._ego_vel if self._ego_fresh else (0.0, 0.0)
                 raw_vx = (err[0] - prev[0]) / dt - ego_vx
                 raw_vy = (err[1] - prev[1]) / dt - ego_vy
                 a = 0.5  # EMA: balance responsiveness vs. jitter rejection
@@ -1353,6 +1428,7 @@ class CameraWorker:
         with self._appearance_lock:
             if track_id != self._target_track_id:
                 self._reset_pose_aim()
+                self._target_h_ref = None
                 self._target_lock = _TargetLockState(status="pending", reason=reason)
                 self._reid_recover_candidate = None
                 self._identity_recover_candidate = None
@@ -1363,6 +1439,25 @@ class CameraWorker:
                 if reset_reid:
                     self._reset_reid()
             self._target_track_id = track_id
+
+    def _target_box_collapsed(self, height_frac: float) -> bool:
+        """True when the target box height suddenly collapsed vs its recent healthy
+        size — the occlusion signature (the subject covered by something leaves only
+        a partial box, e.g. just the legs). A gradual shrink (the subject walking
+        away) updates the reference and is NOT flagged, because the slow reference
+        keeps pace; a sudden drop IS flagged, because the reference hasn't caught up.
+        The caller coasts the PTZ instead of chasing the box down to the last-known
+        partial position.
+        """
+        h = max(0.0, float(height_frac))
+        ref = self._target_h_ref
+        if ref is None or ref <= 0.0:
+            self._target_h_ref = h
+            return False
+        if h < ref * _OCCLUSION_COLLAPSE_FRAC:
+            return True  # leave the reference intact so a full-size reappearance recovers
+        self._target_h_ref = ref + _OCCLUSION_REF_ALPHA * (h - ref)
+        return False
 
     @staticmethod
     def _bbox_area(bb: BBox) -> float:
@@ -1819,6 +1914,10 @@ class CameraWorker:
                     return
             new_id = visible_tracks[result.best_index].track_id
             if new_id != self._target_track_id:
+                if not self._reid_rebind_allows(new_id):
+                    # Named-identity target: body appearance alone must not drift the
+                    # lock onto a different/unknown person — wait for a face match.
+                    return
                 if not self._reid_recovery_confirmed(new_id):
                     return
                 # Now that the candidate is confirmed, blend the matching feature
@@ -1835,6 +1934,20 @@ class CameraWorker:
                     result.best_score,
                 )
                 self._commit_target_track(new_id, reason="reid")
+
+    def _reid_rebind_allows(self, new_id: int) -> bool:
+        """Whether appearance ReID recovery may re-bind the target to *new_id*.
+
+        For a target selected by *identity* (name), body appearance alone must
+        never move the lock onto a different person — re-acquiring a named target
+        requires a face-identity match. So a ReID re-bind is allowed only when the
+        candidate track is face-confirmed as the *same* identity. A manual/clicked
+        target (no identity) keeps the appearance-based re-bind it relies on.
+        """
+        if self._target_identity_id is None:
+            return True
+        entry = self._track_identity.get(new_id)
+        return entry is not None and entry[0] == self._target_identity_id
 
     def _reid_recovery_confirmed(self, track_id: int) -> bool:
         """Return True when the active tracking mode allows rebinding now."""
@@ -2527,7 +2640,8 @@ class CameraWorker:
             # Estimate pose for the selected person so the pose overlay shows the
             # moment you click someone — independent of whether PTZ auto-follow is
             # actively driving (which is the only place pose ran before).
-            self._maybe_estimate_pose_overlay(tracks, frame, now)
+            if self._pose_allowed_this_tick():
+                self._maybe_estimate_pose_overlay(tracks, frame, now)
             self._annotate_target_aim(tracks, frame, now)
 
             # Estimate the camera's own image motion for this tick BEFORE driving
@@ -2881,6 +2995,35 @@ class CameraWorker:
             )
             return None
 
+    def _rebuild_ptz_backend(self) -> None:
+        """Tear down and rebuild the PTZ controller/backend from the current config.
+
+        Used on a live transport change (e.g. toggling Center Stage flips the
+        backend to/from ``digital``). ``_build_ptz_stack`` is a no-op while a
+        backend exists, so we clear it first; the rebuild then reads the new
+        ``config.ptz`` and builds the right backend (a ``DigitalPTZBackend`` for
+        Center Stage). Never raises.
+        """
+        with self._ptz_lock:
+            old = self._ptz_backend
+            if old is not None and self._ptz_owned:
+                try:
+                    old.close()
+                except Exception:  # noqa: BLE001
+                    log.debug(
+                        "camera_id=%s ptz backend close failed", self.camera_id, exc_info=True
+                    )
+            self._ptz = None
+            self._ptz_backend = None
+            self._ptz_owned = False
+            self._digital_framer = None  # fresh framer for the new backend
+            self._build_ptz_stack()
+        log.info(
+            "camera_id=%s PTZ backend rebuilt for backend=%s",
+            self.camera_id,
+            getattr(self.config.ptz, "backend", "?"),
+        )
+
     def _build_ptz_stack(self) -> None:
         """Build a PTZController around a backend from config, if none injected.
 
@@ -3076,6 +3219,87 @@ class CameraWorker:
                     self._quality_active,
                 )
 
+    def _framed_output(self, frame: NDArray[np.uint8]) -> NDArray[np.uint8]:
+        """Center Stage: crop+scale the frame to auto-frame the target.
+
+        The crop is computed directly from the current target's bounding box by
+        :class:`DigitalFramer` (centre on the subject, size to frame it, smoothed)
+        — NOT by integrating the velocity controller, whose conservative auto-zoom
+        never engaged so the crop stayed full-frame. With no target the crop eases
+        back to the whole frame. Returns the frame unchanged when no digital
+        backend is active, so the caller is always safe to use the return value.
+        """
+        from autoptz.engine.ptz.digital import DigitalPTZBackend
+
+        backend = self._ptz_backend
+        if not isinstance(backend, DigitalPTZBackend) or frame is None:
+            return frame
+        import cv2
+
+        h, w = frame.shape[:2]
+        ow = int(getattr(self.config.ptz, "digital_output_w", 1280))
+        oh = int(getattr(self.config.ptz, "digital_output_h", 720))
+        aspect = ow / max(1, oh)
+        framer = self._digital_framer
+        if framer is None or abs(framer.out_aspect - aspect) > 1e-3:
+            from autoptz.engine.pipeline.digital_framer import DigitalFramer
+
+            framer = self._digital_framer = DigitalFramer(out_aspect=aspect)
+        # Crop tightness follows the live "Framing" dropdown.
+        framing = getattr(self.config.tracking, "framing", "upper_body")
+        framer.fill, framer.max_frac = _CENTERSTAGE_FRAMING.get(
+            framing, _CENTERSTAGE_FRAMING["upper_body"]
+        )
+        target = self._current_digital_target()
+        if target is not None:
+            x, y, cw, ch = framer.frame_for(target, w, h)
+        else:
+            x, y, cw, ch = framer.full_frame(w, h)
+        nowm = time.monotonic()
+        if nowm - self._cs_diag_t > 2.0:
+            self._cs_diag_t = nowm
+            log.info(
+                "camera_id=%s center-stage: target=%s crop=%dx%d of %dx%d (tid=%s)",
+                self.camera_id,
+                "yes" if target is not None else "NONE",
+                cw,
+                ch,
+                w,
+                h,
+                self._target_track_id,
+            )
+        crop = frame[y : y + ch, x : x + cw]
+        if crop.size == 0:
+            return frame
+        return cv2.resize(crop, (ow, oh), interpolation=cv2.INTER_LINEAR)
+
+    def _current_digital_target(self) -> tuple[float, float, float, float] | None:
+        """The selected target's bbox (x1,y1,x2,y2) for Center Stage, or None.
+
+        Runs on the capture thread; a slightly stale box is fine for smooth
+        framing. Prefers the live track for the current target id, but falls back
+        to the maintained *trusted* target box so Center Stage keeps framing
+        through track-id churn / identity re-binding (when ``_target_track_id``
+        momentarily points at a track not in the latest ``_last_tracks``).
+        """
+        tid = self._target_track_id
+        if tid is not None:
+            for t in self._last_tracks or ():
+                if (
+                    t.track_id == tid
+                    and not getattr(t, "lost", False)
+                    and getattr(t, "bbox", None) is not None
+                ):
+                    bb = t.bbox
+                    return (bb.x1, bb.y1, bb.x2, bb.y2)
+        # Fallback: the last trusted target box (set whenever a target is locked,
+        # by track id OR by identity), so the crop holds through brief track gaps.
+        if self._target_track_id is not None or self._target_identity_id is not None:
+            tb = getattr(self._target_lock, "trusted_bbox", None)
+            if tb is not None:
+                return (tb.x1, tb.y1, tb.x2, tb.y2)
+        return None
+
     def _push_frame(self, frame: NDArray[np.uint8]) -> None:
         if self._shm is None:
             return
@@ -3087,8 +3311,22 @@ class CameraWorker:
             return
         self._last_preview_push_t = now
         try:
-            f = self._fit_frame(frame)
+            framed = self._framed_output(frame)
+            f = self._fit_frame(framed)
             self._shm.push(f)
+            if getattr(self.config.ptz, "vcam_out", False):
+                ow = int(getattr(self.config.ptz, "digital_output_w", 1280))
+                oh = int(getattr(self.config.ptz, "digital_output_h", 720))
+                if self._vcam is None:
+                    from autoptz.engine.pipeline.vcam import VirtualCamSink
+
+                    self._vcam = VirtualCamSink(ow, oh)
+                self._vcam.send_bgr(framed)
+            elif self._vcam is not None:
+                # Virtual camera output was turned off — release the device so it
+                # disconnects from Zoom/OBS instead of lingering on a frozen frame.
+                self._vcam.close()
+                self._vcam = None
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s shm push failed", self.camera_id, exc_info=True)
 
@@ -3132,6 +3370,8 @@ class CameraWorker:
         ``tracking.min_detection_size_frac`` of the frame height are dropped here
         so the engine doesn't chase/save every far-away person.
         """
+        # Intentional: no inference ran this tick, so the stale _detected_this_tick flag is
+        # harmless — there are no detections to pose anyway.
         if frame is None or self._detect is None:
             return []
         if not self._feature("detection"):
@@ -3144,10 +3384,12 @@ class CameraWorker:
                 not self._pooled_detector or (self._detect_frame_index - 1) % interval == 0
             )
             if should_detect:
+                self._detected_this_tick = True
                 detections = self._detect.detector.detect(frame)
                 detections = self._filter_small_detections(detections, frame)
                 self._last_detections = detections
             else:
+                self._detected_this_tick = False
                 # On detector-skip frames re-feed the previous detections so the
                 # boxmot tracker keeps the person alive between detect frames.
                 # Feeding [] here ages tracks out within a frame or two, which is
@@ -3774,6 +4016,26 @@ class CameraWorker:
         self._last_pose_t = now - _POSE_INTERVAL_S * 0.33
         self._phase_seeded = True
 
+    def _pose_allowed_this_tick(self) -> bool:
+        """False when spreading is on and the detector ran this frame (defer pose)."""
+        if not getattr(self.config.tracking, "stage_spread", True):
+            return True
+        return not self._detected_this_tick
+
+    def _amortized_cost_ms(self) -> float:
+        """Per-displayed-frame work: each stage scaled by how often it runs.
+
+        Detector runs every ``_quality_interval`` frames; face/pose run on a wall
+        clock (``_FACE_INTERVAL_S`` / ``_POSE_INTERVAL_S``) so per-frame they cost
+        proportionally less the higher the source fps.
+        """
+        fps = max(1.0, self._target_fps())
+        detect = self._stage_avg("detect") / max(1, self._quality_interval)
+        track = self._stage_avg("track")
+        face = self._stage_avg("face") * min(1.0, (1.0 / _FACE_INTERVAL_S) / fps)
+        pose = self._stage_avg("pose") * min(1.0, (1.0 / _POSE_INTERVAL_S) / fps)
+        return detect + track + face + pose
+
     def _effective_detect_interval(self) -> int:
         """Return the actual detector cadence after quality policy is applied."""
         base = max(1, int(getattr(self.config.tracking, "detect_interval", 1) or 1))
@@ -3795,20 +4057,21 @@ class CameraWorker:
             return self._quality_interval
 
         budget = self._frame_budget_ms()
-        cost = sum(self._stage_avg(k) for k in ("detect", "track", "face", "pose"))
+        cost = self._amortized_cost_ms()
         ratio = cost / budget if budget > 0 else 0.0
-        if ratio >= 0.95:
-            interval = max(base, 4)
-            active = "low"
-            reason = "Auto quality: runtime cost is over frame budget; detector cadence relaxed."
-        elif ratio >= 0.75:
-            interval = max(base, 2)
-            active = "balanced"
-            reason = "Auto quality: runtime cost is near frame budget; detector cadence balanced."
+        if self._system_cpu_pressure >= 85.0:
+            ratio = max(ratio, 0.92)  # Machine is hot → push toward balanced/low.
+        prev = self._quality_active
+        if ratio >= 0.90 or (prev in ("balanced", "low") and ratio >= 0.70):
+            if ratio >= 1.10:
+                interval, active = max(base, 4), "low"
+                reason = "Auto quality: over frame budget; detector cadence relaxed."
+            else:
+                interval, active = max(base, 2), "balanced"
+                reason = "Auto quality: near frame budget; detector cadence balanced."
         else:
-            interval = base
-            active = "high"
-            reason = "Auto quality: latency headroom stable; quality high, full cadence."
+            interval, active = base, "high"
+            reason = "Auto quality: latency headroom stable; full cadence."
         if interval != self._quality_interval or active != self._quality_active:
             self._add_event("quality", reason)
         self._quality_interval = interval

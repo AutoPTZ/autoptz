@@ -229,3 +229,115 @@ class TestPhaseStagger:
         pose_next_due = worker._last_pose_t + _POSE_INTERVAL_S
         # That is now + (1 - 0.33) * _POSE_INTERVAL_S = now + 0.67 * _POSE_INTERVAL_S
         assert pose_next_due == pytest.approx(now + _POSE_INTERVAL_S * 0.67)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ego-motion decimation: _update_ego_motion cadence gate
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _worker(**ptz):
+    from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
+
+    cfg = CameraConfig(
+        id="cam-cpu-000001",
+        name="t",
+        source=SourceConfig(type="usb", address="usb://0"),
+        tracking=TrackingConfig(),
+        ptz=PTZConfig(**ptz),
+    )
+    from autoptz.engine.camera_worker import CameraWorker
+
+    return CameraWorker("cam-cpu-000001", cfg, on_telemetry=lambda m: None)
+
+
+def test_ego_runs_every_nth_frame():
+    w = _worker(ego_comp_enabled=True, ego_comp_interval=3)
+    calls = {"n": 0}
+
+    class _Est:
+        def estimate(self, *a, **k):
+            calls["n"] += 1
+            from autoptz.engine.pipeline.egomotion import EgoMotion
+
+            return EgoMotion(vx=0.1, vy=0.0, source="flow", confidence=1.0)
+
+    w._ego_estimator = _Est()
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    for i in range(6):
+        w._frames_inferred = i  # drives the decimation phase
+        w._update_ego_motion([], frame, float(i))
+    # 6 frames, interval 3 → flow ran on frames 0 and 3 only.
+    assert calls["n"] == 2
+    # Between runs the estimate is reused (non-zero), not blanked to "none".
+    assert w._ego_source == "flow"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage-spread: pose skips on frames where the detector ran
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_pose_skips_on_a_detect_frame():
+    from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
+    from autoptz.engine.camera_worker import CameraWorker
+
+    cfg = CameraConfig(
+        id="cam-cpu-000002",
+        name="t",
+        source=SourceConfig(type="usb", address="usb://0"),
+        tracking=TrackingConfig(stage_spread=True),
+        ptz=PTZConfig(),
+    )
+    w = CameraWorker("cam-cpu-000002", cfg, on_telemetry=lambda m: None)
+    w._detected_this_tick = True
+    assert w._pose_allowed_this_tick() is False
+    w._detected_this_tick = False
+    assert w._pose_allowed_this_tick() is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Amortized cost + hysteresis
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_amortized_cost_divides_detect_by_interval():
+    from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
+    from autoptz.engine.camera_worker import CameraWorker
+
+    cfg = CameraConfig(
+        id="cam-cpu-000003",
+        name="t",
+        source=SourceConfig(type="usb", address="usb://0"),
+        tracking=TrackingConfig(),
+        ptz=PTZConfig(),
+    )
+    w = CameraWorker("cam-cpu-000003", cfg, on_telemetry=lambda m: None)
+    w._quality_interval = 4
+    w._stage_samples_override = {"detect": 40.0, "track": 2.0, "face": 0.0, "pose": 0.0}
+    w._stage_avg = lambda k: w._stage_samples_override.get(k, 0.0)
+    # Detect amortized over interval 4 → 10ms, + track 2ms = 12ms, NOT 42ms.
+    assert abs(w._amortized_cost_ms() - 12.0) < 0.51
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# System-CPU-aware governor
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_high_system_cpu_relaxes_even_when_local_cost_low():
+    from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
+    from autoptz.engine.camera_worker import CameraWorker
+
+    cfg = CameraConfig(
+        id="cam-cpu-000004",
+        name="t",
+        source=SourceConfig(type="usb", address="usb://0"),
+        tracking=TrackingConfig(),
+        ptz=PTZConfig(),
+    )
+    w = CameraWorker("cam-cpu-000004", cfg, on_telemetry=lambda m: None)
+    w._stage_avg = lambda k: 1.0  # trivially low local cost
+    w.set_system_cpu_pressure(95.0)
+    w._effective_detect_interval()
+    assert w._quality_active in ("balanced", "low")

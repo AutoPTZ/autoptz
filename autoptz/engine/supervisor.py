@@ -63,6 +63,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _PUMP_INTERVAL_S = 0.05  # 20 Hz command pump when run internally
+_CPU_SAMPLE_INTERVAL_S = 1.0  # system-CPU fan-out cadence (≈1 Hz)
 
 # Worker liveness / auto-restart constants
 _HEALTH_SCAN_INTERVAL_S = 2.0  # how often tick() runs the health scan
@@ -423,6 +424,20 @@ class Supervisor:
         if now - self._last_health_scan_t >= _HEALTH_SCAN_INTERVAL_S:
             self._last_health_scan_t = now
             self._scan_worker_health(now)
+        # Throttled (~1 Hz) system-CPU sample fanned out to every worker so the
+        # per-camera governor can back off collectively when the machine is hot.
+        if now - getattr(self, "_last_cpu_sample_t", 0.0) >= _CPU_SAMPLE_INTERVAL_S:
+            self._last_cpu_sample_t = now
+            try:
+                from autoptz.engine.runtime.diagnostics import system_metrics
+
+                pct = float(system_metrics().get("cpu_percent", 0.0) or 0.0)
+            except Exception:  # noqa: BLE001
+                pct = 0.0
+            for worker in self._workers.values():
+                setter = getattr(worker, "set_system_cpu_pressure", None)
+                if setter is not None:
+                    setter(pct)
 
     def _pump_loop(self) -> None:
         while not self._pump_stop.is_set():

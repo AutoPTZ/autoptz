@@ -68,6 +68,8 @@ def build_backend(
             return _build_ndi(ptz, ndi_source=ndi_source, ndi_name=ndi_name)
         if backend == "onvif":
             return _build_onvif(ptz)
+        if backend == "digital":
+            return _build_digital(ptz)
     except Exception:  # noqa: BLE001 - factory must never raise into the engine
         log.warning(
             "PTZ backend %r build failed (addr=%r); PTZ disabled.",
@@ -153,6 +155,13 @@ def _build_onvif(ptz: PTZConfig) -> PTZBackend | None:
         return None
     log.info("PTZ backend: ONVIF on %s:%d", host, port)
     return backend
+
+
+def _build_digital(ptz: PTZConfig) -> PTZBackend | None:
+    from autoptz.engine.ptz.digital import DigitalPTZBackend
+
+    log.info("PTZ backend: digital (Center Stage)")
+    return DigitalPTZBackend()
 
 
 # ── auto probe ──────────────────────────────────────────────────────────────────

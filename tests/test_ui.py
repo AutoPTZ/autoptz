@@ -1287,3 +1287,77 @@ finally:
         env.setdefault("QT_QPA_PLATFORM", "offscreen")
         result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
         assert result.returncode == 0, result.stderr or result.stdout
+
+
+class TestCenterStageUI:
+    """Center Stage (digital PTZ) backend entry and virtual-camera output checkbox."""
+
+    def test_center_stage_toggle_maps_to_digital_backend(self, tmp_path) -> None:
+        code = f"""
+import os
+import sys
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
+from autoptz.ui.widgets.properties_panel import PropertiesPanel
+app = QApplication(sys.argv[:1])
+client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+cid = client.addCamera("usb://0", "Cam")
+panel = PropertiesPanel(client, frame_source=ShmFrameSource())
+panel.set_camera(cid)
+
+# 'digital' is no longer a raw backend item — the Center Stage toggle owns it.
+items = [panel._backend.itemText(i) for i in range(panel._backend.count())]
+assert "digital" not in items, f"'digital' should not be a raw backend item: {{items}}"
+
+# Center Stage off → backend is the hardware combo value (not digital).
+panel._center_stage.setChecked(False)
+panel._push()
+assert panel._cfg["ptz"]["backend"] != "digital", panel._cfg["ptz"]["backend"]
+
+# Center Stage on → backend becomes 'digital' and the Advanced picker greys out.
+panel._center_stage.setChecked(True)
+panel._push()
+assert panel._cfg["ptz"]["backend"] == "digital", panel._cfg["ptz"]["backend"]
+assert panel._backend.isEnabled() is False, "advanced backend picker should be disabled"
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    def test_vcam_out_checkbox_round_trips_into_push(self, tmp_path) -> None:
+        code = f"""
+import os
+import sys
+import json
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
+from autoptz.ui.widgets.properties_panel import PropertiesPanel
+app = QApplication(sys.argv[:1])
+client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+cid = client.addCamera("usb://0", "Cam")
+panel = PropertiesPanel(client, frame_source=ShmFrameSource())
+panel.set_camera(cid)
+
+# Check default is False
+panel._vcam_out.setChecked(False)
+panel._push()
+assert panel._cfg["ptz"]["vcam_out"] is False, f"expected False, got {{panel._cfg['ptz']['vcam_out']!r}}"
+
+# Check that True round-trips
+panel._vcam_out.setChecked(True)
+panel._push()
+assert panel._cfg["ptz"]["vcam_out"] is True, f"expected True, got {{panel._cfg['ptz']['vcam_out']!r}}"
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
+        assert result.returncode == 0, result.stderr or result.stdout
