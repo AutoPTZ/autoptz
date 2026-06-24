@@ -64,6 +64,12 @@ log = logging.getLogger(__name__)
 
 _PUMP_INTERVAL_S = 0.05  # 20 Hz command pump when run internally
 
+# Worker liveness / auto-restart constants
+_HEALTH_SCAN_INTERVAL_S = 2.0  # how often tick() runs the health scan
+_BASE_BACKOFF_S = 1.0  # initial restart back-off
+_MAX_BACKOFF_S = 30.0  # maximum restart back-off (exponential cap)
+_MAX_RESTART_ATTEMPTS = 5  # give up after this many consecutive failures
+
 
 def _log_macos_capture_path() -> None:
     """Log (once at start) which USB capture path macOS will use.
@@ -140,6 +146,14 @@ class Supervisor:
         self._pump_thread: threading.Thread | None = None
         self._pump_stop = threading.Event()
         self._startup_thread: threading.Thread | None = None
+
+        # ── worker health monitoring + auto-restart ──────────────────────────────
+        # Per-camera backoff state: cid → (attempts, next_allowed_t).
+        # Cleared when a worker is healthy again or the camera is removed.
+        self._restart_state: dict[str, tuple[int, float]] = {}
+        # Monotonic timestamp of the last health scan (throttled to
+        # _HEALTH_SCAN_INTERVAL_S so tick() doesn't scan every 50 ms).
+        self._last_health_scan_t: float = 0.0
 
     # ── lifecycle ───────────────────────────────────────────────────────────────
 
@@ -405,6 +419,10 @@ class Supervisor:
                 self._route(cmd)
             except Exception:  # noqa: BLE001
                 log.warning("error routing command %s", getattr(cmd, "kind", "?"), exc_info=True)
+        now = time.monotonic()
+        if now - self._last_health_scan_t >= _HEALTH_SCAN_INTERVAL_S:
+            self._last_health_scan_t = now
+            self._scan_worker_health(now)
 
     def _pump_loop(self) -> None:
         while not self._pump_stop.is_set():
@@ -415,6 +433,88 @@ class Supervisor:
                 log.debug("pump tick error", exc_info=True)
             elapsed = time.monotonic() - t0
             self._pump_stop.wait(max(0.0, _PUMP_INTERVAL_S - elapsed))
+
+    # ── worker health monitoring ─────────────────────────────────────────────────
+
+    def _scan_worker_health(self, now: float) -> None:
+        """Check every worker's liveness and restart any that have died.
+
+        Throttled by the caller (``tick()``) to run at most every
+        ``_HEALTH_SCAN_INTERVAL_S`` seconds.  Uses a locked snapshot of
+        ``_workers`` so the scan never holds the lock across blocking calls
+        (``worker.stop()`` or ``_spawn_worker()``).
+        """
+        if not self._running:
+            return
+        with self._lock:
+            snapshot = list(self._workers.items())
+
+        for cid, worker in snapshot:
+            alive = False
+            try:
+                alive = bool(worker.is_alive())
+            except Exception:  # noqa: BLE001
+                log.debug("camera_id=%s is_alive() raised", cid, exc_info=True)
+
+            if alive:
+                # Worker is healthy — clear any stale restart state.
+                self._restart_state.pop(cid, None)
+                continue
+
+            # Worker appears dead.  Check back-off state.
+            attempts, next_allowed_t = self._restart_state.get(cid, (0, 0.0))
+
+            if attempts >= _MAX_RESTART_ATTEMPTS:
+                # Already gave up — log once (when attempts first hits the cap
+                # the counter was bumped; subsequent scans see == cap, skip).
+                # The "log once" is enforced by the sentinel value stored below.
+                continue
+
+            if now < next_allowed_t:
+                # Still in the back-off window — do nothing this scan.
+                continue
+
+            # Attempt a restart.
+            log.info(
+                "camera_id=%s capture thread died — restarting (attempt %d/%d)",
+                cid,
+                attempts + 1,
+                _MAX_RESTART_ATTEMPTS,
+            )
+            try:
+                worker.stop()
+            except Exception:  # noqa: BLE001
+                log.debug("camera_id=%s stop() before restart failed", cid, exc_info=True)
+
+            with self._lock:
+                # Guard: camera may have been explicitly removed since the snapshot.
+                # Note: tick() (command routing + health scan) runs on a single
+                # thread, so _on_remove_camera and this scan cannot truly interleave;
+                # this re-check is belt-and-suspenders against external direct calls.
+                if cid in self._workers:
+                    del self._workers[cid]
+                else:
+                    # Removed concurrently — clear state and skip the respawn.
+                    self._restart_state.pop(cid, None)
+                    continue
+
+            new_attempts = attempts + 1
+            backoff = min(_MAX_BACKOFF_S, _BASE_BACKOFF_S * (2 ** (new_attempts - 1)))
+            self._restart_state[cid] = (new_attempts, now + backoff)
+
+            if new_attempts >= _MAX_RESTART_ATTEMPTS:
+                log.warning(
+                    "camera_id=%s worker failed %d times — giving up on auto-restart",
+                    cid,
+                    new_attempts,
+                )
+                # Don't respawn; keep the sentinel so future scans skip this camera.
+                continue
+
+            try:
+                self._spawn_worker(cid)
+            except Exception:  # noqa: BLE001
+                log.warning("camera_id=%s respawn failed", cid, exc_info=True)
 
     # ── command routing ─────────────────────────────────────────────────────────
 
@@ -459,15 +559,18 @@ class Supervisor:
             self._spawn_worker(cmd.camera_id)
 
     def _on_remove_camera(self, cmd: RemoveCameraCmd) -> None:
+        cid = cmd.camera_id or ""
         with self._lock:
-            worker = self._workers.pop(cmd.camera_id or "", None)
+            worker = self._workers.pop(cid, None)
+        # Clear any pending restart state so a removed camera isn't resurrected.
+        self._restart_state.pop(cid, None)
         if worker is not None:
             try:
                 worker.stop()
             except Exception:  # noqa: BLE001
                 log.warning("error stopping removed worker %s", cmd.camera_id, exc_info=True)
             try:
-                self._client.request_provider_detach(cmd.camera_id or "")
+                self._client.request_provider_detach(cid)
             except Exception:  # noqa: BLE001
                 log.debug("provider detach request failed for %s", cmd.camera_id, exc_info=True)
 
