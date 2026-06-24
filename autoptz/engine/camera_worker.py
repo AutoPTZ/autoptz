@@ -541,6 +541,7 @@ class CameraWorker:
         self._shm: ShmWriter | None = None
         self._vcam: Any | None = None  # VirtualCamSink (lazily created when vcam_out enabled)
         self._digital_framer: Any | None = None  # Center Stage auto-framer (lazy)
+        self._cs_diag_t: float = 0.0  # throttle for the Center Stage diagnostic log
         self._detect: _DetectStack | None = None
         self._pooled_detector = False
         # True when the detector is the unified YOLO11-pose model (boxes+keypoints
@@ -3237,6 +3238,19 @@ class CameraWorker:
             x, y, cw, ch = framer.frame_for(target, w, h)
         else:
             x, y, cw, ch = framer.full_frame(w, h)
+        nowm = time.monotonic()
+        if nowm - self._cs_diag_t > 2.0:
+            self._cs_diag_t = nowm
+            log.info(
+                "camera_id=%s center-stage: target=%s crop=%dx%d of %dx%d (tid=%s)",
+                self.camera_id,
+                "yes" if target is not None else "NONE",
+                cw,
+                ch,
+                w,
+                h,
+                self._target_track_id,
+            )
         crop = frame[y : y + ch, x : x + cw]
         if crop.size == 0:
             return frame
@@ -3245,20 +3259,28 @@ class CameraWorker:
     def _current_digital_target(self) -> tuple[float, float, float, float] | None:
         """The selected target's bbox (x1,y1,x2,y2) for Center Stage, or None.
 
-        Read from the last published tracks (this runs on the capture thread); a
-        slightly stale box is fine for smooth framing.
+        Runs on the capture thread; a slightly stale box is fine for smooth
+        framing. Prefers the live track for the current target id, but falls back
+        to the maintained *trusted* target box so Center Stage keeps framing
+        through track-id churn / identity re-binding (when ``_target_track_id``
+        momentarily points at a track not in the latest ``_last_tracks``).
         """
         tid = self._target_track_id
-        if tid is None:
-            return None
-        for t in self._last_tracks or ():
-            if (
-                t.track_id == tid
-                and not getattr(t, "lost", False)
-                and getattr(t, "bbox", None) is not None
-            ):
-                bb = t.bbox
-                return (bb.x1, bb.y1, bb.x2, bb.y2)
+        if tid is not None:
+            for t in self._last_tracks or ():
+                if (
+                    t.track_id == tid
+                    and not getattr(t, "lost", False)
+                    and getattr(t, "bbox", None) is not None
+                ):
+                    bb = t.bbox
+                    return (bb.x1, bb.y1, bb.x2, bb.y2)
+        # Fallback: the last trusted target box (set whenever a target is locked,
+        # by track id OR by identity), so the crop holds through brief track gaps.
+        if self._target_track_id is not None or self._target_identity_id is not None:
+            tb = getattr(self._target_lock, "trusted_bbox", None)
+            if tb is not None:
+                return (tb.x1, tb.y1, tb.x2, tb.y2)
         return None
 
     def _push_frame(self, frame: NDArray[np.uint8]) -> None:
