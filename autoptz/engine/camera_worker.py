@@ -404,6 +404,9 @@ class CameraWorker:
         self._reid_probed = False
         self._last_reid_t = 0.0
         self._reid_recover_candidate: tuple[int, int] | None = None
+        # Phase-stagger: seeded once on the first inference-loop tick so face,
+        # ReID, and pose don't all fire on the same appearance-thread iteration.
+        self._phase_seeded = False
 
         # Aim-error velocity estimate (normalized error units / second), fed to the
         # PTZ controller so its feed-forward + motion prediction actually engage —
@@ -1619,7 +1622,7 @@ class CameraWorker:
         reid = self._ensure_reid()
         if reid is None or not getattr(reid, "available", False):
             return
-        if now - self._last_reid_t < _REID_INTERVAL_S:
+        if now - self._last_reid_t < self._effective_reid_interval():
             return
         self._last_reid_t = now
 
@@ -2022,8 +2025,11 @@ class CameraWorker:
             self._pose_keypoints = None
             self._reset_pose_aim()
 
-        # Re-estimate only every _POSE_INTERVAL_S; reuse last keypoints between.
-        if self._pose_keypoints is None or now - self._last_pose_t >= _POSE_INTERVAL_S:
+        # Re-estimate only every _effective_pose_interval(); reuse last keypoints between.
+        if (
+            self._pose_keypoints is None
+            or now - self._last_pose_t >= self._effective_pose_interval()
+        ):
             pose_t0 = time.perf_counter()
             kps = pose.estimate(frame, bbox)
             self._pose_ms = (time.perf_counter() - pose_t0) * 1000.0
@@ -2328,6 +2334,7 @@ class CameraWorker:
             self._frames_inferred += 1
             self._current_inference_frame_id = fid
             now = time.monotonic()
+            self._seed_subservice_phases(now)
 
             detect_t0 = time.perf_counter()
             tracks = self._maybe_track(frame)
@@ -3121,7 +3128,7 @@ class CameraWorker:
         if frame is None or face is None or not getattr(face.recognizer, "available", False):
             self._clear_face_overlay()
             return
-        if now - self._last_face_t < _FACE_INTERVAL_S:
+        if now - self._last_face_t < self._effective_face_interval():
             self._expire_face_overlay(now, tracks)
             # Still keep identity-targeting honest even without the face stack:
             # if an explicit identity target can't be resolved we leave the
@@ -3553,6 +3560,54 @@ class CameraWorker:
             snapshot = list(samples)
         return float(sum(snapshot) / len(snapshot))
 
+    # ── adaptive subservice cadence (CPU governor) ──────────────────────────────
+
+    def _quality_scale(self) -> float:
+        """Multiplier for subservice intervals based on active quality tier.
+
+        ``high`` / ``auto`` (stable headroom) → 1.0 (run at the base cadence)
+        ``balanced`` (near budget) → 1.25 (modest relaxation under moderate load)
+        ``low`` (over budget) → 2.0 (run at half speed when the machine is over budget)
+
+        Subservices run at FULL cadence unless the machine is near or over its
+        frame budget.  The phase-stagger still smooths burst spikes at all load
+        levels, so there is no need to throttle proactively at idle.
+        """
+        q = self._quality_active
+        if q == "low":
+            return 2.0
+        if q == "balanced":
+            return 1.25
+        return 1.0  # "high", "auto", or any unrecognised value → full cadence
+
+    def _effective_face_interval(self) -> float:
+        """Face-recognition run period after quality scaling (seconds)."""
+        return _FACE_INTERVAL_S * self._quality_scale()
+
+    def _effective_reid_interval(self) -> float:
+        """ReID run period after quality scaling (seconds)."""
+        return _REID_INTERVAL_S * self._quality_scale()
+
+    def _effective_pose_interval(self) -> float:
+        """Pose-estimation run period after quality scaling (seconds)."""
+        return _POSE_INTERVAL_S * self._quality_scale()
+
+    def _seed_subservice_phases(self, now: float) -> None:
+        """One-time phase-stagger: offset ReID and pose from face so they don't
+        all fire on the same appearance-thread tick.
+
+        Called from the inference loop the first time ``now`` is known; guarded
+        by ``_phase_seeded`` so it is a no-op on every subsequent call.
+        """
+        if self._phase_seeded:
+            return
+        # Offset ReID by half a period and pose by a third so the three heavy
+        # appearance passes are evenly distributed across the cadence window
+        # instead of all firing at t=0.
+        self._last_reid_t = now - _REID_INTERVAL_S * 0.5
+        self._last_pose_t = now - _POSE_INTERVAL_S * 0.33
+        self._phase_seeded = True
+
     def _effective_detect_interval(self) -> int:
         """Return the actual detector cadence after quality policy is applied."""
         base = max(1, int(getattr(self.config.tracking, "detect_interval", 1) or 1))
@@ -3586,8 +3641,8 @@ class CameraWorker:
             reason = "Auto quality: runtime cost is near frame budget; detector cadence balanced."
         else:
             interval = base
-            active = "balanced"
-            reason = "Auto quality: latency headroom stable."
+            active = "high"
+            reason = "Auto quality: latency headroom stable; quality high, full cadence."
         if interval != self._quality_interval or active != self._quality_active:
             self._add_event("quality", reason)
         self._quality_interval = interval
