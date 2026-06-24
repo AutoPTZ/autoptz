@@ -374,6 +374,91 @@ class PersonDetector:
         )
         return results
 
+    def detect_batch(self, frames: list[NDArray[np.uint8]]) -> list[list[Detection]]:
+        """Run detection on a batch of *frames* (each BGR H×W×3).
+
+        Returns one ``list[Detection]`` per input frame, in order.
+        ``detect_batch(frames)[i]`` is guaranteed to equal ``detect(frames[i])``
+        for any single frame (batched inference is a pure performance optimisation).
+
+        If the ONNX model was exported with a fixed batch dimension of 1, falls
+        back to calling ``detect()`` per frame so the method always works
+        regardless of model export settings.  The ``detect_interval`` counter
+        is *not* consulted here — callers that need interval-based skipping
+        should gate calls to this method themselves.
+        """
+        if not frames:
+            return []
+
+        # Letterbox every frame; collect per-frame tensors ([1,3,S,S]) + ScaleInfos.
+        tensors: list[NDArray[np.float32]] = []
+        scale_infos: list[_ScaleInfo] = []
+        for frame in frames:
+            tensor, si = _letterbox(frame, self._input_size)
+            tensors.append(tensor)
+            scale_infos.append(si)
+
+        # Detect whether the session accepts a variable batch dim.
+        # The input shape is a list like [1, 3, 640, 640] or ['batch', 3, 640, 640].
+        inp_shape = self._session.get_inputs()[0].shape
+        batch_dim = inp_shape[0] if inp_shape else None
+        fixed_batch_1 = isinstance(batch_dim, int) and batch_dim == 1
+
+        if fixed_batch_1 and len(frames) > 1:
+            # Fall back to per-frame detect() so the result is always correct.
+            # Save and restore the frame counter so detect_batch doesn't perturb it.
+            saved_count = self._frame_count
+            results: list[list[Detection]] = []
+            for frame in frames:
+                # Bypass the detect_interval check: force frame_count so the
+                # modulo always passes (set to 0 so the next call is frame 1).
+                self._frame_count = 0
+                results.append(self.detect(frame))
+            self._frame_count = saved_count
+            return results
+
+        # True batched path: concatenate → [N, 3, S, S], one session.run.
+        batched = np.concatenate(tensors, axis=0)
+        raw_outputs = self._session.run([self._output_name], {self._input_name: batched})
+        raw_batch: NDArray[np.float32] = raw_outputs[0].astype(np.float32)
+
+        # raw_batch shape is [N, ...] — one slice per frame.
+        results_batch: list[list[Detection]] = []
+        for i, si in enumerate(scale_infos):
+            # Extract the i-th frame's output and re-add a batch dim so
+            # _parse_raw_output can drop it (it always does raw = raw[0]).
+            raw_i = raw_batch[i : i + 1]
+            dets_np = _parse_raw_output(raw_i, self._input_size, self._conf_floor)
+
+            frame_results: list[Detection] = []
+            for row in dets_np:
+                x1, y1, x2, y2, conf, cls = (
+                    float(row[0]),
+                    float(row[1]),
+                    float(row[2]),
+                    float(row[3]),
+                    float(row[4]),
+                    float(row[5]),
+                )
+                if int(round(cls)) != self._person_class_id:
+                    continue
+                if conf < self._conf_threshold:
+                    continue
+                bbox = _to_orig_coords(x1, y1, x2, y2, si)
+                if bbox.area() < 1.0:
+                    continue
+                frame_results.append(Detection(bbox=bbox, conf=conf, class_id=int(round(cls))))
+
+            results_batch.append(frame_results)
+
+        log.debug(
+            "detect_batch() frames=%d total_detections=%d ep=%s",
+            len(frames),
+            sum(len(r) for r in results_batch),
+            self.ep,
+        )
+        return results_batch
+
     def reset(self) -> None:
         """Reset the frame counter (e.g. on source change)."""
         self._frame_count = 0
