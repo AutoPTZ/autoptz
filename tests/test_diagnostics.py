@@ -221,24 +221,27 @@ class TestSystemMetricsShape:
         assert isinstance(metrics["app_mem_percent"], int | float)
 
     def test_app_memory_is_honest_footprint_not_inflated_rss(self) -> None:
-        # "App Mem" must reflect real memory pressure: on macOS that's
-        # phys_footprint (<= RSS, since RSS counts reclaimable mmap'd model files);
-        # elsewhere it falls back to RSS.
-        import os
+        # "App Mem" must reflect real memory pressure: macOS phys_footprint, else
+        # RSS. Feed a FAKE proc with a fixed RSS so the fallback is deterministic —
+        # a live process's RSS churns between two reads, which made the old
+        # `mem == rss` assertion flaky on non-macOS CI.
         import sys
-
-        import psutil
+        import types
 
         from autoptz.engine.runtime.diagnostics import _app_memory_bytes
 
-        proc = psutil.Process(os.getpid())
-        mem = _app_memory_bytes(proc)
-        rss = proc.memory_info().rss
+        sentinel_rss = 7_000_000_003  # implausible exact value
+        fake = types.SimpleNamespace(memory_info=lambda: types.SimpleNamespace(rss=sentinel_rss))
+
+        mem = _app_memory_bytes(fake)
         assert mem > 0
         if sys.platform == "darwin":
-            assert mem <= rss  # footprint excludes clean/reclaimable mapped pages
+            # macOS reads the real proc_pid_rusage phys_footprint of THIS process
+            # (ignoring the passed proc), so it must differ from the sentinel RSS.
+            assert mem != sentinel_rss
         else:
-            assert mem == rss
+            # Non-macOS returns the proc's RSS straight through — now exact.
+            assert mem == sentinel_rss
 
 
 # ─────────────────────────────────────────────────────────────────────────────
