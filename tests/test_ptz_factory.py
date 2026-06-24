@@ -735,3 +735,17 @@ class TestWorkerStopHaltsBackend:
         # owned controller is close()d → backend stopped and closed
         assert backend.stop_count >= 1
         assert backend.closed is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Digital backend factory
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_factory_builds_digital_backend():
+    from autoptz.config.models import PTZConfig
+    from autoptz.engine.ptz.digital import DigitalPTZBackend
+    from autoptz.engine.ptz.factory import build_backend  # use the real factory entry name
+
+    backend = build_backend(PTZConfig(backend="digital"))
+    assert isinstance(backend, DigitalPTZBackend)

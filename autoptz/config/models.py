@@ -168,7 +168,7 @@ class PtzPresetSlot(BaseModel, frozen=True):
 
 
 class PTZConfig(BaseModel, frozen=True):
-    backend: Literal["auto", "ndi", "visca_ip", "visca_usb", "onvif"] = "auto"
+    backend: Literal["auto", "ndi", "visca_ip", "visca_usb", "onvif", "digital"] = "auto"
     address: str | None = None
     max_pan_speed: float = Field(default=0.7, ge=0.0, le=1.0)
     max_tilt_speed: float = Field(default=0.7, ge=0.0, le=1.0)
@@ -256,6 +256,10 @@ class PTZConfig(BaseModel, frozen=True):
     # / ``goto_preset(slot)`` drive.  Round-trips through JSON (keys are coerced
     # back to ``int`` on load).
     preset_slots: dict[int, PtzPresetSlot] = Field(default_factory=dict)
+    # Center Stage: emit the auto-framed crop as a virtual camera (Zoom/Teams/OBS).
+    vcam_out: bool = False
+    digital_output_w: int = Field(default=1280, ge=320, le=3840)
+    digital_output_h: int = Field(default=720, ge=240, le=2160)
 
     @field_validator("preset_slots", mode="before")
     @classmethod
