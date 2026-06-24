@@ -542,6 +542,11 @@ class CameraWorker:
         # detect_interval > 1) so tracks don't age out into "no boxes".
         self._last_detections: list[Any] = []
 
+        # System-wide CPU pressure (0–100 %) pushed by the supervisor ~1 Hz.
+        # Consulted by _effective_detect_interval to throttle when the whole
+        # machine is hot, even if this camera's local cost looks fine.
+        self._system_cpu_pressure: float = 0.0
+
         self._seq = 0
         self._fps = 0.0
         self._ep = ""
@@ -764,6 +769,10 @@ class CameraWorker:
                     merged[key] = bool(features[key])
         with self._cmd_lock:
             self._features = merged
+
+    def set_system_cpu_pressure(self, pct: float) -> None:
+        """Latest system CPU% (set by the supervisor ~1 Hz), used by the governor."""
+        self._system_cpu_pressure = max(0.0, float(pct))
 
     def _feature(self, name: str) -> bool:
         """Thread-safe read of one feature flag (default True when unset)."""
@@ -3831,6 +3840,8 @@ class CameraWorker:
         budget = self._frame_budget_ms()
         cost = self._amortized_cost_ms()
         ratio = cost / budget if budget > 0 else 0.0
+        if self._system_cpu_pressure >= 85.0:
+            ratio = max(ratio, 0.92)  # Machine is hot → push toward balanced/low.
         prev = self._quality_active
         if ratio >= 0.90 or (prev in ("balanced", "low") and ratio >= 0.70):
             if ratio >= 1.10:

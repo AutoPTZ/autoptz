@@ -318,3 +318,26 @@ def test_amortized_cost_divides_detect_by_interval():
     w._stage_avg = lambda k: w._stage_samples_override.get(k, 0.0)
     # Detect amortized over interval 4 → 10ms, + track 2ms = 12ms, NOT 42ms.
     assert abs(w._amortized_cost_ms() - 12.0) < 0.51
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# System-CPU-aware governor
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_high_system_cpu_relaxes_even_when_local_cost_low():
+    from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
+    from autoptz.engine.camera_worker import CameraWorker
+
+    cfg = CameraConfig(
+        id="cam-cpu-000004",
+        name="t",
+        source=SourceConfig(type="usb", address="usb://0"),
+        tracking=TrackingConfig(),
+        ptz=PTZConfig(),
+    )
+    w = CameraWorker("cam-cpu-000004", cfg, on_telemetry=lambda m: None)
+    w._stage_avg = lambda k: 1.0  # trivially low local cost
+    w.set_system_cpu_pressure(95.0)
+    w._effective_detect_interval()
+    assert w._quality_active in ("balanced", "low")
