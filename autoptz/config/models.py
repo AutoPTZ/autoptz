@@ -238,6 +238,10 @@ class PTZConfig(BaseModel, frozen=True):
     # This is what keeps following stable when the subject and the camera move at
     # the same time; off restores the legacy contaminated-velocity behaviour.
     ego_comp_enabled: bool = True
+    # Run the (CPU-heavy) ego-motion optical flow every Nth inference frame and
+    # reuse a decayed estimate in between. 1 = every frame (old behaviour); 3 is
+    # a good default (flow is slow-changing relative to 30fps).
+    ego_comp_interval: int = Field(default=3, ge=1, le=10)
     # Upper bound on the learned command→image gain (normalised img-vel per unit
     # command); clamps the online regression so a bad sample can't run away.
     ego_comp_gain_max: float = Field(default=8.0, ge=0.0, le=64.0)

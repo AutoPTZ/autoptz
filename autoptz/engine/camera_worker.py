@@ -1262,6 +1262,13 @@ class CameraWorker:
             self._ego_vel = (0.0, 0.0)
             self._ego_source = "none"
             return
+        interval = max(1, int(getattr(self.config.ptz, "ego_comp_interval", 1)))
+        if interval > 1 and (self._frames_inferred % interval) != 0:
+            # Off-cadence: decay the last estimate toward zero and reuse it, so a
+            # stale flow value never feeds the aim feed-forward indefinitely.
+            vx, vy = self._ego_vel
+            self._ego_vel = (vx * 0.6, vy * 0.6)
+            return
         boxes = [
             (t.bbox.x1, t.bbox.y1, t.bbox.x2, t.bbox.y2)
             for t in tracks

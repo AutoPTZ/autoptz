@@ -229,3 +229,45 @@ class TestPhaseStagger:
         pose_next_due = worker._last_pose_t + _POSE_INTERVAL_S
         # That is now + (1 - 0.33) * _POSE_INTERVAL_S = now + 0.67 * _POSE_INTERVAL_S
         assert pose_next_due == pytest.approx(now + _POSE_INTERVAL_S * 0.67)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ego-motion decimation: _update_ego_motion cadence gate
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _worker(**ptz):
+    from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
+
+    cfg = CameraConfig(
+        id="cam-cpu-000001",
+        name="t",
+        source=SourceConfig(type="usb", address="usb://0"),
+        tracking=TrackingConfig(),
+        ptz=PTZConfig(**ptz),
+    )
+    from autoptz.engine.camera_worker import CameraWorker
+
+    return CameraWorker("cam-cpu-000001", cfg, on_telemetry=lambda m: None)
+
+
+def test_ego_runs_every_nth_frame():
+    w = _worker(ego_comp_enabled=True, ego_comp_interval=3)
+    calls = {"n": 0}
+
+    class _Est:
+        def estimate(self, *a, **k):
+            calls["n"] += 1
+            from autoptz.engine.pipeline.egomotion import EgoMotion
+
+            return EgoMotion(vx=0.1, vy=0.0, source="flow", confidence=1.0)
+
+    w._ego_estimator = _Est()
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    for i in range(6):
+        w._frames_inferred = i  # drives the decimation phase
+        w._update_ego_motion([], frame, float(i))
+    # 6 frames, interval 3 → flow ran on frames 0 and 3 only.
+    assert calls["n"] == 2
+    # Between runs the estimate is reused (non-zero), not blanked to "none".
+    assert w._ego_source == "flow"
