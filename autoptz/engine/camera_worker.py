@@ -1819,6 +1819,10 @@ class CameraWorker:
                     return
             new_id = visible_tracks[result.best_index].track_id
             if new_id != self._target_track_id:
+                if not self._reid_rebind_allows(new_id):
+                    # Named-identity target: body appearance alone must not drift the
+                    # lock onto a different/unknown person — wait for a face match.
+                    return
                 if not self._reid_recovery_confirmed(new_id):
                     return
                 # Now that the candidate is confirmed, blend the matching feature
@@ -1835,6 +1839,20 @@ class CameraWorker:
                     result.best_score,
                 )
                 self._commit_target_track(new_id, reason="reid")
+
+    def _reid_rebind_allows(self, new_id: int) -> bool:
+        """Whether appearance ReID recovery may re-bind the target to *new_id*.
+
+        For a target selected by *identity* (name), body appearance alone must
+        never move the lock onto a different person — re-acquiring a named target
+        requires a face-identity match. So a ReID re-bind is allowed only when the
+        candidate track is face-confirmed as the *same* identity. A manual/clicked
+        target (no identity) keeps the appearance-based re-bind it relies on.
+        """
+        if self._target_identity_id is None:
+            return True
+        entry = self._track_identity.get(new_id)
+        return entry is not None and entry[0] == self._target_identity_id
 
     def _reid_recovery_confirmed(self, track_id: int) -> bool:
         """Return True when the active tracking mode allows rebinding now."""
