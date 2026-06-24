@@ -1279,6 +1279,8 @@ class CameraWorker:
             self._ego_vel = (0.0, 0.0)
             self._ego_source = "none"
             return
+        # Sentinel default 1 so a serialized config missing this field falls back to legacy
+        # every-frame behaviour; the normal Pydantic path always supplies the field default of 3.
         interval = max(1, int(getattr(self.config.ptz, "ego_comp_interval", 1)))
         if interval > 1 and (self._frames_inferred % interval) != 0:
             # Off-cadence: decay the last estimate toward zero and reuse it, so a
@@ -3186,6 +3188,8 @@ class CameraWorker:
         ``tracking.min_detection_size_frac`` of the frame height are dropped here
         so the engine doesn't chase/save every far-away person.
         """
+        # Intentional: no inference ran this tick, so the stale _detected_this_tick flag is
+        # harmless — there are no detections to pose anyway.
         if frame is None or self._detect is None:
             return []
         if not self._feature("detection"):
