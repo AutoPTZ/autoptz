@@ -124,7 +124,11 @@ def _aim_vel_fn():
 def test_ego_comp_cancels_phantom_velocity_when_only_camera_moves() -> None:
     est_vel = _aim_vel_fn()
     ns = SimpleNamespace(
-        _prev_aim_err=None, _prev_aim_t=0.0, _aim_vel=(0.0, 0.0), _ego_vel=(0.0, 0.0)
+        _prev_aim_err=None,
+        _prev_aim_t=0.0,
+        _aim_vel=(0.0, 0.0),
+        _ego_vel=(0.0, 0.0),
+        _ego_fresh=True,  # ego freshly measured this tick → trusted/subtracted
     )
     est_vel(ns, (0.0, 0.0), 0.0)  # establish previous error
     # Subject stationary in the world; camera pans → error drifts at -0.5/s, all
@@ -138,7 +142,11 @@ def test_ego_comp_cancels_phantom_velocity_when_only_camera_moves() -> None:
 def test_without_ego_comp_phantom_velocity_appears() -> None:
     est_vel = _aim_vel_fn()
     ns = SimpleNamespace(
-        _prev_aim_err=None, _prev_aim_t=0.0, _aim_vel=(0.0, 0.0), _ego_vel=(0.0, 0.0)
+        _prev_aim_err=None,
+        _prev_aim_t=0.0,
+        _aim_vel=(0.0, 0.0),
+        _ego_vel=(0.0, 0.0),
+        _ego_fresh=False,  # ego comp off / no fresh measurement → not subtracted
     )
     est_vel(ns, (0.0, 0.0), 0.0)
     # Same drift but ego comp off (ego_vel stays zero) → a non-zero phantom

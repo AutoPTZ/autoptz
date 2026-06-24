@@ -445,6 +445,10 @@ class CameraWorker:
         # This tick's ego velocity (error-space units/sec) and last full estimate.
         self._ego_vel: tuple[float, float] = (0.0, 0.0)
         self._ego_source: str = "none"
+        # True only on a tick where ego-motion was *freshly measured*; the aim
+        # feed-forward only subtracts ego when fresh, never a stale/decimated
+        # estimate (subtracting a decayed value made the camera ping-pong).
+        self._ego_fresh: bool = False
 
         # ── fused target associator (flag-gated, default OFF) ────────────────────
         # Cheap stateless instance — always constructed; only consulted when
@@ -1293,15 +1297,17 @@ class CameraWorker:
         if frame is None or not getattr(self.config.ptz, "ego_comp_enabled", True):
             self._ego_vel = (0.0, 0.0)
             self._ego_source = "none"
+            self._ego_fresh = False
             return
         # Sentinel default 1 so a serialized config missing this field falls back to legacy
         # every-frame behaviour; the normal Pydantic path always supplies the field default of 3.
         interval = max(1, int(getattr(self.config.ptz, "ego_comp_interval", 1)))
         if interval > 1 and (self._frames_inferred % interval) != 0:
-            # Off-cadence: decay the last estimate toward zero and reuse it, so a
-            # stale flow value never feeds the aim feed-forward indefinitely.
-            vx, vy = self._ego_vel
-            self._ego_vel = (vx * 0.6, vy * 0.6)
+            # Off-cadence: no fresh measurement this tick. Mark not-fresh so the aim
+            # feed-forward zero-subtracts ego instead of subtracting a stale value —
+            # subtracting a decayed estimate every tick is what made the camera
+            # ping-pong when it and the subject both moved.
+            self._ego_fresh = False
             return
         boxes = [
             (t.bbox.x1, t.bbox.y1, t.bbox.x2, t.bbox.y2)
@@ -1314,9 +1320,11 @@ class CameraWorker:
             log.debug("camera_id=%s ego-motion estimate failed", self.camera_id, exc_info=True)
             self._ego_vel = (0.0, 0.0)
             self._ego_source = "none"
+            self._ego_fresh = False
             return
         self._ego_vel = (ego.vx, ego.vy)
         self._ego_source = ego.source
+        self._ego_fresh = True
 
     def _estimate_aim_velocity(
         self,
@@ -1336,7 +1344,9 @@ class CameraWorker:
         if prev is not None:
             dt = now - self._prev_aim_t
             if dt > 1e-3:
-                ego_vx, ego_vy = self._ego_vel
+                # Only trust ego-motion on a freshly-measured tick; a stale/decimated
+                # estimate would inject a phantom world-velocity (the ping-pong).
+                ego_vx, ego_vy = self._ego_vel if self._ego_fresh else (0.0, 0.0)
                 raw_vx = (err[0] - prev[0]) / dt - ego_vx
                 raw_vy = (err[1] - prev[1]) / dt - ego_vy
                 a = 0.5  # EMA: balance responsiveness vs. jitter rejection
