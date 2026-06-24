@@ -187,7 +187,9 @@ def measure_acceleration(
     cpu_session = make_session(model_path, prefs=HardwarePrefs(force_ep=EP.CPU))
     cpu_stats = time_session(cpu_session, warmup=warmup, runs=runs)
 
-    speedup = (cpu_stats.median_ms / accel_stats.median_ms) if accel_stats.median_ms > 0 else 0.0
+    # Neutral (1.0) fallback for a degenerate zero-latency reading, so it can't
+    # be misclassified as "no-benefit"; never fires for a real model.
+    speedup = (cpu_stats.median_ms / accel_stats.median_ms) if accel_stats.median_ms > 0 else 1.0
     return AccelReport(
         model=Path(model_path).name,
         requested_ep=requested.value,
