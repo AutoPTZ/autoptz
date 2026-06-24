@@ -527,6 +527,7 @@ class CameraWorker:
         # owned resources (created in thread)
         self._source: FrameSource | None = None
         self._shm: ShmWriter | None = None
+        self._vcam: Any | None = None  # VirtualCamSink (lazily created when vcam_out enabled)
         self._detect: _DetectStack | None = None
         self._pooled_detector = False
         # True when the detector is the unified YOLO11-pose model (boxes+keypoints
@@ -634,6 +635,9 @@ class CameraWorker:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=timeout)
         self._thread = None
+        if self._vcam is not None:
+            self._vcam.close()
+            self._vcam = None
 
     @property
     def is_running(self) -> bool:
@@ -3097,6 +3101,26 @@ class CameraWorker:
                     self._quality_active,
                 )
 
+    def _framed_output(self, frame: NDArray[np.uint8]) -> NDArray[np.uint8]:
+        """Crop+scale to the digital crop when a DigitalPTZBackend is active.
+
+        Returns the original frame unchanged when no digital backend is set or
+        the frame is None, so the caller is always safe to use the return value.
+        """
+        from autoptz.engine.ptz.digital import DigitalPTZBackend
+
+        backend = self._ptz_backend
+        if not isinstance(backend, DigitalPTZBackend) or frame is None:
+            return frame
+        import cv2
+
+        h, w = frame.shape[:2]
+        x, y, cw, ch = backend.crop_rect(w, h)
+        crop = frame[y : y + ch, x : x + cw]
+        ow = int(getattr(self.config.ptz, "digital_output_w", 1280))
+        oh = int(getattr(self.config.ptz, "digital_output_h", 720))
+        return cv2.resize(crop, (ow, oh), interpolation=cv2.INTER_LINEAR)
+
     def _push_frame(self, frame: NDArray[np.uint8]) -> None:
         if self._shm is None:
             return
@@ -3108,8 +3132,17 @@ class CameraWorker:
             return
         self._last_preview_push_t = now
         try:
-            f = self._fit_frame(frame)
+            framed = self._framed_output(frame)
+            f = self._fit_frame(framed)
             self._shm.push(f)
+            if getattr(self.config.ptz, "vcam_out", False):
+                ow = int(getattr(self.config.ptz, "digital_output_w", 1280))
+                oh = int(getattr(self.config.ptz, "digital_output_h", 720))
+                if self._vcam is None:
+                    from autoptz.engine.pipeline.vcam import VirtualCamSink
+
+                    self._vcam = VirtualCamSink(ow, oh)
+                self._vcam.send_bgr(framed)
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s shm push failed", self.camera_id, exc_info=True)
 

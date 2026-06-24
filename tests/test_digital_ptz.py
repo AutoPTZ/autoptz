@@ -33,3 +33,43 @@ def test_crop_never_leaves_frame():
         b.move_velocity(1.0, 1.0, 1.0)
     x, y, w, h = b.crop_rect(1280, 720)
     assert 0 <= x and 0 <= y and x + w <= 1280 and y + h <= 720
+
+
+def test_framed_output_crops_when_digital_backend_active():
+    import numpy as np
+
+    from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
+    from autoptz.engine.camera_worker import CameraWorker
+    from autoptz.engine.ptz.digital import DigitalPTZBackend
+
+    cfg = CameraConfig(
+        id="cam-dig-000001",
+        name="t",
+        source=SourceConfig(type="usb", address="usb://0"),
+        tracking=TrackingConfig(),
+        ptz=PTZConfig(backend="digital", digital_output_w=320, digital_output_h=240),
+    )
+    w = CameraWorker("cam-dig-000001", cfg, on_telemetry=lambda m: None)
+    b = DigitalPTZBackend(min_crop_frac=0.5, max_step_per_s=100.0)
+    b.move_velocity(0, 0, 1.0)  # zoom in
+    w._ptz_backend = b
+    out = w._framed_output(np.zeros((720, 1280, 3), dtype=np.uint8))
+    assert out.shape[1] == 320 and out.shape[0] == 240  # scaled to output size
+
+
+def test_framed_output_passthrough_without_digital_backend():
+    import numpy as np
+
+    from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
+    from autoptz.engine.camera_worker import CameraWorker
+
+    cfg = CameraConfig(
+        id="cam-dig-000002",
+        name="t",
+        source=SourceConfig(type="usb", address="usb://0"),
+        tracking=TrackingConfig(),
+        ptz=PTZConfig(),
+    )
+    w = CameraWorker("cam-dig-000002", cfg, on_telemetry=lambda m: None)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    assert w._framed_output(frame) is frame  # untouched
