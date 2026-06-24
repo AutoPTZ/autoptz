@@ -4,6 +4,31 @@ All notable changes to AutoPTZ are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Less CPU oversubscription from OpenCV** — OpenCV's internal thread pool
+  (resize/letterbox and the per-frame ego-motion optical flow) is now capped to
+  the same per-camera budget as the ONNX Runtime sessions instead of defaulting
+  to every core. On Linux/Windows the exact count is honoured; on macOS's GCD
+  OpenCV backend (which ignores a positive count) the cap forces single-threaded
+  only under heavy multi-camera load.
+
+### Removed
+
+- Removed the per-camera **"Confirm with face recognition"** toggle
+  (`tracking.face_confirm`). It was never wired to engine behaviour — face
+  recognition is controlled by the global **Face recognition** module switch
+  (Services) — so the checkbox only persisted and displayed itself. Existing
+  configs that still carry the key load fine (it is ignored).
+
+### Internal
+
+- Consolidated the `AUTOPTZ_UNIFIED_POSE` env flag into a single resolver
+  (`autoptz.engine.runtime.flags.env_unified_pose`); the inference pool and the
+  worker stacks now share one source of truth instead of two duplicate readers.
+
 ## [2.2.0-rc2] — 2026-06-24
 
 > Pre-release for testing — builds on rc1 with CPU-performance, tracking, and

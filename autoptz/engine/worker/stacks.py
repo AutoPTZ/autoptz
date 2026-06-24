@@ -229,11 +229,9 @@ def _log_detector_ready_once(model_path: str, ep: str) -> None:
 
 def _want_unified_pose(config: CameraConfig) -> bool:
     """True iff this camera wants the unified pose detector (config or env)."""
-    import os
+    from autoptz.engine.runtime.flags import env_unified_pose
 
-    if getattr(config.tracking, "unified_pose", False):
-        return True
-    return os.environ.get("AUTOPTZ_UNIFIED_POSE", "").strip().lower() in ("1", "true", "yes", "on")
+    return bool(getattr(config.tracking, "unified_pose", False)) or env_unified_pose()
 
 
 def _build_detect_stack(config: CameraConfig) -> _DetectStack | None:

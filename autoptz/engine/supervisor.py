@@ -822,6 +822,7 @@ class Supervisor:
         import os
 
         from autoptz.config.models import HardwarePrefs
+        from autoptz.engine.runtime.flags import apply_opencv_thread_cap
 
         try:
             raw = self._store.get_setting("hardware", {}) if self._store is not None else {}
@@ -846,8 +847,17 @@ class Supervisor:
             threads = max(1, usable // max(1, camera_count))
         os.environ["AUTOPTZ_ORT_INTRA_THREADS"] = str(threads)
 
+        # OpenCV keeps its OWN thread pool for resize/letterbox and the per-frame
+        # optical flow (ego-motion), defaulting to *all* cores. With several camera
+        # threads each firing cv2 work that oversubscribes the CPU and is a real
+        # source of the frame-time/CPU spikes — ORT alone was capped, OpenCV was not.
+        # Cap it to the same per-camera budget. Published too so a process-per-camera
+        # child (which doesn't run this code) can re-apply it in-process.
+        os.environ["AUTOPTZ_CV2_THREADS"] = str(threads)
+        apply_opencv_thread_cap(threads)
+
         log.info(
-            "hardware prefs → env | force_ep=%s precision=%s intra_threads=%s "
+            "hardware prefs → env | force_ep=%s precision=%s intra_threads=%s (ORT+OpenCV) "
             "(cores=%s, cameras=%s)",
             hw.force_ep or "auto",
             hw.precision,

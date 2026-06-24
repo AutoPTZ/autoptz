@@ -92,7 +92,6 @@ class TrackingConfig(BaseModel, frozen=True):
     reid_threshold_hi: float = Field(default=0.60, ge=0.0, le=1.0)
     reid_threshold_lo: float = Field(default=0.35, ge=0.0, le=1.0)
     coast_window_ms: int = Field(default=300, ge=0)
-    face_confirm: bool = False
     quality_floor: Literal["auto", "high", "balanced", "low"] = "auto"
     # "Framing" preset — the single user-facing control for how the shot is composed.
     # It sets the vertical aim point (how high up the person box the camera centres:

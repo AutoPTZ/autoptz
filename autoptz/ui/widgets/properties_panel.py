@@ -91,7 +91,6 @@ _COST_HELP = {
     "tracker": "\n".join(_TRACKER_HELP.values()),
     "reid": "Appearance re-identification recovers a target after occlusion — "
     "accurate but the most expensive option (runs an extra model).",
-    "face_confirm": "Confirms identity with face recognition — moderate extra cost.",
 }
 
 
@@ -586,18 +585,8 @@ class PropertiesPanel(QWidget):
         )
         # ReID is no longer a per-camera checkbox: it's the global "reid" feature
         # (Services) combined with the per-camera Mode above ("Stable" uses it).
-        self._face = QCheckBox("Confirm with face recognition")
-        self._face.toggled.connect(self._schedule)
-        self._face_chip = CostChip("medium")
-        self._face_chip.setToolTip(_COST_HELP["face_confirm"])
-        tf.addRow(
-            "",
-            _with_chip(
-                self._face,
-                self._face_chip,
-                HelpBadge(_COST_HELP["face_confirm"]),
-            ),
-        )
+        # Face recognition likewise has no per-camera toggle — it's the global
+        # "face_recognition" feature (Services), gated per the selected target.
         tr.add_widget(_wrap(tf))
         self._col.addWidget(tr)
 
@@ -1326,7 +1315,6 @@ class PropertiesPanel(QWidget):
                 tr.get("framing") or tr.get("aim_region") or "upper_body",
             )
             self._ignore_arms.setChecked((tr.get("aim_body_mode") or "torso") == "torso")
-            self._face.setChecked(bool(tr.get("face_confirm", False)))
             _set_combo(self._backend, pz.get("backend", "auto"))
             self._ptz_address.setText(pz.get("address") or "")
             self._auto_zoom.setChecked(bool(pz.get("auto_zoom", True)))
@@ -1491,7 +1479,6 @@ class PropertiesPanel(QWidget):
         _restyle_chip(
             self._tracker_chip, "light" if self._tracker.currentText() == "bytetrack" else "medium"
         )
-        self._face_chip.setVisible(self._face.isChecked())
 
     def _push(self) -> None:
         if not self._camera_id or not self._cfg:
@@ -1521,7 +1508,6 @@ class PropertiesPanel(QWidget):
         cfg["tracking"]["aim_body_mode"] = (
             "torso" if self._ignore_arms.isChecked() else "full_silhouette"
         )
-        cfg["tracking"]["face_confirm"] = self._face.isChecked()
         cfg["ptz"]["backend"] = self._backend.currentText()
         cfg["ptz"]["address"] = self._ptz_address.text().strip() or None
         cfg["ptz"]["auto_zoom"] = self._auto_zoom.isChecked()

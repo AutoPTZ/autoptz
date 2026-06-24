@@ -4144,7 +4144,7 @@ class CameraWorker:
             RuntimeServiceInfo(
                 key="face",
                 name="Face",
-                configured="on" if getattr(tracking, "face_confirm", False) else "off",
+                configured="on" if self._feature("face_recognition") else "off",
                 enabled=self._feature("face_recognition"),
                 active=bool(self._feature("face_recognition") and self._face is not None),
                 state=self._stage_status(

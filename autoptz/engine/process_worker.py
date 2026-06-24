@@ -123,6 +123,12 @@ def run_camera_process(
     except Exception:  # noqa: BLE001
         pass
 
+    # Re-apply the OpenCV thread cap in this child (it inherited AUTOPTZ_CV2_THREADS
+    # from the parent but not the in-process cv2.setNumThreads call).
+    from autoptz.engine.runtime.flags import apply_opencv_thread_cap
+
+    apply_opencv_thread_cap()
+
     worker = None
     try:
         from autoptz.engine.camera_worker import CameraWorker

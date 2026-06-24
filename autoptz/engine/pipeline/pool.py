@@ -37,17 +37,12 @@ per-worker fallback for tests/fakes that do not inject a pool.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-
-def _env_unified_pose() -> bool:
-    """Process-wide opt-in for the unified (one-backbone) pose detector."""
-    return os.environ.get("AUTOPTZ_UNIFIED_POSE", "").strip().lower() in ("1", "true", "yes", "on")
-
+from autoptz.engine.runtime.flags import env_unified_pose
 
 if TYPE_CHECKING:
     import numpy as np
@@ -159,7 +154,7 @@ class InferencePool:
         # When set, the detector slot is a unified YOLO11-pose model that emits
         # boxes AND keypoints in one pass (the separate pose estimator is then
         # unused).  Env var wins so it's togglable without touching config.
-        self._unified_pose = bool(unified_pose) or _env_unified_pose()
+        self._unified_pose = bool(unified_pose) or env_unified_pose()
 
         self._detector: Any | None = None
         self._detector_built = False
