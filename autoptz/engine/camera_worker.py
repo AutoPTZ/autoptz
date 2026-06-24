@@ -3794,6 +3794,20 @@ class CameraWorker:
             return True
         return not self._detected_this_tick
 
+    def _amortized_cost_ms(self) -> float:
+        """Per-displayed-frame work: each stage scaled by how often it runs.
+
+        Detector runs every ``_quality_interval`` frames; face/pose run on a wall
+        clock (``_FACE_INTERVAL_S`` / ``_POSE_INTERVAL_S``) so per-frame they cost
+        proportionally less the higher the source fps.
+        """
+        fps = max(1.0, self._target_fps())
+        detect = self._stage_avg("detect") / max(1, self._quality_interval)
+        track = self._stage_avg("track")
+        face = self._stage_avg("face") * min(1.0, (1.0 / _FACE_INTERVAL_S) / fps)
+        pose = self._stage_avg("pose") * min(1.0, (1.0 / _POSE_INTERVAL_S) / fps)
+        return detect + track + face + pose
+
     def _effective_detect_interval(self) -> int:
         """Return the actual detector cadence after quality policy is applied."""
         base = max(1, int(getattr(self.config.tracking, "detect_interval", 1) or 1))
@@ -3815,20 +3829,19 @@ class CameraWorker:
             return self._quality_interval
 
         budget = self._frame_budget_ms()
-        cost = sum(self._stage_avg(k) for k in ("detect", "track", "face", "pose"))
+        cost = self._amortized_cost_ms()
         ratio = cost / budget if budget > 0 else 0.0
-        if ratio >= 0.95:
-            interval = max(base, 4)
-            active = "low"
-            reason = "Auto quality: runtime cost is over frame budget; detector cadence relaxed."
-        elif ratio >= 0.75:
-            interval = max(base, 2)
-            active = "balanced"
-            reason = "Auto quality: runtime cost is near frame budget; detector cadence balanced."
+        prev = self._quality_active
+        if ratio >= 0.90 or (prev in ("balanced", "low") and ratio >= 0.70):
+            if ratio >= 1.10:
+                interval, active = max(base, 4), "low"
+                reason = "Auto quality: over frame budget; detector cadence relaxed."
+            else:
+                interval, active = max(base, 2), "balanced"
+                reason = "Auto quality: near frame budget; detector cadence balanced."
         else:
-            interval = base
-            active = "high"
-            reason = "Auto quality: latency headroom stable; quality high, full cadence."
+            interval, active = base, "high"
+            reason = "Auto quality: latency headroom stable; full cadence."
         if interval != self._quality_interval or active != self._quality_active:
             self._add_event("quality", reason)
         self._quality_interval = interval

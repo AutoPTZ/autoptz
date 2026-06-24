@@ -294,3 +294,27 @@ def test_pose_skips_on_a_detect_frame():
     assert w._pose_allowed_this_tick() is False
     w._detected_this_tick = False
     assert w._pose_allowed_this_tick() is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Amortized cost + hysteresis
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_amortized_cost_divides_detect_by_interval():
+    from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
+    from autoptz.engine.camera_worker import CameraWorker
+
+    cfg = CameraConfig(
+        id="cam-cpu-000003",
+        name="t",
+        source=SourceConfig(type="usb", address="usb://0"),
+        tracking=TrackingConfig(),
+        ptz=PTZConfig(),
+    )
+    w = CameraWorker("cam-cpu-000003", cfg, on_telemetry=lambda m: None)
+    w._quality_interval = 4
+    w._stage_samples_override = {"detect": 40.0, "track": 2.0, "face": 0.0, "pose": 0.0}
+    w._stage_avg = lambda k: w._stage_samples_override.get(k, 0.0)
+    # Detect amortized over interval 4 → 10ms, + track 2ms = 12ms, NOT 42ms.
+    assert abs(w._amortized_cost_ms() - 12.0) < 0.51
