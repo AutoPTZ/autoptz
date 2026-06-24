@@ -48,6 +48,45 @@ def _cosine(a: NDArray[np.floating], b: NDArray[np.floating]) -> float:
     return float(np.dot(na, nb))
 
 
+def adaptive_threshold_hi(
+    candidates: list[NDArray[np.floating]],
+    base_hi: float,
+    *,
+    margin: float = 0.05,
+    cap: float = 0.95,
+) -> float:
+    """Raise the recovery accept threshold toward the most-similar candidate pair.
+
+    With <2 candidates there is no inter-person signal → return *base_hi*.
+    Otherwise return ``clamp(max(base_hi, max_pairwise_cosine + margin), base_hi, cap)``
+    so a scene full of look-alikes demands a higher cosine to re-bind, while a
+    distinct scene keeps the base.  Never returns below *base_hi*.
+
+    Degenerate (zero-norm) vectors are skipped; if fewer than 2 valid vectors
+    remain after filtering, *base_hi* is returned.
+    """
+    # Filter to non-degenerate (non-zero) vectors only.
+    valid: list[NDArray[np.float32]] = []
+    for v in candidates:
+        arr = np.asarray(v, dtype=np.float32).ravel()
+        if arr.size > 0 and float(np.linalg.norm(arr)) > 1e-8:
+            valid.append(arr)
+
+    if len(valid) < 2:
+        return base_hi
+
+    # Find the maximum pairwise cosine similarity among all pairs.
+    max_cos = 0.0
+    for i in range(len(valid)):
+        for j in range(i + 1, len(valid)):
+            c = _cosine(valid[i], valid[j])
+            if c > max_cos:
+                max_cos = c
+
+    raw = max(base_hi, max_cos + margin)
+    return float(min(max(raw, base_hi), cap))
+
+
 @dataclass
 class _Template:
     """EMA appearance template for the locked target."""

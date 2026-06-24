@@ -1649,9 +1649,15 @@ class CameraWorker:
         cand = reid.embed([_xyxy(t.bbox) for t in visible_tracks], frame)
         if cand.size == 0:
             return
+        from autoptz.engine.pipeline import reid as _reid_mod  # noqa: PLC0415
+
+        eff_hi = _reid_mod.adaptive_threshold_hi(
+            list(cand),
+            base_hi=float(self.config.tracking.reid_threshold_hi),
+        )
         result = reid.recover(
             cand,
-            threshold=float(self.config.tracking.reid_threshold_hi),
+            threshold=eff_hi,
             update=False,
         )
         if result.matched and 0 <= result.best_index < len(visible_tracks):
@@ -1673,7 +1679,7 @@ class CameraWorker:
                 # into the target template exactly once.
                 reid.recover(
                     cand[[result.best_index]],
-                    threshold=float(self.config.tracking.reid_threshold_hi),
+                    threshold=eff_hi,
                     update=True,
                 )
                 log.info(
