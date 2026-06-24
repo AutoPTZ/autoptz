@@ -367,3 +367,104 @@ class TestLogExport:
         # A path under a non-existent directory cannot be written.
         ok = client.exportLogs("/no/such/dir/AUTOPTZ/logs.txt")
         assert ok is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _runtime_services: detector row accel verdict (A-2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestRuntimeServicesAccelVerdict:
+    """Detector row in _runtime_services reflects the cached accel summary/verdict.
+
+    Uses a fake pool that pre-exposes detector_accel_summary/verdict so no real
+    ONNX session or model file is needed.  Calls _runtime_services() directly
+    (no thread, no frame loop).
+    """
+
+    def _make_worker_with_pool(self, pool):
+        from autoptz.config.models import CameraConfig, SourceConfig
+        from autoptz.engine.camera_worker import CameraWorker
+
+        config = CameraConfig(
+            id="svctest01accd",
+            name="Cam",
+            source=SourceConfig(type="usb", address="usb://0"),
+        )
+        worker = CameraWorker(
+            "svctest01accd",
+            config,
+            lambda m: None,
+            frame_source=_FakeSource(),
+        )
+        worker.set_inference_pool(pool)
+        return worker
+
+    def test_detector_row_contains_accel_summary(self) -> None:
+        import types
+
+        fake_pool = types.SimpleNamespace(
+            detector_model_name="yolo11n.onnx",
+            detector_tier="auto",
+            detector_ep="CoreMLExecutionProvider",
+            detector_error="",
+            detector_accel_summary=lambda: "CoreML · fp32 · 1.24× CPU (accelerated: GPU/accelerator is helping)",
+            detector_accel_verdict=lambda: "accelerated",
+        )
+        worker = self._make_worker_with_pool(fake_pool)
+        rows = worker._runtime_services()
+        det_row = next(r for r in rows if r.key == "detector")
+        assert "1.24×" in det_row.detail
+        assert "CoreML" in det_row.detail
+
+    def test_detector_row_confidence_is_verdict(self) -> None:
+        import types
+
+        fake_pool = types.SimpleNamespace(
+            detector_model_name="yolo11n.onnx",
+            detector_tier="auto",
+            detector_ep="CoreMLExecutionProvider",
+            detector_error="",
+            detector_accel_summary=lambda: "CoreML · fp32 · 0.98× CPU (no-benefit: accelerator selected but no faster than CPU)",
+            detector_accel_verdict=lambda: "no-benefit",
+        )
+        worker = self._make_worker_with_pool(fake_pool)
+        rows = worker._runtime_services()
+        det_row = next(r for r in rows if r.key == "detector")
+        assert det_row.confidence == "no-benefit"
+
+    def test_detector_row_no_accel_summary_when_not_ready(self) -> None:
+        """When pool has not yet measured (summary=""), detail has no '·' suffix."""
+        import types
+
+        fake_pool = types.SimpleNamespace(
+            detector_model_name="yolo11n.onnx",
+            detector_tier="auto",
+            detector_ep="CPUExecutionProvider",
+            detector_error="",
+            detector_accel_summary=lambda: "",
+            detector_accel_verdict=lambda: "",
+        )
+        worker = self._make_worker_with_pool(fake_pool)
+        rows = worker._runtime_services()
+        det_row = next(r for r in rows if r.key == "detector")
+        # Detail should just be the model name, no appended accel text.
+        assert det_row.detail == "yolo11n.onnx"
+        assert det_row.confidence == ""
+
+    def test_detector_row_no_crash_when_pool_lacks_accel_attrs(self) -> None:
+        """getattr guard: a pool without accel methods does not crash the tick."""
+        import types
+
+        # Old-style fake pool without accel attributes.
+        fake_pool = types.SimpleNamespace(
+            detector_model_name="yolo11n.onnx",
+            detector_tier="auto",
+            detector_ep="CPUExecutionProvider",
+            detector_error="",
+            # no detector_accel_summary / detector_accel_verdict
+        )
+        worker = self._make_worker_with_pool(fake_pool)
+        rows = worker._runtime_services()  # must not raise
+        det_row = next(r for r in rows if r.key == "detector")
+        assert det_row.confidence == ""
