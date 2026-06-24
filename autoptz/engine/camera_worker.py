@@ -3322,6 +3322,11 @@ class CameraWorker:
 
                     self._vcam = VirtualCamSink(ow, oh)
                 self._vcam.send_bgr(framed)
+            elif self._vcam is not None:
+                # Virtual camera output was turned off — release the device so it
+                # disconnects from Zoom/OBS instead of lingering on a frozen frame.
+                self._vcam.close()
+                self._vcam = None
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s shm push failed", self.camera_id, exc_info=True)
 
