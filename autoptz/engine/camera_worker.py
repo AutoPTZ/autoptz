@@ -77,6 +77,13 @@ _FACE_INTERVAL_S = 0.25
 _FACE_TTL_S = 0.12
 _STAGE_WINDOW = 60
 _STAGE_FRESH_S = 2.0
+# Inference-hang watchdog: if the inference thread hasn't completed a tick in
+# this many seconds, the capture thread halts PTZ motion and surfaces a
+# DEGRADED/stalled status.  Must exceed the worst normal per-frame inference
+# time (typically <200 ms even on CPU) by a large margin.
+# NOTE: the value 2.0 coincidentally matches ``_STAGE_FRESH_S`` but the two
+# constants are UNRELATED concepts and should be tuned independently.
+_INFER_STALL_S = 2.0
 _EVENT_MAX = 12
 _FPS_LOG_DELTA = 0.25
 
@@ -359,6 +366,9 @@ class CameraWorker:
 
         # tracking state
         self._tracking_enabled = config.target.mode != "off"
+        # Set True by the capture-thread watchdog when inference appears hung;
+        # cleared automatically when inference resumes.
+        self._watchdog_stalled: bool = False
         self._target_track_id: int | None = None
         self._target_lock = _TargetLockState()
         self._identity_recover_candidate: tuple[str, int, int] | None = None
@@ -526,6 +536,7 @@ class CameraWorker:
         # so sustained overload shows up in the logs instead of silently dropping.
         self._frames_captured = 0
         self._frames_inferred = 0
+        self._last_infer_t: float = 0.0  # monotonic timestamp of last completed inference tick
         self._last_logged_inf_captured = 0
         self._last_logged_inf_inferred = 0
 
@@ -2234,6 +2245,7 @@ class CameraWorker:
 
             # Telemetry pacing (~telemetry_hz) — report the latest inference output.
             if now - last_telemetry >= self._telemetry_period:
+                self._apply_inference_watchdog(now)
                 self._emit_telemetry(
                     tracks=list(self._last_tracks), health=last_health, last_error=last_error
                 )
@@ -2365,6 +2377,9 @@ class CameraWorker:
 
             self._last_tracks = tracks
             self._last_tracks_frame_id = fid
+            # Heartbeat: advance so the capture-thread watchdog knows inference
+            # is alive.  Set AFTER all work for this frame is committed.
+            self._last_infer_t = time.monotonic()
             if log.isEnabledFor(logging.DEBUG):
                 log.debug(
                     "camera_id=%s timings detect+track=%.1fms face=%.1fms tracks=%d fps=%.1f",
@@ -3634,6 +3649,15 @@ class CameraWorker:
                 severity="warning",
             )
 
+        if self._watchdog_stalled:
+            return TrackingStatusInfo(
+                state="degraded",
+                headline="Inference stalled",
+                detail="inference stalled — holding",
+                action="holding",
+                severity="warning",
+            )
+
         snap = self._ptz_status_snapshot(now)
         ptz_state = str(snap.get("state", "idle"))
         ptz_action = str(snap.get("action", ""))
@@ -3993,6 +4017,57 @@ class CameraWorker:
         except Exception:  # noqa: BLE001
             return None
         return SwitchStateInfo(**state) if state else None
+
+    # ── inference-hang watchdog ───────────────────────────────────────────────
+
+    def _inference_stalled(self, now: float) -> bool:
+        """Return True iff the inference thread appears to have hung.
+
+        Pure predicate — no side effects.  Safe to call from the capture thread
+        at any time.
+
+        Conditions (all must hold):
+        - At least one inference tick has completed (``_frames_inferred > 0``),
+          so we never fire on a fresh worker that hasn't started yet.
+        - Tracking is enabled (``_tracking_enabled``), because a stall only
+          matters when auto PTZ would be driven.
+        - The heartbeat timestamp is older than ``_INFER_STALL_S`` seconds.
+        """
+        return (
+            self._frames_inferred > 0
+            and self._tracking_enabled
+            and (now - self._last_infer_t) > _INFER_STALL_S
+        )
+
+    def _apply_inference_watchdog(self, now: float) -> None:
+        """Watchdog action — called once per telemetry tick from the capture thread.
+
+        If ``_inference_stalled`` is True:
+        - Stops PTZ motion ONCE on the False→True transition of ``_watchdog_stalled``
+          (edge-triggered) so VISCA-IP/ONVIF hardware is not flooded with stop
+          packets every tick.
+        - Keeps ``_watchdog_stalled`` set (level) so ``_tracking_status_info``
+          continues to surface a DEGRADED/stalled state with
+          ``severity="warning"`` each tick until inference recovers.
+
+        Recovery is automatic when ``_last_infer_t`` advances (next successful
+        inference tick); ``_watchdog_stalled`` is cleared and re-armed so a
+        subsequent stall issues a fresh stop.
+        """
+        if self._inference_stalled(now):
+            if not self._watchdog_stalled:  # edge: stop once on entering the stall
+                backend = self._ptz_backend
+                if backend is not None and hasattr(backend, "stop"):
+                    try:
+                        with self._ptz_lock:
+                            backend.stop()
+                    except Exception:  # noqa: BLE001
+                        log.debug(
+                            "camera_id=%s watchdog stop failed", self.camera_id, exc_info=True
+                        )
+            self._watchdog_stalled = True
+        else:
+            self._watchdog_stalled = False
 
     def _emit_telemetry(
         self,
