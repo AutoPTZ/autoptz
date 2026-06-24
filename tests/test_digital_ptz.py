@@ -62,6 +62,35 @@ def test_framed_output_frames_the_target_when_digital_backend_active():
     assert cw < 1280 and ch < 720  # cropped to less than the full frame (zoomed on target)
 
 
+def test_toggling_center_stage_rebuilds_the_backend_live():
+    from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
+    from autoptz.engine.camera_worker import CameraWorker
+    from autoptz.engine.ptz.digital import DigitalPTZBackend
+
+    cfg = CameraConfig(
+        id="cam-cs-rebuild1",
+        name="t",
+        source=SourceConfig(type="usb", address="usb://0"),
+        tracking=TrackingConfig(),
+        ptz=PTZConfig(backend="auto"),
+    )
+    w = CameraWorker("cam-cs-rebuild1", cfg, on_telemetry=lambda m: None)
+    # A webcam on "auto" has no PTZ hardware → no digital backend yet.
+    assert not isinstance(w._ptz_backend, DigitalPTZBackend)
+
+    # Toggle Center Stage on (backend → "digital") via a live config update.
+    on = cfg.model_copy(update={"ptz": cfg.ptz.model_copy(update={"backend": "digital"})})
+    w.update_config(on)
+    w._drain_commands()
+    assert isinstance(w._ptz_backend, DigitalPTZBackend)
+
+    # Toggle off again → the digital backend is torn down.
+    off = on.model_copy(update={"ptz": on.ptz.model_copy(update={"backend": "auto"})})
+    w.update_config(off)
+    w._drain_commands()
+    assert not isinstance(w._ptz_backend, DigitalPTZBackend)
+
+
 def test_framed_output_passthrough_without_digital_backend():
     import numpy as np
 

@@ -898,7 +898,17 @@ class CameraWorker:
             prev_fps = getattr(self.config.source, "fps", None)
             prev_tracker = getattr(self.config.tracking, "tracker", "")
             prev_mode = getattr(self.config.tracking, "tracking_mode", "stable")
+            prev_backend = getattr(self.config.ptz, "backend", "")
+            prev_addr = getattr(self.config.ptz, "address", "")
             self.config = payload
+            # Rebuild the PTZ backend live when the transport changes — e.g. toggling
+            # Center Stage flips backend to/from "digital". Without this the digital
+            # backend is never created on a live switch and Center Stage does nothing
+            # until an app restart.
+            new_backend = getattr(payload.ptz, "backend", "")
+            new_addr = getattr(payload.ptz, "address", "")
+            if new_backend != prev_backend or new_addr != prev_addr:
+                self._rebuild_ptz_backend()
             # Apply an fps change from a full-config push live too, so the UI's
             # fps slider takes effect whether it routes through updateCameraConfig
             # or the dedicated setTargetFps slot.
@@ -2971,6 +2981,35 @@ class CameraWorker:
                 exc_info=True,
             )
             return None
+
+    def _rebuild_ptz_backend(self) -> None:
+        """Tear down and rebuild the PTZ controller/backend from the current config.
+
+        Used on a live transport change (e.g. toggling Center Stage flips the
+        backend to/from ``digital``). ``_build_ptz_stack`` is a no-op while a
+        backend exists, so we clear it first; the rebuild then reads the new
+        ``config.ptz`` and builds the right backend (a ``DigitalPTZBackend`` for
+        Center Stage). Never raises.
+        """
+        with self._ptz_lock:
+            old = self._ptz_backend
+            if old is not None and self._ptz_owned:
+                try:
+                    old.close()
+                except Exception:  # noqa: BLE001
+                    log.debug(
+                        "camera_id=%s ptz backend close failed", self.camera_id, exc_info=True
+                    )
+            self._ptz = None
+            self._ptz_backend = None
+            self._ptz_owned = False
+            self._digital_framer = None  # fresh framer for the new backend
+            self._build_ptz_stack()
+        log.info(
+            "camera_id=%s PTZ backend rebuilt for backend=%s",
+            self.camera_id,
+            getattr(self.config.ptz, "backend", "?"),
+        )
 
     def _build_ptz_stack(self) -> None:
         """Build a PTZController around a backend from config, if none injected.
