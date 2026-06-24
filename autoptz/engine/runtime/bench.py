@@ -26,6 +26,7 @@ from autoptz.engine.runtime.inference import (
     get_best_ep,
     make_session,
 )
+from autoptz.engine.runtime.models import default_manager
 
 log = logging.getLogger(__name__)
 
@@ -197,3 +198,45 @@ def measure_acceleration(
         accel=accel_stats,
         cpu=cpu_stats,
     )
+
+
+def run_acceleration_bench(
+    tier: str = "auto",
+    json_path: str | None = None,
+    *,
+    warmup: int = 5,
+    runs: int = 30,
+) -> int:
+    """Resolve the detector model, measure acceleration, print/save a report.
+
+    Returns a process exit code: 0 on success, 1 when no model is available.
+    Prints to stdout deliberately — this is the CLI face of the bench.
+    """
+    manager = default_manager()
+    model_path = manager.ensure_detector(tier=tier, allow_download=False)
+    if not model_path:
+        reason = getattr(manager, "last_error", "") or "model not found"
+        print(f"No detector model available for tier {tier!r}: {reason}")
+        return 1
+
+    report = measure_acceleration(model_path, warmup=warmup, runs=runs)
+    print("AutoPTZ inference acceleration bench")
+    print(f"  model:        {report.model}")
+    print(f"  requested EP: {_ep_label(report.requested_ep)}")
+    print(f"  actual EP:    {_ep_label(report.actual_ep)}  ({report.precision})")
+    print(f"  accel:        {report.accel.median_ms:.2f} ms  ({report.accel.fps:.1f} fps)")
+    print(f"  cpu baseline: {report.cpu.median_ms:.2f} ms  ({report.cpu.fps:.1f} fps)")
+    print(f"  speedup:      {report.speedup:.2f}× CPU")
+    print(f"  verdict:      {report.verdict} — {report.summary()}")
+    if report.verdict == "no-benefit":
+        print(
+            "  ⚠ The selected accelerator is not faster than CPU — the GPU is "
+            "likely not engaged (common on Intel Macs with AMD GPUs via CoreML)."
+        )
+
+    if json_path:
+        import json as _json
+
+        Path(json_path).write_text(_json.dumps(report.to_dict(), indent=2))
+        print(f"  wrote: {json_path}")
+    return 0

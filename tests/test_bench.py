@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import types
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,11 +11,13 @@ import numpy as np
 import onnxruntime as ort
 from onnx import TensorProto, helper
 
+from autoptz.engine.runtime import bench as bench_mod
 from autoptz.engine.runtime.bench import (
     ACCEL_MIN_SPEEDUP,
     AccelReport,
     LatencyStats,
     measure_acceleration,
+    run_acceleration_bench,
     time_session,
     verdict,
     zeros_for_session,
@@ -122,3 +126,29 @@ def test_accel_report_summary_and_dict() -> None:
     d = report.to_dict()
     assert d["verdict"] == "cpu-only"
     assert isinstance(d["accel"], dict)
+
+
+def test_run_acceleration_bench_no_model(monkeypatch, capsys) -> None:
+    fake_mgr = types.SimpleNamespace(ensure_detector=lambda *a, **k: None, last_error="no model")
+    monkeypatch.setattr(bench_mod, "default_manager", lambda: fake_mgr)
+    code = run_acceleration_bench(tier="auto")
+    assert code == 1
+    assert "no detector model" in capsys.readouterr().out.lower()
+
+
+def test_run_acceleration_bench_reports_and_writes_json(tmp_path, monkeypatch, capsys) -> None:
+    model_path = _save_identity_model(tmp_path)
+    fake_mgr = types.SimpleNamespace(ensure_detector=lambda *a, **k: str(model_path), last_error="")
+    monkeypatch.setattr(bench_mod, "default_manager", lambda: fake_mgr)
+    json_out = tmp_path / "bench.json"
+    with patch(
+        "autoptz.engine.runtime.inference._available_providers",
+        return_value=frozenset({"CPUExecutionProvider"}),
+    ):
+        code = run_acceleration_bench(tier="auto", json_path=str(json_out), warmup=1, runs=3)
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "cpu-only" in out.lower()  # CI host has no accelerator
+    data = json.loads(json_out.read_text())
+    assert data["verdict"] == "cpu-only"
+    assert data["actual_ep"] == "CPUExecutionProvider"
