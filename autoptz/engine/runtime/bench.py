@@ -1,0 +1,102 @@
+"""Measure real inference performance and whether acceleration is helping.
+
+Times ONNX Runtime sessions (warmup + N timed runs → median/p95/fps) and
+compares the auto-selected execution provider against a CPU-forced baseline so a
+user can see whether their GPU is actually doing work — the truth that the EP
+*label* alone does not tell you (e.g. CoreML on an Intel Mac can report itself
+active while silently running every op on the CPU).
+"""
+
+from __future__ import annotations
+
+import logging
+import statistics
+import time
+from dataclasses import dataclass
+
+import numpy as np
+import onnxruntime as ort
+from numpy.typing import NDArray
+
+log = logging.getLogger(__name__)
+
+# ORT input type string ("tensor(float)") → numpy dtype.
+_ORT_TO_NUMPY: dict[str, type[np.generic]] = {
+    "tensor(float)": np.float32,
+    "tensor(float16)": np.float16,
+    "tensor(double)": np.float64,
+    "tensor(int64)": np.int64,
+    "tensor(int32)": np.int32,
+    "tensor(uint8)": np.uint8,
+}
+
+
+@dataclass(frozen=True)
+class LatencyStats:
+    """Timing summary for a series of inference runs."""
+
+    runs: int
+    median_ms: float
+    p95_ms: float
+    mean_ms: float
+    fps: float
+
+    def to_dict(self) -> dict[str, float | int]:
+        return {
+            "runs": self.runs,
+            "median_ms": self.median_ms,
+            "p95_ms": self.p95_ms,
+            "mean_ms": self.mean_ms,
+            "fps": self.fps,
+        }
+
+
+def zeros_for_session(session: ort.InferenceSession) -> dict[str, NDArray[np.generic]]:
+    """All-zero feeds matching every input's shape/dtype (symbolic dims → 1)."""
+    feeds: dict[str, NDArray[np.generic]] = {}
+    for inp in session.get_inputs():
+        shape = [d if isinstance(d, int) and d > 0 else 1 for d in inp.shape]
+        dtype = _ORT_TO_NUMPY.get(inp.type, np.float32)
+        feeds[inp.name] = np.zeros(tuple(shape), dtype=dtype)
+    return feeds
+
+
+def _percentile(samples: list[float], pct: float) -> float:
+    """Linear-interpolated percentile (pct in [0,100]); pure-python, no numpy dep."""
+    if not samples:
+        return 0.0
+    ordered = sorted(samples)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (pct / 100.0) * (len(ordered) - 1)
+    low = int(rank)
+    high = min(low + 1, len(ordered) - 1)
+    frac = rank - low
+    return ordered[low] * (1.0 - frac) + ordered[high] * frac
+
+
+def time_session(
+    session: ort.InferenceSession,
+    feeds: dict[str, NDArray[np.generic]] | None = None,
+    *,
+    warmup: int = 3,
+    runs: int = 20,
+) -> LatencyStats:
+    """Run *warmup* untimed then *runs* timed inferences; return latency stats."""
+    if feeds is None:
+        feeds = zeros_for_session(session)
+    for _ in range(max(0, warmup)):
+        session.run(None, feeds)
+    samples_ms: list[float] = []
+    for _ in range(max(1, runs)):
+        t0 = time.perf_counter()
+        session.run(None, feeds)
+        samples_ms.append((time.perf_counter() - t0) * 1000.0)
+    median_ms = statistics.median(samples_ms)
+    return LatencyStats(
+        runs=len(samples_ms),
+        median_ms=median_ms,
+        p95_ms=_percentile(samples_ms, 95.0),
+        mean_ms=statistics.fmean(samples_ms),
+        fps=(1000.0 / median_ms) if median_ms > 0 else 0.0,
+    )
