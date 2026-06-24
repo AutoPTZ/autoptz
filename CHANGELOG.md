@@ -6,6 +6,10 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Center Stage** — software auto-framing (digital PTZ) with virtual-camera output for non-PTZ cameras; select the `digital` backend in the PTZ panel and enable "Virtual camera output" to publish the cropped frame as a virtual camera.
+
 ### Changed
 
 - **Less CPU oversubscription from OpenCV** — OpenCV's internal thread pool

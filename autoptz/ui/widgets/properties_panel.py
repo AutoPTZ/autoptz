@@ -594,10 +594,12 @@ class PropertiesPanel(QWidget):
         pz = CollapsibleGroup("PTZ", expanded=False)
         pf = _form()
         self._backend = QComboBox()
-        self._backend.addItems(["auto", "ndi", "visca_ip", "visca_usb", "onvif"])
+        self._backend.addItems(["auto", "ndi", "visca_ip", "visca_usb", "onvif", "digital"])
         self._backend.setToolTip(
             "How PTZ move commands reach the camera. “auto” probes NDI → ONVIF → "
-            "VISCA-IP; pick a specific one if you know your camera."
+            "VISCA-IP; pick a specific one if you know your camera. "
+            "”digital” enables Center Stage — software auto-framing for non-PTZ "
+            "cameras, output as a virtual camera."
         )
         self._backend.currentTextChanged.connect(self._schedule)
         pf.addRow(
@@ -607,7 +609,8 @@ class PropertiesPanel(QWidget):
                 HelpBadge(
                     "How PTZ move commands reach the camera. “auto” probes NDI → ONVIF → "
                     "VISCA-IP; pick a specific protocol if you already know what your "
-                    "camera speaks."
+                    "camera speaks. “digital” (Center Stage) does software auto-framing "
+                    "for non-PTZ cameras and outputs the result as a virtual camera."
                 ),
             ),
         )
@@ -641,6 +644,23 @@ class PropertiesPanel(QWidget):
                     "Lets the controller zoom in and out automatically to keep the "
                     "subject at the chosen Framing tightness (set in the Tracking "
                     "section). Turn off to hold a fixed zoom."
+                ),
+            ),
+        )
+        self._vcam_out = QCheckBox("Virtual camera output")
+        self._vcam_out.setToolTip(
+            "Publish the auto-framed crop as a virtual camera device "
+            "(Center Stage / digital backend only)."
+        )
+        self._vcam_out.toggled.connect(self._schedule)
+        pf.addRow(
+            "",
+            _with_chip(
+                self._vcam_out,
+                HelpBadge(
+                    "When the digital (Center Stage) backend is active, publish the "
+                    "auto-framed crop as a virtual camera device so apps like Zoom "
+                    "or OBS can pick it up without hardware PTZ."
                 ),
             ),
         )
@@ -1318,6 +1338,7 @@ class PropertiesPanel(QWidget):
             _set_combo(self._backend, pz.get("backend", "auto"))
             self._ptz_address.setText(pz.get("address") or "")
             self._auto_zoom.setChecked(bool(pz.get("auto_zoom", True)))
+            self._vcam_out.setChecked(bool(pz.get("vcam_out", False)))
             # Advanced tracking tuning (sliders store hundredths of the cfg value).
             self._kp.setValue(int(round(float(pz.get("kp", 0.6)) * 100)))
             self._kp_val.setText(f"{self._kp.value() / 100:.2f}")
@@ -1511,6 +1532,7 @@ class PropertiesPanel(QWidget):
         cfg["ptz"]["backend"] = self._backend.currentText()
         cfg["ptz"]["address"] = self._ptz_address.text().strip() or None
         cfg["ptz"]["auto_zoom"] = self._auto_zoom.isChecked()
+        cfg["ptz"]["vcam_out"] = self._vcam_out.isChecked()
         cfg["ptz"]["zoom_framing"] = framing
         # Advanced tracking tuning (sliders hold hundredths of the cfg value).
         cfg["ptz"]["kp"] = self._kp.value() / 100.0
