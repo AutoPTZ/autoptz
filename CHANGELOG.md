@@ -4,6 +4,35 @@ All notable changes to AutoPTZ are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/).
 
+## [2.2.0-rc1] — 2026-06-24
+
+> Pre-release for testing — please validate on your real cameras and report back
+> before this becomes the stable 2.2.0.
+
+### Added
+
+- **GPU acceleration check (`--bench`)** — run `python -m autoptz --bench` to see
+  whether your GPU/accelerator is actually faster than the CPU, with a plain verdict
+  (*accelerated* / *no-benefit* / *cpu-only*). It times the auto-selected execution
+  provider (CoreML, CUDA/TensorRT, DirectML, OpenVINO) against a CPU baseline, so you
+  can tell when, e.g., CoreML on an Intel Mac is silently running on the CPU.
+- **CoreML compile-cache** — the CoreML model is compiled once per machine and cached,
+  cutting cold-start on Apple Silicon and Intel Macs (and per-camera warmup when
+  running several cameras).
+- **Inference-hang watchdog** — if detection inference stalls, the camera now holds
+  position and shows a *degraded — inference stalled* status instead of driving the
+  PTZ toward a frozen target; it recovers automatically when inference resumes.
+- **Automatic camera recovery** — if a camera's processing thread crashes, the engine
+  detects it and restarts that camera automatically (with backoff) instead of letting
+  it go silently dark.
+- **PTZ auto-reconnect** — VISCA over IP and USB now reconnect automatically after a
+  network blip or a USB re-enumeration, instead of staying dead until you restart.
+
+### Fixed
+
+- CI reliability: deflaked the macOS app-memory test and the Qt widget-smoke subprocess
+  tests so continuous integration is no longer intermittently red.
+
 ## [2.1.0] — 2026-06-23
 
 ### Added
