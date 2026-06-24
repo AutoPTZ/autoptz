@@ -534,6 +534,10 @@ class CameraWorker:
         # detections instead of running a separate pose forward pass.
         self._unified_pose_active = False
         self._detect_frame_index = 0
+        # Tracks whether the detector actually ran this inference tick (vs. a
+        # skip/coast frame). Used by _pose_allowed_this_tick to spread the two
+        # heavy stages across separate frames when stage_spread is enabled.
+        self._detected_this_tick: bool = False
         # Last detections, re-fed to the tracker on detector-skip frames (when
         # detect_interval > 1) so tracks don't age out into "no boxes".
         self._last_detections: list[Any] = []
@@ -2534,7 +2538,8 @@ class CameraWorker:
             # Estimate pose for the selected person so the pose overlay shows the
             # moment you click someone — independent of whether PTZ auto-follow is
             # actively driving (which is the only place pose ran before).
-            self._maybe_estimate_pose_overlay(tracks, frame, now)
+            if self._pose_allowed_this_tick():
+                self._maybe_estimate_pose_overlay(tracks, frame, now)
             self._annotate_target_aim(tracks, frame, now)
 
             # Estimate the camera's own image motion for this tick BEFORE driving
@@ -3151,10 +3156,12 @@ class CameraWorker:
                 not self._pooled_detector or (self._detect_frame_index - 1) % interval == 0
             )
             if should_detect:
+                self._detected_this_tick = True
                 detections = self._detect.detector.detect(frame)
                 detections = self._filter_small_detections(detections, frame)
                 self._last_detections = detections
             else:
+                self._detected_this_tick = False
                 # On detector-skip frames re-feed the previous detections so the
                 # boxmot tracker keeps the person alive between detect frames.
                 # Feeding [] here ages tracks out within a frame or two, which is
@@ -3780,6 +3787,12 @@ class CameraWorker:
         self._last_reid_t = now - _REID_INTERVAL_S * 0.5
         self._last_pose_t = now - _POSE_INTERVAL_S * 0.33
         self._phase_seeded = True
+
+    def _pose_allowed_this_tick(self) -> bool:
+        """False when spreading is on and the detector ran this frame (defer pose)."""
+        if not getattr(self.config.tracking, "stage_spread", True):
+            return True
+        return not self._detected_this_tick
 
     def _effective_detect_interval(self) -> int:
         """Return the actual detector cadence after quality policy is applied."""

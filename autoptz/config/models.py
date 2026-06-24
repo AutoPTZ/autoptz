@@ -120,6 +120,9 @@ class TrackingConfig(BaseModel, frozen=True):
     # ``_apply_target_lock`` instead of the existing heuristic path.  OFF by
     # default — flip on per-camera to validate before it becomes the default.
     use_target_associator: bool = False
+    # Never run the detector and the pose pass on the same inference frame, so a
+    # heavy detect tick and a heavy pose tick don't stack into a 200ms frame.
+    stage_spread: bool = True
 
 
 # Vertical aim point as a fraction of the person-box height measured from the TOP

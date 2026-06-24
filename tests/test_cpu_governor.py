@@ -271,3 +271,26 @@ def test_ego_runs_every_nth_frame():
     assert calls["n"] == 2
     # Between runs the estimate is reused (non-zero), not blanked to "none".
     assert w._ego_source == "flow"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage-spread: pose skips on frames where the detector ran
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_pose_skips_on_a_detect_frame():
+    from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
+    from autoptz.engine.camera_worker import CameraWorker
+
+    cfg = CameraConfig(
+        id="cam-cpu-000002",
+        name="t",
+        source=SourceConfig(type="usb", address="usb://0"),
+        tracking=TrackingConfig(stage_spread=True),
+        ptz=PTZConfig(),
+    )
+    w = CameraWorker("cam-cpu-000002", cfg, on_telemetry=lambda m: None)
+    w._detected_this_tick = True
+    assert w._pose_allowed_this_tick() is False
+    w._detected_this_tick = False
+    assert w._pose_allowed_this_tick() is True
