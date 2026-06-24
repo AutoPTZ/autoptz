@@ -438,6 +438,13 @@ class CameraWorker:
         self._ego_vel: tuple[float, float] = (0.0, 0.0)
         self._ego_source: str = "none"
 
+        # ── fused target associator (flag-gated, default OFF) ────────────────────
+        # Cheap stateless instance — always constructed; only consulted when
+        # config.tracking.use_target_associator is True.
+        from autoptz.engine.pipeline.associator import TargetAssociator
+
+        self._associator = TargetAssociator()
+
         # runtime state
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -1496,6 +1503,130 @@ class CameraWorker:
             target.aim_x, target.aim_y = lock.trusted_aim
             target.aim_source = "held"
 
+    def _build_candidate_cues(
+        self,
+        tracks: list[TrackInfo],
+    ) -> list[Any]:
+        """Build ``CandidateCues`` for every non-lost track.
+
+        Called only when ``use_target_associator`` is True.  Each cue is marked
+        CONSERVATIVE — only available when the signal genuinely exists this tick:
+
+        - **motion**: IOU of the candidate's bbox against ``_target_lock.trusted_bbox``
+          (the current target's last stored bbox).  Unavailable when there is no
+          current target or no stored trusted bbox.
+        - **identity**: available only when ``_track_identity`` maps this track to
+          the camera's configured target identity (``_target_identity_id``).
+        - **pose**: unavailable here (pose is per-target; we don't have per-candidate
+          pose keypoints — never run pose just for cue-building).
+        - **appearance**: unavailable here (ReID template scores are not stored
+          per-candidate; we don't run ReID in this path — the ReID recovery loop
+          is a separate async path).
+        """
+        from autoptz.engine.pipeline.associator import CandidateCues, Cue
+
+        ref_bbox = self._target_lock.trusted_bbox
+        has_ref = ref_bbox is not None and self._target_track_id is not None
+        cues: list[Any] = []
+        for t in tracks:
+            if getattr(t, "lost", False):
+                continue
+            # -- motion --
+            if has_ref and ref_bbox is not None:
+                motion_iou = self._bbox_iou(ref_bbox, t.bbox)
+                motion_cue = Cue(float(motion_iou), available=True)
+            else:
+                motion_cue = Cue(0.0, available=False)
+
+            # -- identity --
+            # Available iff this track has a recognised identity AND it matches
+            # the operator's configured target identity for this camera.
+            identity_cue = Cue(0.0, available=False)
+            target_iid = self._target_identity_id
+            if target_iid is not None:
+                entry = self._track_identity.get(t.track_id)
+                if entry is not None:
+                    track_iid, _name, score = entry
+                    if track_iid == target_iid:
+                        identity_cue = Cue(float(score), available=True)
+
+            # -- pose --
+            # Per-candidate pose is not computed here (it's per-target only).
+            pose_cue = Cue(0.0, available=False)
+
+            # -- appearance --
+            # ReID template scores are not stored per-candidate for the associator
+            # path (they live inside the recovery loop).  Mark unavailable.
+            appearance_cue = Cue(0.0, available=False)
+
+            cues.append(
+                CandidateCues(
+                    track_id=t.track_id,
+                    motion=motion_cue,
+                    appearance=appearance_cue,
+                    pose=pose_cue,
+                    identity=identity_cue,
+                )
+            )
+        return cues
+
+    def _apply_associator_decision(
+        self,
+        decision: Any,
+        tracks: list[TrackInfo],
+        now: float,
+    ) -> None:
+        """Apply a ``Decision`` returned by ``TargetAssociator.decide``.
+
+        keep      → no change (``_target_lock`` updated by normal store path).
+        switch    → commit the new target via ``_commit_target_track``.
+        ambiguous → mark the current lock ambiguous (hold and freeze).
+        """
+        action = decision.action
+        if action == "keep":
+            # Refresh the trusted state for the existing target if it's visible.
+            target = self._resolve_target_track(tracks)
+            if target is not None and not getattr(target, "lost", False):
+                self._store_trusted_target(target, now)
+                # Surface associator confidence in the lock.
+                self._target_lock.trusted_confidence = float(decision.confidence)
+        elif action == "switch" and decision.track_id is not None:
+            self._commit_target_track(decision.track_id, reason="associator")
+            # Store the new target's bbox immediately so the next tick has a ref.
+            new_target = next(
+                (
+                    t
+                    for t in tracks
+                    if t.track_id == decision.track_id and not getattr(t, "lost", False)
+                ),
+                None,
+            )
+            if new_target is not None:
+                self._store_trusted_target(new_target, now)
+                # Intentionally override detector confidence with the associator's
+                # fused confidence — the fused value is what surfaces in telemetry.
+                self._target_lock.trusted_confidence = float(decision.confidence)
+            log.debug(
+                "camera_id=%s associator switch → track=%d conf=%.2f margin=%.2f",
+                self.camera_id,
+                decision.track_id,
+                decision.confidence,
+                decision.margin,
+            )
+        elif action == "ambiguous":
+            target = self._resolve_target_track(tracks)
+            self._mark_target_ambiguous(
+                target,
+                now=now,
+                reason="associator_ambiguous",
+            )
+            log.debug(
+                "camera_id=%s associator ambiguous conf=%.2f margin=%.2f",
+                self.camera_id,
+                decision.confidence,
+                decision.margin,
+            )
+
     def _append_held_target(self, tracks: list[TrackInfo], now: float) -> None:
         lock = self._target_lock
         if self._target_track_id is None or lock.trusted_bbox is None:
@@ -1528,7 +1659,13 @@ class CameraWorker:
         frame: NDArray[np.uint8] | None,
         now: float,
     ) -> None:
-        """Suppress target evidence from obvious crossings or pose-risk crowding."""
+        """Suppress target evidence from obvious crossings or pose-risk crowding.
+
+        When ``config.tracking.use_target_associator`` is True the fused
+        ``TargetAssociator`` drives keep/switch/ambiguous and the method returns
+        early — the existing heuristic path below is completely bypassed.
+        When the flag is False (default) behaviour is byte-identical to today.
+        """
         self._sync_target_flags(tracks)
         if self._target_track_id is None:
             self._target_lock.status = "idle"
@@ -1539,6 +1676,15 @@ class CameraWorker:
             return
         if target.lost:
             return
+
+        # ── flag-gated associator path (OFF by default) ──────────────────────────
+        if getattr(self.config.tracking, "use_target_associator", False):
+            cues = self._build_candidate_cues(tracks)
+            decision = self._associator.decide(cues, self._target_track_id)
+            self._apply_associator_decision(decision, tracks, now)
+            return
+        # ── existing heuristic path (flag OFF — unchanged) ───────────────────────
+
         if (
             self._target_lock.trusted_track_id != target.track_id
             or self._target_lock.trusted_bbox is None
