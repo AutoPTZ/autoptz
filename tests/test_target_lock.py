@@ -45,3 +45,31 @@ class TestReidRebindIdentityGate:
         # No identity target (clicked/manual): appearance re-bind is the intended behaviour.
         assert w._reid_rebind_allows(7) is True
         assert w._reid_rebind_allows(9) is True
+
+
+class TestTargetBoxCollapsed:
+    """Bug C — a target box that suddenly collapses (occlusion → only legs/partial
+    visible) must be flagged so the camera coasts instead of chasing the shrinking
+    box down to the last-known partial position. A gradual shrink (the subject
+    walking away) must NOT be flagged."""
+
+    def test_first_call_sets_reference_not_collapsed(self):
+        w = _worker()
+        assert w._target_box_collapsed(0.5) is False
+        assert w._target_h_ref == 0.5
+
+    def test_gradual_shrink_not_flagged_and_tracks_reference(self):
+        w = _worker()
+        w._target_box_collapsed(0.5)
+        for h in (0.47, 0.44, 0.41, 0.38):
+            assert w._target_box_collapsed(h) is False
+        # The healthy-height reference followed the gradual change downward.
+        assert w._target_h_ref < 0.5
+
+    def test_sudden_collapse_is_flagged_and_recovers(self):
+        w = _worker()
+        w._target_box_collapsed(0.5)
+        assert w._target_box_collapsed(0.2) is True  # sudden drop below the reference
+        # Reference is left intact on collapse, so the subject reappearing at full
+        # size is immediately trusted again.
+        assert w._target_box_collapsed(0.5) is False

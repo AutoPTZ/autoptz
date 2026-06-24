@@ -204,6 +204,11 @@ _REID_RECOVERY_CONFIRM_STABLE = 3
 _REID_RECOVERY_CONFIRM_RESPONSIVE = 1
 _REID_RECOVERY_MARGIN = 0.08
 _IDENTITY_TARGET_CONFIRM = 2
+# Occlusion coast: the target box height (frame fraction) must drop below this
+# fraction of its recent *healthy* height to count as a sudden collapse (the
+# subject covered by something) rather than the subject simply walking away.
+_OCCLUSION_COLLAPSE_FRAC = 0.55
+_OCCLUSION_REF_ALPHA = 0.10  # how fast the healthy-height reference tracks a gradual change
 
 # EMA weight for the pose-derived aim point: lower = smoother/laggier.  Light
 # smoothing so noisy keypoint regression doesn't jitter the framing.
@@ -342,6 +347,9 @@ class CameraWorker:
         # target per camera — supersedes an explicit track id when its identity
         # is detected on a live track.
         self._target_identity_id: str | None = config.target.identity_id
+        # Slowly-tracked "healthy" target box height (frame fraction); lets the
+        # drive loop tell a sudden occlusion collapse from a gradual walk-away.
+        self._target_h_ref: float | None = None
 
         self.shm_name = f"cam_{camera_id[:8]}_preview"
 
@@ -1228,10 +1236,17 @@ class CameraWorker:
             and self._tracking_enabled
             and tracking_on
         ):
+            fh = max(1, int(frame.shape[0]))
+            box_h_frac = (float(target.bbox.y2) - float(target.bbox.y1)) / fh
+            occluded = self._target_box_collapsed(box_h_frac)
             err, height = self._track_error(target, frame, now, tracks=tracks)
             vel = self._estimate_aim_velocity(err, now)
             try:
-                pan, tilt, zoom = ctrl.step(err, vel, height, track_active=True, t=now)
+                # A box that suddenly collapsed (occlusion → only a partial body
+                # visible) is not a trustworthy aim — coast (track_active=False) so
+                # the controller holds instead of chasing it onto the legs/last-known
+                # partial position, and resumes when the subject reappears in full.
+                pan, tilt, zoom = ctrl.step(err, vel, height, track_active=not occluded, t=now)
                 self._ptz_last_cmd = (pan, tilt, zoom)
                 self._log_ptz_cmd("auto", pan, tilt, zoom)
             except Exception:  # noqa: BLE001
@@ -1353,6 +1368,7 @@ class CameraWorker:
         with self._appearance_lock:
             if track_id != self._target_track_id:
                 self._reset_pose_aim()
+                self._target_h_ref = None
                 self._target_lock = _TargetLockState(status="pending", reason=reason)
                 self._reid_recover_candidate = None
                 self._identity_recover_candidate = None
@@ -1363,6 +1379,25 @@ class CameraWorker:
                 if reset_reid:
                     self._reset_reid()
             self._target_track_id = track_id
+
+    def _target_box_collapsed(self, height_frac: float) -> bool:
+        """True when the target box height suddenly collapsed vs its recent healthy
+        size — the occlusion signature (the subject covered by something leaves only
+        a partial box, e.g. just the legs). A gradual shrink (the subject walking
+        away) updates the reference and is NOT flagged, because the slow reference
+        keeps pace; a sudden drop IS flagged, because the reference hasn't caught up.
+        The caller coasts the PTZ instead of chasing the box down to the last-known
+        partial position.
+        """
+        h = max(0.0, float(height_frac))
+        ref = self._target_h_ref
+        if ref is None or ref <= 0.0:
+            self._target_h_ref = h
+            return False
+        if h < ref * _OCCLUSION_COLLAPSE_FRAC:
+            return True  # leave the reference intact so a full-size reappearance recovers
+        self._target_h_ref = ref + _OCCLUSION_REF_ALPHA * (h - ref)
+        return False
 
     @staticmethod
     def _bbox_area(bb: BBox) -> float:
