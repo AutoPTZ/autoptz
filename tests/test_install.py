@@ -61,6 +61,25 @@ def test_linux_nvidia_auto_uses_nvidia_swap() -> None:
     assert ("install", "-r", "requirements/gpu-nvidia.txt") in args
 
 
+def test_linux_intel_auto_uses_openvino_swap() -> None:
+    # Intel CPU/iGPU on Linux with no NVIDIA → OpenVINO (faster than the stock CPU EP).
+    system = SystemInfo("Linux", "x86_64", ("Intel Corporation UHD Graphics 770",))
+
+    args = _step_args(system)
+
+    assert ("install", "-r", "requirements/openvino.txt") in args
+
+
+def test_linux_nvidia_beats_intel_when_both_present() -> None:
+    # A box with both an NVIDIA dGPU and an Intel iGPU should pick NVIDIA, not OpenVINO.
+    system = SystemInfo("Linux", "x86_64", ("Intel UHD Graphics", "NVIDIA RTX 4090"))
+
+    args = _step_args(system)
+
+    assert ("install", "-r", "requirements/gpu-nvidia.txt") in args
+    assert ("install", "-r", "requirements/openvino.txt") not in args
+
+
 def test_macos_auto_stays_on_base_coreml_wheel() -> None:
     system = SystemInfo("Darwin", "arm64", ("Apple M3",))
 

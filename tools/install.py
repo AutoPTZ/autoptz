@@ -55,6 +55,10 @@ class SystemInfo:
     def has_nvidia_gpu(self) -> bool:
         return any("nvidia" in name.lower() for name in self.gpu_names)
 
+    @property
+    def has_intel_gpu(self) -> bool:
+        return any("intel" in name.lower() for name in self.gpu_names)
+
     def label(self) -> str:
         gpu_label = ", ".join(self.gpu_names) if self.gpu_names else "no GPU name detected"
         return f"{self.os_name} {self.machine} ({gpu_label})"
@@ -178,6 +182,9 @@ def _auto_accelerator(system: SystemInfo) -> Accelerator | None:
         return "directml"
     if system.is_linux and system.has_nvidia_gpu:
         return "nvidia"
+    # Intel CPU/iGPU (no discrete NVIDIA): OpenVINO beats the stock CPU EP on Intel.
+    if system.is_linux and system.has_intel_gpu:
+        return "openvino"
     return None
 
 
