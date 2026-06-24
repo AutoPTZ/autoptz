@@ -1,0 +1,62 @@
+"""Process-wide feature-flag env resolvers — the single source of truth.
+
+These ``AUTOPTZ_*`` switches are read from more than one layer (the inference
+pool, the worker stacks, the supervisor), so the parsing of "what counts as on"
+lives here once instead of being re-implemented per call site.
+"""
+
+from __future__ import annotations
+
+import os
+
+# Strings that count as "on" for a boolean env flag.
+_TRUE_VALUES = ("1", "true", "yes", "on")
+
+
+def _env_true(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUE_VALUES
+
+
+def env_unified_pose() -> bool:
+    """Process-wide opt-in for the unified (one-backbone) pose detector.
+
+    Honoured in addition to the per-camera ``tracking.unified_pose`` config flag.
+    """
+    return _env_true("AUTOPTZ_UNIFIED_POSE")
+
+
+def apply_opencv_thread_cap(threads: int | None = None) -> None:
+    """Cap OpenCV's internal thread pool (resize/letterbox + optical flow).
+
+    OpenCV defaults to *all* cores, so with several camera threads each firing
+    cv2 work it oversubscribes the CPU — a real source of frame-time/CPU spikes.
+    ``threads`` defaults to the ``AUTOPTZ_CV2_THREADS`` budget the supervisor
+    publishes (so a spawned camera child can re-apply it in its own process).
+
+    **Backend nuance:** with the TBB/OpenMP backends (typical on Linux/Windows)
+    ``setNumThreads(n)`` honours *n*.  With the GCD/Concurrency backend (the macOS
+    opencv-python wheels) a positive count is **ignored** and only ``0`` (force
+    single-threaded) takes effect — so when we want a tight single-thread cap and
+    the backend kept more, we fall back to disabling OpenCV's internal threading.
+    Best-effort and must never raise into startup.
+    """
+    if threads is None:
+        raw = os.environ.get("AUTOPTZ_CV2_THREADS", "").strip()
+        if not raw:
+            return
+        try:
+            threads = max(1, int(raw))
+        except ValueError:
+            return
+    try:
+        import cv2
+
+        threads = max(1, int(threads))
+        cv2.setNumThreads(threads)
+        # GCD/Concurrency backends ignore a positive count; if we asked to squeeze
+        # down to a single thread but it kept more, force OpenCV single-threaded so
+        # per-camera cv2 work can't fan across every core under heavy multi-cam load.
+        if threads <= 1 and cv2.getNumThreads() > 1:
+            cv2.setNumThreads(0)
+    except Exception:  # noqa: BLE001 — a thread-cap hint must never block startup
+        pass
