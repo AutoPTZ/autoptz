@@ -72,6 +72,18 @@ _PREVIEW_H = 720
 _PREVIEW_PUSH_FPS = 20.0
 _PREVIEW_PUSH_MIN_PERIOD_S = 1.0 / _PREVIEW_PUSH_FPS
 
+# Center Stage crop tightness per "Framing" preset → (subject fill of crop,
+# max crop as a fraction of the frame). A smaller ``max_frac`` forces a tighter
+# zoom even on a close subject that already fills the sensor; the live "Framing"
+# dropdown (tracking.framing) picks the preset, so the user dials the shot
+# without a restart. ``upper_body`` is the default head-and-shoulders look.
+_CENTERSTAGE_FRAMING: dict[str, tuple[float, float]] = {
+    "face": (0.86, 0.50),  # tight head/face closeup (~2.0x on a close subject)
+    "head_shoulders": (0.80, 0.62),  # head + shoulders (~1.6x)
+    "upper_body": (0.70, 0.74),  # head + chest (~1.35x) — default
+    "full_body": (0.58, 0.94),  # whole person, gentle crop
+}
+
 _DEFAULT_TELEMETRY_HZ = 10.0
 
 # How long a manual PTZ nudge suspends auto control before auto resumes.
@@ -3233,6 +3245,11 @@ class CameraWorker:
             from autoptz.engine.pipeline.digital_framer import DigitalFramer
 
             framer = self._digital_framer = DigitalFramer(out_aspect=aspect)
+        # Crop tightness follows the live "Framing" dropdown.
+        framing = getattr(self.config.tracking, "framing", "upper_body")
+        framer.fill, framer.max_frac = _CENTERSTAGE_FRAMING.get(
+            framing, _CENTERSTAGE_FRAMING["upper_body"]
+        )
         target = self._current_digital_target()
         if target is not None:
             x, y, cw, ch = framer.frame_for(target, w, h)
