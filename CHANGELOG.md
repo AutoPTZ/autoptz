@@ -6,14 +6,24 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.0-rc3] — 2026-06-24
+
+> Pre-release for testing — adds **Center Stage** software auto-framing on top of
+> the rc2 CPU-performance and tracking work. Please validate on your real cameras
+> and report back before this becomes the stable 2.2.0.
+
 ### Added
 
 - **Center Stage** — software auto-framing (digital PTZ) for cameras without
   motorised PTZ: a single **Center Stage** toggle in the PTZ panel digitally
-  pans/zooms a crop to follow the selected target, with an optional **Virtual
-  camera output** to publish the framed crop to Zoom/OBS (needs a system
-  virtual-camera driver). The raw PTZ transport selector now lives under PTZ →
-  Advanced, since most users use Center Stage or the auto-probe.
+  crops, zooms, and pans to keep the selected target framed — a head-and-shoulders
+  shot that follows them and holds steady through normal track re-association
+  instead of snapping back to the full frame. Set how tightly it frames with the
+  **Framing** dropdown (Face / Head & shoulders / Upper body / Full body), live.
+  An optional **Virtual camera output** publishes the framed crop to Zoom/OBS
+  (needs a system virtual-camera driver) and disconnects cleanly when turned off.
+  The raw PTZ transport selector now lives under PTZ → Advanced, since most users
+  use Center Stage or the auto-probe.
 
 ### Changed
 
