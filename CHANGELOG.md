@@ -18,6 +18,11 @@ follow [Semantic Versioning](https://semver.org/).
   or CUDA when available instead of always the CPU, cutting the per-frame
   appearance cost (and the GIL stall it caused on Macs). Set
   `AUTOPTZ_REID_DEVICE=cpu` to force the previous behaviour.
+- **Verify/force the CoreML GPU path** — `AUTOPTZ_COREML_UNITS`
+  (`ALL` / `CPUAndGPU` / `CPUOnly`) lets Intel + AMD Macs (e.g. iMac Pro Xeon +
+  Vega 56) check whether CoreML is actually using the discrete GPU or silently
+  falling back to the CPU: run `--bench` with `CPUOnly` and again with `ALL` and
+  compare. Defaults to `ALL`.
 
 ### Fixed
 

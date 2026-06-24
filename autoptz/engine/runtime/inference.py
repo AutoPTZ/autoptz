@@ -199,17 +199,39 @@ def effective_precision(ep: EP | str, prefs: HardwarePrefs | None = None) -> str
     return "fp16" if (ep in _ACCELERATED_EPS and _wants_fp16(prefs)) else "fp32"
 
 
+_VALID_COREML_UNITS = ("ALL", "CPUAndGPU", "CPUOnly", "CPUAndNeuralEngine")
+
+
+def _coreml_compute_units() -> str:
+    """CoreML compute-unit target. Defaults to ``ALL`` (CoreML picks the fastest
+    unit per op; on Intel Macs ``ALL`` includes the discrete AMD GPU via Metal).
+
+    Override with ``AUTOPTZ_COREML_UNITS`` to diagnose or force the path on
+    Intel + AMD (e.g. iMac Pro Xeon + Vega) Macs — ``CPUOnly`` to *measure* whether
+    the GPU is helping at all (compare two ``--bench`` runs), or ``CPUAndGPU`` to
+    pin the discrete GPU if ``ALL`` is silently choosing the CPU. Invalid values
+    fall back to ``ALL``.
+    """
+    import os  # noqa: PLC0415
+
+    val = os.environ.get("AUTOPTZ_COREML_UNITS", "").strip().lower()
+    for v in _VALID_COREML_UNITS:
+        if val == v.lower():
+            return v
+    return "ALL"
+
+
 def _provider_options(ep: EP, prefs: HardwarePrefs | None) -> dict[str, object]:
     """Per-EP acceleration options. Empty dict = provider defaults."""
     if ep is EP.COREML:
         # MLProgram routes to the Apple Neural Engine / GPU (incl. AMD on Intel
-        # Macs via Metal); ALL lets CoreML pick the fastest unit per op.
-        # ModelCacheDirectory persists the compiled MLProgram so the slow first
-        # compile is one-time per machine, not paid on every session build
-        # (acute with many camera workers / process-per-camera).
+        # Macs via Metal); the compute-unit target is tunable (AUTOPTZ_COREML_UNITS)
+        # so an Intel+AMD Mac can verify/force the GPU path. ModelCacheDirectory
+        # persists the compiled MLProgram so the slow first compile is one-time per
+        # machine, not paid on every session build (acute with process-per-camera).
         return {
             "ModelFormat": "MLProgram",
-            "MLComputeUnits": "ALL",
+            "MLComputeUnits": _coreml_compute_units(),
             "ModelCacheDirectory": _coreml_cache_dir(),
         }
     if ep is EP.TENSORRT:
