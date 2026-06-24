@@ -45,3 +45,7 @@ htmlcov/
 # Packaging build outputs
 /packaging/build/
 /packaging/dist/
+
+# Superpowers planning docs / scratch — kept on disk, not tracked
+docs/superpowers/
+.superpowers/

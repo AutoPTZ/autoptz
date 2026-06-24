@@ -133,6 +133,21 @@ def main() -> None:
     parser.add_argument(
         "--log-level", default="WARNING", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
     )
+    parser.add_argument(
+        "--bench",
+        action="store_true",
+        help="Benchmark detector inference (auto EP vs CPU) and exit.",
+    )
+    parser.add_argument(
+        "--bench-tier",
+        default="auto",
+        help="Detector tier to benchmark (default: auto).",
+    )
+    parser.add_argument(
+        "--bench-json",
+        default=None,
+        help="Write the benchmark report as JSON to this path.",
+    )
     args = parser.parse_args()
 
     logging.getLogger().setLevel(getattr(logging, args.log_level))
@@ -140,6 +155,11 @@ def main() -> None:
     if args.selftest:
         selftest()
         return
+
+    if args.bench:
+        from autoptz.engine.runtime.bench import run_acceleration_bench
+
+        raise SystemExit(run_acceleration_bench(tier=args.bench_tier, json_path=args.bench_json))
 
     # Default: launch the UI
     from autoptz.ui.app import run
