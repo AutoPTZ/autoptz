@@ -35,12 +35,13 @@ def test_crop_never_leaves_frame():
     assert 0 <= x and 0 <= y and x + w <= 1280 and y + h <= 720
 
 
-def test_framed_output_crops_when_digital_backend_active():
+def test_framed_output_frames_the_target_when_digital_backend_active():
     import numpy as np
 
     from autoptz.config.models import CameraConfig, PTZConfig, SourceConfig, TrackingConfig
     from autoptz.engine.camera_worker import CameraWorker
     from autoptz.engine.ptz.digital import DigitalPTZBackend
+    from autoptz.engine.runtime.messages import BBox, TrackInfo
 
     cfg = CameraConfig(
         id="cam-dig-000001",
@@ -50,11 +51,15 @@ def test_framed_output_crops_when_digital_backend_active():
         ptz=PTZConfig(backend="digital", digital_output_w=320, digital_output_h=240),
     )
     w = CameraWorker("cam-dig-000001", cfg, on_telemetry=lambda m: None)
-    b = DigitalPTZBackend(min_crop_frac=0.5, max_step_per_s=100.0)
-    b.move_velocity(0, 0, 1.0)  # zoom in
-    w._ptz_backend = b
+    w._ptz_backend = DigitalPTZBackend()
+    # A selected target occupying ~25% of a 1280x720 frame → the auto-framer crops
+    # onto it (zoomed in) and the output is scaled to the configured size.
+    w._target_track_id = 7
+    w._last_tracks = [TrackInfo(track_id=7, bbox=BBox(x1=900, y1=300, x2=1020, y2=480))]
     out = w._framed_output(np.zeros((720, 1280, 3), dtype=np.uint8))
     assert out.shape[1] == 320 and out.shape[0] == 240  # scaled to output size
+    x, y, cw, ch = w._digital_framer._crop
+    assert cw < 1280 and ch < 720  # cropped to less than the full frame (zoomed on target)
 
 
 def test_framed_output_passthrough_without_digital_backend():

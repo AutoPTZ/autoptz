@@ -540,6 +540,7 @@ class CameraWorker:
         self._source: FrameSource | None = None
         self._shm: ShmWriter | None = None
         self._vcam: Any | None = None  # VirtualCamSink (lazily created when vcam_out enabled)
+        self._digital_framer: Any | None = None  # Center Stage auto-framer (lazy)
         self._detect: _DetectStack | None = None
         self._pooled_detector = False
         # True when the detector is the unified YOLO11-pose model (boxes+keypoints
@@ -3167,10 +3168,14 @@ class CameraWorker:
                 )
 
     def _framed_output(self, frame: NDArray[np.uint8]) -> NDArray[np.uint8]:
-        """Crop+scale to the digital crop when a DigitalPTZBackend is active.
+        """Center Stage: crop+scale the frame to auto-frame the target.
 
-        Returns the original frame unchanged when no digital backend is set or
-        the frame is None, so the caller is always safe to use the return value.
+        The crop is computed directly from the current target's bounding box by
+        :class:`DigitalFramer` (centre on the subject, size to frame it, smoothed)
+        — NOT by integrating the velocity controller, whose conservative auto-zoom
+        never engaged so the crop stayed full-frame. With no target the crop eases
+        back to the whole frame. Returns the frame unchanged when no digital
+        backend is active, so the caller is always safe to use the return value.
         """
         from autoptz.engine.ptz.digital import DigitalPTZBackend
 
@@ -3180,11 +3185,42 @@ class CameraWorker:
         import cv2
 
         h, w = frame.shape[:2]
-        x, y, cw, ch = backend.crop_rect(w, h)
-        crop = frame[y : y + ch, x : x + cw]
         ow = int(getattr(self.config.ptz, "digital_output_w", 1280))
         oh = int(getattr(self.config.ptz, "digital_output_h", 720))
+        aspect = ow / max(1, oh)
+        framer = self._digital_framer
+        if framer is None or abs(framer.out_aspect - aspect) > 1e-3:
+            from autoptz.engine.pipeline.digital_framer import DigitalFramer
+
+            framer = self._digital_framer = DigitalFramer(out_aspect=aspect)
+        target = self._current_digital_target()
+        if target is not None:
+            x, y, cw, ch = framer.frame_for(target, w, h)
+        else:
+            x, y, cw, ch = framer.full_frame(w, h)
+        crop = frame[y : y + ch, x : x + cw]
+        if crop.size == 0:
+            return frame
         return cv2.resize(crop, (ow, oh), interpolation=cv2.INTER_LINEAR)
+
+    def _current_digital_target(self) -> tuple[float, float, float, float] | None:
+        """The selected target's bbox (x1,y1,x2,y2) for Center Stage, or None.
+
+        Read from the last published tracks (this runs on the capture thread); a
+        slightly stale box is fine for smooth framing.
+        """
+        tid = self._target_track_id
+        if tid is None:
+            return None
+        for t in self._last_tracks or ():
+            if (
+                t.track_id == tid
+                and not getattr(t, "lost", False)
+                and getattr(t, "bbox", None) is not None
+            ):
+                bb = t.bbox
+                return (bb.x1, bb.y1, bb.x2, bb.y2)
+        return None
 
     def _push_frame(self, frame: NDArray[np.uint8]) -> None:
         if self._shm is None:
