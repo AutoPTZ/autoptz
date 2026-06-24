@@ -19,6 +19,46 @@ import pytest
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
+def _run_ui_smoke(
+    code: str,
+    *,
+    cwd,
+    env,
+    timeout: int = 30,
+    attempts: int = 3,
+) -> subprocess.CompletedProcess:
+    """Run a Qt widget-smoke child process, retrying ONLY on a signal crash.
+
+    Headless Qt occasionally segfaults during teardown on macOS CI
+    (``returncode == -11``). That is an environment flake, not a test failure:
+    a failed assertion in the child exits with code 1 (>= 0), which we never
+    retry. Only a negative returncode (killed by a signal) triggers a retry.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=cwd,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+    for _ in range(max(0, attempts - 1)):
+        if result.returncode >= 0:
+            return result
+        # Child was killed by a signal (e.g. SIGSEGV during Qt teardown) — flake; retry.
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=cwd,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    return result
+
+
 def _client(qapp):  # noqa: ANN001 — fixture type varies
     from autoptz.ui.engine_client import EngineClient
 
@@ -1133,15 +1173,7 @@ finally:
 """
         env = dict(os.environ)
         env.setdefault("QT_QPA_PLATFORM", "offscreen")
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            cwd=Path(__file__).resolve().parents[1],
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
         assert result.returncode == 0, result.stderr or result.stdout
 
     def test_status_logs_button_controls_logs_dock(self, tmp_path) -> None:
@@ -1186,15 +1218,7 @@ finally:
 """
         env = dict(os.environ)
         env.setdefault("QT_QPA_PLATFORM", "offscreen")
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            cwd=Path(__file__).resolve().parents[1],
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
         assert result.returncode == 0, result.stderr or result.stdout
 
     def test_theme_does_not_strip_mainwindow_desktop_chrome(self, tmp_path) -> None:
@@ -1232,15 +1256,7 @@ finally:
 """
         env = dict(os.environ)
         env.setdefault("QT_QPA_PLATFORM", "offscreen")
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            cwd=Path(__file__).resolve().parents[1],
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
         assert result.returncode == 0, result.stderr or result.stdout
 
     def test_services_panel_does_not_force_tall_main_window(self, tmp_path) -> None:
@@ -1269,13 +1285,5 @@ finally:
 """
         env = dict(os.environ)
         env.setdefault("QT_QPA_PLATFORM", "offscreen")
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            cwd=Path(__file__).resolve().parents[1],
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
         assert result.returncode == 0, result.stderr or result.stdout
