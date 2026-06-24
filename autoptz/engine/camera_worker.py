@@ -3860,6 +3860,19 @@ class CameraWorker:
             str(getattr(pool, "detector_ep", "") or "") if pool is not None else ""
         )
         detector_error = str(getattr(pool, "detector_error", "") or "") if pool is not None else ""
+        # Read cached acceleration verdict (never triggers a measurement here —
+        # that runs once on a daemon thread from warmup_detector).
+        _no_accel: Any = lambda: ""  # noqa: E731
+        accel_summary = (
+            str(getattr(pool, "detector_accel_summary", _no_accel)() or "")
+            if pool is not None
+            else ""
+        )
+        accel_verdict = (
+            str(getattr(pool, "detector_accel_verdict", _no_accel)() or "")
+            if pool is not None
+            else ""
+        )
         cap = self._source_fps_cap()
         target_fps = self._target_fps()
         tracking = self.config.tracking
@@ -3870,6 +3883,13 @@ class CameraWorker:
         det_enabled = self._feature("detection")
         det_available = self._detect is not None
         det_failed = det_enabled and not det_available and bool(detector_error)
+        # Base detail for the detector row; append the accel summary when available.
+        if det_failed:
+            det_detail = detector_error
+        else:
+            det_detail = detector_model or "per-camera detector"
+            if accel_summary:
+                det_detail = f"{det_detail} · {accel_summary}"
         return [
             RuntimeServiceInfo(
                 key="detector",
@@ -3881,10 +3901,11 @@ class CameraWorker:
                 state="failed"
                 if det_failed
                 else self._stage_status("detect", enabled=det_enabled, available=det_available),
-                detail=detector_error if det_failed else (detector_model or "per-camera detector"),
+                detail=det_detail,
                 model=detector_model,
                 tier=detector_tier,
                 ep=detector_ep,
+                confidence=accel_verdict,
             ),
             RuntimeServiceInfo(
                 key="tracker",

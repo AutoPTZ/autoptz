@@ -168,6 +168,10 @@ class InferencePool:
         # Reason the detector couldn't be built ("" = fine / not yet tried),
         # surfaced to the UI so a silent live-preview-only fall-back is visible.
         self._detector_error = ""
+        # Acceleration verdict — measured once, lazily, off the hot path.
+        # State: "idle" → "measuring" → "done" | "unavailable"
+        self._detector_accel: Any | None = None  # AccelReport | None
+        self._accel_state: str = "idle"
         self._switch_lock = threading.Lock()
         self._switch_state: dict[str, Any] | None = None
 
@@ -552,6 +556,58 @@ class InferencePool:
 
         return np.zeros((size, size, 3), dtype=np.uint8)
 
+    # ── acceleration verdict (measure once, lazily, off the hot path) ───────────────
+
+    def measure_detector_acceleration(self) -> None:
+        """Time the detector EP vs CPU baseline and cache the verdict.
+
+        Designed to run on a daemon thread (spawned from ``warmup_detector``
+        after the dummy inference warms the EP).  Safe to call directly in tests
+        — no thread is created here.
+
+        Guards:
+        - Only runs for the plain detector path (not unified-pose).
+        - Requires a real ``_detector_model_path`` (not empty / placeholder).
+        - Only transitions from "idle"; re-entry is a no-op.
+        - Never raises (BLE001).
+        """
+        if self._accel_state != "idle":
+            return
+        # Skip unified-pose path — model path is a placeholder, not an ONNX file.
+        if self._unified_pose:
+            return
+        path = self._detector_model_path
+        if not path or path.startswith("<"):
+            return
+        self._accel_state = "measuring"
+        try:
+            from autoptz.engine.runtime.bench import measure_acceleration
+
+            report = measure_acceleration(path, warmup=2, runs=8)
+            self._detector_accel = report
+            self._accel_state = "done"
+            log.info(
+                "inference pool: detector accel verdict=%s (%s)",
+                report.verdict,
+                report.summary(),
+            )
+        except Exception:  # noqa: BLE001 — acceleration bench is a nicety
+            self._detector_accel = None
+            self._accel_state = "unavailable"
+            log.debug("inference pool: detector acceleration measurement failed", exc_info=True)
+
+    def detector_accel_summary(self) -> str:
+        """Human-readable acceleration summary, or "" if not yet measured."""
+        if self._accel_state != "done" or self._detector_accel is None:
+            return ""
+        return str(self._detector_accel.summary())
+
+    def detector_accel_verdict(self) -> str:
+        """Verdict string ("accelerated"/"no-benefit"/"cpu-only"), or "" if not done."""
+        if self._accel_state != "done" or self._detector_accel is None:
+            return ""
+        return str(self._detector_accel.verdict)
+
     def warmup_detector(self) -> None:
         """Build the detector and run one dummy frame so its EP compiles now."""
         det = self.detector()
@@ -561,6 +617,11 @@ class InferencePool:
             det.detect(self._dummy_frame())
         except Exception:  # noqa: BLE001 — warmup must never break startup
             log.debug("inference pool: detector warmup inference failed", exc_info=True)
+        # Kick off the acceleration measurement on a background daemon thread so
+        # warmup never blocks startup.  Tests call measure_detector_acceleration()
+        # directly instead (no thread).
+        t = threading.Thread(target=self.measure_detector_acceleration, daemon=True)
+        t.start()
 
     def warmup_face(self) -> None:
         """Build the face stack and run one dummy frame to pre-compile it."""
