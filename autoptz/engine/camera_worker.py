@@ -65,6 +65,12 @@ log = logging.getLogger(__name__)
 # shape it reads.
 _PREVIEW_W = 1280
 _PREVIEW_H = 720
+# Cap the preview ShmWriter push rate. The UI tile is a monitoring view (overlays
+# come from the ~10 Hz telemetry, not the preview frame), so it doesn't need the
+# full capture fps — capping it skips the per-frame resize/copy cost on faster
+# sources. Detection/tracking use the full-rate frame on a separate path.
+_PREVIEW_PUSH_FPS = 20.0
+_PREVIEW_PUSH_MIN_PERIOD_S = 1.0 / _PREVIEW_PUSH_FPS
 
 _DEFAULT_TELEMETRY_HZ = 10.0
 
@@ -314,6 +320,7 @@ class CameraWorker:
         self._injected_face_stack = face_stack
         self._face: Any | None = None
         self._last_face_t = 0.0
+        self._last_preview_push_t = 0.0
         self._last_harvest_t = 0.0
         self._last_crop_t = 0.0
         # Most recent face→identity bindings seen this tick: track_id → (id, conf).
@@ -2920,6 +2927,13 @@ class CameraWorker:
     def _push_frame(self, frame: NDArray[np.uint8]) -> None:
         if self._shm is None:
             return
+        # Cap the preview rate: skip the resize/push when the last preview frame
+        # was pushed less than one preview period ago (saves CPU on >20fps sources
+        # without affecting tracking, which uses the full-rate frame elsewhere).
+        now = time.monotonic()
+        if now - self._last_preview_push_t < _PREVIEW_PUSH_MIN_PERIOD_S:
+            return
+        self._last_preview_push_t = now
         try:
             f = self._fit_frame(frame)
             self._shm.push(f)
