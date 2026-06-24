@@ -613,6 +613,17 @@ class CameraWorker:
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    def is_alive(self) -> bool:
+        """Return True iff the worker has been started and its capture thread is alive.
+
+        False before ``start()``, after ``stop()``, or if the thread died unexpectedly.
+        Uniform interface with ``ProcessWorkerHandle.is_alive()`` so the supervisor
+        can treat both worker types identically for health monitoring.
+
+        Delegates to :attr:`is_running` so liveness logic lives in exactly one place.
+        """
+        return self.is_running
+
     # ── command intake (thread-safe; called from supervisor/command pump) ────────
 
     def enable_tracking(self, enabled: bool) -> None:
