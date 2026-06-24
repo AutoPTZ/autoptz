@@ -3,11 +3,17 @@
 Wraps a pyserial connection to any Sony/compatible VISCA camera (EVI-D100, etc.).
 Normalized [-1, 1] pan/tilt/zoom maps to VISCA speed bytes 0x01–0x18 / 0x01–0x14 / 0x01–0x07.
 Presets are native VISCA memory commands (81 01 04 3F 01/02 MM FF).
+
+Auto-reconnect: on SerialException or OSError the port is closed and a
+ReconnectPolicy gate is consulted; if the backoff interval has elapsed a single
+reconnect is attempted and the command is retried once.  Neither move_velocity
+nor stop ever raise into the caller.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from autoptz.engine.ptz.base import (
@@ -23,8 +29,12 @@ from autoptz.engine.ptz.base import (
     visca_zoom_cmd,
     visca_zoom_stop_cmd,
 )
+from autoptz.engine.ptz.reconnect import ReconnectPolicy
 
 log = logging.getLogger(__name__)
+
+# Import serial at module level so tests can monkeypatch visca_usb.serial
+import serial  # noqa: E402  pyserial — already in requirements/base.txt
 
 
 class ViscaUSBBackend(PTZBackend):
@@ -38,8 +48,6 @@ class ViscaUSBBackend(PTZBackend):
 
     def __init__(self, port: str, baud: int = 9600, address: int = 1) -> None:
         super().__init__()
-        import serial  # pyserial — already in requirements/base.txt
-
         self.caps = PTZCaps(
             continuous_pan_tilt=True,
             continuous_zoom=True,
@@ -48,15 +56,82 @@ class ViscaUSBBackend(PTZBackend):
         )
         # address byte: camera 1 = 0x81, camera 2 = 0x82, …
         self._addr = 0x80 | (address & 0x07)
-        self._ser: Any = serial.Serial(port, baud, timeout=0.1)
-        log.info("ViscaUSB opened %s @ %d baud", port, baud)
+        self._port = port
+        self._baud = baud
+        self._policy = ReconnectPolicy()
+        self._connected: bool = False
+        self._ser: Any = None
+        self._open()
+
+    # ── connection management ─────────────────────────────────────────────────
+
+    def _open(self) -> None:
+        """Open (or reopen) the serial port; sets _connected=True on success."""
+        self._ser = serial.Serial(self._port, self._baud, timeout=0.1)
+        self._connected = True
+        log.info("ViscaUSB opened %s @ %d baud", self._port, self._baud)
+
+    def _close_ser(self) -> None:
+        """Close the serial port without raising."""
+        self._connected = False
+        if self._ser is not None:
+            try:
+                self._ser.close()
+            except Exception:
+                pass
+            self._ser = None
+
+    @property
+    def connected(self) -> bool:
+        """True while the serial port is believed to be live."""
+        return self._connected
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _send(self, cmd: bytes) -> None:
-        """Write VISCA command; drain any pending ACK/completion bytes first."""
+        """Write VISCA command; drain any pending ACK/completion bytes first.
+
+        On SerialException or OSError the port is closed and a reconnect is
+        attempted once (subject to backoff policy).  Never raises.
+        """
         # Patch address byte (index 0) to match configured camera address
         patched = bytes([self._addr]) + cmd[1:]
+
+        # Fast path: serial port is open and healthy.
+        if self._ser is not None:
+            try:
+                self._do_write(patched)
+                return
+            except (serial.SerialException, OSError) as _exc:
+                log.debug("ViscaUSB write failed (will reconnect): %s", _exc)
+            # Transport error on the existing port — close it.
+            self._close_ser()
+
+        # Port is None (either from a previous failure or just closed above).
+        # Check whether the policy allows a reconnect attempt right now.
+        now = time.monotonic()
+        if not self._policy.should_attempt(now):
+            return  # still in backoff window; swallow silently
+
+        # Attempt exactly one reconnect.
+        try:
+            self._open()
+            self._policy.record_success()
+        except (serial.SerialException, OSError) as exc:
+            log.warning("ViscaUSB reconnect to %s failed: %s", self._port, exc)
+            self._policy.record_failure(time.monotonic())
+            return
+
+        # Retry the command once on the fresh port.
+        try:
+            self._do_write(patched)
+        except (serial.SerialException, OSError) as exc:
+            log.warning("ViscaUSB retry write failed: %s", exc)
+            self._close_ser()
+            self._policy.record_failure(time.monotonic())
+
+    def _do_write(self, patched: bytes) -> None:
+        """Actually write to the serial port (factored out for clarity)."""
         pending = self._ser.in_waiting
         if pending:
             self._ser.read(pending)
@@ -94,8 +169,5 @@ class ViscaUSBBackend(PTZBackend):
             self.stop()
         except Exception:
             pass
-        try:
-            self._ser.close()
-        except Exception:
-            pass
+        self._close_ser()
         log.info("ViscaUSB closed")
