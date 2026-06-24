@@ -18,6 +18,21 @@ follow [Semantic Versioning](https://semver.org/).
   to every core. On Linux/Windows the exact count is honoured; on macOS's GCD
   OpenCV backend (which ignores a positive count) the cap forces single-threaded
   only under heavy multi-camera load.
+- **ReID runs on the GPU** — OSNet appearance ReID now uses the Apple GPU (`mps`)
+  or CUDA when available instead of always the CPU, cutting the per-frame
+  appearance cost (and the GIL stall it caused on Macs). Set
+  `AUTOPTZ_REID_DEVICE=cpu` to force the previous behaviour.
+
+### Fixed
+
+- **Named-target tracking no longer drifts to the wrong person** — a target
+  selected by identity (name), once lost, could be re-bound by appearance ReID to
+  the next visually-similar person, then any track. It now re-binds only to a
+  face-confirmed match of the *same* identity; otherwise it keeps searching.
+- **The camera no longer chases an occluded subject** — when the target is
+  suddenly covered, its box collapses to the visible part (e.g. the legs); the
+  drive loop now coasts on a sudden box-height collapse instead of following the
+  shrinking box down, and resumes when the subject reappears at full size.
 
 ### Removed
 

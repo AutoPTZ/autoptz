@@ -112,6 +112,39 @@ class ReIDResult:
     scores: list[float] = field(default_factory=list)
 
 
+def _pick_device(*, has_mps: bool, has_cuda: bool) -> str:
+    """Device priority for OSNet ReID: Apple GPU (mps) → CUDA → CPU."""
+    if has_mps:
+        return "mps"
+    if has_cuda:
+        return "cuda"
+    return "cpu"
+
+
+def _best_reid_device() -> str:
+    """Best available torch device for ReID, or "cpu" if torch is unavailable.
+
+    Keeps the appearance pass off the CPU on Macs (Apple ``mps``) and CUDA boxes —
+    it is otherwise a major per-frame cost that also stalls the inference thread
+    through the GIL. Set ``AUTOPTZ_REID_DEVICE=cpu`` to force it back (e.g. if an
+    OSNet op misbehaves on mps).
+    """
+    import os  # noqa: PLC0415
+
+    forced = os.environ.get("AUTOPTZ_REID_DEVICE", "").strip().lower()
+    if forced in ("cpu", "mps", "cuda"):
+        return forced
+    try:
+        import torch  # noqa: PLC0415
+
+        return _pick_device(
+            has_mps=bool(torch.backends.mps.is_available() and torch.backends.mps.is_built()),
+            has_cuda=bool(torch.cuda.is_available()),
+        )
+    except Exception:  # noqa: BLE001 — no torch / probe failure → CPU
+        return "cpu"
+
+
 class BodyReID:
     """OSNet appearance embeddings + hysteresis recovery matching.
 
@@ -129,7 +162,7 @@ class BodyReID:
         self,
         weights: Path | None = None,
         *,
-        device: str = "cpu",
+        device: str | None = None,
         threshold_hi: float = 0.70,
         threshold_lo: float = 0.45,
         _backend: Any | None = None,
@@ -145,22 +178,44 @@ class BodyReID:
         if _backend is None:
             self._try_init(weights, device)
 
-    def _try_init(self, weights: Path | None, device: str) -> None:
+    def _try_init(self, weights: Path | None, device: str | None) -> None:
         global _WARNED_UNAVAILABLE
         name = weights or Path("osnet_x0_25_msmt17.pt")
-        # BoxMOT ≥ 11 exposes a single ``boxmot.reid.ReID`` entry point with a
-        # ``__call__(frame, boxes=...)`` feature extractor.  Older releases used
-        # ``boxmot.appearance.reid_auto_backend.ReidAutoBackend`` whose ``.model``
-        # had ``get_features(xyxys, frame)``.  Try the new API first, then fall
-        # back, so both major versions work; either path degrades gracefully.
+        device = device or _best_reid_device()
+        # Try the resolved (GPU) device first; if it can't initialise (an op a
+        # given backend doesn't support on mps, etc.) fall back to CPU before
+        # finally degrading to motion-only.
+        if self._init_on_device(name, device):
+            return
+        if device != "cpu" and self._init_on_device(name, "cpu"):
+            log.info("BodyReID: %s device init failed; using CPU", device)
+            return
+        self._backend = None
+        self._available = False
+        if not _WARNED_UNAVAILABLE:
+            _WARNED_UNAVAILABLE = True
+            log.warning(
+                "boxmot OSNet ReID unavailable; appearance recovery disabled "
+                "(motion-only tracking still works).",
+                exc_info=True,
+            )
+
+    def _init_on_device(self, name: Path, device: str) -> bool:
+        """Build the OSNet backend on *device*; True on success, False to fall back.
+
+        BoxMOT ≥ 11 exposes ``boxmot.reid.ReID`` (``__call__(frame, boxes=...)``);
+        older releases used ``boxmot.appearance.reid_auto_backend.ReidAutoBackend``
+        whose ``.model`` had ``get_features(xyxys, frame)``. Try the new API first,
+        then the legacy one, so both major versions work.
+        """
         try:
             from boxmot.reid import ReID  # noqa: PLC0415
 
             self._backend = ReID(weights=name, device=device, half=False)
             self._new_api = True
             self._available = True
-            log.info("BodyReID ready (OSNet %s, boxmot.reid API)", name)
-            return
+            log.info("BodyReID ready (OSNet %s on %s, boxmot.reid API)", name, device)
+            return True
         except Exception:  # noqa: BLE001 — fall through to the legacy API
             pass
         try:
@@ -168,24 +223,13 @@ class BodyReID:
                 ReidAutoBackend,
             )
 
-            self._backend = ReidAutoBackend(
-                weights=name,
-                device=device,
-                half=False,
-            ).model
+            self._backend = ReidAutoBackend(weights=name, device=device, half=False).model
             self._new_api = False
             self._available = True
-            log.info("BodyReID ready (OSNet %s, legacy API)", name)
+            log.info("BodyReID ready (OSNet %s on %s, legacy API)", name, device)
+            return True
         except Exception:  # noqa: BLE001 — missing dep/weights/network must not raise
-            self._backend = None
-            self._available = False
-            if not _WARNED_UNAVAILABLE:
-                _WARNED_UNAVAILABLE = True
-                log.warning(
-                    "boxmot OSNet ReID unavailable; appearance recovery disabled "
-                    "(motion-only tracking still works).",
-                    exc_info=True,
-                )
+            return False
 
     @property
     def available(self) -> bool:
