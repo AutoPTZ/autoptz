@@ -151,19 +151,29 @@ def get_best_ep(prefs: HardwarePrefs | None = None) -> EP:
     return EP.CPU  # always available
 
 
-def _trt_engine_cache_dir() -> str:
-    """Persistent TensorRT engine-cache dir (so the multi-minute build is one-time)."""
+def _cache_dir(subdir: str) -> str:
+    """Persistent per-machine cache dir for an EP's compiled artifacts."""
     try:
         from autoptz.config.store import default_config_dir
 
-        cache = default_config_dir() / "trt_cache"
+        cache = default_config_dir() / subdir
     except Exception:  # noqa: BLE001 — config import must never break inference
-        cache = Path.home() / ".cache" / "AutoPTZ" / "trt_cache"
+        cache = Path.home() / ".cache" / "AutoPTZ" / subdir
     try:
         cache.mkdir(parents=True, exist_ok=True)
     except Exception:  # noqa: BLE001
-        logger.debug("Could not create TRT cache dir %s", cache, exc_info=True)
+        logger.debug("Could not create cache dir %s", cache, exc_info=True)
     return str(cache)
+
+
+def _trt_engine_cache_dir() -> str:
+    """Persistent TensorRT engine-cache dir (so the multi-minute build is one-time)."""
+    return _cache_dir("trt_cache")
+
+
+def _coreml_cache_dir() -> str:
+    """Persistent CoreML compiled-model cache dir (skips per-session MLProgram compile)."""
+    return _cache_dir("coreml_cache")
 
 
 def _wants_fp16(prefs: HardwarePrefs | None) -> bool:
@@ -194,7 +204,14 @@ def _provider_options(ep: EP, prefs: HardwarePrefs | None) -> dict[str, object]:
     if ep is EP.COREML:
         # MLProgram routes to the Apple Neural Engine / GPU (incl. AMD on Intel
         # Macs via Metal); ALL lets CoreML pick the fastest unit per op.
-        return {"ModelFormat": "MLProgram", "MLComputeUnits": "ALL"}
+        # ModelCacheDirectory persists the compiled MLProgram so the slow first
+        # compile is one-time per machine, not paid on every session build
+        # (acute with many camera workers / process-per-camera).
+        return {
+            "ModelFormat": "MLProgram",
+            "MLComputeUnits": "ALL",
+            "ModelCacheDirectory": _coreml_cache_dir(),
+        }
     if ep is EP.TENSORRT:
         opts: dict[str, object] = {
             "trt_engine_cache_enable": True,

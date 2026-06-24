@@ -92,6 +92,27 @@ def test_get_best_ep_force_ep_unavailable_falls_back() -> None:
     assert ep == EP.CPU  # best available after forced EP fails
 
 
+def test_cache_dir_creates_directory() -> None:
+    import os
+
+    from autoptz.engine.runtime.inference import _cache_dir
+
+    d = _cache_dir("pytest_coreml_cache_probe")
+    assert os.path.isdir(d)
+
+
+def test_coreml_provider_options_include_model_cache() -> None:
+    import os
+
+    from autoptz.engine.runtime.inference import EP, _provider_options
+
+    opts = _provider_options(EP.COREML, None)
+    assert opts["ModelFormat"] == "MLProgram"
+    assert opts["MLComputeUnits"] == "ALL"
+    assert "ModelCacheDirectory" in opts
+    assert os.path.isdir(str(opts["ModelCacheDirectory"]))
+
+
 def test_make_session_cpu(tmp_path: Path) -> None:
     """Create a minimal ONNX model and verify make_session returns a session."""
     import onnx
