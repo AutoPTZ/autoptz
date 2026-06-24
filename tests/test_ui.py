@@ -1292,7 +1292,7 @@ finally:
 class TestCenterStageUI:
     """Center Stage (digital PTZ) backend entry and virtual-camera output checkbox."""
 
-    def test_backend_combo_contains_digital(self, tmp_path) -> None:
+    def test_center_stage_toggle_maps_to_digital_backend(self, tmp_path) -> None:
         code = f"""
 import os
 import sys
@@ -1305,9 +1305,24 @@ from autoptz.ui.frames import ShmFrameSource
 from autoptz.ui.widgets.properties_panel import PropertiesPanel
 app = QApplication(sys.argv[:1])
 client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+cid = client.addCamera("usb://0", "Cam")
 panel = PropertiesPanel(client, frame_source=ShmFrameSource())
+panel.set_camera(cid)
+
+# 'digital' is no longer a raw backend item — the Center Stage toggle owns it.
 items = [panel._backend.itemText(i) for i in range(panel._backend.count())]
-assert "digital" in items, f"'digital' not in backend combo items: {{items}}"
+assert "digital" not in items, f"'digital' should not be a raw backend item: {{items}}"
+
+# Center Stage off → backend is the hardware combo value (not digital).
+panel._center_stage.setChecked(False)
+panel._push()
+assert panel._cfg["ptz"]["backend"] != "digital", panel._cfg["ptz"]["backend"]
+
+# Center Stage on → backend becomes 'digital' and the Advanced picker greys out.
+panel._center_stage.setChecked(True)
+panel._push()
+assert panel._cfg["ptz"]["backend"] == "digital", panel._cfg["ptz"]["backend"]
+assert panel._backend.isEnabled() is False, "advanced backend picker should be disabled"
 """
         env = dict(os.environ)
         env.setdefault("QT_QPA_PLATFORM", "offscreen")

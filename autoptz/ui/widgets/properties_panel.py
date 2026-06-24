@@ -593,40 +593,26 @@ class PropertiesPanel(QWidget):
         # PTZ
         pz = CollapsibleGroup("PTZ", expanded=False)
         pf = _form()
-        self._backend = QComboBox()
-        self._backend.addItems(["auto", "ndi", "visca_ip", "visca_usb", "onvif", "digital"])
-        self._backend.setToolTip(
-            "How PTZ move commands reach the camera. “auto” probes NDI → ONVIF → "
-            "VISCA-IP; pick a specific one if you know your camera. "
-            "”digital” enables Center Stage — software auto-framing for non-PTZ "
-            "cameras, output as a virtual camera."
+
+        # Center Stage: the user-facing toggle for software auto-framing. When on,
+        # this camera uses the digital backend (crop-follow) instead of hardware PTZ;
+        # the raw transport selector (moved to Advanced below) is then overridden.
+        self._center_stage = QCheckBox("Center Stage — auto-frame this camera (no PTZ hardware)")
+        self._center_stage.setToolTip(
+            "Software auto-framing: digitally pans and zooms a crop to follow the "
+            "selected target, for cameras without motorised PTZ. Select a person to "
+            "follow; enable Virtual camera output to publish the framed crop."
         )
-        self._backend.currentTextChanged.connect(self._schedule)
+        self._center_stage.toggled.connect(self._on_center_stage_toggled)
         pf.addRow(
-            "Backend",
+            "",
             _with_chip(
-                self._backend,
+                self._center_stage,
                 HelpBadge(
-                    "How PTZ move commands reach the camera. “auto” probes NDI → ONVIF → "
-                    "VISCA-IP; pick a specific protocol if you already know what your "
-                    "camera speaks. “digital” (Center Stage) does software auto-framing "
-                    "for non-PTZ cameras and outputs the result as a virtual camera."
-                ),
-            ),
-        )
-        self._ptz_address = QLineEdit()
-        self._ptz_address.editingFinished.connect(self._schedule)
-        self._ptz_address.setToolTip(
-            "Host:port (IP backends) or serial port (VISCA-USB). Leave blank for auto."
-        )
-        pf.addRow(
-            "Address",
-            _with_chip(
-                self._ptz_address,
-                HelpBadge(
-                    "Where to send PTZ commands: host:port for IP backends (NDI / ONVIF / "
-                    "VISCA-IP) or the serial port for VISCA-USB. Leave blank to let the "
-                    "backend auto-discover."
+                    "Center Stage digitally frames the subject (crop + zoom) on cameras "
+                    "with no motorised PTZ. It follows the target you select. Enable "
+                    "Virtual camera output to send the framed crop to apps like Zoom or "
+                    "OBS (needs a system virtual-camera driver installed)."
                 ),
             ),
         )
@@ -665,6 +651,50 @@ class PropertiesPanel(QWidget):
             ),
         )
         pz.add_widget(_wrap(pf))
+
+        # Advanced — the raw transport selector + address, tucked away. Most users
+        # use Center Stage (software) or leave the backend on auto-probe, so the
+        # protocol picker lives here rather than front-and-centre.
+        adv_ptz = CollapsibleGroup("Advanced", expanded=False)
+        apf = _form()
+        self._backend = QComboBox()
+        self._backend.addItems(["auto", "ndi", "visca_ip", "visca_usb", "onvif"])
+        self._backend.setToolTip(
+            "How PTZ move commands reach a motorised camera. “auto” probes "
+            "NDI → ONVIF → VISCA-IP; pick a specific protocol if you know your camera. "
+            "Overridden while Center Stage is on."
+        )
+        self._backend.currentTextChanged.connect(self._schedule)
+        apf.addRow(
+            "Backend",
+            _with_chip(
+                self._backend,
+                HelpBadge(
+                    "How PTZ move commands reach a motorised camera. “auto” probes "
+                    "NDI → ONVIF → VISCA-IP; pick a specific protocol if you already know "
+                    "what your camera speaks. Ignored while Center Stage is enabled."
+                ),
+            ),
+        )
+        self._ptz_address = QLineEdit()
+        self._ptz_address.editingFinished.connect(self._schedule)
+        self._ptz_address.setToolTip(
+            "Host:port (IP backends) or serial port (VISCA-USB). Leave blank for auto."
+        )
+        apf.addRow(
+            "Address",
+            _with_chip(
+                self._ptz_address,
+                HelpBadge(
+                    "Where to send PTZ commands: host:port for IP backends (NDI / ONVIF / "
+                    "VISCA-IP) or the serial port for VISCA-USB. Leave blank to let the "
+                    "backend auto-discover."
+                ),
+            ),
+        )
+        adv_ptz.add_widget(_wrap(apf))
+        pz.add_widget(adv_ptz)
+
         pz.add_widget(self._build_ptz_controls())
         pz.add_widget(self._build_presets())
         self._col.addWidget(pz)
@@ -1335,7 +1365,11 @@ class PropertiesPanel(QWidget):
                 tr.get("framing") or tr.get("aim_region") or "upper_body",
             )
             self._ignore_arms.setChecked((tr.get("aim_body_mode") or "torso") == "torso")
-            _set_combo(self._backend, pz.get("backend", "auto"))
+            backend = pz.get("backend", "auto")
+            is_center_stage = backend == "digital"
+            self._center_stage.setChecked(is_center_stage)
+            _set_combo(self._backend, "auto" if is_center_stage else backend)
+            self._backend.setEnabled(not is_center_stage)
             self._ptz_address.setText(pz.get("address") or "")
             self._auto_zoom.setChecked(bool(pz.get("auto_zoom", True)))
             self._vcam_out.setChecked(bool(pz.get("vcam_out", False)))
@@ -1494,6 +1528,11 @@ class PropertiesPanel(QWidget):
         tip = _TRACKER_HELP.get(self._tracker.currentText(), _COST_HELP["tracker"])
         self._tracker.setToolTip(tip)
 
+    def _on_center_stage_toggled(self, on: bool) -> None:
+        """Center Stage overrides the transport — grey the Advanced backend picker."""
+        self._backend.setEnabled(not on)
+        self._schedule()
+
     def _refresh_cost_chips(self) -> None:
         di = self._detect_interval.value()
         _restyle_chip(self._detect_chip, "heavy" if di <= 2 else "medium" if di <= 5 else "light")
@@ -1529,7 +1568,9 @@ class PropertiesPanel(QWidget):
         cfg["tracking"]["aim_body_mode"] = (
             "torso" if self._ignore_arms.isChecked() else "full_silhouette"
         )
-        cfg["ptz"]["backend"] = self._backend.currentText()
+        cfg["ptz"]["backend"] = (
+            "digital" if self._center_stage.isChecked() else self._backend.currentText()
+        )
         cfg["ptz"]["address"] = self._ptz_address.text().strip() or None
         cfg["ptz"]["auto_zoom"] = self._auto_zoom.isChecked()
         cfg["ptz"]["vcam_out"] = self._vcam_out.isChecked()

@@ -8,7 +8,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Center Stage** — software auto-framing (digital PTZ) with virtual-camera output for non-PTZ cameras; select the `digital` backend in the PTZ panel and enable "Virtual camera output" to publish the cropped frame as a virtual camera.
+- **Center Stage** — software auto-framing (digital PTZ) for cameras without
+  motorised PTZ: a single **Center Stage** toggle in the PTZ panel digitally
+  pans/zooms a crop to follow the selected target, with an optional **Virtual
+  camera output** to publish the framed crop to Zoom/OBS (needs a system
+  virtual-camera driver). The raw PTZ transport selector now lives under PTZ →
+  Advanced, since most users use Center Stage or the auto-probe.
 
 ### Changed
 
