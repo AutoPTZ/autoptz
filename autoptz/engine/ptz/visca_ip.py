@@ -7,6 +7,11 @@ Supports two wire formats:
 Preset memory, zoom, and pan/tilt all use standard VISCA serial commands wrapped
 in the chosen transport framing.  Position inquiry (InqPanTiltPos) is issued on
 get_position() for cameras that answer it; others return None.
+
+Auto-reconnect: on any OSError the socket is closed and a ReconnectPolicy gate
+is consulted; if the backoff interval has elapsed a single reconnect attempt is
+made and the command is retried once.  Neither move_velocity nor stop ever raise
+into the caller.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import logging
 import socket
 import struct
 import threading
+import time
 
 from autoptz.engine.ptz.base import (
     PTZBackend,
@@ -29,6 +35,7 @@ from autoptz.engine.ptz.base import (
     visca_zoom_cmd,
     visca_zoom_stop_cmd,
 )
+from autoptz.engine.ptz.reconnect import ReconnectPolicy
 
 log = logging.getLogger(__name__)
 
@@ -61,8 +68,13 @@ class ViscaIPBackend(PTZBackend):
         if mode not in ("sony", "raw"):
             raise ValueError(f"mode must be 'sony' or 'raw', got {mode!r}")
         self._mode = mode
+        self._host = host
+        self._port = port
+        self._timeout = timeout
         self._lock = threading.Lock()
         self._seq = 0  # VISCA-over-IP sequence counter (Sony mode)
+        self._policy = ReconnectPolicy()
+        self._connected: bool = False
 
         self.caps = PTZCaps(
             continuous_pan_tilt=True,
@@ -70,9 +82,32 @@ class ViscaIPBackend(PTZBackend):
             native_presets=True,
             query_position=True,  # best-effort; cameras that don't answer return None
         )
-        self._sock = socket.create_connection((host, port), timeout=timeout)
-        self._sock.settimeout(timeout)
-        log.info("ViscaIP connected to %s:%d (%s mode)", host, port, mode)
+        self._sock: socket.socket | None = None
+        self._open()
+
+    # ── connection management ─────────────────────────────────────────────────
+
+    def _open(self) -> None:
+        """Open (or reopen) the TCP socket; sets _connected=True on success."""
+        self._sock = socket.create_connection((self._host, self._port), timeout=self._timeout)
+        self._sock.settimeout(self._timeout)
+        self._connected = True
+        log.info("ViscaIP connected to %s:%d (%s mode)", self._host, self._port, self._mode)
+
+    def _close_sock(self) -> None:
+        """Close the current socket without raising."""
+        self._connected = False
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+
+    @property
+    def connected(self) -> bool:
+        """True while the TCP connection is believed to be live."""
+        return self._connected
 
     # ── framing ───────────────────────────────────────────────────────────────
 
@@ -85,12 +120,45 @@ class ViscaIPBackend(PTZBackend):
 
     def _send(self, visca_cmd: bytes) -> None:
         with self._lock:
-            self._sock.sendall(self._frame(visca_cmd))
+            # Fast path: socket is open and healthy.
+            if self._sock is not None:
+                try:
+                    self._sock.sendall(self._frame(visca_cmd))
+                    return
+                except OSError as _exc:
+                    log.debug("ViscaIP send failed (will reconnect): %s", _exc)
+                # Transport error on the existing socket — close it.
+                self._close_sock()
+
+            # Socket is None (either from a previous failure or just closed above).
+            # Check whether the policy allows a reconnect attempt right now.
+            now = time.monotonic()
+            if not self._policy.should_attempt(now):
+                return  # still in backoff window; swallow silently
+
+            # Attempt exactly one reconnect.
+            try:
+                self._open()
+                self._policy.record_success()
+            except OSError as exc:
+                log.warning("ViscaIP reconnect to %s:%d failed: %s", self._host, self._port, exc)
+                self._policy.record_failure(time.monotonic())
+                return
+
+            # Retry the command once on the fresh socket.
+            try:
+                self._sock.sendall(self._frame(visca_cmd))  # type: ignore[union-attr]
+            except OSError as exc:
+                log.warning("ViscaIP retry send failed: %s", exc)
+                self._close_sock()
+                self._policy.record_failure(time.monotonic())
 
     def _query(self, visca_inq: bytes, response_len: int) -> bytes | None:
         """Send inquiry and read fixed-length response; returns None on error."""
         try:
             with self._lock:
+                if self._sock is None:
+                    return None
                 self._sock.sendall(self._frame(visca_inq))
                 if self._mode == "sony":
                     # Sony: 8-byte header before payload
@@ -101,6 +169,11 @@ class ViscaIPBackend(PTZBackend):
                     return self._sock.recv(plen)
                 else:
                     return self._sock.recv(response_len)
+        except OSError:
+            now = time.monotonic()
+            self._close_sock()
+            self._policy.record_failure(now)
+            return None
         except Exception:
             return None
 
@@ -167,10 +240,7 @@ class ViscaIPBackend(PTZBackend):
             self.stop()
         except Exception:
             pass
-        try:
-            self._sock.close()
-        except Exception:
-            pass
+        self._close_sock()
         log.info("ViscaIP closed")
 
 
