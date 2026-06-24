@@ -116,6 +116,11 @@ class TrackingConfig(BaseModel, frozen=True):
     # Off by default — flip on (or set AUTOPTZ_UNIFIED_POSE=1) to validate; falls
     # back to the plain detector automatically if the pose model can't be built.
     unified_pose: bool = False
+    # Flag-gated TargetAssociator: when True the fused associator (motion +
+    # appearance + identity + pose cues) drives keep/switch/ambiguous in
+    # ``_apply_target_lock`` instead of the existing heuristic path.  OFF by
+    # default — flip on per-camera to validate before it becomes the default.
+    use_target_associator: bool = False
 
 
 # Vertical aim point as a fraction of the person-box height measured from the TOP
