@@ -4,6 +4,45 @@ All notable changes to AutoPTZ are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to
 follow [Semantic Versioning](https://semver.org/).
 
+## [2.2.0-rc2] — 2026-06-24
+
+> Pre-release for testing — builds on rc1 with CPU-performance, tracking, and
+> diagnostics work. Please validate on your real cameras and report back before
+> this becomes the stable 2.2.0.
+
+### Added
+
+- **Live GPU-acceleration verdict in the Services panel** — the detector row now
+  shows whether your GPU/accelerator is actually beating the CPU (e.g. *CoreML ·
+  1.24× CPU (accelerated)*), measured once in the background at startup.
+- **OpenVINO auto-install for Intel** — `tools/install.py` now auto-selects the
+  OpenVINO ONNX Runtime wheel on Intel CPU/iGPU Linux machines (faster than the
+  stock CPU provider).
+- **Opt-in fused target-association** — a new `TargetAssociator` fuses motion,
+  ReID, pose, and identity into one confidence-scored keep/switch/hold decision
+  with explicit anti-ID-switch hysteresis. **Off by default**
+  (`tracking.use_target_associator`); enable it to try the new logic and report back.
+- **Batched detector inference** primitive (`detect_batch`) — foundation for a
+  future multi-camera GPU batching path.
+
+### Changed
+
+- **Lower CPU usage and fewer CPU spikes with all subservices running** — face,
+  ReID, and pose no longer fire on the same tick (phase-staggered), and their
+  cadence eases off automatically when the machine is over its frame budget.
+- **CoreML compile-cache** — the CoreML model compiles once per machine and is
+  cached, cutting cold-start and per-camera warmup on Apple Silicon and Intel Macs.
+- **Lighter preview path** — the camera-tile preview is capped at ~20 fps (it's a
+  monitoring view), saving a per-frame resize on higher-fps sources.
+- **Scene-adaptive ReID** — the recovery match threshold tightens automatically
+  when people in frame look alike (reducing wrong re-locks); it never loosens
+  below your configured value.
+
+### Fixed
+
+- CI test reliability: deflaked the macOS app-memory test, the Qt widget-smoke
+  subprocess tests, and the ReID-throttle test.
+
 ## [2.2.0-rc1] — 2026-06-24
 
 > Pre-release for testing — please validate on your real cameras and report back
