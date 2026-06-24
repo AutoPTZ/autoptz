@@ -13,10 +13,19 @@ import logging
 import statistics
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
 from numpy.typing import NDArray
+
+from autoptz.engine.runtime.inference import (
+    EP,
+    HardwarePrefs,
+    effective_precision,
+    get_best_ep,
+    make_session,
+)
 
 log = logging.getLogger(__name__)
 
@@ -99,4 +108,92 @@ def time_session(
         p95_ms=_percentile(samples_ms, 95.0),
         mean_ms=statistics.fmean(samples_ms),
         fps=(1000.0 / median_ms) if median_ms > 0 else 0.0,
+    )
+
+
+#: Minimum chosen-EP-vs-CPU speedup to call an accelerator a real win.
+ACCEL_MIN_SPEEDUP: float = 1.15
+
+_VERDICT_BLURB: dict[str, str] = {
+    "accelerated": "GPU/accelerator is helping",
+    "no-benefit": "accelerator selected but no faster than CPU",
+    "cpu-only": "running on CPU",
+}
+
+
+def _ep_label(ep_value: str) -> str:
+    """`CoreMLExecutionProvider` → `CoreML` for human-facing output."""
+    return ep_value.replace("ExecutionProvider", "")
+
+
+def verdict(actual_ep: str, speedup: float) -> str:
+    """Classify an acceleration result. CPU-in-use always wins over speedup."""
+    if actual_ep == EP.CPU.value:
+        return "cpu-only"
+    return "accelerated" if speedup >= ACCEL_MIN_SPEEDUP else "no-benefit"
+
+
+@dataclass(frozen=True)
+class AccelReport:
+    """Auto-selected EP vs CPU-forced baseline for one model."""
+
+    model: str
+    requested_ep: str
+    actual_ep: str
+    precision: str
+    speedup: float
+    verdict: str
+    accel: LatencyStats
+    cpu: LatencyStats
+
+    def summary(self) -> str:
+        actual = _ep_label(self.actual_ep)
+        if self.actual_ep != self.requested_ep:
+            device = f"{actual} (requested: {_ep_label(self.requested_ep)})"
+        else:
+            device = actual
+        return (
+            f"{device} · {self.precision} · {self.speedup:.2f}× CPU "
+            f"({self.verdict}: {_VERDICT_BLURB.get(self.verdict, self.verdict)})"
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "model": self.model,
+            "requested_ep": self.requested_ep,
+            "actual_ep": self.actual_ep,
+            "precision": self.precision,
+            "speedup": self.speedup,
+            "verdict": self.verdict,
+            "accel": self.accel.to_dict(),
+            "cpu": self.cpu.to_dict(),
+        }
+
+
+def measure_acceleration(
+    model_path: str | Path,
+    *,
+    prefs: HardwarePrefs | None = None,
+    warmup: int = 3,
+    runs: int = 20,
+) -> AccelReport:
+    """Time the auto-selected EP against a CPU-forced baseline for *model_path*."""
+    requested = get_best_ep(prefs)
+    accel_session = make_session(model_path, prefs=prefs)
+    actual_ep = accel_session.get_providers()[0]
+    accel_stats = time_session(accel_session, warmup=warmup, runs=runs)
+
+    cpu_session = make_session(model_path, prefs=HardwarePrefs(force_ep=EP.CPU))
+    cpu_stats = time_session(cpu_session, warmup=warmup, runs=runs)
+
+    speedup = (cpu_stats.median_ms / accel_stats.median_ms) if accel_stats.median_ms > 0 else 0.0
+    return AccelReport(
+        model=Path(model_path).name,
+        requested_ep=requested.value,
+        actual_ep=actual_ep,
+        precision=effective_precision(actual_ep, prefs),
+        speedup=speedup,
+        verdict=verdict(actual_ep, speedup),
+        accel=accel_stats,
+        cpu=cpu_stats,
     )
