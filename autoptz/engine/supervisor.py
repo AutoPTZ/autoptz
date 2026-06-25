@@ -847,7 +847,7 @@ class Supervisor:
         import os
 
         from autoptz.config.models import HardwarePrefs
-        from autoptz.engine.runtime.flags import apply_opencv_thread_cap
+        from autoptz.engine.runtime.flags import apply_opencv_thread_cap, apply_thread_caps
 
         try:
             raw = self._store.get_setting("hardware", {}) if self._store is not None else {}
@@ -881,9 +881,16 @@ class Supervisor:
         os.environ["AUTOPTZ_CV2_THREADS"] = str(threads)
         apply_opencv_thread_cap(threads)
 
+        # Cap OMP/BLAS/MKL/NumExpr env vars and the torch intra-op pool to the
+        # same per-camera budget.  Env vars reach any library not yet imported
+        # (and any future process-per-camera child that inherits the env before
+        # first import); torch.set_num_threads() reaches the already-running
+        # pool regardless of import order.
+        apply_thread_caps(threads)
+
         log.info(
-            "hardware prefs → env | force_ep=%s precision=%s intra_threads=%s (ORT+OpenCV) "
-            "(cores=%s, cameras=%s)",
+            "hardware prefs → env | force_ep=%s precision=%s intra_threads=%s "
+            "(ORT+OpenCV+OMP+BLAS+MKL+NumExpr+torch) (cores=%s, cameras=%s)",
             hw.force_ep or "auto",
             hw.precision,
             threads,
