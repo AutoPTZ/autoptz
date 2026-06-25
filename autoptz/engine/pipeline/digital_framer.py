@@ -50,6 +50,7 @@ def desired_crop(
     min_frac: float,
     max_frac: float,
     headroom: float = 0.10,
+    fit_width: bool = False,
 ) -> tuple[float, float, float, float]:
     """The crop ``(x, y, w, h)`` (pixels) that frames *bbox*.
 
@@ -60,12 +61,13 @@ def desired_crop(
     the crop matching the output so the resize doesn't distort. ``headroom`` lifts
     the centre so the head sits a little below the top.
 
-    The crop is sized so the subject fits both *vertically* (``fill`` of the
-    height) and *horizontally* (the same ``fill`` margin on the width): a tall
-    single person stays height-driven exactly as before, but a WIDE box — e.g. the
-    union of several people in *group framing* — forces the crop to widen
-    (auto-zoom out) so everyone stays in shot, still aspect-locked and capped at
-    ``max_frac``.
+    By default the crop is sized *height-only* from the subject height (a tall
+    single person frames exactly as before, and an arms-spread / T-pose single box
+    is NOT zoomed out). ``fit_width=True`` additionally grows the crop so its
+    aspect-locked width covers the subject *width* too — used only for the
+    multi-person *group framing* union, so the crop auto-widens to keep everyone
+    in shot (still aspect-locked and capped at ``max_frac``). Single-person /
+    non-group framing keeps ``fit_width=False`` for byte-identical prior behaviour.
     """
     bx1, by1, bx2, by2 = (float(v) for v in bbox)
     subj_h = max(1.0, by2 - by1)
@@ -75,13 +77,15 @@ def desired_crop(
     fw, fh = float(frame_w), float(frame_h)
 
     # Size the crop to the subject, then constrain it to a window of the frame.
-    # Height from the subject height; but if the subject is WIDER than that crop
-    # would hold (a wide group union), grow the crop height so its aspect-locked
-    # width covers the subject width too. ``max_frac`` then caps the result.
+    # Height from the subject height. Only when ``fit_width`` is set (the group
+    # union path) do we ALSO grow the crop height so its aspect-locked width covers
+    # a wide subject — the single-person default stays strictly height-driven so it
+    # never zooms out more than before. ``max_frac`` then caps the result.
     fill_c = _clamp(fill, 0.1, 1.0)
     ch = subj_h / fill_c
-    ch_for_width = (subj_w / fill_c) / out_aspect
-    ch = max(ch, ch_for_width)
+    if fit_width:
+        ch_for_width = (subj_w / fill_c) / out_aspect
+        ch = max(ch, ch_for_width)
     ch = _clamp(ch, min_frac * fh, max_frac * fh)
     cw = ch * out_aspect
     # If that is wider than the frame, cap width (keeps aspect; only happens for
@@ -152,9 +156,18 @@ class DigitalFramer:
         self._subj_vel = (0.0, 0.0)
 
     def frame_for(
-        self, bbox: tuple[float, float, float, float], frame_w: int, frame_h: int
+        self,
+        bbox: tuple[float, float, float, float],
+        frame_w: int,
+        frame_h: int,
+        *,
+        fit_width: bool = False,
     ) -> tuple[int, int, int, int]:
-        """Smoothed integer crop framing *bbox*."""
+        """Smoothed integer crop framing *bbox*.
+
+        ``fit_width=True`` widens the crop to cover a wide subject (the group-union
+        box); the default keeps the prior height-only sizing for single people.
+        """
         tgt = desired_crop(
             bbox,
             frame_w,
@@ -164,6 +177,7 @@ class DigitalFramer:
             min_frac=self.min_frac,
             max_frac=self.max_frac,
             headroom=self.headroom,
+            fit_width=fit_width,
         )
         tgt = self._apply_lead(bbox, tgt, frame_w, frame_h)
         return self._step(tgt)

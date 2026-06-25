@@ -613,6 +613,10 @@ class CameraWorker:
         self._shm: ShmWriter | None = None
         self._vcam: Any | None = None  # VirtualCamSink (lazily created when vcam_out enabled)
         self._digital_framer: Any | None = None  # Center Stage auto-framer (lazy)
+        # True when the last _current_digital_target() returned a multi-person group
+        # UNION box (which must fit-width); False for a single locked person (which
+        # keeps the prior height-only sizing). Read by the Center Stage crop path.
+        self._digital_target_is_group: bool = False
         self._cs_diag_t: float = 0.0  # throttle for the Center Stage diagnostic log
         self._detect: _DetectStack | None = None
         self._pooled_detector = False
@@ -3507,7 +3511,10 @@ class CameraWorker:
         framer.lead = float(getattr(self.config.tracking, "lead_room", 0.0))
         target = self._current_digital_target()
         if target is not None:
-            x, y, cw, ch = framer.frame_for(target, w, h)
+            # fit_width only for a multi-person group UNION (so it auto-widens to
+            # keep everyone in shot); a single locked/standalone person stays on
+            # the prior height-only sizing.
+            x, y, cw, ch = framer.frame_for(target, w, h, fit_width=self._digital_target_is_group)
         else:
             x, y, cw, ch = framer.full_frame(w, h)
         nowm = time.monotonic()
@@ -3553,6 +3560,7 @@ class CameraWorker:
         capped by ``max_frac``). One person, or the toggle off, is the single
         target's box exactly as before.
         """
+        self._digital_target_is_group = False
         tid = self._target_track_id
         explicit_lock = tid is not None or self._target_identity_id is not None
         if tid is not None:
@@ -3570,11 +3578,39 @@ class CameraWorker:
             tb = getattr(self._target_lock, "trusted_bbox", None)
             if tb is not None:
                 return (tb.x1, tb.y1, tb.x2, tb.y2)
+            # An explicit lock ALWAYS wins: never fall through to the group union
+            # just because the locked track is momentarily absent (transient — e.g.
+            # the first frame(s) after selecting a target, before trusted_bbox is
+            # populated). Returning None holds the prior crop / full frame instead.
+            return None
 
         # No explicit lock: optionally frame the whole confident group as a union.
         if bool(getattr(self.config.tracking, "group_framing", False)):
-            return self._group_union_bbox(self._last_tracks)
+            boxes = self._confident_person_boxes(self._last_tracks)
+            if not boxes:
+                return None
+            # fit-width only when the union actually spans MORE THAN ONE person; a
+            # single confident person keeps the prior height-only single-target feel.
+            self._digital_target_is_group = len(boxes) > 1
+            from autoptz.engine.pipeline.digital_framer import union_bbox
+
+            return union_bbox(boxes)
         return None
+
+    @staticmethod
+    def _confident_person_boxes(
+        tracks: list[TrackInfo],
+    ) -> list[tuple[float, float, float, float]]:
+        """Every confident, non-lost person box in *tracks* (pure, testable)."""
+        boxes: list[tuple[float, float, float, float]] = []
+        for t in tracks or ():
+            if getattr(t, "lost", False):
+                continue
+            bb = getattr(t, "bbox", None)
+            if bb is None:
+                continue
+            boxes.append((bb.x1, bb.y1, bb.x2, bb.y2))
+        return boxes
 
     @staticmethod
     def _group_union_bbox(
@@ -3588,15 +3624,7 @@ class CameraWorker:
         """
         from autoptz.engine.pipeline.digital_framer import union_bbox
 
-        boxes: list[tuple[float, float, float, float]] = []
-        for t in tracks or ():
-            if getattr(t, "lost", False):
-                continue
-            bb = getattr(t, "bbox", None)
-            if bb is None:
-                continue
-            boxes.append((bb.x1, bb.y1, bb.x2, bb.y2))
-        return union_bbox(boxes)
+        return union_bbox(CameraWorker._confident_person_boxes(tracks))
 
     def _push_frame(self, frame: NDArray[np.uint8]) -> None:
         if self._shm is None:

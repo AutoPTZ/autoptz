@@ -106,3 +106,39 @@ class TestExplicitLockWins:
         w._last_tracks = [_track(1, 300, 400, 500, 670), _track(2, 1400, 380, 1600, 690)]
         target = w._current_digital_target()
         assert target == (900.0, 420.0, 1100.0, 720.0)  # the locked identity, not the union
+
+    def test_lock_with_no_live_track_and_no_trusted_does_not_leak_to_group(self):
+        # The transient corner case (first frame(s) after selecting a target):
+        # explicit lock set, but the locked track isn't in _last_tracks yet AND no
+        # trusted_bbox exists. Group framing on + other people present must NOT
+        # leak the union — explicit lock always wins, so the target is None (hold).
+        w = _make_worker(group_framing=True)
+        w._target_track_id = 99  # locked, but absent from _last_tracks
+        w._target_lock = _TargetLockState()  # trusted_bbox defaults to None
+        w._last_tracks = [_track(1, 300, 400, 500, 670), _track(2, 1400, 380, 1600, 690)]
+        assert w._current_digital_target() is None
+
+
+class TestGroupFlag:
+    """``_digital_target_is_group`` gates fit-width: True only for a real union."""
+
+    def test_flag_true_for_multi_person_union(self):
+        w = _make_worker(group_framing=True)
+        w._target_track_id = None
+        w._last_tracks = [_track(1, 300, 400, 500, 670), _track(2, 1400, 380, 1600, 690)]
+        w._current_digital_target()
+        assert w._digital_target_is_group is True
+
+    def test_flag_false_for_single_person(self):
+        w = _make_worker(group_framing=True)
+        w._target_track_id = None
+        w._last_tracks = [_track(7, 800, 400, 1000, 700)]
+        w._current_digital_target()
+        assert w._digital_target_is_group is False
+
+    def test_flag_false_for_explicit_lock(self):
+        w = _make_worker(group_framing=True)
+        w._target_track_id = 2
+        w._last_tracks = [_track(1, 300, 400, 500, 670), _track(2, 1400, 380, 1600, 690)]
+        w._current_digital_target()
+        assert w._digital_target_is_group is False

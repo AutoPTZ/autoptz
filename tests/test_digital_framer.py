@@ -233,13 +233,21 @@ class TestUnionBbox:
 
     def test_group_crop_frames_all_people(self):
         # Two people on opposite sides of the frame: the group crop (framing the
-        # union) must be wider than either single-person crop, and cover both.
+        # union, fit_width=True) must be wider than either single-person crop, and
+        # cover both.
         left = (300, 400, 500, 670)
         right = (1400, 400, 1600, 670)
         u = union_bbox([left, right])
         assert u is not None
         group = desired_crop(
-            u, 1920, 1080, out_aspect=ASPECT, fill=0.62, min_frac=0.34, max_frac=0.94
+            u,
+            1920,
+            1080,
+            out_aspect=ASPECT,
+            fill=0.62,
+            min_frac=0.34,
+            max_frac=0.94,
+            fit_width=True,
         )
         single = desired_crop(
             left, 1920, 1080, out_aspect=ASPECT, fill=0.62, min_frac=0.34, max_frac=0.94
@@ -248,6 +256,22 @@ class TestUnionBbox:
         # Both subjects fall inside the group crop horizontally.
         gx, gw = group[0], group[2]
         assert gx <= left[0] and (gx + gw) >= right[2]
+
+    def test_fit_width_default_off_keeps_height_only_for_wide_box(self):
+        # A box WIDER than the output aspect (arms spread / T-pose: w/h=2.5 > 16:9)
+        # must NOT zoom out on the default path (fit_width=False) — the crop matches
+        # a same-height normal box. fit_width=True (group union only) widens it.
+        wide = (600, 400, 1400, 720)  # w=800, h=320 → w/h=2.5
+        narrow = (900, 400, 1100, 720)  # same height, normal width
+        kw = {"out_aspect": ASPECT, "fill": 0.62, "min_frac": 0.34, "max_frac": 0.94}
+        wide_default = desired_crop(wide, 1920, 1080, **kw)
+        narrow_default = desired_crop(narrow, 1920, 1080, **kw)
+        # Same height → same crop size on the default (height-only) path.
+        assert wide_default[2] == narrow_default[2]
+        assert wide_default[3] == narrow_default[3]
+        # Opting into fit_width widens the crop for the wide box.
+        wide_fit = desired_crop(wide, 1920, 1080, fit_width=True, **kw)
+        assert wide_fit[2] > wide_default[2]
 
 
 class TestHeadroomByPreset:
