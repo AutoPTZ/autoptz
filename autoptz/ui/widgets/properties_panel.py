@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from autoptz.config.models import SPEED_PROFILES, TrackingSpeed
 from autoptz.ui import theme as T
 from autoptz.ui.widgets.common import (
     CollapsibleGroup,
@@ -62,6 +63,34 @@ from autoptz.ui.widgets.properties_helpers import (  # noqa: F401  re-exported
 log = logging.getLogger(__name__)
 
 _NUDGE = 0.6
+
+# ── Tracking Speed preset helpers ─────────────────────────────────────────────
+
+_SPEED_PRESET_CHOICES: list[tuple[TrackingSpeed | None, str]] = [
+    (TrackingSpeed.CALM, "Calm"),
+    (TrackingSpeed.NORMAL, "Normal"),
+    (TrackingSpeed.FAST, "Fast"),
+    (TrackingSpeed.SPORT, "Sport"),
+]
+
+# Tolerance for floating-point comparisons when matching sliders → preset.
+_PRESET_TOL = 1e-3
+
+
+def match_speed_preset(ptz_dict: dict[str, object]) -> TrackingSpeed | None:
+    """Return the TrackingSpeed whose profile matches *ptz_dict*, or None (Custom).
+
+    Compares the six knob values from the live ptz config dict against every
+    named preset's profile.  Returns the first match within ``_PRESET_TOL``;
+    returns ``None`` when no preset matches (displayed as "Custom").
+    """
+    keys = ("max_pan_speed", "max_tilt_speed", "kp", "aim_smoothing", "max_accel", "catch_up_speed")
+    for speed, profile in SPEED_PROFILES.items():
+        if all(abs(float(ptz_dict.get(k, profile[k])) - profile[k]) <= _PRESET_TOL for k in keys):
+            return speed
+    return None
+
+
 _PRESET_COUNT = 6  # quick-recall slots shown as tiles in the PTZ section
 _PRESET_THUMB = 84  # preset tile thumbnail edge (px)
 
@@ -343,6 +372,7 @@ class PropertiesPanel(QWidget):
         # Cost chips re-resolve their semantic colors from the active palette.
         self._refresh_cost_chips()
         self._refresh_reid_gating()
+        self._refresh_speed_preset()
 
     # ── construction ─────────────────────────────────────────────────────────────
 
@@ -485,6 +515,44 @@ class PropertiesPanel(QWidget):
         )
         self._track_btn.toggled.connect(self._on_track_toggled)
         tr.add_widget(self._track_btn)
+
+        # Tracking Speed: a single segmented control (Calm / Normal / Fast / Sport)
+        # that applies all six tuning knobs coherently.  When the live slider
+        # values don't match any preset the label shows "(Custom)".
+        speed_holder = QWidget()
+        speed_row = QHBoxLayout(speed_holder)
+        speed_row.setContentsMargins(0, 0, 0, 0)
+        speed_row.setSpacing(4)
+        self._speed_btns: list[QPushButton] = []
+        for speed, label in _SPEED_PRESET_CHOICES:
+            b = QPushButton(label)
+            b.setObjectName("speedPresetBtn")
+            b.setCheckable(True)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.setProperty("speed", speed.value if speed else None)
+            b.clicked.connect(lambda checked, s=speed: self._on_speed_preset(s))
+            speed_row.addWidget(b, 1)
+            self._speed_btns.append(b)
+        self._speed_custom_label = QLabel("")
+        self._speed_custom_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        speed_row.addWidget(self._speed_custom_label)
+        speed_tf = _form()
+        speed_tf.addRow(
+            "Tracking Speed",
+            _with_chip(
+                speed_holder,
+                HelpBadge(
+                    "One dial for all six motion-tuning knobs. Calm is slow and smooth; "
+                    "Normal matches the original defaults; Fast and Sport are progressively "
+                    "snappier. Tweak individual sliders in Advanced tracking to fine-tune "
+                    "-- the label shows (Custom) when the sliders no longer match a preset."
+                ),
+            ),
+        )
+        tr.add_widget(_wrap(speed_tf))
+
         tf = _form()
         self._target_combo = QComboBox()
         self._target_combo.setToolTip(
@@ -1423,6 +1491,7 @@ class PropertiesPanel(QWidget):
             self._max_speed_val.setText(f"{self._max_speed.value()}%")
             self._catch_up.setValue(int(round(float(pz.get("catch_up_speed", 0.6)) * 100)))
             self._catch_up_val.setText(f"{self._catch_up.value()}%")
+            self._refresh_speed_preset()
             self._safe_zone.setChecked(bool(pz.get("safe_zone_enabled", True)))
             self._safe_x.setValue(int(round(float(pz.get("safe_zone_x", 0.0)) * 100)))
             self._safe_x_val.setText(_signed_pct(self._safe_x.value()))
@@ -1485,6 +1554,70 @@ class PropertiesPanel(QWidget):
         else:
             self._mode_caption.clear()
             self._mode_caption.setVisible(False)
+
+    def _on_speed_preset(self, speed: TrackingSpeed) -> None:
+        """Apply a named speed preset to the six Advanced tracking sliders and push.
+
+        Writes the six knob values into the slider widgets (which fire their
+        valueChanged signals → ``_schedule``), then persists ``tracking_speed``
+        so the label survives a reload.
+        """
+        if self._loading or not self._camera_id:
+            return
+        profile = SPEED_PROFILES[speed]
+        # Block individual slider signals while batch-applying; one _schedule at end.
+        self._loading = True
+        try:
+            self._kp.setValue(int(round(profile["kp"] * 100)))
+            self._kp_val.setText(f"{self._kp.value() / 100:.2f}")
+            self._smoothing.setValue(int(round(profile["aim_smoothing"] * 100)))
+            self._smoothing_val.setText(f"{self._smoothing.value()}%")
+            self._max_speed.setValue(int(round(profile["max_pan_speed"] * 100)))
+            self._max_speed_val.setText(f"{self._max_speed.value()}%")
+            self._catch_up.setValue(int(round(profile["catch_up_speed"] * 100)))
+            self._catch_up_val.setText(f"{self._catch_up.value()}%")
+        finally:
+            self._loading = False
+        # Persist tracking_speed in the ptz dict so the preset survives reload.
+        if isinstance(self._cfg, dict):
+            self._cfg.setdefault("ptz", {})
+            self._cfg["ptz"]["tracking_speed"] = speed.value
+            self._cfg["ptz"]["max_accel"] = profile["max_accel"]
+        self._refresh_speed_preset_ui(speed)
+        self._schedule()
+
+    def _refresh_speed_preset(self) -> None:
+        """Update the preset button highlight from the current slider values."""
+        pz = (self._cfg or {}).get("ptz") or {}
+        matched = match_speed_preset(pz)
+        self._refresh_speed_preset_ui(matched)
+
+    def _refresh_speed_preset_ui(self, active: TrackingSpeed | None) -> None:
+        """Toggle the checked state on the four preset buttons; show Custom label."""
+        pal = T.CURRENT
+        for btn in getattr(self, "_speed_btns", []):
+            speed_val = btn.property("speed")
+            is_active = active is not None and speed_val == active.value
+            btn.setChecked(is_active)
+            accent = T.ACCENT.name()
+            btn.setStyleSheet(
+                f"QPushButton#speedPresetBtn {{"
+                f" background: {'rgba(0,0,0,0)' if not is_active else accent};"
+                f" color: {'#ffffff' if is_active else pal.text};"
+                f" border: 1px solid {accent if is_active else pal.border};"
+                f" border-radius: {T.RADIUS}px; font-size: {T.fs(12)}px;"
+                f" padding: 4px 8px; }}"
+                f"QPushButton#speedPresetBtn:hover {{"
+                f" border-color: {accent}; }}"
+            )
+        custom_label = getattr(self, "_speed_custom_label", None)
+        if custom_label is not None:
+            if active is None:
+                custom_label.setText("(Custom)")
+                custom_label.setStyleSheet(f"color: {pal.muted}; font-size: {T.fs(11)}px;")
+                custom_label.setVisible(True)
+            else:
+                custom_label.setVisible(False)
 
     def _schedule(self) -> None:
         if self._loading or not self._camera_id:
@@ -1627,6 +1760,13 @@ class PropertiesPanel(QWidget):
         cfg["ptz"]["max_pan_speed"] = self._max_speed.value() / 100.0
         cfg["ptz"]["max_tilt_speed"] = self._max_speed.value() / 100.0
         cfg["ptz"]["catch_up_speed"] = self._catch_up.value() / 100.0
+        # max_accel has no slider; keep whatever was set by the speed preset (or
+        # the persisted config value) — don't overwrite with a stale default here.
+        # (If _cfg already has a value, dict() above copied it; nothing to do.)
+        # Persist the matched preset (or clear to None/custom) so it survives reload.
+        matched = match_speed_preset(cfg["ptz"])
+        cfg["ptz"]["tracking_speed"] = matched.value if matched is not None else None
+        self._refresh_speed_preset()
         cfg["ptz"]["safe_zone_enabled"] = self._safe_zone.isChecked()
         cfg["ptz"]["safe_zone_x"] = self._safe_x.value() / 100.0
         cfg["ptz"]["safe_zone_y"] = self._safe_y.value() / 100.0
