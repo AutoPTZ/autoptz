@@ -18,6 +18,7 @@ also returns ``None``.
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ def build_backend(
     *,
     ndi_source: Any | None = None,
     ndi_name: str | None = None,
+    is_usb: bool = False,
 ) -> PTZBackend | None:
     """Construct the PTZ backend described by *ptz*, or ``None``.
 
@@ -47,6 +49,10 @@ def build_backend(
                     backend opens its own low-bandwidth PTZ receiver to it.  This
                     is what makes NDI cameras controllable without threading the
                     video receiver through (the video adapter keeps its own).
+        is_usb:     True when the camera's *video* source is a USB/UVC device.
+                    Only then does ``auto`` probe serial ports for a companion
+                    VISCA control port — so a network camera's ``auto`` never
+                    grabs an unrelated USB-serial device.
 
     Returns:
         A :class:`PTZBackend` instance, or ``None`` when unconfigured / the
@@ -59,7 +65,7 @@ def build_backend(
 
     try:
         if backend in ("", "auto"):
-            return _probe_auto(ptz, ndi_source=ndi_source, ndi_name=ndi_name)
+            return _probe_auto(ptz, ndi_source=ndi_source, ndi_name=ndi_name, is_usb=is_usb)
         if backend == "visca_usb":
             return _build_visca_usb(ptz)
         if backend == "visca_ip":
@@ -93,12 +99,62 @@ def _build_visca_usb(ptz: PTZConfig) -> PTZBackend | None:
     if not port:
         log.warning("visca_usb requested but no serial port in address; PTZ disabled.")
         return None
+    baud = int(getattr(ptz, "baud", 9600) or 9600)
     try:
-        backend = ViscaUSBBackend(port)
+        backend = ViscaUSBBackend(port, baud=baud)
     except Exception:  # noqa: BLE001 - pyserial missing / port not present
-        log.warning("ViscaUSB %s unavailable; PTZ disabled.", port, exc_info=True)
+        log.warning("ViscaUSB %s @ %d unavailable; PTZ disabled.", port, baud, exc_info=True)
         return None
-    log.info("PTZ backend: VISCA-USB on %s", port)
+    log.info("PTZ backend: VISCA-USB on %s @ %d baud", port, baud)
+    return backend
+
+
+def _serial_autoprobe_enabled() -> bool:
+    """Whether ``auto`` may scan serial ports for a VISCA-USB camera.
+
+    On by default; set ``AUTOPTZ_PTZ_SERIAL_AUTOPROBE=0`` to disable.  Discovery
+    opens real serial ports, so the test suite sets this off (a conftest fixture)
+    to keep worker startup from touching hardware, and users on machines with
+    unrelated serial peripherals can opt out.
+    """
+    val = os.environ.get("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "1").strip().lower()
+    return val not in ("0", "false", "no", "off")
+
+
+def _autodetect_visca_usb(ptz: PTZConfig) -> PTZBackend | None:
+    """Scan serial ports for a VISCA camera and build a backend, or ``None``.
+
+    Used by ``auto`` on USB cameras: probes USB-serial ports with a read-only
+    VISCA version inquiry and, on a hit, opens a :class:`ViscaUSBBackend` at the
+    detected baud.  Never raises.
+    """
+    if not _serial_autoprobe_enabled():
+        log.debug("PTZ serial auto-probe disabled (AUTOPTZ_PTZ_SERIAL_AUTOPROBE); skipping.")
+        return None
+
+    from autoptz.engine.ptz.visca_serial import discover_visca_usb
+    from autoptz.engine.ptz.visca_usb import ViscaUSBBackend
+
+    try:
+        found = discover_visca_usb()
+    except Exception:  # noqa: BLE001 - discovery is best-effort
+        log.debug("VISCA-USB serial discovery failed", exc_info=True)
+        return None
+    if found is None:
+        log.debug("PTZ auto-probe: USB camera but no VISCA serial port found; PTZ disabled.")
+        return None
+    port, baud = found
+    try:
+        backend = ViscaUSBBackend(port, baud=baud)
+    except Exception:  # noqa: BLE001 - port grabbed by another worker / vanished
+        log.warning(
+            "VISCA-USB auto-detected on %s @ %d but could not open; PTZ disabled.",
+            port,
+            baud,
+            exc_info=True,
+        )
+        return None
+    log.info("PTZ backend: VISCA-USB auto-detected on %s @ %d baud", port, baud)
     return backend
 
 
@@ -168,14 +224,19 @@ def _build_digital(ptz: PTZConfig) -> PTZBackend | None:
 
 
 def _probe_auto(
-    ptz: PTZConfig, *, ndi_source: Any | None, ndi_name: str | None = None
+    ptz: PTZConfig,
+    *,
+    ndi_source: Any | None,
+    ndi_name: str | None = None,
+    is_usb: bool = False,
 ) -> PTZBackend | None:
     """Best-effort backend discovery for ``backend="auto"``.
 
     Order:
       1. An NDI source/name → NDI PTZ (own or shared receiver).
-      2. An address present → try ONVIF, then VISCA-IP.
-      3. Nothing probable → ``None`` (manual PTZ no-ops; auto control disabled).
+      2. A USB camera with no address → scan serial ports for VISCA-USB.
+      3. An address present → try ONVIF, then VISCA-IP.
+      4. Nothing probable → ``None`` (manual PTZ no-ops; auto control disabled).
     """
     if ndi_source is not None or (ndi_name or "").strip():
         ndi = _build_ndi(ptz, ndi_source=ndi_source, ndi_name=ndi_name)
@@ -184,6 +245,11 @@ def _probe_auto(
 
     addr = (ptz.address or "").strip()
     if not addr:
+        # A USB/UVC camera may carry a companion VISCA serial control port.
+        if is_usb:
+            usb = _autodetect_visca_usb(ptz)
+            if usb is not None:
+                return usb
         log.debug("PTZ auto-probe: no NDI source and no address; PTZ disabled.")
         return None
 

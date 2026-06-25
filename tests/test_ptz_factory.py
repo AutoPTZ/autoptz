@@ -91,6 +91,21 @@ class TestFactoryDispatch:
     def test_visca_usb_no_address_returns_none(self) -> None:
         assert build_backend(_cfg(backend="visca_usb", address=None)) is None
 
+    def test_visca_usb_dispatch_passes_baud(self, monkeypatch) -> None:
+        # The configured baud must reach the backend ctor — a camera that speaks
+        # VISCA at 115200 silently ignores every byte at the old hardcoded 9600.
+        seen: dict[str, object] = {}
+
+        def fake_ctor(port, *a, **k):
+            seen["port"] = port
+            seen["baud"] = k.get("baud", (a[0] if a else None))
+            return RecordingBackend()
+
+        monkeypatch.setattr("autoptz.engine.ptz.visca_usb.ViscaUSBBackend", fake_ctor)
+        b = build_backend(_cfg(backend="visca_usb", address="/dev/tty.usbserial", baud=115200))
+        assert b is not None
+        assert seen["baud"] == 115200
+
     def test_visca_ip_dispatch_with_port(self, monkeypatch) -> None:
         seen: dict[str, object] = {}
 
@@ -226,6 +241,71 @@ class TestAutoProbe:
             lambda *a, **k: (_ for _ in ()).throw(OSError()),
         )
         assert build_backend(_cfg(backend="auto", address="192.168.0.10")) is None
+
+
+class TestAutoSerialProbe:
+    """``auto`` backend on a USB-source camera auto-discovers a VISCA serial port."""
+
+    def test_usb_auto_discovers_visca_serial(self, monkeypatch) -> None:
+        monkeypatch.setenv("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "1")
+        seen: dict[str, object] = {}
+
+        def fake_ctor(port, *a, **k):
+            seen["port"] = port
+            seen["baud"] = k.get("baud")
+            return RecordingBackend()
+
+        monkeypatch.setattr("autoptz.engine.ptz.visca_usb.ViscaUSBBackend", fake_ctor)
+        monkeypatch.setattr(
+            "autoptz.engine.ptz.visca_serial.discover_visca_usb",
+            lambda **k: ("/dev/cu.usbserial-21310", 115200),
+        )
+        b = build_backend(_cfg(backend="auto", address=None), is_usb=True)
+        assert b is not None
+        assert seen["port"] == "/dev/cu.usbserial-21310"
+        assert seen["baud"] == 115200
+
+    def test_usb_auto_no_serial_returns_none(self, monkeypatch) -> None:
+        monkeypatch.setenv("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "1")
+        monkeypatch.setattr("autoptz.engine.ptz.visca_serial.discover_visca_usb", lambda **k: None)
+        assert build_backend(_cfg(backend="auto", address=None), is_usb=True) is None
+
+    def test_non_usb_auto_never_probes_serial(self, monkeypatch) -> None:
+        # A non-USB auto camera (e.g. an NDI/RTSP source with no address) must not
+        # scan serial ports — that risks grabbing another camera's control port.
+        monkeypatch.setenv("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "1")
+        called = {"n": 0}
+
+        def spy(**k):
+            called["n"] += 1
+            return ("/dev/cu.usbserial-21310", 115200)
+
+        monkeypatch.setattr("autoptz.engine.ptz.visca_serial.discover_visca_usb", spy)
+        assert build_backend(_cfg(backend="auto", address=None), is_usb=False) is None
+        assert called["n"] == 0
+
+    def test_serial_autoprobe_disabled_by_env(self, monkeypatch) -> None:
+        # AUTOPTZ_PTZ_SERIAL_AUTOPROBE=0 must skip discovery entirely — no real
+        # serial ports get opened. This keeps the worker-startup path (and the
+        # whole test suite) from touching hardware, the root of the CI regression.
+        monkeypatch.setenv("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "0")
+        called = {"n": 0}
+
+        def spy(**k):
+            called["n"] += 1
+            return ("/dev/cu.usbserial-21310", 115200)
+
+        monkeypatch.setattr("autoptz.engine.ptz.visca_serial.discover_visca_usb", spy)
+        assert build_backend(_cfg(backend="auto", address=None), is_usb=True) is None
+        assert called["n"] == 0
+
+
+class TestBaudModel:
+    def test_default_baud_is_9600(self) -> None:
+        assert PTZConfig().baud == 9600
+
+    def test_baud_is_configurable(self) -> None:
+        assert _cfg(baud=115200).baud == 115200
 
 
 class TestAddressParsing:
