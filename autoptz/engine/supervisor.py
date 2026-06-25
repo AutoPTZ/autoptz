@@ -64,6 +64,7 @@ log = logging.getLogger(__name__)
 
 _PUMP_INTERVAL_S = 0.05  # 20 Hz command pump when run internally
 _CPU_SAMPLE_INTERVAL_S = 1.0  # system-CPU fan-out cadence (≈1 Hz)
+_TICK_WARN_INTERVAL_S = 5.0  # throttle for the pump-tick failure WARNING
 
 # Worker liveness / auto-restart constants
 _HEALTH_SCAN_INTERVAL_S = 2.0  # how often tick() runs the health scan
@@ -147,6 +148,9 @@ class Supervisor:
         self._pump_thread: threading.Thread | None = None
         self._pump_stop = threading.Event()
         self._startup_thread: threading.Thread | None = None
+        # Throttle for the pump-tick failure WARNING (monotonic seconds) so a
+        # persistent fault can't spam at the 20 Hz pump rate.
+        self._last_pump_warn_t = 0.0
 
         # ── worker health monitoring + auto-restart ──────────────────────────────
         # Per-camera backoff state: cid → (attempts, next_allowed_t).
@@ -444,8 +448,14 @@ class Supervisor:
             t0 = time.monotonic()
             try:
                 self.tick()
-            except Exception:  # noqa: BLE001
-                log.debug("pump tick error", exc_info=True)
+            except Exception as exc:  # noqa: BLE001
+                # Was DEBUG-only: a pump-tick fault (health scan / command fan-out)
+                # was invisible at the default level.  Promote to a throttled
+                # WARNING so a persistent fault is visible without spamming at the
+                # pump rate.  The pump keeps running.
+                if t0 - self._last_pump_warn_t >= _TICK_WARN_INTERVAL_S:
+                    self._last_pump_warn_t = t0
+                    log.warning("pump tick error (%s); continuing", exc, exc_info=True)
             elapsed = time.monotonic() - t0
             self._pump_stop.wait(max(0.0, _PUMP_INTERVAL_S - elapsed))
 
