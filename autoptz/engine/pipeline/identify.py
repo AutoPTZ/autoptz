@@ -92,7 +92,7 @@ class FaceObservation:
         inter_ocular = ((rx - lx) ** 2 + (ry - ly) ** 2) ** 0.5
         if inter_ocular <= 1e-3:
             return None
-        return abs(nx - eye_mid_x) / inter_ocular
+        return float(abs(nx - eye_mid_x) / inter_ocular)
 
 
 @dataclass(frozen=True)

@@ -35,7 +35,7 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -174,8 +174,12 @@ class IdentityService:
     ) -> IdentityRecord:
         """Add a new *labeled* identity (persisted).  ``embedding`` may be None."""
         embeddings = [embedding_to_bytes(embedding)] if embedding is not None else []
+        # Pass ``id`` only when supplied (else IdentityRecord's default factory
+        # generates one).  Typed ``dict[str, Any]`` so the ** unpack doesn't make
+        # mypy infer every field as ``str``.
+        id_kwargs: dict[str, Any] = {"id": identity_id} if identity_id else {}
         rec = IdentityRecord(
-            **({"id": identity_id} if identity_id else {}),
+            **id_kwargs,
             name=name,
             embeddings=embeddings,
             thumbnail=thumbnail,
