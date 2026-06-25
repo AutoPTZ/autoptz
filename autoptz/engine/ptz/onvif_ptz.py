@@ -10,16 +10,31 @@ Implements:
   GotoPreset      — by integer slot (1-based, as ONVIF spec requires)
   SetPreset       — store current position as named preset
   GetStatus       — PTZState with current position
+
+Safety: every ContinuousMove carries a Timeout so the camera self-stops if
+the next command does not arrive (dead-man's switch).  Transport errors in
+move_velocity / stop are caught and logged at WARNING (throttled) so a hung
+or dropped camera never blocks or crashes the control loop.
 """
 
 from __future__ import annotations
 
 import logging
+import time
+from datetime import timedelta
 from typing import Any
 
 from autoptz.engine.ptz.base import PTZBackend, PTZCaps, PTZState
 
 log = logging.getLogger(__name__)
+
+# How long the camera keeps moving if no new command arrives.
+# Set to ~1 second — a comfortable dead-man window at 10–30 Hz command rates.
+_CONTINUOUSMOVE_TIMEOUT: timedelta = timedelta(seconds=1)
+
+# Throttle transport-error log messages: emit at most one WARNING per this many
+# seconds so a sustained outage doesn't flood the log.
+_LOG_THROTTLE_S: float = 5.0
 
 
 def _require_onvif() -> Any:
@@ -94,18 +109,39 @@ class ONVIFPTZBackend(PTZBackend):
             native_presets=True,
             query_position=True,
         )
+
+        # Throttle-gate for transport-error WARNING messages.
+        self._last_err_log_t: float = 0.0
+
         log.info("ONVIFPTZBackend ready: %s:%d profile=%r", host, port, self._profile_token)
+
+    # ── internal helpers ──────────────────────────────────────────────────────
+
+    def _log_transport_error(self, context: str, exc: Exception) -> None:
+        """Emit a throttled WARNING for transport errors."""
+        now = time.monotonic()
+        if now - self._last_err_log_t >= _LOG_THROTTLE_S:
+            log.warning("ONVIFPTZBackend transport error in %s: %s", context, exc)
+            self._last_err_log_t = now
+        else:
+            log.debug("ONVIFPTZBackend transport error in %s (throttled): %s", context, exc)
 
     # ── PTZBackend interface ──────────────────────────────────────────────────
 
     def move_velocity(self, pan: float, tilt: float, zoom: float = 0.0) -> None:
-        request = self._ptz.create_type("ContinuousMove")
-        request.ProfileToken = self._profile_token
-        request.Velocity = {
-            "PanTilt": {"x": pan, "y": tilt},
-            "Zoom": {"x": zoom},
-        }
-        self._ptz.ContinuousMove(request)
+        try:
+            request = self._ptz.create_type("ContinuousMove")
+            request.ProfileToken = self._profile_token
+            request.Velocity = {
+                "PanTilt": {"x": pan, "y": tilt},
+                "Zoom": {"x": zoom},
+            }
+            # Dead-man's switch: camera self-stops after _CONTINUOUSMOVE_TIMEOUT
+            # if no new command arrives (e.g. on connection loss).
+            request.Timeout = _CONTINUOUSMOVE_TIMEOUT
+            self._ptz.ContinuousMove(request)
+        except Exception as exc:
+            self._log_transport_error("move_velocity", exc)
 
     def move_absolute(self, pan: float, tilt: float, zoom: float) -> None:
         request = self._ptz.create_type("AbsoluteMove")
