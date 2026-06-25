@@ -88,15 +88,20 @@ def _push_due(now: float, last: float, min_period: float) -> bool:
 
 
 # Center Stage crop tightness per "Framing" preset → (subject fill of crop,
-# max crop as a fraction of the frame). A smaller ``max_frac`` forces a tighter
-# zoom even on a close subject that already fills the sensor; the live "Framing"
-# dropdown (tracking.framing) picks the preset, so the user dials the shot
-# without a restart. ``upper_body`` is the default head-and-shoulders look.
-_CENTERSTAGE_FRAMING: dict[str, tuple[float, float]] = {
-    "face": (0.86, 0.50),  # tight head/face closeup (~2.0x on a close subject)
-    "head_shoulders": (0.80, 0.62),  # head + shoulders (~1.6x)
-    "upper_body": (0.70, 0.74),  # head + chest (~1.35x) — default
-    "full_body": (0.58, 0.94),  # whole person, gentle crop
+# max crop as a fraction of the frame, headroom). A smaller ``max_frac`` forces a
+# tighter zoom even on a close subject that already fills the sensor; the live
+# "Framing" dropdown (tracking.framing) picks the preset, so the user dials the
+# shot without a restart. ``upper_body`` is the default head-and-shoulders look.
+#
+# ``headroom`` is shot-size-aware: a tight face/closeup wants only a sliver of
+# space above the head, while a full-body shot wants more margin so the subject
+# isn't jammed against the top. Closer shots → less headroom, wider shots → more.
+# The old fixed 0.10 is kept for ``upper_body`` as the midpoint.
+_CENTERSTAGE_FRAMING: dict[str, tuple[float, float, float]] = {
+    "face": (0.86, 0.50, 0.06),  # tight head/face closeup (~2.0x), minimal headroom
+    "head_shoulders": (0.80, 0.62, 0.08),  # head + shoulders (~1.6x)
+    "upper_body": (0.70, 0.74, 0.10),  # head + chest (~1.35x) — default midpoint
+    "full_body": (0.58, 0.94, 0.14),  # whole person, more margin above the head
 }
 
 _DEFAULT_TELEMETRY_HZ = 10.0
@@ -3491,11 +3496,15 @@ class CameraWorker:
             from autoptz.engine.pipeline.digital_framer import DigitalFramer
 
             framer = self._digital_framer = DigitalFramer(out_aspect=aspect)
-        # Crop tightness follows the live "Framing" dropdown.
+        # Crop tightness AND shot-size-aware headroom follow the live "Framing"
+        # dropdown (set live so a preset change re-composes without a restart).
         framing = getattr(self.config.tracking, "framing", "upper_body")
-        framer.fill, framer.max_frac = _CENTERSTAGE_FRAMING.get(
+        framer.fill, framer.max_frac, framer.headroom = _CENTERSTAGE_FRAMING.get(
             framing, _CENTERSTAGE_FRAMING["upper_body"]
         )
+        # Subtle digital lead-room ("nose room"): bias the crop toward the
+        # subject's motion. Conservative default; 0 reproduces centred framing.
+        framer.lead = float(getattr(self.config.tracking, "lead_room", 0.0))
         target = self._current_digital_target()
         if target is not None:
             x, y, cw, ch = framer.frame_for(target, w, h)
@@ -3525,15 +3534,27 @@ class CameraWorker:
         return cv2.resize(crop, (ow, oh), interpolation=interp)
 
     def _current_digital_target(self) -> tuple[float, float, float, float] | None:
-        """The selected target's bbox (x1,y1,x2,y2) for Center Stage, or None.
+        """The bbox (x1,y1,x2,y2) Center Stage should frame this tick, or None.
 
         Runs on the capture thread; a slightly stale box is fine for smooth
-        framing. Prefers the live track for the current target id, but falls back
-        to the maintained *trusted* target box so Center Stage keeps framing
-        through track-id churn / identity re-binding (when ``_target_track_id``
-        momentarily points at a track not in the latest ``_last_tracks``).
+        framing.
+
+        **Explicit lock wins.** When the user has locked a specific person (by
+        track id OR by configured identity), Center Stage follows *that* single
+        person even with group framing on — explicit selection always beats the
+        crowd. It prefers the live track for the current id but falls back to the
+        maintained *trusted* box so the crop holds through track-id churn /
+        identity re-binding (when ``_target_track_id`` momentarily points at a
+        track not in the latest ``_last_tracks``).
+
+        **Group framing** (``tracking.group_framing``, default off) only applies
+        when NO explicit target is locked: with more than one confident, non-lost
+        person present the crop frames the UNION of their boxes (auto-widening,
+        capped by ``max_frac``). One person, or the toggle off, is the single
+        target's box exactly as before.
         """
         tid = self._target_track_id
+        explicit_lock = tid is not None or self._target_identity_id is not None
         if tid is not None:
             for t in self._last_tracks or ():
                 if (
@@ -3545,11 +3566,37 @@ class CameraWorker:
                     return (bb.x1, bb.y1, bb.x2, bb.y2)
         # Fallback: the last trusted target box (set whenever a target is locked,
         # by track id OR by identity), so the crop holds through brief track gaps.
-        if self._target_track_id is not None or self._target_identity_id is not None:
+        if explicit_lock:
             tb = getattr(self._target_lock, "trusted_bbox", None)
             if tb is not None:
                 return (tb.x1, tb.y1, tb.x2, tb.y2)
+
+        # No explicit lock: optionally frame the whole confident group as a union.
+        if bool(getattr(self.config.tracking, "group_framing", False)):
+            return self._group_union_bbox(self._last_tracks)
         return None
+
+    @staticmethod
+    def _group_union_bbox(
+        tracks: list[TrackInfo],
+    ) -> tuple[float, float, float, float] | None:
+        """Union of every confident, non-lost person box in *tracks*, or None.
+
+        Pure (no instance state) so it's unit-testable directly. Returns None when
+        fewer than one usable person is present so the caller falls back to the
+        full-frame path; a single usable person yields just that person's box.
+        """
+        from autoptz.engine.pipeline.digital_framer import union_bbox
+
+        boxes: list[tuple[float, float, float, float]] = []
+        for t in tracks or ():
+            if getattr(t, "lost", False):
+                continue
+            bb = getattr(t, "bbox", None)
+            if bb is None:
+                continue
+            boxes.append((bb.x1, bb.y1, bb.x2, bb.y2))
+        return union_bbox(boxes)
 
     def _push_frame(self, frame: NDArray[np.uint8]) -> None:
         if self._shm is None:

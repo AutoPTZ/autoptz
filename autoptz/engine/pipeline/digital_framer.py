@@ -21,6 +21,25 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
 
 
+def union_bbox(
+    boxes: list[tuple[float, float, float, float]],
+) -> tuple[float, float, float, float] | None:
+    """The smallest ``(x1, y1, x2, y2)`` box covering every box in *boxes*.
+
+    Used for multi-person *group framing*: pass the bboxes of the confident
+    people and frame the union so the auto-zoom widens to keep everyone in shot.
+    Returns ``None`` for an empty list (the caller falls back to the single
+    target / full-frame path). A single box round-trips unchanged.
+    """
+    if not boxes:
+        return None
+    x1 = min(b[0] for b in boxes)
+    y1 = min(b[1] for b in boxes)
+    x2 = max(b[2] for b in boxes)
+    y2 = max(b[3] for b in boxes)
+    return (float(x1), float(y1), float(x2), float(y2))
+
+
 def desired_crop(
     bbox: tuple[float, float, float, float],
     frame_w: int,
@@ -40,15 +59,29 @@ def desired_crop(
     window (never the whole frame) and never an extreme zoom. ``out_aspect`` keeps
     the crop matching the output so the resize doesn't distort. ``headroom`` lifts
     the centre so the head sits a little below the top.
+
+    The crop is sized so the subject fits both *vertically* (``fill`` of the
+    height) and *horizontally* (the same ``fill`` margin on the width): a tall
+    single person stays height-driven exactly as before, but a WIDE box — e.g. the
+    union of several people in *group framing* — forces the crop to widen
+    (auto-zoom out) so everyone stays in shot, still aspect-locked and capped at
+    ``max_frac``.
     """
     bx1, by1, bx2, by2 = (float(v) for v in bbox)
     subj_h = max(1.0, by2 - by1)
+    subj_w = max(1.0, bx2 - bx1)
     cx = (bx1 + bx2) * 0.5
     cy = (by1 + by2) * 0.5
     fw, fh = float(frame_w), float(frame_h)
 
     # Size the crop to the subject, then constrain it to a window of the frame.
-    ch = subj_h / _clamp(fill, 0.1, 1.0)
+    # Height from the subject height; but if the subject is WIDER than that crop
+    # would hold (a wide group union), grow the crop height so its aspect-locked
+    # width covers the subject width too. ``max_frac`` then caps the result.
+    fill_c = _clamp(fill, 0.1, 1.0)
+    ch = subj_h / fill_c
+    ch_for_width = (subj_w / fill_c) / out_aspect
+    ch = max(ch, ch_for_width)
     ch = _clamp(ch, min_frac * fh, max_frac * fh)
     cw = ch * out_aspect
     # If that is wider than the frame, cap width (keeps aspect; only happens for
@@ -93,16 +126,30 @@ class DigitalFramer:
     deadzone: float = 0.04  # hold centre while desired moves < this frac of crop w/h
     size_deadband: float = 0.03  # ignore size changes under this fraction
     headroom: float = 0.10
+    # Digital lead-room ("nose room"): bias the crop CENTRE in the direction of the
+    # subject's motion so a walking subject sits a touch back-of-centre rather than
+    # trailing the edge. The offset is ``lead`` × the EMA subject-centre velocity
+    # (px/frame), capped to ``_LEAD_MAX_FRAC`` of the crop so it can never
+    # destabilise framing. ``lead=0.0`` reproduces the prior centred behaviour.
+    lead: float = 0.0  # default OFF/very subtle; 0 = no lead-room
+    lead_smooth: float = 0.2  # EMA weight for the subject-centre velocity estimate
     _crop: tuple[float, float, float, float] | None = None
     _following: bool = False  # hysteresis: True once the centre is being tracked
+    _prev_subj_c: tuple[float, float] | None = None  # last subject centre (for velocity)
+    _subj_vel: tuple[float, float] = (0.0, 0.0)  # EMA of subject-centre velocity
 
     # Once moving, keep following until the desired centre is back inside this
     # (tighter) fraction of the dead-zone band — prevents boundary chatter.
     _INNER_BAND_FRAC: float = 0.5
+    # Lead-room offset is capped to this fraction of the crop width/height so a
+    # fast subject can never shove the framing more than a gentle nudge off-centre.
+    _LEAD_MAX_FRAC: float = 0.12
 
     def reset(self) -> None:
         self._crop = None
         self._following = False
+        self._prev_subj_c = None
+        self._subj_vel = (0.0, 0.0)
 
     def frame_for(
         self, bbox: tuple[float, float, float, float], frame_w: int, frame_h: int
@@ -118,11 +165,54 @@ class DigitalFramer:
             max_frac=self.max_frac,
             headroom=self.headroom,
         )
+        tgt = self._apply_lead(bbox, tgt, frame_w, frame_h)
         return self._step(tgt)
 
     def full_frame(self, frame_w: int, frame_h: int) -> tuple[int, int, int, int]:
         """Ease the crop back toward the whole frame (no target to follow)."""
+        # No subject to lead — forget the velocity so the next acquisition starts
+        # clean instead of carrying stale motion.
+        self._prev_subj_c = None
+        self._subj_vel = (0.0, 0.0)
         return self._step((0.0, 0.0, float(frame_w), float(frame_h)))
+
+    def _apply_lead(
+        self,
+        bbox: tuple[float, float, float, float],
+        tgt: tuple[float, float, float, float],
+        frame_w: int,
+        frame_h: int,
+    ) -> tuple[float, float, float, float]:
+        """Offset the desired crop centre toward the subject's motion (nose room).
+
+        Tracks an EMA of the subject-centre velocity (px/frame) and shifts the
+        crop's top-left by ``lead × velocity``, capped to ``_LEAD_MAX_FRAC`` of the
+        crop and re-clamped inside the frame. ``lead == 0`` is a no-op (returns
+        *tgt* unchanged), so prior behaviour is exactly reproduced.
+        """
+        bx1, by1, bx2, by2 = bbox
+        subj_c = ((bx1 + bx2) * 0.5, (by1 + by2) * 0.5)
+        if self._prev_subj_c is not None:
+            dx = subj_c[0] - self._prev_subj_c[0]
+            dy = subj_c[1] - self._prev_subj_c[1]
+            a = _clamp(self.lead_smooth, 0.0, 1.0)
+            self._subj_vel = (
+                self._subj_vel[0] + a * (dx - self._subj_vel[0]),
+                self._subj_vel[1] + a * (dy - self._subj_vel[1]),
+            )
+        self._prev_subj_c = subj_c
+        if self.lead <= 0.0:
+            return tgt
+        x, y, w, h = tgt
+        ox = _clamp(
+            self.lead * self._subj_vel[0], -self._LEAD_MAX_FRAC * w, self._LEAD_MAX_FRAC * w
+        )
+        oy = _clamp(
+            self.lead * self._subj_vel[1], -self._LEAD_MAX_FRAC * h, self._LEAD_MAX_FRAC * h
+        )
+        x = _clamp(x + ox, 0.0, max(0.0, float(frame_w) - w))
+        y = _clamp(y + oy, 0.0, max(0.0, float(frame_h) - h))
+        return (x, y, w, h)
 
     def _step(self, tgt: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
         if self._crop is None:
