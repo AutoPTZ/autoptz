@@ -146,6 +146,40 @@ class TestSizeSmoothing:
         # Both grow toward the new size, but the slower constant lags behind.
         assert s[3] > 0 and fa[3] > s[3]
 
+    def test_crop_stays_on_aspect_when_size_deltas_straddle_deadband(self):
+        # B4 regression guard (point case). When w and h were eased through
+        # INDEPENDENT size dead-bands, one axis could freeze while the other eased,
+        # because cw != ch makes the same target produce different per-axis deltas
+        # relative to the dead-band. Crop 800x450 (16:9) → target 818x470: w changes
+        # 2.25% (under a 3% dead-band → frozen) but h changes 4.4% (over → eases),
+        # so the OLD code returned 800x470 (aspect 1.70) and the fixed-size output
+        # resize stretched the subject. The fix eases height then DERIVES width from
+        # out_aspect, so the crop stays on aspect.
+        f = DigitalFramer(
+            out_aspect=ASPECT, smooth=1.0, size_smooth=1.0, deadzone=0.04, size_deadband=0.03
+        )
+        f._crop = (0.0, 0.0, 800.0, 450.0)
+        _, _, w, h = f._step((0.0, 0.0, 818.0, 470.0))
+        assert abs(w / h - ASPECT) < 0.01, f"crop went off-aspect: {w}x{h} = {w / h:.4f}"
+
+    def test_crop_stays_on_aspect_through_slow_zoom(self):
+        # B4 regression guard (sequence case): drive a slow zoom (subject grows over
+        # many frames, small per-frame size steps near the dead-band) and assert the
+        # crop aspect stays locked on out_aspect every frame.
+        f = DigitalFramer(
+            out_aspect=ASPECT,
+            smooth=1.0,
+            size_smooth=0.08,  # slow zoom → small per-frame size steps near the band
+            deadzone=0.04,
+            size_deadband=0.03,
+        )
+        for i in range(30):
+            half_h = 135 + i * 2  # subject slowly steps closer
+            half_w = 100
+            bbox = (960 - half_w, 540 - half_h, 960 + half_w, 540 + half_h)
+            _, _, w, h = f.frame_for(bbox, 1920, 1080)
+            assert abs(w / h - ASPECT) < 0.01, f"frame {i}: aspect {w / h:.4f} drifted"
+
     def test_size_smooth_equal_reproduces_prior_behavior(self):
         # size_smooth == smooth and no dead-bands → old uniform EMA on all 4 params.
         f = DigitalFramer(

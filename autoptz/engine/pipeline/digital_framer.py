@@ -134,9 +134,14 @@ class DigitalFramer:
         cx, cy, cw, ch = self._crop
         tx, ty, tw, th = tgt
 
-        # ── Size (w, h): slower EMA, with a dead-band on small changes ──────────
-        nw = self._ease_size(cw, tw)
+        # ── Size: ease ONE aspect-locked scalar, then derive the other ──────────
+        # Easing w and h through INDEPENDENT dead-bands lets one axis cross while
+        # the other freezes (because cw != ch), so the crop drifts off-aspect and
+        # the fixed-size output resize stretches the subject. Ease HEIGHT through
+        # the dead-band + slower size constant, then DERIVE width from the output
+        # aspect so the crop stays locked on out_aspect every frame.
         nh = self._ease_size(ch, th)
+        nw = nh * self.out_aspect
 
         # ── Position (x, y): dead-zone hold + hysteresis on the crop CENTRE ─────
         # Compare the desired crop CENTRE to the held centre; the band scales with
