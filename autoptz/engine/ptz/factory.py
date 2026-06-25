@@ -18,6 +18,7 @@ also returns ``None``.
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -108,6 +109,18 @@ def _build_visca_usb(ptz: PTZConfig) -> PTZBackend | None:
     return backend
 
 
+def _serial_autoprobe_enabled() -> bool:
+    """Whether ``auto`` may scan serial ports for a VISCA-USB camera.
+
+    On by default; set ``AUTOPTZ_PTZ_SERIAL_AUTOPROBE=0`` to disable.  Discovery
+    opens real serial ports, so the test suite sets this off (a conftest fixture)
+    to keep worker startup from touching hardware, and users on machines with
+    unrelated serial peripherals can opt out.
+    """
+    val = os.environ.get("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "1").strip().lower()
+    return val not in ("0", "false", "no", "off")
+
+
 def _autodetect_visca_usb(ptz: PTZConfig) -> PTZBackend | None:
     """Scan serial ports for a VISCA camera and build a backend, or ``None``.
 
@@ -115,6 +128,10 @@ def _autodetect_visca_usb(ptz: PTZConfig) -> PTZBackend | None:
     VISCA version inquiry and, on a hit, opens a :class:`ViscaUSBBackend` at the
     detected baud.  Never raises.
     """
+    if not _serial_autoprobe_enabled():
+        log.debug("PTZ serial auto-probe disabled (AUTOPTZ_PTZ_SERIAL_AUTOPROBE); skipping.")
+        return None
+
     from autoptz.engine.ptz.visca_serial import discover_visca_usb
     from autoptz.engine.ptz.visca_usb import ViscaUSBBackend
 

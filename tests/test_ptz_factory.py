@@ -247,6 +247,7 @@ class TestAutoSerialProbe:
     """``auto`` backend on a USB-source camera auto-discovers a VISCA serial port."""
 
     def test_usb_auto_discovers_visca_serial(self, monkeypatch) -> None:
+        monkeypatch.setenv("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "1")
         seen: dict[str, object] = {}
 
         def fake_ctor(port, *a, **k):
@@ -265,6 +266,7 @@ class TestAutoSerialProbe:
         assert seen["baud"] == 115200
 
     def test_usb_auto_no_serial_returns_none(self, monkeypatch) -> None:
+        monkeypatch.setenv("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "1")
         monkeypatch.setattr(
             "autoptz.engine.ptz.visca_serial.discover_visca_usb", lambda **k: None
         )
@@ -273,6 +275,7 @@ class TestAutoSerialProbe:
     def test_non_usb_auto_never_probes_serial(self, monkeypatch) -> None:
         # A non-USB auto camera (e.g. an NDI/RTSP source with no address) must not
         # scan serial ports — that risks grabbing another camera's control port.
+        monkeypatch.setenv("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "1")
         called = {"n": 0}
 
         def spy(**k):
@@ -281,6 +284,21 @@ class TestAutoSerialProbe:
 
         monkeypatch.setattr("autoptz.engine.ptz.visca_serial.discover_visca_usb", spy)
         assert build_backend(_cfg(backend="auto", address=None), is_usb=False) is None
+        assert called["n"] == 0
+
+    def test_serial_autoprobe_disabled_by_env(self, monkeypatch) -> None:
+        # AUTOPTZ_PTZ_SERIAL_AUTOPROBE=0 must skip discovery entirely — no real
+        # serial ports get opened. This keeps the worker-startup path (and the
+        # whole test suite) from touching hardware, the root of the CI regression.
+        monkeypatch.setenv("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "0")
+        called = {"n": 0}
+
+        def spy(**k):
+            called["n"] += 1
+            return ("/dev/cu.usbserial-21310", 115200)
+
+        monkeypatch.setattr("autoptz.engine.ptz.visca_serial.discover_visca_usb", spy)
+        assert build_backend(_cfg(backend="auto", address=None), is_usb=True) is None
         assert called["n"] == 0
 
 

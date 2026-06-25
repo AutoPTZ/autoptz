@@ -33,6 +33,18 @@ if TYPE_CHECKING:
     from pytest import ExitCode, Session
 
 
+@pytest.fixture(autouse=True)
+def _no_serial_autoprobe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never open real serial ports during tests.
+
+    A USB camera's ``auto`` PTZ backend scans serial ports for a VISCA control
+    port at worker startup; on CI that opens host serial devices and stalls the
+    worker thread (breaking timing-sensitive tests). Disable it globally; the
+    tests that exercise the probe path re-enable it explicitly.
+    """
+    monkeypatch.setenv("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "0")
+
+
 @pytest.fixture(scope="session")
 def qapp() -> Generator[object]:
     """One process-wide Qt application object for headless tests."""
