@@ -4,7 +4,7 @@ from __future__ import annotations
 
 #: Canonical version string. This is the single source of truth; ``pyproject.toml``
 #: reads it via ``[tool.setuptools.dynamic]`` and the UI imports it at runtime.
-__version__ = "2.2.0-rc3"
+__version__ = "2.2.0-rc4"
 
 
 def version() -> str:
