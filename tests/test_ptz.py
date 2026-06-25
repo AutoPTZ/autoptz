@@ -778,6 +778,45 @@ class TestControllerPumpHeartbeat:
         ctrl.step((0.5, 0.0), (0.0, 0.0), 0.45, True, t=1.0)
         assert ctrl.state == ControllerState.TRACKING
 
+    def test_manual_hold_refreshes_recency(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """note_manual_hold() stamps recency (pause the heartbeat) without
+        touching the tracking payload."""
+        import autoptz.engine.ptz.controller as ctrl_mod
+
+        ctrl = PTZController(MockBackend(), _cfg(kp=0.6), rate_hz=20.0)
+        seq_before = ctrl._payload.seq
+        monkeypatch.setattr(ctrl_mod.time, "monotonic", lambda: 456.0)
+        ctrl.note_manual_hold()
+        assert ctrl._last_update_t == pytest.approx(456.0)
+        assert ctrl._payload.seq == seq_before, "manual hold must not alter the payload"
+
+    def test_manual_hold_prevents_heartbeat_stop(self) -> None:
+        """I1: refreshing via note_manual_hold() each tick during a held nudge
+        keeps the background loop from halting the camera as 'stale'."""
+        backend = MockBackend()
+        ctrl = PTZController(backend, _cfg(kp=0.6), rate_hz=50.0)
+        ctrl._heartbeat_stale_s = 0.1
+        ctrl.start()
+        try:
+            # Drive once so we're TRACKING (the only state the heartbeat guards).
+            ctrl.update((0.5, 0.0), (0.0, 0.0), 0.45, True)
+            deadline = time.monotonic() + 2.0
+            while not backend.velocity_calls and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert ctrl.state == ControllerState.TRACKING
+
+            # Now simulate a held manual nudge: no update() for well past the stale
+            # threshold, but note_manual_hold() each "tick".  The loop must NOT stop.
+            end = time.monotonic() + 0.5  # 5x the 0.1s threshold
+            while time.monotonic() < end:
+                ctrl.note_manual_hold()
+                time.sleep(0.01)
+            assert ctrl.state == ControllerState.TRACKING, (
+                "heartbeat fired during an active manual hold (I1)"
+            )
+        finally:
+            ctrl.stop()
+
 
 def ctrl_mod_floor() -> float:
     import autoptz.engine.ptz.controller as ctrl_mod

@@ -1357,6 +1357,13 @@ class CameraWorker:
         if ctrl is None:
             return
         if self._manual_override_active(now):
+            # Pump mode (I1): while the operator holds a manual nudge we stop
+            # feeding the controller (manual owns the camera).  Refresh the
+            # heartbeat each tick so the background loop doesn't mistake the
+            # intentional update() gap for a stalled feed and inject a stop()
+            # that fights the nudge.  No-op when the pump is off (no heartbeat).
+            if self._ptz_pump and hasattr(ctrl, "note_manual_hold"):
+                ctrl.note_manual_hold()
             return
 
         # Tell the controller how long this machine's capture+inference pipeline
@@ -3204,6 +3211,22 @@ class CameraWorker:
         Center Stage). Never raises.
         """
         with self._ptz_lock:
+            # Pump mode (C1): the OLD controller owns a background loop thread that
+            # is still driving the (about-to-be-closed) backend.  Stop it *before*
+            # we drop the reference, otherwise its daemon loop is orphaned — it
+            # keeps spinning _tick against a closed backend while the new
+            # controller's loop also drives (two senders + a leaked thread per
+            # rebuild).  Gated on the pump flag because that is the only mode in
+            # which a controller loop is ever running; OFF mode never starts one,
+            # so this is a no-op there and the backend close below is unchanged.
+            old_ctrl = self._ptz
+            if self._ptz_pump and old_ctrl is not None and hasattr(old_ctrl, "stop"):
+                try:
+                    old_ctrl.stop()
+                except Exception:  # noqa: BLE001
+                    log.debug(
+                        "camera_id=%s ptz controller stop failed", self.camera_id, exc_info=True
+                    )
             old = self._ptz_backend
             if old is not None and self._ptz_owned:
                 try:

@@ -462,6 +462,19 @@ class PTZController:
         # adjustment can't make the feed look stale.
         self._last_update_t = time.monotonic()
 
+    def note_manual_hold(self) -> None:
+        """Pause the stop-on-loss heartbeat for one staleness window (pump mode).
+
+        While the operator holds a manual nudge the worker suspends ``update()``
+        (manual owns the camera, so the controller is intentionally fed nothing).
+        Without this, the background loop would see the producer as "stalled" and
+        inject a ``stop()`` that races the operator's nudge.  Refreshing recency
+        each tick of the override keeps the heartbeat from firing, without
+        touching the tracking payload (so the held aim/coast state is preserved
+        for when auto control resumes).
+        """
+        self._last_update_t = time.monotonic()
+
     def step(
         self,
         error: tuple[float, float],

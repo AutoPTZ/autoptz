@@ -743,6 +743,7 @@ class _SpyController:
         self.started = 0
         self.stopped = 0
         self.latencies: list[float] = []
+        self.manual_holds = 0
 
     def step(self, error, velocity, subject_height, track_active, t=None):
         self.steps.append((error, velocity, subject_height, track_active))
@@ -750,6 +751,9 @@ class _SpyController:
 
     def update(self, error, velocity, subject_height, track_active):
         self.updates.append((error, velocity, subject_height, track_active))
+
+    def note_manual_hold(self) -> None:
+        self.manual_holds += 1
 
     def start(self) -> None:
         self.started += 1
@@ -821,6 +825,148 @@ class TestPtzPumpFlag:
         worker, ctrl = self._worker(monkeypatch, pump=False)
         worker._maybe_start_ptz_pump()
         assert ctrl.started == 0
+
+    def test_manual_override_refreshes_heartbeat_when_pump_on(self, monkeypatch) -> None:
+        """I1: during a manual-override window the auto loop early-returns without
+        an update(); pump mode must refresh the heartbeat so the loop doesn't
+        inject a stop() that fights the operator's nudge."""
+        worker, ctrl = self._worker(monkeypatch, pump=True)
+        now = time.monotonic()
+        worker._manual_override_until = now + 10.0  # override is active
+        worker._drive_ptz_auto([], None, now)
+        assert ctrl.manual_holds == 1, "pump mode must refresh heartbeat during manual override"
+        assert ctrl.updates == [], "manual override must not feed the controller"
+        assert ctrl.steps == []
+
+    def test_manual_override_no_heartbeat_refresh_when_pump_off(self, monkeypatch) -> None:
+        """OFF mode has no heartbeat, so the override path must not touch it."""
+        worker, ctrl = self._worker(monkeypatch, pump=False)
+        now = time.monotonic()
+        worker._manual_override_until = now + 10.0
+        worker._drive_ptz_auto([], None, now)
+        assert ctrl.manual_holds == 0, "OFF mode must not call note_manual_hold"
+
+
+class _ThreadedSpyController:
+    """Spy controller with a real daemon loop, like the production controller.
+
+    ``start()`` spins a daemon thread that idles until ``stop()`` joins it, so a
+    test can assert the rebuild stops the OLD controller (no leaked/extra thread)
+    before the new stack comes up.  Records call ordering so we can prove the old
+    stop happens before the new pump starts.
+    """
+
+    _events: list[str] = []
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.started = 0
+        self.stopped = 0
+
+    # the worker only treats an object as a controller (not a bare backend) when
+    # it has step(); never actually invoked in pump mode but required for routing.
+    def step(self, *a, **k):  # pragma: no cover - not exercised in pump mode
+        return (0.0, 0.0, 0.0)
+
+    def update(self, *a, **k) -> None:  # pragma: no cover - not exercised here
+        pass
+
+    def set_loop_latency(self, seconds: float) -> None:  # pragma: no cover
+        pass
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            self._stop_event.wait(0.01)
+
+    def start(self) -> None:
+        self.started += 1
+        type(self)._events.append(f"start:{self.name}")
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._loop, name=f"spy-{self.name}", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self.stopped += 1
+        type(self)._events.append(f"stop:{self.name}")
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+
+
+class TestPtzRebuildLifecycle:
+    """Rebuilding the PTZ backend in pump mode must stop the OLD controller's
+    background loop (C1) before the new one starts — no leaked/extra thread."""
+
+    def _worker(self, monkeypatch, *, pump: bool, old_ctrl):
+        from autoptz.engine.camera_worker import CameraWorker
+
+        monkeypatch.setenv("AUTOPTZ_PTZ_PUMP", "1" if pump else "0")
+        worker = CameraWorker(
+            "ptzrebuild123",
+            _camera_config("ptzrebuild123"),
+            lambda _m: None,
+            frame_source=FakeFrameSource(),
+            ptz_controller=old_ctrl,
+        )
+        return worker
+
+    def test_rebuild_stops_old_controller_before_new_starts(self, monkeypatch) -> None:
+        _ThreadedSpyController._events = []
+        old = _ThreadedSpyController("old")
+        worker = self._worker(monkeypatch, pump=True, old_ctrl=old)
+        # We own the controller for the test so the rebuild treats it as ours and
+        # the stop path is exercised; mark it owned to mirror a built stack.
+        worker._ptz_owned = True
+
+        # The rebuild then constructs a fresh stack.  Stub it to install a second
+        # threaded spy as the NEW controller and start its pump, so we can assert
+        # ordering (old stop BEFORE new start) without a real backend/hardware.
+        new = _ThreadedSpyController("new")
+
+        def _build_new_stack() -> None:
+            worker._ptz = new
+            worker._ptz_owned = True
+
+        monkeypatch.setattr(worker, "_build_ptz_stack", _build_new_stack)
+
+        before = threading.active_count()
+        old.start()  # the old controller's loop is running, like a live pump
+        assert old._thread is not None and old._thread.is_alive()
+
+        worker._rebuild_ptz_backend()
+
+        # OLD controller's loop was stopped (its stop() called, thread joined)…
+        assert old.stopped == 1, "old controller was not stopped on rebuild (C1 leak)"
+        assert old._thread is None, "old controller's loop thread leaked"
+        # …and the NEW controller's pump was started.
+        assert new.started == 1, "new controller pump did not start after rebuild"
+        # Ordering: old stop strictly precedes new start (no two-senders window).
+        assert _ThreadedSpyController._events.index(
+            "stop:old"
+        ) < _ThreadedSpyController._events.index("start:new")
+        # No thread leak: the old loop is gone; the new spy's loop is the only add.
+        new.stop()
+        # Allow the joined threads to fully retire before counting.
+        deadline = time.monotonic() + 2.0
+        while threading.active_count() > before and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert threading.active_count() <= before, "rebuild leaked a controller loop thread"
+
+    def test_rebuild_off_mode_does_not_stop_controller(self, monkeypatch) -> None:
+        """OFF mode never runs a controller loop, so the rebuild must NOT call
+        stop() on the controller (no loop to stop; backend close path unchanged)."""
+        _ThreadedSpyController._events = []
+        old = _ThreadedSpyController("old")
+        worker = self._worker(monkeypatch, pump=False, old_ctrl=old)
+        worker._ptz_owned = True
+        monkeypatch.setattr(worker, "_build_ptz_stack", lambda: None)
+
+        worker._rebuild_ptz_backend()
+
+        assert old.stopped == 0, "OFF mode must not stop the controller on rebuild"
 
 
 class TestInferenceWakeTimeout:
