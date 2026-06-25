@@ -71,6 +71,21 @@ _PREVIEW_H = 720
 # sources. Detection/tracking use the full-rate frame on a separate path.
 _PREVIEW_PUSH_FPS = 20.0
 _PREVIEW_PUSH_MIN_PERIOD_S = 1.0 / _PREVIEW_PUSH_FPS
+# The virtual-camera output is a real product feed (Zoom/OBS), not a monitoring
+# tile, so it runs on its OWN, faster gate — decoupled from the preview cap so it
+# isn't throttled to ≤20 fps while the source delivers 30. The vcam send and the
+# preview push are gated independently in ``_push_frame``.
+_VCAM_PUSH_FPS = 30.0
+_VCAM_PUSH_MIN_PERIOD_S = 1.0 / _VCAM_PUSH_FPS
+
+
+def _push_due(now: float, last: float, min_period: float) -> bool:
+    """Whether a rate-gated push is due: at least ``min_period`` since ``last``.
+
+    Pure helper so the preview/vcam send cadence is unit-testable without timing.
+    """
+    return (now - last) >= min_period
+
 
 # Center Stage crop tightness per "Framing" preset → (subject fill of crop,
 # max crop as a fraction of the frame). A smaller ``max_frac`` forces a tighter
@@ -345,6 +360,7 @@ class CameraWorker:
         self._face: Any | None = None
         self._last_face_t = 0.0
         self._last_preview_push_t = 0.0
+        self._last_vcam_push_t = 0.0
         self._last_harvest_t = 0.0
         self._last_crop_t = 0.0
         # Most recent face→identity bindings seen this tick: track_id → (id, conf).
@@ -3395,7 +3411,12 @@ class CameraWorker:
         crop = frame[y : y + ch, x : x + cw]
         if crop.size == 0:
             return frame
-        return cv2.resize(crop, (ow, oh), interpolation=cv2.INTER_LINEAR)
+        from autoptz.engine.pipeline.vcam import pick_interpolation
+
+        # The crop is almost always UPSCALED to the output → INTER_LINEAR looks
+        # soft. Pick by scale factor: cubic up, area down, linear ~1:1.
+        interp = pick_interpolation((int(crop.shape[1]), int(crop.shape[0])), (ow, oh))
+        return cv2.resize(crop, (ow, oh), interpolation=interp)
 
     def _current_digital_target(self) -> tuple[float, float, float, float] | None:
         """The selected target's bbox (x1,y1,x2,y2) for Center Stage, or None.
@@ -3427,18 +3448,36 @@ class CameraWorker:
     def _push_frame(self, frame: NDArray[np.uint8]) -> None:
         if self._shm is None:
             return
-        # Cap the preview rate: skip the resize/push when the last preview frame
-        # was pushed less than one preview period ago (saves CPU on >20fps sources
-        # without affecting tracking, which uses the full-rate frame elsewhere).
         now = time.monotonic()
-        if now - self._last_preview_push_t < _PREVIEW_PUSH_MIN_PERIOD_S:
+        vcam_on = bool(getattr(self.config.ptz, "vcam_out", False))
+        # Two INDEPENDENT rate gates:
+        #  • preview (~20 fps) — the SHM monitoring tile only; capping it skips the
+        #    per-frame resize/copy on faster sources (overlays come from telemetry).
+        #  • vcam (~30 fps) — a real product feed, so it is NOT throttled to the
+        #    preview rate; it sends up to 30 fps when ``vcam_out`` is on.
+        preview_due = _push_due(now, self._last_preview_push_t, _PREVIEW_PUSH_MIN_PERIOD_S)
+        vcam_due = vcam_on and _push_due(now, self._last_vcam_push_t, _VCAM_PUSH_MIN_PERIOD_S)
+
+        # Release the device promptly once output is turned off (so it disconnects
+        # from Zoom/OBS instead of lingering on a frozen frame) regardless of gates.
+        if not vcam_on and self._vcam is not None:
+            try:
+                self._vcam.close()
+            finally:
+                self._vcam = None
+
+        # CPU savings preserved: if neither sink is due this tick, do no framing.
+        if not preview_due and not vcam_due:
             return
-        self._last_preview_push_t = now
+
         try:
+            # Compute the framed (cropped+scaled) output ONCE and share it.
             framed = self._framed_output(frame)
-            f = self._fit_frame(framed)
-            self._shm.push(f)
-            if getattr(self.config.ptz, "vcam_out", False):
+            if preview_due:
+                self._last_preview_push_t = now
+                self._shm.push(self._fit_frame(framed))
+            if vcam_due:
+                self._last_vcam_push_t = now
                 ow = int(getattr(self.config.ptz, "digital_output_w", 1280))
                 oh = int(getattr(self.config.ptz, "digital_output_h", 720))
                 if self._vcam is None:
@@ -3446,11 +3485,6 @@ class CameraWorker:
 
                     self._vcam = VirtualCamSink(ow, oh)
                 self._vcam.send_bgr(framed)
-            elif self._vcam is not None:
-                # Virtual camera output was turned off — release the device so it
-                # disconnects from Zoom/OBS instead of lingering on a frozen frame.
-                self._vcam.close()
-                self._vcam = None
         except Exception:  # noqa: BLE001
             # Was DEBUG-only: a broken preview pipe (shm/vcam) left the operator
             # staring at a frozen preview with an empty log.  Surface it as a
