@@ -98,13 +98,16 @@ class MainWindow(QMainWindow):
         from autoptz.ui.update_manager import UpdateManager
 
         self._updates = UpdateManager(client, _app_version(), self)
+        self._updates.checkStarted.connect(self._on_update_check_started)
         self._updates.updateAvailable.connect(self._on_update_available)
         self._updates.upToDate.connect(self._on_up_to_date)
+        self._updates.checkFailed.connect(self._on_update_check_failed)
         self._updates.downloadStarted.connect(self._on_update_download_started)
         self._updates.downloadProgress.connect(self._on_update_download_progress)
         self._updates.downloadFinished.connect(self._on_update_download_finished)
         self._updates.downloadFailed.connect(self._on_update_download_failed)
         self._update_progress: Any | None = None
+        self._update_check_busy: Any | None = None
         self._startup_update_checked = False
 
         self._build_central()
@@ -842,6 +845,7 @@ class MainWindow(QMainWindow):
         self._open_model_manager(startup_prompt=True, selected_keys=missing)
 
     def _on_update_available(self, info: Any) -> None:
+        self._set_update_check_busy(False)
         from autoptz import version as _app_version
 
         UpdateDialog(
@@ -928,20 +932,66 @@ class MainWindow(QMainWindow):
             f"{message}\n\nYou can still download the installer from the Releases page.",
         )
 
-    def _on_up_to_date(self, manual: bool) -> None:
-        # Only nag for manual checks; the silent startup check stays silent.
-        if not manual:
-            return
-        from PySide6.QtWidgets import QMessageBox
+    def _on_update_check_started(self, manual: bool) -> None:
+        """Show a 'Checking for updates…' indicator while the check runs."""
+        self._set_update_check_busy(True)
 
+    def _set_update_check_busy(self, on: bool) -> None:
+        """Add/remove an indeterminate progress bar + status message for a check."""
+        if on:
+            if self._update_check_busy is None:
+                bar = QProgressBar()
+                bar.setRange(0, 0)  # indeterminate "working" animation
+                bar.setMaximumWidth(T.fs(120))
+                bar.setMaximumHeight(T.fs(14))
+                bar.setTextVisible(False)
+                self.statusBar().addWidget(bar)
+                self._update_check_busy = bar
+            self.statusBar().showMessage("Checking for updates…")
+        else:
+            bar = self._update_check_busy
+            self._update_check_busy = None
+            if bar is not None:
+                self.statusBar().removeWidget(bar)
+                bar.deleteLater()
+
+    def _on_up_to_date(self, manual: bool) -> None:
+        self._set_update_check_busy(False)
         from autoptz import version as _app_version
 
-        QMessageBox.information(
-            self,
-            "Check for Updates",
-            f"You're up to date.\n\nAutoPTZ {_app_version()} is the latest version "
-            "available (or the update server couldn't be reached).",
-        )
+        if manual:
+            from PySide6.QtWidgets import QMessageBox
+
+            QMessageBox.information(
+                self,
+                "Check for Updates",
+                f"You're on the latest version.\n\nAutoPTZ {_app_version()} is up to date.",
+            )
+        else:
+            # Startup check: visible (so it's clearly working) but unobtrusive.
+            self.statusBar().showMessage(f"AutoPTZ {_app_version()} is up to date.", 6000)
+
+    def _on_update_check_failed(self, reason: str, manual: bool) -> None:
+        self._set_update_check_busy(False)
+        if manual:
+            from PySide6.QtWidgets import QMessageBox
+
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Couldn't Check for Updates")
+            box.setText(reason)
+            box.setInformativeText(
+                "AutoPTZ couldn't reach the update server, so it can't tell whether "
+                "you're on the latest version. Check your internet connection and try again."
+            )
+            retry = box.addButton("Retry", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Close", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is retry:
+                self._updates.check_now()
+        else:
+            # Startup check failure: don't interrupt; surface briefly + log.
+            self.statusBar().showMessage("Couldn't check for updates (offline?).", 6000)
 
     # ── saved dock layouts ───────────────────────────────────────────────────────
 

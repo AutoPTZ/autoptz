@@ -21,7 +21,7 @@ _CHECK_INTERVAL_S = 24 * 3600
 
 
 class _CheckSignals(QObject):
-    finished = Signal(object, bool)  # (UpdateInfo | None, manual)
+    finished = Signal(object, bool)  # (CheckResult, manual)
 
 
 class _DownloadSignals(QObject):
@@ -41,14 +41,16 @@ class _CheckTask(QRunnable):
         self._signals = signals
 
     def run(self) -> None:
-        from autoptz.update.checker import check_for_update
+        from autoptz.update.checker import CheckResult, check_for_update_result
 
         try:
-            info = check_for_update(self._current, include_prereleases=self._pre)
-        except Exception:  # noqa: BLE001 — never let a worker crash the pool
+            result = check_for_update_result(self._current, include_prereleases=self._pre)
+        except Exception as exc:  # noqa: BLE001 — never let a worker crash the pool
             log.debug("update check task failed", exc_info=True)
-            info = None
-        self._signals.finished.emit(info, self._manual)
+            result = CheckResult(
+                status="failed", error_kind="network", error=str(exc) or "Update check failed."
+            )
+        self._signals.finished.emit(result, self._manual)
 
 
 class _DownloadTask(QRunnable):
@@ -75,8 +77,10 @@ class _DownloadTask(QRunnable):
 class UpdateManager(QObject):
     """Owns update-check scheduling, settings, and result routing."""
 
+    checkStarted = Signal(bool)  # manual? — a check just began (show "Checking…")
     updateAvailable = Signal(object)  # UpdateInfo
     upToDate = Signal(bool)  # manual?
+    checkFailed = Signal(str, bool)  # (reason, manual?) — distinct from upToDate
     downloadStarted = Signal(object)  # UpdateInfo
     downloadProgress = Signal(int, int)  # (bytes_downloaded, total_bytes)
     downloadFinished = Signal(object)  # DownloadedUpdate
@@ -141,7 +145,9 @@ class UpdateManager(QObject):
         self._start(manual=True)
 
     def _start(self, *, manual: bool) -> None:
-        self._set("update_last_check", time.time())
+        # NB: the 24h throttle is stamped on SUCCESS (in _on_finished), not here —
+        # a failed/offline check must not suppress the next startup retry.
+        self.checkStarted.emit(manual)
         task = _CheckTask(self._current, self.include_prereleases, manual, self._signals)
         QThreadPool.globalInstance().start(task)
 
@@ -152,10 +158,25 @@ class UpdateManager(QObject):
         QThreadPool.globalInstance().start(task)
 
     @Slot(object, bool)
-    def _on_finished(self, info: object, manual: bool) -> None:
-        if info is None:
+    def _on_finished(self, result: object, manual: bool) -> None:
+        status = getattr(result, "status", "failed")
+
+        # A failed check is reported as such — never as "up to date" — and does
+        # NOT arm the 24h throttle, so the next launch retries.
+        if status == "failed":
+            reason = str(getattr(result, "error", "") or "The update check could not be completed.")
+            log.info("update check failed (%s): %s", getattr(result, "error_kind", "?"), reason)
+            self.checkFailed.emit(reason, manual)
+            return
+
+        # Successful check (up-to-date or update-available) → remember when.
+        self._set("update_last_check", time.time())
+
+        if status != "update_available":
             self.upToDate.emit(manual)
             return
+
+        info = getattr(result, "info", None)
         version = getattr(info, "version", "")
         if not manual:
             skip = str(self._get("update_skip_version", "") or "")

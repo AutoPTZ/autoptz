@@ -140,9 +140,14 @@ hiddenimports += [
 # ML / engine deps that are imported lazily and may be missed by static analysis.
 for opt in (
     "onnxruntime", "cv2", "numpy", "scipy", "PIL",
-    "msgpack", "pydantic", "serial",
+    "msgpack", "pydantic", "serial", "certifi",
 ):
     hiddenimports.append(opt)
+
+# certifi's CA bundle (cacert.pem) must ship so the updater can verify HTTPS to
+# api.github.com in the frozen app — without it the TLS handshake fails and the
+# update check silently no-ops (the Intel-macOS "can't check for updates" bug).
+datas += collect_data_files("certifi")
 
 # Heavy optional deps: include their submodules ONLY if installed in the build
 # env (keeps a UI-only build from failing the analysis).

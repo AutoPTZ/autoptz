@@ -25,7 +25,14 @@ def _release(tag: str, *, prerelease: bool = False, assets: list[str] | None = N
 
 
 def _patch(monkeypatch, releases: list[dict] | None) -> None:
-    monkeypatch.setattr(checker, "_fetch_releases", lambda: releases)
+    # _fetch_releases now returns (releases, error_kind, error_message); None
+    # releases models a network failure.
+    if releases is None:
+        monkeypatch.setattr(
+            checker, "_fetch_releases", lambda: (None, "network", "Couldn't reach the server.")
+        )
+    else:
+        monkeypatch.setattr(checker, "_fetch_releases", lambda: (releases, None, None))
 
 
 def test_newer_stable_returns_info(monkeypatch) -> None:
