@@ -12,6 +12,11 @@ Auto-reconnect: on any OSError the socket is closed and a ReconnectPolicy gate
 is consulted; if the backoff interval has elapsed a single reconnect attempt is
 made and the command is retried once.  Neither move_velocity nor stop ever raise
 into the caller.
+
+Safety (halt-on-reconnect): when a reconnect succeeds, a stop is always sent
+FIRST before retrying any command.  This ensures a camera that was mid-pan on
+disconnect halts rather than continuing a stale continuous-move.  Sending a
+stop to an already-stopped camera is a safe no-op.
 """
 
 from __future__ import annotations
@@ -144,6 +149,16 @@ class ViscaIPBackend(PTZBackend):
                 log.warning("ViscaIP reconnect to %s:%d failed: %s", self._host, self._port, exc)
                 self._policy.record_failure(time.monotonic())
                 return
+
+            # Safety halt-on-reconnect: always send a stop immediately after
+            # reconnect so a camera that was mid-pan on disconnect halts before
+            # we retry any new command.  Sending a stop to an already-stopped
+            # camera is a safe no-op.
+            try:
+                self._sock.sendall(self._frame(visca_stop_cmd()))  # type: ignore[union-attr]
+                self._sock.sendall(self._frame(visca_zoom_stop_cmd()))  # type: ignore[union-attr]
+            except OSError:
+                pass  # best-effort; the retry below will handle further errors
 
             # Retry the command once on the fresh socket.
             try:

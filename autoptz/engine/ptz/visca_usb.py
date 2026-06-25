@@ -8,6 +8,11 @@ Auto-reconnect: on SerialException or OSError the port is closed and a
 ReconnectPolicy gate is consulted; if the backoff interval has elapsed a single
 reconnect is attempted and the command is retried once.  Neither move_velocity
 nor stop ever raise into the caller.
+
+Safety (halt-on-reconnect): when a reconnect succeeds, a stop is always sent
+FIRST before retrying any command.  This ensures a camera that was mid-pan on
+disconnect halts rather than continuing a stale continuous-move.  Sending a
+stop to an already-stopped camera is a safe no-op.
 """
 
 from __future__ import annotations
@@ -121,6 +126,18 @@ class ViscaUSBBackend(PTZBackend):
             log.warning("ViscaUSB reconnect to %s failed: %s", self._port, exc)
             self._policy.record_failure(time.monotonic())
             return
+
+        # Safety halt-on-reconnect: always send a stop immediately after
+        # reconnect so a camera that was mid-pan on disconnect halts before
+        # we retry any new command.  Sending a stop to an already-stopped
+        # camera is a safe no-op.
+        stop_patched = bytes([self._addr]) + visca_stop_cmd()[1:]
+        zoom_stop_patched = bytes([self._addr]) + visca_zoom_stop_cmd()[1:]
+        try:
+            self._do_write(stop_patched)
+            self._do_write(zoom_stop_patched)
+        except (serial.SerialException, OSError):
+            pass  # best-effort; the retry below will handle further errors
 
         # Retry the command once on the fresh port.
         try:
