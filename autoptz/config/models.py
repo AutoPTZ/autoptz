@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -136,6 +137,82 @@ AIM_REGION_FRACTION: dict[str, float] = {
 }
 
 
+# ── Tracking Speed presets ───────────────────────────────────────────────────
+
+
+class TrackingSpeed(str, Enum):
+    """Named tracking-speed presets.
+
+    Each preset expresses a coherent set of the six PTZ tuning knobs so the
+    user can switch feel with one control instead of six sliders.  NORMAL
+    reproduces the historic PTZConfig defaults so existing behaviour is
+    unchanged when no preset is set.
+    """
+
+    CALM = "calm"
+    NORMAL = "normal"
+    FAST = "fast"
+    SPORT = "sport"
+
+
+# Six knobs driven by every preset.  NORMAL values match PTZConfig defaults
+# exactly so switching to NORMAL is a no-op on existing rigs.
+SPEED_PROFILES: dict[TrackingSpeed, dict[str, float]] = {
+    TrackingSpeed.CALM: {
+        "max_pan_speed": 0.4,
+        "max_tilt_speed": 0.4,
+        "kp": 0.35,
+        "aim_smoothing": 0.75,
+        "max_accel": 1.5,
+        "catch_up_speed": 0.3,
+    },
+    TrackingSpeed.NORMAL: {
+        "max_pan_speed": 0.7,
+        "max_tilt_speed": 0.7,
+        "kp": 0.6,
+        "aim_smoothing": 0.5,
+        "max_accel": 3.0,
+        "catch_up_speed": 0.6,
+    },
+    TrackingSpeed.FAST: {
+        "max_pan_speed": 0.85,
+        "max_tilt_speed": 0.85,
+        "kp": 0.8,
+        "aim_smoothing": 0.3,
+        "max_accel": 6.0,
+        "catch_up_speed": 0.75,
+    },
+    TrackingSpeed.SPORT: {
+        "max_pan_speed": 1.0,
+        "max_tilt_speed": 1.0,
+        "kp": 1.0,
+        "aim_smoothing": 0.15,
+        "max_accel": 12.0,
+        "catch_up_speed": 0.9,
+    },
+}
+
+
+def apply_speed_profile(cfg: PTZConfig, speed: TrackingSpeed) -> PTZConfig:
+    """Return a new frozen PTZConfig with the six preset knobs applied.
+
+    The returned config is otherwise identical to *cfg* — only the six
+    speed-profile fields (and ``tracking_speed`` for persistence/display) are
+    replaced.  The controller is never touched; it reads the individual fields.
+    """
+    p = SPEED_PROFILES[speed]
+    update: dict[str, object] = {
+        "max_pan_speed": p["max_pan_speed"],
+        "max_tilt_speed": p["max_tilt_speed"],
+        "kp": p["kp"],
+        "aim_smoothing": p["aim_smoothing"],
+        "max_accel": p["max_accel"],
+        "catch_up_speed": p["catch_up_speed"],
+        "tracking_speed": speed,
+    }
+    return cfg.model_copy(update=update)
+
+
 # ── PTZ ───────────────────────────────────────────────────────────────────────
 
 
@@ -194,6 +271,11 @@ class PTZConfig(BaseModel, frozen=True):
     invert_tilt: bool = False
     deadzone_x: float = Field(default=0.05, ge=0.0, le=0.5)
     deadzone_y: float = Field(default=0.05, ge=0.0, le=0.5)
+    # Nonlinear band: over this width (in normalised error units) just past the
+    # dead-zone edge the effective gain ramps smoothly from 0 → 1 via a
+    # smoothstep, so the response is C1-continuous at the edge (no slope
+    # discontinuity).  0.0 reproduces the historic hard-knee behaviour exactly.
+    nonlinear_band: float = Field(default=0.05, ge=0.0, le=0.5)
     kp: float = Field(default=0.6, ge=0.0)
     kd: float = Field(default=0.05, ge=0.0)
     kv: float = Field(default=0.1, ge=0.0)
@@ -260,6 +342,10 @@ class PTZConfig(BaseModel, frozen=True):
     # Upper bound on the learned command→image gain (normalised img-vel per unit
     # command); clamps the online regression so a bad sample can't run away.
     ego_comp_gain_max: float = Field(default=8.0, ge=0.0, le=64.0)
+    # Named tracking-speed preset last applied to this config (for persistence /
+    # display in the UI).  None = user has customised one or more knobs manually
+    # without going through a preset (shown as "Custom" in the UI).
+    tracking_speed: TrackingSpeed | None = None
     # Quick-recall hardware preset slots, shown in the Properties → PTZ section as
     # label + snapshot tiles.  Maps a slot index (0-based, 0..5) to a
     # :class:`PtzPresetSlot` (label + thumbnail); an absent slot is "empty" (no

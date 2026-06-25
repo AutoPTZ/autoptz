@@ -191,18 +191,39 @@ def _zone_norm(dx: float, dy: float, hw: float, hh: float, roundness: float) -> 
     return r * (nx + ny) + (1.0 - r) * max(nx, ny)
 
 
-def _soft_deadband(d: float, dead: float) -> float:
-    """Zero within ``±dead``; beyond it, the excess (sign-preserving).
+def _smoothstep(t: float) -> float:
+    """Classic cubic smoothstep: 0 at t=0, 1 at t=1, zero derivative at both ends."""
+    t = _clamp(t, 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _soft_deadband(d: float, dead: float, band: float = 0.0) -> float:
+    """Zero within ``±dead``; nonlinear ramp over ``band``; linear excess beyond.
+
+    With ``band=0`` (the default) this reproduces the original hard-knee
+    behaviour: ``copysign(abs(d) - dead, d)`` for ``|d| > dead``.
+
+    With ``band > 0`` a smoothstep ramps the effective slope from 0 → 1 over the
+    width ``band`` just past the dead-zone edge, making the response C1-continuous
+    at the edge (no slope discontinuity / "click" when the camera starts moving).
+    Beyond ``dead + band`` the output is indistinguishable from the linear excess.
 
     Feeding this to the PD makes the steady state ``|error| ≤ dead`` — the subject
     settles *within* the deadband of the setpoint (i.e. centred), rather than the
     PD holding wherever they happened to enter a wide region.
     """
-    if dead <= 0.0:
+    if dead <= 0.0 and band <= 0.0:
         return d
     if abs(d) <= dead:
         return 0.0
-    return math.copysign(abs(d) - dead, d)
+    excess = abs(d) - dead
+    if band > 0.0 and excess < band:
+        # Nonlinear transition zone: scale the excess by a smoothstep so the
+        # slope rises continuously from 0 at the dead-zone edge to 1 at band.
+        effective = excess * _smoothstep(excess / band)
+    else:
+        effective = excess
+    return math.copysign(effective, d)
 
 
 def _slew(prev: float, target: float, max_step: float) -> float:
@@ -791,7 +812,8 @@ class PTZController:
         if self._holding:
             return 0.0, 0.0, True
 
-        return _soft_deadband(dx, dbx), _soft_deadband(dy, dby), False
+        band = float(getattr(cfg, "nonlinear_band", 0.0))
+        return _soft_deadband(dx, dbx, band), _soft_deadband(dy, dby, band), False
 
     def _update_hold(self, ex: float, ey: float, cfg: Any) -> bool:
         """Return whether to HOLD inside the per-axis dead-zone, with hysteresis.
