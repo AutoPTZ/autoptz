@@ -3,7 +3,11 @@ bbox (not the velocity controller, which never zoomed)."""
 
 from __future__ import annotations
 
-from autoptz.engine.pipeline.digital_framer import DigitalFramer, desired_crop
+from autoptz.engine.pipeline.digital_framer import (
+    DigitalFramer,
+    desired_crop,
+    union_bbox,
+)
 
 ASPECT = 16.0 / 9.0
 
@@ -199,3 +203,167 @@ class TestSizeSmoothing:
             max(1, int(round(exp[2]))),
             max(1, int(round(exp[3]))),
         )
+
+
+class TestUnionBbox:
+    """D1 — multi-person group framing: the union of several person boxes."""
+
+    def test_union_of_one_box_is_itself(self):
+        assert union_bbox([(10, 20, 30, 40)]) == (10.0, 20.0, 30.0, 40.0)
+
+    def test_union_covers_all_boxes(self):
+        boxes = [(100, 200, 300, 500), (700, 150, 900, 600), (400, 300, 500, 450)]
+        u = union_bbox(boxes)
+        # The union's corners are the extremes across all boxes.
+        assert u == (100.0, 150.0, 900.0, 600.0)
+        # Every input box is contained inside the union.
+        for x1, y1, x2, y2 in boxes:
+            assert u[0] <= x1 and u[1] <= y1
+            assert u[2] >= x2 and u[3] >= y2
+
+    def test_union_wider_than_any_single_box(self):
+        boxes = [(300, 400, 500, 670), (1400, 400, 1600, 670)]
+        u = union_bbox(boxes)
+        u_w = u[2] - u[0]
+        for x1, _, x2, _ in boxes:
+            assert u_w > (x2 - x1)
+
+    def test_empty_returns_none(self):
+        assert union_bbox([]) is None
+
+    def test_group_crop_frames_all_people(self):
+        # Two people on opposite sides of the frame: the group crop (framing the
+        # union, fit_width=True) must be wider than either single-person crop, and
+        # cover both.
+        left = (300, 400, 500, 670)
+        right = (1400, 400, 1600, 670)
+        u = union_bbox([left, right])
+        assert u is not None
+        group = desired_crop(
+            u,
+            1920,
+            1080,
+            out_aspect=ASPECT,
+            fill=0.62,
+            min_frac=0.34,
+            max_frac=0.94,
+            fit_width=True,
+        )
+        single = desired_crop(
+            left, 1920, 1080, out_aspect=ASPECT, fill=0.62, min_frac=0.34, max_frac=0.94
+        )
+        assert group[2] > single[2]  # group crop is wider
+        # Both subjects fall inside the group crop horizontally.
+        gx, gw = group[0], group[2]
+        assert gx <= left[0] and (gx + gw) >= right[2]
+
+    def test_fit_width_default_off_keeps_height_only_for_wide_box(self):
+        # A box WIDER than the output aspect (arms spread / T-pose: w/h=2.5 > 16:9)
+        # must NOT zoom out on the default path (fit_width=False) — the crop matches
+        # a same-height normal box. fit_width=True (group union only) widens it.
+        wide = (600, 400, 1400, 720)  # w=800, h=320 → w/h=2.5
+        narrow = (900, 400, 1100, 720)  # same height, normal width
+        kw = {"out_aspect": ASPECT, "fill": 0.62, "min_frac": 0.34, "max_frac": 0.94}
+        wide_default = desired_crop(wide, 1920, 1080, **kw)
+        narrow_default = desired_crop(narrow, 1920, 1080, **kw)
+        # Same height → same crop size on the default (height-only) path.
+        assert wide_default[2] == narrow_default[2]
+        assert wide_default[3] == narrow_default[3]
+        # Opting into fit_width widens the crop for the wide box.
+        wide_fit = desired_crop(wide, 1920, 1080, fit_width=True, **kw)
+        assert wide_fit[2] > wide_default[2]
+
+
+class TestHeadroomByPreset:
+    """D2 — shot-size-aware headroom: the applied headroom comes from the preset."""
+
+    def test_more_headroom_lifts_center_higher(self):
+        bbox = (860, 400, 1060, 670)  # centre y = 535
+        _, y_lo, _, h_lo = desired_crop(
+            bbox,
+            1920,
+            1080,
+            out_aspect=ASPECT,
+            fill=0.62,
+            min_frac=0.34,
+            max_frac=0.78,
+            headroom=0.0,
+        )
+        _, y_hi, _, h_hi = desired_crop(
+            bbox,
+            1920,
+            1080,
+            out_aspect=ASPECT,
+            fill=0.62,
+            min_frac=0.34,
+            max_frac=0.78,
+            headroom=0.2,
+        )
+        # More headroom raises the subject (smaller y, crop pulled up).
+        assert y_hi < y_lo
+
+    def test_framer_headroom_field_is_applied(self):
+        # Two framers identical but for headroom must produce different crop y.
+        low = DigitalFramer(out_aspect=ASPECT, smooth=1.0, headroom=0.0)
+        high = DigitalFramer(out_aspect=ASPECT, smooth=1.0, headroom=0.25)
+        bbox = (860, 400, 1060, 670)
+        ylow = low.frame_for(bbox, 1920, 1080)[1]
+        yhigh = high.frame_for(bbox, 1920, 1080)[1]
+        assert yhigh < ylow
+
+
+class TestLeadRoom:
+    """D2 — subtle motion lead-room: bias the crop centre in the direction of
+    motion so a walking subject sits back-of-centre."""
+
+    def test_lead_zero_centers_as_before(self):
+        # lead=0 must reproduce the prior centred behaviour for a moving subject.
+        f = DigitalFramer(out_aspect=ASPECT, smooth=1.0, deadzone=0.0, size_smooth=1.0, lead=0.0)
+        f.frame_for((300, 400, 500, 670), 1920, 1080)
+        x, _, w, _ = f.frame_for((600, 400, 800, 670), 1920, 1080)
+        ref = desired_crop(
+            (600, 400, 800, 670),
+            1920,
+            1080,
+            out_aspect=ASPECT,
+            fill=f.fill,
+            min_frac=f.min_frac,
+            max_frac=f.max_frac,
+            headroom=f.headroom,
+        )
+        assert x == int(round(ref[0]))
+
+    def test_subject_moving_right_shifts_crop_right(self):
+        # A subject moving steadily right: with lead-room the crop centre sits to
+        # the RIGHT of the bbox centre (nose room ahead of the motion).
+        lead = DigitalFramer(out_aspect=ASPECT, smooth=1.0, deadzone=0.0, size_smooth=1.0, lead=0.5)
+        no_lead = DigitalFramer(
+            out_aspect=ASPECT, smooth=1.0, deadzone=0.0, size_smooth=1.0, lead=0.0
+        )
+        # Walk the subject right across several frames so velocity builds up.
+        bx = 300
+        cx_lead = cx_no = 0.0
+        for _ in range(12):
+            box = (bx, 400, bx + 200, 670)
+            cl = lead.frame_for(box, 1920, 1080)
+            cn = no_lead.frame_for(box, 1920, 1080)
+            cx_lead = cl[0] + cl[2] / 2
+            cx_no = cn[0] + cn[2] / 2
+            bx += 60
+        # Lead-room pushes the crop centre ahead (to the right) of the no-lead one.
+        assert cx_lead > cx_no
+
+    def test_lead_default_is_subtle(self):
+        # The default lead must be conservative (small): a moving subject is not
+        # pushed more than a small fraction of the crop width off-centre.
+        f = DigitalFramer(out_aspect=ASPECT, smooth=1.0, deadzone=0.0, size_smooth=1.0)
+        bx = 300
+        offset = 0.0
+        for _ in range(12):
+            box = (bx, 400, bx + 200, 670)
+            x, _, w, _ = f.frame_for(box, 1920, 1080)
+            bbox_cx = bx + 100
+            crop_cx = x + w / 2
+            offset = abs(crop_cx - bbox_cx)
+            bx += 60
+        assert offset <= 0.15 * w  # small bias, can't destabilise framing

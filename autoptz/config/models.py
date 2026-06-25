@@ -124,6 +124,19 @@ class TrackingConfig(BaseModel, frozen=True):
     # Never run the detector and the pose pass on the same inference frame, so a
     # heavy detect tick and a heavy pose tick don't stack into a 200ms frame.
     stage_spread: bool = True
+    # Center Stage multi-person *group framing* (digital crop path only). When ON
+    # and more than one confident person is present WITHOUT an explicit locked
+    # target, the digital framer frames the UNION of everyone's boxes (auto-widens
+    # to keep the group in shot) instead of a single subject. An explicitly locked
+    # target (by id or identity) always wins — it keeps following that one person.
+    # Off by default → no behaviour change.
+    group_framing: bool = False
+    # Subtle digital lead-room ("nose room") for the Center Stage crop: bias the
+    # crop centre toward the framed subject's motion so a walking subject sits a
+    # touch back-of-centre. The offset is this gain × the EMA subject-centre
+    # velocity, capped to a small fraction of the crop so it can't destabilise
+    # framing. Conservative default (0.0 = off / centred, exactly as before).
+    lead_room: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 # Vertical aim point as a fraction of the person-box height measured from the TOP
