@@ -267,9 +267,7 @@ class TestAutoSerialProbe:
 
     def test_usb_auto_no_serial_returns_none(self, monkeypatch) -> None:
         monkeypatch.setenv("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "1")
-        monkeypatch.setattr(
-            "autoptz.engine.ptz.visca_serial.discover_visca_usb", lambda **k: None
-        )
+        monkeypatch.setattr("autoptz.engine.ptz.visca_serial.discover_visca_usb", lambda **k: None)
         assert build_backend(_cfg(backend="auto", address=None), is_usb=True) is None
 
     def test_non_usb_auto_never_probes_serial(self, monkeypatch) -> None:

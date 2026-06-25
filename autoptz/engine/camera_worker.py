@@ -3068,9 +3068,7 @@ class CameraWorker:
             # Only USB/UVC sources auto-probe serial ports for a VISCA control
             # port — so a network camera's "auto" never grabs an unrelated
             # USB-serial device.
-            backend = build_backend(
-                self.config.ptz, ndi_name=ndi_name, is_usb=(src_type == "usb")
-            )
+            backend = build_backend(self.config.ptz, ndi_name=ndi_name, is_usb=(src_type == "usb"))
             if backend is None:
                 return
             self._ptz_backend = backend
