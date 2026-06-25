@@ -1,0 +1,16 @@
+# AutoPTZ — optional tracking extra (heavy: pulls in PyTorch via boxmot)
+# Install:
+#   python tools/install.py --with-tracking      # or --full
+#   pip install -r requirements/tracking.txt
+#
+# The DEFAULT install is torch-free: detection runs on ONNX Runtime and tracking
+# falls back to the built-in lightweight IoU tracker (engine/pipeline/track.py).
+# This extra adds the occlusion-robust BoT-SORT/DeepOCSORT/ByteTrack trackers and
+# the OSNet ReID backend.
+
+# BoxMOT: multi-object tracker collection (BoT-SORT, DeepOCSORT, ByteTrack).
+# Also provides the OSNet ReID backend used by engine/pipeline/reid.py for
+# body-appearance recovery after occlusion (weights auto-download on first use).
+# Optional at import time — Tracker / BodyReID degrade gracefully if absent.
+# Pin to a specific release once a stable wheel is available for all platforms.
+boxmot>=10.0.91

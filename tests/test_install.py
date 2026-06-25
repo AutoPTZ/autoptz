@@ -34,6 +34,83 @@ def test_ci_install_is_hardware_independent() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Torch-free default + opt-in extras
+# ---------------------------------------------------------------------------
+
+
+def test_default_install_is_torch_free() -> None:
+    """The bare default plan must NOT include the torch-heavy extras."""
+    system = SystemInfo("Darwin", "arm64", ("Apple M3",))
+
+    plan = plan_install(system)
+
+    assert "tracking" not in plan.profiles
+    assert "export" not in plan.profiles
+    args = [step.args for step in plan.steps]
+    assert ("install", "-r", "requirements/tracking.txt") not in args
+    assert ("install", "-r", "requirements/export.txt") not in args
+    assert any("torch-free" in note for note in plan.notes)
+
+
+def test_dev_install_pulls_extras_via_dev_txt() -> None:
+    """--dev installs dev.txt, which references tracking.txt + export.txt, so the
+    extras are NOT added as separate steps (avoids redundant pip work)."""
+    system = SystemInfo("Linux", "x86_64", ())
+
+    plan = plan_install(system, dev=True)
+
+    args = [step.args for step in plan.steps]
+    assert ("install", "-r", "requirements/dev.txt") in args
+    # dev.txt's `-r tracking.txt` / `-r export.txt` cover these, so install.py
+    # must not duplicate them.
+    assert ("install", "-r", "requirements/tracking.txt") not in args
+    assert ("install", "-r", "requirements/export.txt") not in args
+
+
+def test_full_install_adds_both_extras() -> None:
+    system = SystemInfo("Linux", "x86_64", ())
+
+    plan = plan_install(system, full=True)
+
+    assert plan.profiles == ("base", "tracking", "export")
+    args = [step.args for step in plan.steps]
+    assert ("install", "-r", "requirements/tracking.txt") in args
+    assert ("install", "-r", "requirements/export.txt") in args
+
+
+def test_with_tracking_adds_only_tracking() -> None:
+    system = SystemInfo("Linux", "x86_64", ())
+
+    plan = plan_install(system, with_tracking=True)
+
+    args = [step.args for step in plan.steps]
+    assert ("install", "-r", "requirements/tracking.txt") in args
+    assert ("install", "-r", "requirements/export.txt") not in args
+
+
+def test_with_export_adds_only_export() -> None:
+    system = SystemInfo("Linux", "x86_64", ())
+
+    plan = plan_install(system, with_export=True)
+
+    args = [step.args for step in plan.steps]
+    assert ("install", "-r", "requirements/export.txt") in args
+    assert ("install", "-r", "requirements/tracking.txt") not in args
+
+
+def test_ui_only_never_adds_extras() -> None:
+    """--ui-only deliberately omits the ML stack even with --full."""
+    system = SystemInfo("Linux", "x86_64", ())
+
+    plan = plan_install(system, ui_only=True, full=True)
+
+    assert plan.profiles == ("ui",)
+    args = [step.args for step in plan.steps]
+    assert ("install", "-r", "requirements/tracking.txt") not in args
+    assert ("install", "-r", "requirements/export.txt") not in args
+
+
+# ---------------------------------------------------------------------------
 # Windows auto-select
 # ---------------------------------------------------------------------------
 

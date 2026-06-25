@@ -78,18 +78,14 @@ onnx==1.21.0
 # AUTOPTZ_MODEL_PATH). The UI uses cached models unless the user explicitly
 # enables automatic downloads in Engine > Models.
 #
-# Ultralytics is an OPTIONAL *fallback* used only when the prebuilt download is
-# unreachable; it exports the YOLO11 .pt → ONNX but pulls in torch (heavy).  Omit
-# it on minimal installs — detection still works via the prebuilt download, and
-# the engine degrades to live-preview-only only if BOTH paths fail.
-ultralytics>=8.3.0
-
-# BoxMOT: multi-object tracker collection (BoT-SORT, DeepOCSORT, ByteTrack).
-# Also provides the OSNet ReID backend used by engine/pipeline/reid.py for
-# body-appearance recovery after occlusion (weights auto-download on first use).
-# Optional at import time — Tracker / BodyReID degrade gracefully if absent.
-# Pin to a specific release once a stable wheel is available for all platforms.
-boxmot>=10.0.91
+# The default install is torch-free: detection runs on ONNX Runtime, tracking
+# falls back to the built-in IoU tracker, and weights provision via the prebuilt
+# ONNX download. The two torch-heavy fallbacks live in OPTIONAL extras (omit them
+# on a default install):
+#   requirements/tracking.txt — boxmot (BoT-SORT/DeepOCSORT/ByteTrack + OSNet ReID)
+#   requirements/export.txt   — ultralytics (YOLO11 .pt → ONNX export fallback)
+# Install both with `python tools/install.py --full` (or --with-tracking /
+# --with-export). `--dev` and CI pull them in automatically via dev.txt.
 
 # ── face identity ───────────────────────────────────────────────────
 # InsightFace: SCRFD face detector + ArcFace 512-d embeddings (engine/pipeline/

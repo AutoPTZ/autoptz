@@ -33,11 +33,32 @@ python tools/install.py --editable
 python -m autoptz
 ```
 
-- `requirements/base.txt` — full stack: ONNX Runtime, OpenCV, PySide6, PyAV,
-  ultralytics, boxmot, insightface, PTZ libs, plus OS-specific camera helpers
-  through pip environment markers.
+The default `python tools/install.py` is **torch-free** (~2–3 GB lighter):
+detection runs on ONNX Runtime, multi-object tracking uses the built-in
+lightweight IoU tracker, and detector/pose weights provision via the
+prebuilt-ONNX download. The two PyTorch-heavy fallbacks are opt-in extras:
+
+```bash
+python tools/install.py --editable                 # lean, torch-free default
+python tools/install.py --full --editable          # + tracking + export extras
+python tools/install.py --with-tracking --editable # boxmot only
+python tools/install.py --with-export --editable   # ultralytics only
+```
+
+- **tracking** (`requirements/tracking.txt`, `boxmot`) — occlusion-robust
+  BoT-SORT/DeepOCSORT/ByteTrack trackers and the OSNet ReID backend used for
+  body-appearance recovery after occlusion.
+- **export** (`requirements/export.txt`, `ultralytics`) — the YOLO11 `.pt` →
+  ONNX export fallback, used only when the prebuilt ONNX download is unreachable.
+
+- `requirements/base.txt` — torch-free core: ONNX Runtime, OpenCV, PySide6,
+  PyAV, insightface, PTZ libs, plus OS-specific camera helpers through pip
+  environment markers.
+- `requirements/tracking.txt` / `requirements/export.txt` — optional torch
+  extras (above); `--dev` and CI install both automatically (the test suite
+  needs them).
 - `requirements/ui.txt` — UI-only (no ML stack), for quick UI work.
-- `requirements/dev.txt` — pytest, ruff, mypy.
+- `requirements/dev.txt` — pytest, ruff, mypy (plus the tracking + export extras).
 - `tools/install.py` — one readable install entry point that selects the right
   profile and prevents multiple `onnxruntime*` wheels from coexisting.
 

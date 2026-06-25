@@ -2,6 +2,12 @@
 # Install after base:
 #   python tools/install.py --dev --editable
 
+# The test suite needs the torch-heavy tracking + export extras (tracker tests
+# and model-export tests import boxmot / ultralytics), so contributors and CI
+# always get them even though the default end-user install stays torch-free.
+-r tracking.txt
+-r export.txt
+
 # ── testing ───────────────────────────────────────────────────────────────────
 pytest==9.0.3
 pytest-timeout==2.3.1
