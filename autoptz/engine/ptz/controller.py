@@ -487,6 +487,15 @@ class PTZController:
         # ── state transitions ─────────────────────────────────────────────────
         if p.track_active:
             if self._state != ControllerState.TRACKING:
+                # WARM re-acquire when the target was lost only BRIEFLY (still in
+                # the coast window): it's ~where it was, so keep the slew-limiter
+                # speed (and hold latch) so motion resumes from the pre-loss speed
+                # instead of re-ramping from a dead stop — that cold restart of the
+                # slew is the visible "find" lurch in the find/lose/find cycle
+                # during pans.  Everything else still resets (below), so there's no
+                # stale wind-up or filter/derivative artifact.
+                warm = self._state == ControllerState.COASTING
+
                 # (re-)acquired target: reset filters (and re-apply smoothing in
                 # case the tuning changed while we were searching)
                 self._filt_ex.reset()
@@ -504,11 +513,15 @@ class PTZController:
                 self._prev_pan_sign = 0
                 self._prev_tilt_sign = 0
                 self._flip_score = 0.0
-                self._slew_pan = 0.0
-                self._slew_tilt = 0.0
-                self._holding = False
                 self._zoom_height_ema = None
                 self._zoom_cmd = 0.0
+                if not warm:
+                    # COLD acquire (fresh target, or recovery after a long loss via
+                    # SEARCHING where the subject may be anywhere): also stop the
+                    # slew limiter and release the hold so motion ramps from rest.
+                    self._slew_pan = 0.0
+                    self._slew_tilt = 0.0
+                    self._holding = False
                 self._state = ControllerState.TRACKING
         else:
             if self._state == ControllerState.TRACKING:
