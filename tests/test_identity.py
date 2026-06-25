@@ -159,13 +159,48 @@ class TestFaceRecognizer:
         monkeypatch.setenv("INSIGHTFACE_HOME", str(tmp_path))
         assert insightface_root() == str(tmp_path)
 
-    def test_insightface_root_defaults_to_home(self, monkeypatch):
+    def test_insightface_root_defaults_to_home(self, monkeypatch, tmp_path):
         from pathlib import Path
 
+        import autoptz.engine.runtime.models as models_mod
         from autoptz.engine.pipeline.identify import insightface_root
 
         monkeypatch.delenv("INSIGHTFACE_HOME", raising=False)
+        # No bundled pack and no user-cache pack → fall back to insightface's own
+        # default (~/.insightface), where it auto-downloads when online.
+        monkeypatch.setattr(models_mod, "bundled_models_dir", lambda: tmp_path / "nobundle")
+        monkeypatch.setattr(models_mod, "_models_cache_dir", lambda: tmp_path / "nocache")
         assert insightface_root() == str(Path.home() / ".insightface")
+
+    def test_insightface_root_prefers_bundled_pack(self, monkeypatch, tmp_path):
+        # A packaged installer ships the pack under <bundled models>/insightface;
+        # the running app must resolve there so offline face enrolment works.
+        import autoptz.engine.runtime.models as models_mod
+        from autoptz.engine.pipeline.identify import insightface_root
+
+        monkeypatch.delenv("INSIGHTFACE_HOME", raising=False)
+        bundled_models = tmp_path / "bundled"
+        pack = bundled_models / "insightface" / "models" / "buffalo_l"
+        pack.mkdir(parents=True)
+        (pack / "det_10g.onnx").write_bytes(b"x")
+        monkeypatch.setattr(models_mod, "bundled_models_dir", lambda: bundled_models)
+        monkeypatch.setattr(models_mod, "_models_cache_dir", lambda: tmp_path / "nocache")
+        assert insightface_root() == str(bundled_models / "insightface")
+
+    def test_insightface_root_uses_user_cache_when_no_bundle(self, monkeypatch, tmp_path):
+        # A source/dev user who ran `fetch_models` has the pack in the app-data
+        # model cache; resolve there when nothing is bundled.
+        import autoptz.engine.runtime.models as models_mod
+        from autoptz.engine.pipeline.identify import insightface_root
+
+        monkeypatch.delenv("INSIGHTFACE_HOME", raising=False)
+        cache = tmp_path / "cache"
+        pack = cache / "insightface" / "models" / "buffalo_l"
+        pack.mkdir(parents=True)
+        (pack / "w600k_r50.onnx").write_bytes(b"x")
+        monkeypatch.setattr(models_mod, "bundled_models_dir", lambda: tmp_path / "nobundle")
+        monkeypatch.setattr(models_mod, "_models_cache_dir", lambda: cache)
+        assert insightface_root() == str(cache / "insightface")
 
     def test_face_recognizer_passes_root_to_insightface(self, monkeypatch, tmp_path):
         # A2: the model storage root must be controllable (so a bundled/relocated

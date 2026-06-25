@@ -138,14 +138,44 @@ def cosine(a: NDArray[np.floating], b: NDArray[np.floating]) -> float:
 # ── face model provisioning ────────────────────────────────────────────────────
 
 
-def insightface_root() -> str:
-    """Resolve the insightface model storage root (``$INSIGHTFACE_HOME`` or ``~/.insightface``).
+def _insightface_pack_present(root: Path) -> bool:
+    """True if *root* holds an insightface model pack (``root/models/*/*.onnx``)."""
+    models = root / "models"
+    try:
+        return models.is_dir() and any(models.glob("*/*.onnx"))
+    except OSError:
+        return False
 
-    Threaded into ``FaceAnalysis(root=...)`` so a bundled or relocated model cache
-    is honoured — the offline-Windows provisioning path.  Kept consistent with the
-    weight check in :func:`autoptz.engine.runtime.diagnostics.face_status`.
+
+def insightface_root() -> str:
+    """Resolve the insightface model storage root.
+
+    Priority: ``$INSIGHTFACE_HOME`` (explicit override) → a pack **bundled inside
+    the app** (``<bundled models>/insightface`` — what release installers ship and
+    ``tools.fetch_models`` writes) → the **user model cache**
+    (``<app-data models>/insightface``, populated by a dev's ``fetch_models``) →
+    ``~/.insightface`` (insightface's own default, where it auto-downloads when
+    online).  Threaded into ``FaceAnalysis(root=...)`` so an **offline packaged
+    app finds its weights with no download** — the real fix for "faces never save
+    on Windows".  Kept consistent with :func:`face_status` in
+    :mod:`autoptz.engine.runtime.diagnostics`.
     """
-    return os.environ.get("INSIGHTFACE_HOME") or str(Path.home() / ".insightface")
+    env = os.environ.get("INSIGHTFACE_HOME")
+    if env:
+        return env
+    try:
+        from autoptz.engine.runtime.models import (  # noqa: PLC0415
+            _models_cache_dir,
+            bundled_models_dir,
+        )
+
+        for base in (bundled_models_dir(), _models_cache_dir()):
+            candidate = Path(base) / "insightface"
+            if _insightface_pack_present(candidate):
+                return str(candidate)
+    except Exception:  # noqa: BLE001 — resolution must never raise into the model load
+        pass
+    return str(Path.home() / ".insightface")
 
 
 def ensure_face_model(root: str | None = None, model_name: str = "buffalo_l") -> str | None:
