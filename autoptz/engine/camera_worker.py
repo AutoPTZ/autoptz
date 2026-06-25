@@ -142,6 +142,13 @@ _HARVEST_COOLDOWN_S = 2.0
 # spamming a line per missed frame.
 _DROP_LOG_INTERVAL_S = 10.0
 
+# Throttle interval for the per-iteration crash-guard WARNINGs in the capture and
+# inference loops: a persistent fault would otherwise emit a stack trace every
+# tick (~hundreds/s).  At most one WARNING per interval keeps the failure visible
+# without flooding the log.
+_TICK_WARN_INTERVAL_S = 5.0
+_INFER_WARN_INTERVAL_S = 5.0
+
 # Capture idle/reconnect backoff: a stalled, offline, or permission-denied source
 # returns no frame, and a flat 10 ms retry then spins the capture thread at ~100 Hz
 # (real, measurable idle CPU per camera).  Retry fast for a short window to ride out
@@ -628,6 +635,18 @@ class CameraWorker:
         # PTZ command-rate-limit so DEBUG nudge/auto lines don't spam at
         # per-frame rate — only log when the command meaningfully changes.
         self._last_logged_ptz: tuple[float, float, float] | None = None
+
+        # Crash-safety throttles: monotonic timestamp of the last per-iteration
+        # WARNING in the capture / inference loops, so a persistent fault stays
+        # visible without spamming a stack trace every tick.  _infer_last_error
+        # surfaces the most recent inference-stage failure for the Camera Info
+        # panel (cleared implicitly once ticks succeed again and telemetry moves
+        # on).
+        self._last_tick_warn_t = 0.0
+        self._last_infer_warn_t = 0.0
+        self._infer_last_error: str | None = None
+        # Throttle for the shm-push failure WARNING (per-camera, monotonic).
+        self._last_shm_push_warn_t = 0.0
 
     # ── lifecycle ───────────────────────────────────────────────────────────────
 
@@ -2464,127 +2483,176 @@ class CameraWorker:
             float(getattr(src, "fps", 0.0) or 0.0),
             self.shm_name,
         )
-        self._open_resources()
+        # Crash-safety: the whole worker body runs under a try/finally so an
+        # unhandled exception anywhere (including _open_resources) can never kill
+        # the capture thread WITHOUT releasing resources — the finally ALWAYS
+        # joins the inference thread, runs _close_resources (no leaked cv2
+        # capture / shm segment), and emits a STOPPED telemetry so the UI
+        # reflects the camera going down instead of a silent hang.
+        last_health = HealthState.OK
+        last_error: str | None = None
+        try:
+            self._open_resources()
 
-        # Start the inference thread AFTER the source is open.  It builds the
-        # heavy models itself (so a slow first-time EP compile never blocks the
-        # live preview) and processes the latest captured frame.
-        self._inference_thread = threading.Thread(
-            target=self._inference_loop,
-            name=f"caminfer-{self.camera_id[:8]}",
-            daemon=True,
-        )
-        self._inference_thread.start()
+            # Start the inference thread AFTER the source is open.  It builds the
+            # heavy models itself (so a slow first-time EP compile never blocks the
+            # live preview) and processes the latest captured frame.
+            self._inference_thread = threading.Thread(
+                target=self._inference_loop,
+                name=f"caminfer-{self.camera_id[:8]}",
+                daemon=True,
+            )
+            self._inference_thread.start()
 
-        last_telemetry = 0.0
-        miss_streak = 0  # consecutive no-frame reads, drives the reconnect backoff
-        fps_window_start = time.monotonic()
-        fps_window_frames = 0
-        self._next_drop_log_t = time.monotonic() + _DROP_LOG_INTERVAL_S
-        last_health = HealthState.OK if self._source is not None else HealthState.ERROR
-        last_error: str | None = None if self._source is not None else "frame source unavailable"
+            last_telemetry = 0.0
+            miss_streak = 0  # consecutive no-frame reads, drives the reconnect backoff
+            fps_window_start = time.monotonic()
+            fps_window_frames = 0
+            self._next_drop_log_t = time.monotonic() + _DROP_LOG_INTERVAL_S
+            last_health = HealthState.OK if self._source is not None else HealthState.ERROR
+            last_error = None if self._source is not None else "frame source unavailable"
 
-        # If the source could not be opened at all, still emit telemetry so the
-        # UI shows an error/no-signal state instead of a silent hang.
-        if self._source is None:
-            self._emit_telemetry(tracks=[], health=last_health, last_error=last_error)
+            # If the source could not be opened at all, still emit telemetry so the
+            # UI shows an error/no-signal state instead of a silent hang.
+            if self._source is None:
+                self._emit_telemetry(tracks=[], health=last_health, last_error=last_error)
 
-        while not self._stop_event.is_set():
-            # Apply any pending manual PTZ first thing each tick (low-latency path,
-            # independent of inference) so the joystick/D-pad feels immediate.
-            self._drain_ptz_commands()
-
-            tick_t0 = time.perf_counter()
-            frame: NDArray[np.uint8] | None = None
-            if self._source is not None:
+            while not self._stop_event.is_set():
+                # Per-iteration guard: a single bad frame/tick logs a throttled
+                # WARNING and the loop CONTINUES rather than killing the capture
+                # thread.  Only the unrecoverable case (a raise escaping here)
+                # falls through to the outer handler + finally cleanup.
                 try:
-                    frame = self._source.read()
-                    if frame is None:
-                        # A transient read() miss (decode failure / dropped
-                        # frame) — count it for Camera Info.
-                        self._dropped_frames += 1
-                except Exception as exc:  # noqa: BLE001
-                    if last_health is not HealthState.RECONNECTING:
-                        log.warning(
-                            "camera_id=%s frame read failed (%s); reconnecting", self.camera_id, exc
+                    # Apply any pending manual PTZ first thing each tick (low-latency
+                    # path, independent of inference) so the joystick/D-pad feels
+                    # immediate.
+                    self._drain_ptz_commands()
+
+                    tick_t0 = time.perf_counter()
+                    frame: NDArray[np.uint8] | None = None
+                    if self._source is not None:
+                        try:
+                            frame = self._source.read()
+                            if frame is None:
+                                # A transient read() miss (decode failure / dropped
+                                # frame) — count it for Camera Info.
+                                self._dropped_frames += 1
+                        except Exception as exc:  # noqa: BLE001
+                            if last_health is not HealthState.RECONNECTING:
+                                log.warning(
+                                    "camera_id=%s frame read failed (%s); reconnecting",
+                                    self.camera_id,
+                                    exc,
+                                )
+                            last_health = HealthState.RECONNECTING
+                            last_error = str(exc)
+                            self._dropped_frames += 1
+                            frame = None
+                    ingest_ms = (time.perf_counter() - tick_t0) * 1000.0
+
+                    now = time.monotonic()
+
+                    if frame is not None:
+                        self._record_stage("ingest", ingest_ms)
+                        if last_health is HealthState.RECONNECTING:
+                            log.info("camera_id=%s frame source recovered", self.camera_id)
+                        self._record_frame_dims(frame)
+                        self._push_frame(frame)
+                        fps_window_frames += 1
+                        miss_streak = 0  # got a frame → drop back to fast retries
+                        last_health = HealthState.OK
+                        last_error = None
+
+                        # Hand the newest frame to the inference thread (latest wins)
+                        # so detection/face never gate the capture+preview rate.
+                        with self._frame_lock:
+                            self._latest_frame = frame
+                            self._latest_frame_id += 1
+                        self._frames_captured += 1
+                        self._frame_ready.set()
+
+                        self._ingest_ms = ingest_ms
+                        # Latency = capture read + the latest inference detect+track.
+                        self._latency_ms = ingest_ms + self._inference_ms
+
+                        elapsed = now - fps_window_start
+                        if elapsed >= 1.0:
+                            self._fps = fps_window_frames / elapsed
+                            fps_window_start = now
+                            fps_window_frames = 0
+
+                    # Periodic frame-drop summary (INFO) when drops keep accruing.
+                    self._maybe_log_drops(now)
+
+                    # Telemetry pacing (~telemetry_hz) — report latest inference.
+                    if now - last_telemetry >= self._telemetry_period:
+                        self._apply_inference_watchdog(now)
+                        self._emit_telemetry(
+                            tracks=list(self._last_tracks),
+                            health=last_health,
+                            last_error=last_error,
                         )
-                    last_health = HealthState.RECONNECTING
+                        last_telemetry = now
+
+                    # No frame: retry fast briefly (transient decode miss on a
+                    # healthy source), then back off a sustained no-frame source up
+                    # to the cap so a stalled/offline/denied camera doesn't spin the
+                    # capture thread.
+                    if frame is None:
+                        miss_streak += 1
+                        if miss_streak <= _RECONNECT_FAST_RETRIES:
+                            wait = 0.01
+                        else:
+                            over = miss_streak - _RECONNECT_FAST_RETRIES
+                            wait = min(_RECONNECT_BACKOFF_MAX_S, 0.01 + 0.05 * over)
+                        # Interruptible: a manual PTZ command (or stop) wakes this
+                        # early so the joystick stays responsive even while the video
+                        # feed is stalled (the next loop iteration drains the PTZ
+                        # queue at the top).
+                        self._capture_wake.wait(timeout=wait)
+                        self._capture_wake.clear()
+                except Exception as exc:  # noqa: BLE001 — one bad tick must not kill capture
+                    now = time.monotonic()
+                    if now - self._last_tick_warn_t >= _TICK_WARN_INTERVAL_S:
+                        self._last_tick_warn_t = now
+                        log.warning(
+                            "camera_id=%s capture tick failed (%s); continuing",
+                            self.camera_id,
+                            exc,
+                            exc_info=True,
+                        )
+                    last_health = HealthState.ERROR
                     last_error = str(exc)
-                    self._dropped_frames += 1
-                    frame = None
-            ingest_ms = (time.perf_counter() - tick_t0) * 1000.0
-
-            now = time.monotonic()
-
-            if frame is not None:
-                self._record_stage("ingest", ingest_ms)
-                if last_health is HealthState.RECONNECTING:
-                    log.info("camera_id=%s frame source recovered", self.camera_id)
-                self._record_frame_dims(frame)
-                self._push_frame(frame)
-                fps_window_frames += 1
-                miss_streak = 0  # got a frame → drop back to fast retries
-                last_health = HealthState.OK
-                last_error = None
-
-                # Hand the newest frame to the inference thread (latest wins) so
-                # detection/face never gate the capture+preview rate.
-                with self._frame_lock:
-                    self._latest_frame = frame
-                    self._latest_frame_id += 1
-                self._frames_captured += 1
-                self._frame_ready.set()
-
-                self._ingest_ms = ingest_ms
-                # Latency = capture read + the latest inference detect+track cost.
-                self._latency_ms = ingest_ms + self._inference_ms
-
-                elapsed = now - fps_window_start
-                if elapsed >= 1.0:
-                    self._fps = fps_window_frames / elapsed
-                    fps_window_start = now
-                    fps_window_frames = 0
-
-            # Periodic frame-drop summary (INFO) when drops continue to accrue.
-            self._maybe_log_drops(now)
-
-            # Telemetry pacing (~telemetry_hz) — report the latest inference output.
-            if now - last_telemetry >= self._telemetry_period:
-                self._apply_inference_watchdog(now)
+                    # Brief interruptible pause so a persistent fault can't spin.
+                    self._capture_wake.wait(timeout=0.05)
+                    self._capture_wake.clear()
+        except Exception:  # noqa: BLE001 — fatal: log + emit ERROR, finally cleans up
+            log.error("camera_id=%s capture thread died", self.camera_id, exc_info=True)
+            try:
                 self._emit_telemetry(
-                    tracks=list(self._last_tracks), health=last_health, last_error=last_error
+                    tracks=[], health=HealthState.ERROR, last_error="capture thread error"
                 )
-                last_telemetry = now
-
-            # No frame: retry fast briefly (transient decode miss on a healthy
-            # source), then back off a sustained no-frame source up to the cap so a
-            # stalled/offline/denied camera doesn't spin the capture thread.
-            if frame is None:
-                miss_streak += 1
-                if miss_streak <= _RECONNECT_FAST_RETRIES:
-                    wait = 0.01
-                else:
-                    over = miss_streak - _RECONNECT_FAST_RETRIES
-                    wait = min(_RECONNECT_BACKOFF_MAX_S, 0.01 + 0.05 * over)
-                # Interruptible: a manual PTZ command (or stop) wakes this early so
-                # the joystick stays responsive even while the video feed is stalled
-                # (the next loop iteration drains the PTZ queue at the top).
-                self._capture_wake.wait(timeout=wait)
-                self._capture_wake.clear()
-
-        # Shutdown: wake + join the inference thread, then release resources.
-        self._frame_ready.set()
-        if self._inference_thread is not None:
-            self._inference_thread.join(timeout=5.0)
-            self._inference_thread = None
-        self._close_resources()
-        log.info(
-            "camera_id=%s worker stopped (frames dropped total=%d)",
-            self.camera_id,
-            self._dropped_frames,
-        )
-        # Final STOPPED telemetry so the UI reflects the camera going down.
-        self._emit_telemetry(tracks=[], health=HealthState.STOPPED, last_error=None)
+            except Exception:  # noqa: BLE001
+                pass
+        finally:
+            # Shutdown: wake + join the inference thread, then release resources.
+            # ALWAYS runs — even on a fatal exception above — so the cv2 capture
+            # and the shared-memory segment are never leaked.
+            self._frame_ready.set()
+            if self._inference_thread is not None:
+                self._inference_thread.join(timeout=5.0)
+                self._inference_thread = None
+            self._close_resources()
+            log.info(
+                "camera_id=%s worker stopped (frames dropped total=%d)",
+                self.camera_id,
+                self._dropped_frames,
+            )
+            # Final STOPPED telemetry so the UI reflects the camera going down.
+            try:
+                self._emit_telemetry(tracks=[], health=HealthState.STOPPED, last_error=None)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _inference_loop(self) -> None:
         """Detect → track → face → pose → PTZ on the latest captured frame.
@@ -2598,106 +2666,135 @@ class CameraWorker:
             self._drain_commands()
         if self._stop_event.is_set():
             return
-        self._build_inference_stacks()
-        # Seed so the first lifecycle pass sees no spurious transition.
-        self._prev_model_features = self._features_snapshot()
-        self._start_appearance_thread()
-        last_id = 0
-        while not self._stop_event.is_set():
-            # Wake on a new frame, but fall through on the timeout too so commands
-            # (nudge / set-target / enable-tracking) are still drained when no
-            # frames are arriving — they must never depend on frame delivery.
-            self._frame_ready.wait(timeout=0.05)
-            self._frame_ready.clear()
-            if self._stop_event.is_set():
-                break
-            self._drain_commands()
-            self._apply_model_lifecycle()
-            with self._frame_lock:
-                frame = self._latest_frame
-                fid = self._latest_frame_id
-            if frame is None or fid == last_id:
-                continue
-            last_id = fid
-            self._frames_inferred += 1
-            self._current_inference_frame_id = fid
-            now = time.monotonic()
-            self._seed_subservice_phases(now)
+        # Crash-safety: everything from the model build onward runs under a
+        # try/finally so an unhandled exception (build or a hot-loop stage) can
+        # never orphan the appearance thread — the finally ALWAYS joins it.  A
+        # per-iteration guard inside the while keeps one raising stage from
+        # killing inference (the camera would otherwise go dark with no boxes).
+        try:
+            self._build_inference_stacks()
+            # Seed so the first lifecycle pass sees no spurious transition.
+            self._prev_model_features = self._features_snapshot()
+            self._start_appearance_thread()
+            last_id = 0
+            while not self._stop_event.is_set():
+                # Wake on a new frame, but fall through on the timeout too so
+                # commands (nudge / set-target / enable-tracking) are still drained
+                # when no frames are arriving — they must never depend on frame
+                # delivery.
+                self._frame_ready.wait(timeout=0.05)
+                self._frame_ready.clear()
+                if self._stop_event.is_set():
+                    break
+                try:
+                    self._drain_commands()
+                    self._apply_model_lifecycle()
+                    with self._frame_lock:
+                        frame = self._latest_frame
+                        fid = self._latest_frame_id
+                    if frame is None or fid == last_id:
+                        continue
+                    last_id = fid
+                    self._frames_inferred += 1
+                    self._current_inference_frame_id = fid
+                    now = time.monotonic()
+                    self._seed_subservice_phases(now)
 
-            detect_t0 = time.perf_counter()
-            tracks = self._maybe_track(frame)
-            self._inference_ms = (time.perf_counter() - detect_t0) * 1000.0
+                    detect_t0 = time.perf_counter()
+                    tracks = self._maybe_track(frame)
+                    self._inference_ms = (time.perf_counter() - detect_t0) * 1000.0
 
-            self._apply_target_lock(tracks, frame, now)
+                    self._apply_target_lock(tracks, frame, now)
 
-            if self._async_appearance:
-                # Hand the heavy appearance passes (ReID + face) to their own
-                # thread so they overlap detect+track+PTZ instead of stalling the
-                # control loop.  Shared target/identity state is serialised by
-                # _appearance_lock inside those methods; the hot loop re-reads the
-                # (possibly rebound) target via _apply_target_lock each tick.
-                # Only publish when there's actually appearance work — otherwise we
-                # wake the appearance thread every frame for two passes that both
-                # immediately no-op with face + ReID off (pure idle overhead).
-                if self._feature("face_recognition") or self._feature("reid"):
-                    self._publish_appearance_input(frame, tracks, now, fid)
-            else:
-                # Inline (sync) path — preserves the exact original ordering.
-                self._maybe_reid_recover(tracks, frame, now)
-                self._apply_target_lock(tracks, frame, now)
-                face_t0 = time.perf_counter()
-                self._maybe_identify(frame, tracks, now)
-                face_dt = (time.perf_counter() - face_t0) * 1000.0
-                if face_dt > 0.5:
-                    self._face_ms = face_dt
-                    self._record_stage("face", face_dt)
-                self._apply_target_lock(tracks, frame, now)
+                    if self._async_appearance:
+                        # Hand the heavy appearance passes (ReID + face) to their own
+                        # thread so they overlap detect+track+PTZ instead of stalling
+                        # the control loop.  Shared target/identity state is
+                        # serialised by _appearance_lock inside those methods; the
+                        # hot loop re-reads the (possibly rebound) target via
+                        # _apply_target_lock each tick.  Only publish when there's
+                        # actually appearance work — otherwise we wake the appearance
+                        # thread every frame for two passes that both immediately
+                        # no-op with face + ReID off (pure idle overhead).
+                        if self._feature("face_recognition") or self._feature("reid"):
+                            self._publish_appearance_input(frame, tracks, now, fid)
+                    else:
+                        # Inline (sync) path — preserves the exact original ordering.
+                        self._maybe_reid_recover(tracks, frame, now)
+                        self._apply_target_lock(tracks, frame, now)
+                        face_t0 = time.perf_counter()
+                        self._maybe_identify(frame, tracks, now)
+                        face_dt = (time.perf_counter() - face_t0) * 1000.0
+                        if face_dt > 0.5:
+                            self._face_ms = face_dt
+                            self._record_stage("face", face_dt)
+                        self._apply_target_lock(tracks, frame, now)
 
-            # Estimate pose for the selected person so the pose overlay shows the
-            # moment you click someone — independent of whether PTZ auto-follow is
-            # actively driving (which is the only place pose ran before).
-            if self._pose_allowed_this_tick():
-                self._maybe_estimate_pose_overlay(tracks, frame, now)
-            self._annotate_target_aim(tracks, frame, now)
+                    # Estimate pose for the selected person so the pose overlay shows
+                    # the moment you click someone — independent of whether PTZ
+                    # auto-follow is actively driving (the only place pose ran
+                    # before).
+                    if self._pose_allowed_this_tick():
+                        self._maybe_estimate_pose_overlay(tracks, frame, now)
+                    self._annotate_target_aim(tracks, frame, now)
 
-            # Estimate the camera's own image motion for this tick BEFORE driving
-            # the PTZ — _drive_ptz_auto → _estimate_aim_velocity subtracts it so the
-            # feed-forward follows the subject's world motion, not the frame shift.
-            # (_ptz_last_cmd still holds the *previous* command here — exactly the
-            # one that produced this frame's observed shift.)
-            #
-            # Ego-motion runs sparse optical flow on every frame, but its only
-            # consumer is the aim-velocity feed-forward, which only runs while
-            # actively following (tracking on).  With tracking off it burned ~15%
-            # of a core computing a value nothing reads — so gate it on tracking
-            # and keep the estimate zeroed otherwise.
-            if self._feature("tracking"):
-                self._update_ego_motion(tracks, frame, now)
-            elif self._ego_source != "none":
-                self._ego_vel = (0.0, 0.0)
-                self._ego_source = "none"
+                    # Estimate the camera's own image motion for this tick BEFORE
+                    # driving the PTZ — _drive_ptz_auto → _estimate_aim_velocity
+                    # subtracts it so the feed-forward follows the subject's world
+                    # motion, not the frame shift.  (_ptz_last_cmd still holds the
+                    # *previous* command here — exactly the one that produced this
+                    # frame's observed shift.)
+                    #
+                    # Ego-motion runs sparse optical flow on every frame, but its
+                    # only consumer is the aim-velocity feed-forward, which only runs
+                    # while actively following (tracking on).  With tracking off it
+                    # burned ~15% of a core computing a value nothing reads — so gate
+                    # it on tracking and keep the estimate zeroed otherwise.
+                    if self._feature("tracking"):
+                        self._update_ego_motion(tracks, frame, now)
+                    elif self._ego_source != "none":
+                        self._ego_vel = (0.0, 0.0)
+                        self._ego_source = "none"
 
-            # Auto PTZ control (suspended during a manual-override window).  Lock
-            # the backend so a concurrent telemetry position read can't interleave.
-            with self._ptz_lock:
-                self._drive_ptz_auto(tracks, frame, now)
+                    # Auto PTZ control (suspended during a manual-override window).
+                    # Lock the backend so a concurrent telemetry position read can't
+                    # interleave.
+                    with self._ptz_lock:
+                        self._drive_ptz_auto(tracks, frame, now)
 
-            self._last_tracks = tracks
-            self._last_tracks_frame_id = fid
-            # Heartbeat: advance so the capture-thread watchdog knows inference
-            # is alive.  Set AFTER all work for this frame is committed.
-            self._last_infer_t = time.monotonic()
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug(
-                    "camera_id=%s timings detect+track=%.1fms face=%.1fms tracks=%d fps=%.1f",
-                    self.camera_id,
-                    self._detect_ms,
-                    self._face_ms,
-                    len(tracks),
-                    self._fps,
-                )
-
-        self._stop_appearance_thread()
+                    self._last_tracks = tracks
+                    self._last_tracks_frame_id = fid
+                    # Heartbeat: advance so the capture-thread watchdog knows
+                    # inference is alive.  Set AFTER all work for this frame is
+                    # committed.
+                    self._last_infer_t = time.monotonic()
+                    if log.isEnabledFor(logging.DEBUG):
+                        log.debug(
+                            "camera_id=%s timings detect+track=%.1fms face=%.1fms "
+                            "tracks=%d fps=%.1f",
+                            self.camera_id,
+                            self._detect_ms,
+                            self._face_ms,
+                            len(tracks),
+                            self._fps,
+                        )
+                except Exception as exc:  # noqa: BLE001 — one stage must not kill inference
+                    now = time.monotonic()
+                    if now - self._last_infer_warn_t >= _INFER_WARN_INTERVAL_S:
+                        self._last_infer_warn_t = now
+                        log.warning(
+                            "camera_id=%s inference tick failed (%s); continuing",
+                            self.camera_id,
+                            exc,
+                            exc_info=True,
+                        )
+                    self._infer_last_error = str(exc)
+        except Exception:  # noqa: BLE001 — fatal: log; finally still joins appearance
+            log.error("camera_id=%s inference thread died", self.camera_id, exc_info=True)
+        finally:
+            # ALWAYS join the appearance thread — even on a fatal error — so it is
+            # never orphaned when inference goes down.
+            self._stop_appearance_thread()
 
     # ── async appearance (face + ReID) thread ───────────────────────────────────
 
@@ -3348,7 +3445,13 @@ class CameraWorker:
                 self._vcam.close()
                 self._vcam = None
         except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s shm push failed", self.camera_id, exc_info=True)
+            # Was DEBUG-only: a broken preview pipe (shm/vcam) left the operator
+            # staring at a frozen preview with an empty log.  Surface it as a
+            # throttled WARNING so a persistent failure is visible without
+            # spamming one line per pushed frame.
+            if now - self._last_shm_push_warn_t >= _TICK_WARN_INTERVAL_S:
+                self._last_shm_push_warn_t = now
+                log.warning("camera_id=%s preview/shm push failed", self.camera_id, exc_info=True)
 
     def _fit_frame(self, frame: NDArray[np.uint8]) -> NDArray[np.uint8]:
         """Resize / coerce a BGR frame to the ShmWriter's exact dimensions."""
@@ -3423,8 +3526,15 @@ class CameraWorker:
             self._track_ms = (_t2 - _t1) * 1000.0
             self._record_stage("detect", self._detect_ms)
             self._record_stage("track", self._track_ms)
-        except Exception:  # noqa: BLE001
-            log.debug("camera_id=%s detect/track failed", self.camera_id, exc_info=True)
+        except Exception as exc:  # noqa: BLE001
+            # Surface the FIRST detect/track failure at WARNING (then throttle) and
+            # stash it as last_error so the Camera Info panel can show *why* the
+            # camera went box-blind instead of leaving an empty DEBUG-only log.
+            now = time.monotonic()
+            if now - self._last_infer_warn_t >= _INFER_WARN_INTERVAL_S:
+                self._last_infer_warn_t = now
+                log.warning("camera_id=%s detect/track failed", self.camera_id, exc_info=True)
+            self._infer_last_error = str(exc)
             return []
 
         out: list[TrackInfo] = []
@@ -4612,6 +4722,11 @@ class CameraWorker:
         health: HealthState,
         last_error: str | None,
     ) -> None:
+        # Surface a recent inference-stage failure (detect/track raise) when the
+        # capture path itself is healthy, so the Camera Info panel can show *why*
+        # a streaming-but-box-blind camera has no tracks.
+        if last_error is None and self._infer_last_error is not None:
+            last_error = self._infer_last_error
         msg = TelemetryMsg(
             camera_id=self.camera_id,
             seq=self._seq,

@@ -12,6 +12,7 @@ coast_window_ms, then stop and enter SEARCHING state.
 
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
@@ -22,6 +23,13 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from autoptz.config.models import PTZConfig
     from autoptz.engine.ptz.base import PTZBackend
+
+log = logging.getLogger(__name__)
+
+# Throttle for the control-loop tick failure WARNING: a persistent backend fault
+# would otherwise emit a stack trace at the full control rate — at most one line
+# per interval keeps it visible without flooding the log.
+_TICK_WARN_INTERVAL_S = 5.0
 
 # Named framing presets → target subject-height fraction of the frame.
 # A larger fraction means the subject fills more of the frame (tighter shot).
@@ -324,6 +332,9 @@ class PTZController:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
+        # Throttle for the control-loop tick failure WARNING (monotonic seconds).
+        self._last_tick_warn_t = 0.0
+
     # ── public API ────────────────────────────────────────────────────────────
 
     @property
@@ -470,8 +481,15 @@ class PTZController:
             t0 = time.perf_counter()
             try:
                 self._tick(t=t0)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # Was a bare ``pass`` — a backend/compute fault silently froze the
+                # PTZ with no log at all.  Surface it as a throttled WARNING so a
+                # persistent control fault is visible without spamming the log at
+                # the control rate.  The loop keeps running so motion can recover.
+                now = time.monotonic()
+                if now - self._last_tick_warn_t >= _TICK_WARN_INTERVAL_S:
+                    self._last_tick_warn_t = now
+                    log.warning("PTZ control tick failed (%s); continuing", exc, exc_info=True)
             elapsed = time.perf_counter() - t0
             self._stop_event.wait(max(0.0, interval - elapsed))
         # guarantee stop on thread exit
