@@ -726,6 +726,116 @@ class TestCameraWorker:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CameraWorker — fixed-rate PTZ command pump flag (AUTOPTZ_PTZ_PUMP)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _SpyController:
+    """Stand-in PTZController recording step()/update()/start()/stop() calls.
+
+    Has ``step`` so the worker treats it as a controller (not a bare backend).
+    ``step`` returns a fixed command so the legacy inline path can mirror it.
+    """
+
+    def __init__(self) -> None:
+        self.steps: list[tuple] = []
+        self.updates: list[tuple] = []
+        self.started = 0
+        self.stopped = 0
+        self.latencies: list[float] = []
+
+    def step(self, error, velocity, subject_height, track_active, t=None):
+        self.steps.append((error, velocity, subject_height, track_active))
+        return (0.1, 0.2, 0.0)
+
+    def update(self, error, velocity, subject_height, track_active):
+        self.updates.append((error, velocity, subject_height, track_active))
+
+    def start(self) -> None:
+        self.started += 1
+
+    def stop(self) -> None:
+        self.stopped += 1
+
+    def set_loop_latency(self, seconds: float) -> None:
+        self.latencies.append(seconds)
+
+
+class TestPtzPumpFlag:
+    """AUTOPTZ_PTZ_PUMP gates the off-thread pump; OFF == legacy inline step()."""
+
+    def _worker(self, monkeypatch, *, pump: bool):
+        from autoptz.engine.camera_worker import CameraWorker
+
+        monkeypatch.setenv("AUTOPTZ_PTZ_PUMP", "1" if pump else "0")
+        ctrl = _SpyController()
+        worker = CameraWorker(
+            "ptzpump12345",
+            _camera_config("ptzpump12345"),
+            lambda _m: None,
+            frame_source=FakeFrameSource(),
+            ptz_controller=ctrl,
+        )
+        return worker, ctrl
+
+    def test_env_helper_parses(self, monkeypatch) -> None:
+        from autoptz.engine.camera_worker import _ptz_pump_enabled
+
+        for on in ("1", "true", "TRUE", "yes", "on"):
+            monkeypatch.setenv("AUTOPTZ_PTZ_PUMP", on)
+            assert _ptz_pump_enabled() is True
+        for off in ("0", "false", "no", "off", ""):
+            monkeypatch.setenv("AUTOPTZ_PTZ_PUMP", off)
+            assert _ptz_pump_enabled() is False
+
+    def test_default_off(self, monkeypatch) -> None:
+        from autoptz.engine.camera_worker import _ptz_pump_enabled
+
+        monkeypatch.delenv("AUTOPTZ_PTZ_PUMP", raising=False)
+        assert _ptz_pump_enabled() is False
+
+    def test_publish_routes_to_update_when_pump_on(self, monkeypatch) -> None:
+        worker, ctrl = self._worker(monkeypatch, pump=True)
+        worker._publish_ptz(
+            ctrl, (0.3, 0.1), (0.0, 0.0), 0.45, track_active=True, now=0.0, log_label="auto"
+        )
+        assert ctrl.updates == [((0.3, 0.1), (0.0, 0.0), 0.45, True)]
+        assert ctrl.steps == [], "pump ON must not call step()"
+
+    def test_publish_routes_to_step_when_pump_off(self, monkeypatch) -> None:
+        worker, ctrl = self._worker(monkeypatch, pump=False)
+        worker._publish_ptz(
+            ctrl, (0.3, 0.1), (0.0, 0.0), 0.45, track_active=True, now=0.0, log_label="auto"
+        )
+        assert ctrl.steps == [((0.3, 0.1), (0.0, 0.0), 0.45, True)]
+        assert ctrl.updates == [], "pump OFF must not call update()"
+        # Legacy inline path mirrors the returned command.
+        assert worker._ptz_last_cmd == (0.1, 0.2, 0.0)
+
+    def test_maybe_start_pump_starts_controller_when_on(self, monkeypatch) -> None:
+        worker, ctrl = self._worker(monkeypatch, pump=True)
+        worker._maybe_start_ptz_pump()
+        assert ctrl.started == 1
+
+    def test_maybe_start_pump_noop_when_off(self, monkeypatch) -> None:
+        worker, ctrl = self._worker(monkeypatch, pump=False)
+        worker._maybe_start_ptz_pump()
+        assert ctrl.started == 0
+
+
+class TestInferenceWakeTimeout:
+    """The inference loop's frame-wait ceiling must stay small so commands drain
+    promptly when frames are sparse (C3: lower wake-latency ceiling)."""
+
+    def test_wake_timeout_is_small(self) -> None:
+        from autoptz.engine.camera_worker import _INFER_WAKE_TIMEOUT_S
+
+        # Tightened from the old 50 ms ceiling; a value check guards a regression.
+        assert _INFER_WAKE_TIMEOUT_S == pytest.approx(0.01)
+        assert _INFER_WAKE_TIMEOUT_S < 0.05
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CameraWorker._track_error — region-aware aim point
 # ─────────────────────────────────────────────────────────────────────────────
 

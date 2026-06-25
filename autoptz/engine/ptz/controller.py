@@ -31,6 +31,18 @@ log = logging.getLogger(__name__)
 # per interval keeps it visible without flooding the log.
 _TICK_WARN_INTERVAL_S = 5.0
 
+# Stop-on-loss heartbeat (pump mode only): if the background loop is TRACKING but
+# no fresh update() has arrived from the inference thread for longer than this, the
+# loop commands a stop() so a stalled inference thread / dropped feed halts the
+# camera instead of coasting on a frozen aim.  Bounded to a small floor and a few
+# control periods, whichever is larger, so a momentarily slow producer doesn't trip
+# it while a genuinely wedged one halts within a fraction of a second.
+_HEARTBEAT_FLOOR_S = 0.3  # absolute minimum staleness before the heartbeat fires
+_HEARTBEAT_PERIODS = 4.0  # …or this many control periods, whichever is larger
+# Throttle for the heartbeat stop WARNING so a sustained producer stall logs once
+# per interval rather than at the full control rate.
+_HEARTBEAT_WARN_INTERVAL_S = 5.0
+
 # Named framing presets → target subject-height fraction of the frame.
 # A larger fraction means the subject fills more of the frame (tighter shot).
 #   face           — head fills most of the frame (closeup)
@@ -352,9 +364,22 @@ class PTZController:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        # True only while the background _loop is running; gates the stop-on-loss
+        # heartbeat so the synchronous step() path (tests / inline mode) never trips
+        # it (step() refreshes the payload itself, immediately before _tick).
+        self._loop_running: bool = False
+
+        # Stop-on-loss heartbeat (pump mode): monotonic time of the last update()
+        # from the inference thread, and the staleness threshold past which the
+        # background loop halts a still-TRACKING camera.  The threshold is a few
+        # control periods or a small floor, whichever is larger.
+        self._last_update_t: float = time.monotonic()
+        self._heartbeat_stale_s = max(_HEARTBEAT_FLOOR_S, _HEARTBEAT_PERIODS / max(1.0, rate_hz))
 
         # Throttle for the control-loop tick failure WARNING (monotonic seconds).
         self._last_tick_warn_t = 0.0
+        # Throttle for the heartbeat stop WARNING (monotonic seconds).
+        self._last_heartbeat_warn_t = 0.0
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -432,6 +457,10 @@ class PTZController:
                 track_active=track_active,
                 seq=self._payload.seq + 1,
             )
+        # Heartbeat: record recency so the background loop can detect a stalled
+        # producer and halt the camera (pump mode).  Monotonic so a wall-clock
+        # adjustment can't make the feed look stale.
+        self._last_update_t = time.monotonic()
 
     def step(
         self,
@@ -498,6 +527,10 @@ class PTZController:
 
     def _loop(self) -> None:
         interval = 1.0 / self._rate_hz
+        # Reset recency on (re)start so a long-idle controller doesn't immediately
+        # trip the heartbeat before the first update() of the new session arrives.
+        self._last_update_t = time.monotonic()
+        self._loop_running = True
         while not self._stop_event.is_set():
             t0 = time.perf_counter()
             try:
@@ -513,6 +546,7 @@ class PTZController:
                     log.warning("PTZ control tick failed (%s); continuing", exc, exc_info=True)
             elapsed = time.perf_counter() - t0
             self._stop_event.wait(max(0.0, interval - elapsed))
+        self._loop_running = False
         # guarantee stop on thread exit
         try:
             self._backend.stop()
@@ -522,6 +556,13 @@ class PTZController:
     # ── tick (core logic) ─────────────────────────────────────────────────────
 
     def _tick(self, t: float) -> tuple[float, float, float]:
+        # Stop-on-loss heartbeat (pump mode only): if we're driving the camera but
+        # the inference thread has gone quiet (stalled / feed dropped) past the
+        # staleness threshold, halt rather than coast on a frozen aim.  Gated on the
+        # background loop running so the synchronous step() path never trips it.
+        if self._loop_running and self._heartbeat_stalled():
+            return self._heartbeat_stop()
+
         with self._lock:
             payload = self._payload
 
@@ -539,6 +580,41 @@ class PTZController:
             self._last_zoom = zoom_cmd
 
         return pan_cmd, tilt_cmd, zoom_cmd
+
+    def _heartbeat_stalled(self) -> bool:
+        """True when actively driving but the producer feed has gone stale.
+
+        Only relevant while TRACKING/COASTING (a camera that is actually moving or
+        about to be stopped by coast logic): IDLE/SEARCHING are already halted, so a
+        quiet feed there is expected and must not be flagged.
+        """
+        if self._state not in (ControllerState.TRACKING, ControllerState.COASTING):
+            return False
+        return (time.monotonic() - self._last_update_t) > self._heartbeat_stale_s
+
+    def _heartbeat_stop(self) -> tuple[float, float, float]:
+        """Halt the camera because the inference feed stalled; transition to IDLE.
+
+        Drops to IDLE so when fresh updates resume the controller does a clean
+        (re-)acquire instead of resuming a frozen mid-pan command, and sends a real
+        backend stop (bypassing the change-suppression in ``_tick``) so the halt is
+        guaranteed even if the last command was already zero.
+        """
+        now = time.monotonic()
+        if now - self._last_heartbeat_warn_t >= _HEARTBEAT_WARN_INTERVAL_S:
+            self._last_heartbeat_warn_t = now
+            log.warning(
+                "PTZ heartbeat: no tracking update for %.2fs (>%.2fs) — halting camera",
+                now - self._last_update_t,
+                self._heartbeat_stale_s,
+            )
+        self._state = ControllerState.IDLE
+        self._last_pan = self._last_tilt = self._last_zoom = 0.0
+        try:
+            self._backend.stop()
+        except Exception:
+            pass
+        return 0.0, 0.0, 0.0
 
     def _compute(self, p: _TrackPayload, t: float) -> tuple[float, float, float]:
         cfg = self._cfg

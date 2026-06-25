@@ -120,6 +120,14 @@ _INFER_STALL_S = 2.0
 _EVENT_MAX = 12
 _FPS_LOG_DELTA = 0.25
 
+# Max time the inference loop blocks waiting for a new frame before falling through
+# to drain commands.  The fall-through is what keeps PTZ commands (and nudges /
+# set-target / enable-tracking) flowing when frames are sparse, so a smaller value
+# tightens command latency.  Cost is one extra cheap drain per idle interval — the
+# loop body short-circuits on no new frame — so 10 ms is negligible vs. the prior
+# 50 ms wake ceiling.
+_INFER_WAKE_TIMEOUT_S = 0.01
+
 # ── auto-harvest quality gates ───────────────────────────────────────────────────
 # Auto-harvesting a NEW "Person N" is deliberately strict so the user rarely has
 # to merge junk identities.  A face must clear ALL of these before it earns a new
@@ -183,6 +191,25 @@ def _async_appearance_enabled() -> bool:
         "false",
         "no",
         "off",
+    )
+
+
+def _ptz_pump_enabled() -> bool:
+    """Emit PTZ commands from the controller's own fixed-rate thread (default OFF).
+
+    When ON (``AUTOPTZ_PTZ_PUMP=1``/``true``) the controller's background loop is
+    started and the inference thread merely ``update()``s the latest target via a
+    lock — the loop sends at its fixed ``rate_hz``, off the inference hot path, with
+    a stop-on-loss heartbeat.  When OFF (the default until real-camera validation),
+    behaviour is exactly the legacy inline ``step()`` path.
+    """
+    import os
+
+    return os.environ.get("AUTOPTZ_PTZ_PUMP", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
     )
 
 
@@ -398,6 +425,11 @@ class CameraWorker:
         self._ptz: Any | None = None
         self._ptz_backend: Any | None = ptz_backend
         self._ptz_owned = False  # True when we built the controller ourselves
+        # Fixed-rate off-thread command pump (flag-gated, default OFF). When ON the
+        # controller's own loop emits commands at its rate_hz and _drive_ptz_auto
+        # only publishes the latest target via update(); when OFF the worker drives
+        # the controller inline via step() each inference tick (legacy behaviour).
+        self._ptz_pump = _ptz_pump_enabled()
         if ptz_controller is not None:
             if hasattr(ptz_controller, "step"):
                 self._ptz = ptz_controller
@@ -1274,6 +1306,35 @@ class CameraWorker:
     def _manual_override_active(self, now: float) -> bool:
         return now < self._manual_override_until
 
+    def _publish_ptz(
+        self,
+        ctrl: Any,
+        err: tuple[float, float],
+        vel: tuple[float, float],
+        height: float,
+        *,
+        track_active: bool,
+        now: float,
+        log_label: str | None,
+    ) -> None:
+        """Hand this tick's target to the controller, branching on the pump flag.
+
+        - **Pump ON** (``AUTOPTZ_PTZ_PUMP``): publish the latest payload via
+          ``update()`` (lock-safe, non-blocking); the controller's own fixed-rate
+          loop sends the command off this inference thread.  No command is returned
+          to mirror, so ``_ptz_last_cmd`` is left for the loop/telemetry.
+        - **Pump OFF** (default): exactly the legacy inline path — ``step()`` runs
+          the control math here and drives the backend synchronously, returning the
+          command we mirror into ``_ptz_last_cmd`` and (for the active site) log.
+        """
+        if self._ptz_pump:
+            ctrl.update(err, vel, height, track_active)
+            return
+        pan, tilt, zoom = ctrl.step(err, vel, height, track_active=track_active, t=now)
+        self._ptz_last_cmd = (pan, tilt, zoom)
+        if log_label is not None:
+            self._log_ptz_cmd(log_label, pan, tilt, zoom)
+
     @_appearance_guarded
     def _drive_ptz_auto(
         self,
@@ -1328,9 +1389,9 @@ class CameraWorker:
                 # visible) is not a trustworthy aim — coast (track_active=False) so
                 # the controller holds instead of chasing it onto the legs/last-known
                 # partial position, and resumes when the subject reappears in full.
-                pan, tilt, zoom = ctrl.step(err, vel, height, track_active=not occluded, t=now)
-                self._ptz_last_cmd = (pan, tilt, zoom)
-                self._log_ptz_cmd("auto", pan, tilt, zoom)
+                self._publish_ptz(
+                    ctrl, err, vel, height, track_active=not occluded, now=now, log_label="auto"
+                )
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s ptz auto step failed", self.camera_id, exc_info=True)
         else:
@@ -1338,8 +1399,9 @@ class CameraWorker:
             self._prev_aim_err = None
             self._aim_vel = (0.0, 0.0)
             try:
-                pan, tilt, zoom = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, track_active=False, t=now)
-                self._ptz_last_cmd = (pan, tilt, zoom)
+                self._publish_ptz(
+                    ctrl, (0.0, 0.0), (0.0, 0.0), 0.0, track_active=False, now=now, log_label=None
+                )
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s ptz auto idle step failed", self.camera_id, exc_info=True)
 
@@ -2700,7 +2762,7 @@ class CameraWorker:
                 # commands (nudge / set-target / enable-tracking) are still drained
                 # when no frames are arriving — they must never depend on frame
                 # delivery.
-                self._frame_ready.wait(timeout=0.05)
+                self._frame_ready.wait(timeout=_INFER_WAKE_TIMEOUT_S)
                 self._frame_ready.clear()
                 if self._stop_event.is_set():
                     break
@@ -2928,6 +2990,7 @@ class CameraWorker:
         # build, so it stays here; the heavy detect/face models are built on the
         # inference thread (see ``_build_inference_stacks``).
         self._build_ptz_stack()
+        self._maybe_start_ptz_pump()
 
     def _build_inference_stacks(self) -> None:
         """Build the detect + face stacks ON the inference thread.
@@ -3154,6 +3217,7 @@ class CameraWorker:
             self._ptz_owned = False
             self._digital_framer = None  # fresh framer for the new backend
             self._build_ptz_stack()
+            self._maybe_start_ptz_pump()
         log.info(
             "camera_id=%s PTZ backend rebuilt for backend=%s",
             self.camera_id,
@@ -3207,6 +3271,25 @@ class CameraWorker:
             )
             self._ptz = None
             self._ptz_backend = None
+
+    def _maybe_start_ptz_pump(self) -> None:
+        """Start the controller's fixed-rate command loop when the pump flag is ON.
+
+        No-op when the flag is OFF (legacy inline ``step()`` drive) or when there's
+        no controller / it lacks ``start()`` (bare-backend injection).  Starting is
+        idempotent in the controller, so a rebuild can safely call this again.
+        Never raises — a pump that fails to start must not break the worker.
+        """
+        if not self._ptz_pump:
+            return
+        ctrl = self._ptz
+        if ctrl is None or not hasattr(ctrl, "start"):
+            return
+        try:
+            ctrl.start()
+            log.info("camera_id=%s PTZ command pump started (AUTOPTZ_PTZ_PUMP)", self.camera_id)
+        except Exception:  # noqa: BLE001
+            log.warning("camera_id=%s PTZ pump start failed", self.camera_id, exc_info=True)
 
     def _create_shm_writer_eager(self) -> None:
         """Set ``self._shm`` from the injected writer or by creating one now.

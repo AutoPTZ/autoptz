@@ -705,6 +705,87 @@ class TestControllerThread:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Controller — fixed-rate pump + stop-on-loss heartbeat
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestControllerPumpHeartbeat:
+    """The background loop drives the backend from update()s; a stale producer
+    (no fresh update() past the heartbeat threshold) makes the loop halt."""
+
+    def test_update_records_recency(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """update() stamps the last-update monotonic time so the loop can gauge it."""
+        import autoptz.engine.ptz.controller as ctrl_mod
+
+        ctrl = PTZController(MockBackend(), _cfg(kp=0.6), rate_hz=20.0)
+        monkeypatch.setattr(ctrl_mod.time, "monotonic", lambda: 123.5)
+        ctrl.update((0.3, 0.0), (0.0, 0.0), 0.45, True)
+        assert ctrl._last_update_t == pytest.approx(123.5)
+
+    def test_heartbeat_threshold_floor(self) -> None:
+        """At a fast rate the threshold floors at the absolute minimum, not periods."""
+        ctrl = PTZController(MockBackend(), _cfg(), rate_hz=1000.0)
+        assert ctrl._heartbeat_stale_s == pytest.approx(ctrl_mod_floor())
+
+    def test_thread_drives_from_update(self) -> None:
+        """With start(), a fresh update(track_active=True) makes the loop drive."""
+        backend = MockBackend()
+        ctrl = PTZController(backend, _cfg(kp=0.6), rate_hz=50.0)
+        ctrl.start()
+        try:
+            ctrl.update((0.5, 0.0), (0.0, 0.0), 0.45, True)
+            deadline = time.monotonic() + 2.0
+            while not backend.velocity_calls and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert backend.velocity_calls, "loop did not drive backend from update()"
+            assert ctrl.state == ControllerState.TRACKING
+        finally:
+            ctrl.stop()
+
+    def test_stale_feed_halts_camera(self) -> None:
+        """Withholding update() past the stale threshold makes the loop stop()."""
+        backend = MockBackend()
+        # Short threshold so the test is quick but still well above a tick period.
+        ctrl = PTZController(backend, _cfg(kp=0.6), rate_hz=50.0)
+        ctrl._heartbeat_stale_s = 0.1
+        ctrl.start()
+        try:
+            ctrl.update((0.5, 0.0), (0.0, 0.0), 0.45, True)
+            deadline = time.monotonic() + 2.0
+            while not backend.velocity_calls and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert backend.velocity_calls, "loop never started driving"
+            stops_before = backend.stop_count
+            # Now go quiet: no further update() — the loop must halt and drop to IDLE.
+            deadline = time.monotonic() + 2.0
+            while ctrl.state != ControllerState.IDLE and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert ctrl.state == ControllerState.IDLE, "stale feed did not halt the controller"
+            assert backend.stop_count > stops_before, "stale feed did not send a backend stop"
+        finally:
+            ctrl.stop()
+
+    def test_heartbeat_inactive_on_synchronous_step(self) -> None:
+        """The synchronous step() path never trips the heartbeat (loop not running).
+
+        step() refreshes the payload itself immediately before _tick, so even a
+        wall-clock gap between steps must not be treated as a stalled producer.
+        """
+        backend = MockBackend()
+        ctrl = PTZController(backend, _cfg(kp=0.6))
+        ctrl._heartbeat_stale_s = 0.0  # would trip instantly IF the gate were off
+        ctrl.step((0.5, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
+        ctrl.step((0.5, 0.0), (0.0, 0.0), 0.45, True, t=1.0)
+        assert ctrl.state == ControllerState.TRACKING
+
+
+def ctrl_mod_floor() -> float:
+    import autoptz.engine.ptz.controller as ctrl_mod
+
+    return ctrl_mod._HEARTBEAT_FLOOR_S
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Controller — rate-limit suppression
 # ─────────────────────────────────────────────────────────────────────────────
 
