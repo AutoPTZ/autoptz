@@ -469,8 +469,13 @@ class TestZoneGeometry:
         assert abs(pan) <= 1.0
 
     def test_response_curve_applied(self) -> None:
-        """With large Kp, mid-range error should produce less than half-speed."""
-        ctrl = PTZController(MockBackend(), _cfg(kp=0.5))
+        """With large Kp, mid-range error should produce less than half-speed.
+
+        Catch-up speed is disabled here so this isolates the ``_shape`` response
+        curve — with the default catch-up boost on, a far subject is deliberately
+        driven *faster* (covered by ``test_ptz_catchup``).
+        """
+        ctrl = PTZController(MockBackend(), _cfg(kp=0.5, catch_up_speed=0.0))
         pan, _, _ = ctrl.step((1.0, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
         # shape(0.5) ≈ 0.35; shape(1.0)=1.0 — shape(0.5) < 0.5
         assert pan < 0.5

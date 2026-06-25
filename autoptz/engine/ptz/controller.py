@@ -146,6 +146,26 @@ def _shape(x: float) -> float:
     return math.copysign(abs(x) ** _POWER, x) if x != 0.0 else 0.0
 
 
+# Dynamic catch-up speed: the per-axis speed ceiling is scaled by 1 + gain·strength·
+# min(1, |error|/ref), so the camera speeds up the further the subject is from the
+# target framing and eases back to the configured speed near centre.
+_DYN_GAIN = 1.5  # max extra-speed multiplier at full strength + far error (→ up to 2.5×)
+_DYN_E_REF = 0.6  # aim error (fraction of half-frame) at which the boost saturates
+
+
+def _catch_up_boost(error: float, strength: float) -> float:
+    """Error-proportional speed multiplier (``>= 1.0``).
+
+    ``error`` is the normalized aim error toward the setpoint (0 at centre, ~1 at
+    the frame edge); ``strength`` is the user's catch-up control in ``[0, 1]``
+    (0 disables → always ``1.0``).  Saturates at ``_DYN_E_REF`` so a far subject
+    gets full catch-up speed without the boost running away.
+    """
+    if strength <= 0.0:
+        return 1.0
+    return 1.0 + _DYN_GAIN * strength * min(1.0, abs(error) / _DYN_E_REF)
+
+
 def _zone_norm(dx: float, dy: float, hw: float, hh: float, roundness: float) -> float:
     """Normalized distance from a zone centre; ``<= 1.0`` means inside the zone.
 
@@ -647,9 +667,15 @@ class PTZController:
             if abs(tilt_raw) > 1.0:
                 self._int_ey *= 0.5
 
-        # 5. per-camera speed ceiling + clamp + response curve
-        pan_cmd = _shape(_clamp(pan_raw * cfg.max_pan_speed, -1.0, 1.0))
-        tilt_cmd = _shape(_clamp(tilt_raw * cfg.max_tilt_speed, -1.0, 1.0))
+        # 5. per-camera speed ceiling + dynamic catch-up + clamp + response curve.
+        #    The ceiling is scaled per-axis by an error-proportional boost: far
+        #    from the setpoint the camera speeds up to catch the subject; near it
+        #    the boost is ~1 so centred framing stays smooth and precise.
+        catch = float(getattr(cfg, "catch_up_speed", 0.0))
+        pan_cap = cfg.max_pan_speed * _catch_up_boost(ex_f, catch)
+        tilt_cap = cfg.max_tilt_speed * _catch_up_boost(ey_f, catch)
+        pan_cmd = _shape(_clamp(pan_raw * pan_cap, -1.0, 1.0))
+        tilt_cmd = _shape(_clamp(tilt_raw * tilt_cap, -1.0, 1.0))
 
         # 5b. oscillation guard — damp the command when it keeps flipping sign
         #     (self-sustained hunting), easing back to full speed once it settles.

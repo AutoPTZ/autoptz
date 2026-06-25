@@ -178,6 +178,13 @@ class PTZConfig(BaseModel, frozen=True):
     # snapping to full speed on a sudden error (the "speeds out of nowhere" feel),
     # which matters most on fast NDI/VISCA heads.  0 disables (instant response).
     max_accel: float = Field(default=3.0, ge=0.0, le=50.0)
+    # Dynamic "catch-up" speed (0..1): how much the camera speeds UP when the
+    # subject is far from the target framing, easing back to the configured speed
+    # near centre for precision.  0 = fixed speed (legacy); higher = faster
+    # catch-up of off-centre / fast-moving subjects.  Scales the per-axis speed
+    # ceiling by the normalized aim error, so it only adds speed where it helps
+    # and never makes centred framing twitchy.  On by default.
+    catch_up_speed: float = Field(default=0.6, ge=0.0, le=1.0)
     invert_pan: bool = False
     invert_tilt: bool = False
     deadzone_x: float = Field(default=0.05, ge=0.0, le=0.5)
