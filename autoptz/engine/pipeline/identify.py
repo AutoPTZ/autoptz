@@ -25,7 +25,9 @@ This module owns *embedding + matching*; gallery storage/CRUD lives in
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -133,6 +135,45 @@ def cosine(a: NDArray[np.floating], b: NDArray[np.floating]) -> float:
     return float(np.dot(na, nb))
 
 
+# ── face model provisioning ────────────────────────────────────────────────────
+
+
+def insightface_root() -> str:
+    """Resolve the insightface model storage root (``$INSIGHTFACE_HOME`` or ``~/.insightface``).
+
+    Threaded into ``FaceAnalysis(root=...)`` so a bundled or relocated model cache
+    is honoured — the offline-Windows provisioning path.  Kept consistent with the
+    weight check in :func:`autoptz.engine.runtime.diagnostics.face_status`.
+    """
+    return os.environ.get("INSIGHTFACE_HOME") or str(Path.home() / ".insightface")
+
+
+def ensure_face_model(root: str | None = None, model_name: str = "buffalo_l") -> str | None:
+    """Pre-download the insightface model pack into *root* for offline use.
+
+    Constructing :class:`FaceAnalysis` triggers insightface's own download of the
+    pack (needs network) into ``<root>/models/<model_name>``; once cached, later
+    OFFLINE runs load it without network — the fix for "faces never save on an
+    offline first-run" (run ``python -m tools.fetch_models`` once while online).
+    Returns ``None`` on success, or a human-readable error string (never raises).
+    """
+    try:
+        from insightface.app import FaceAnalysis  # noqa: PLC0415
+
+        from autoptz.engine.runtime.inference import EP  # noqa: PLC0415
+
+        app = FaceAnalysis(
+            name=model_name,
+            root=root or insightface_root(),
+            providers=[EP.CPU.value],
+            allowed_modules=["detection", "recognition"],
+        )
+        app.prepare(ctx_id=-1, det_size=(640, 640))
+        return None
+    except Exception as exc:  # noqa: BLE001 — provisioning must never crash the caller
+        return f"{type(exc).__name__}: {exc}"
+
+
 # ── face recogniser ──────────────────────────────────────────────────────────────
 
 
@@ -161,6 +202,11 @@ class FaceRecognizer:
         self._det_size = det_size
         self._app: Any | None = _app
         self._available = _app is not None
+        # Human-readable reason the model failed to load (``None`` when healthy).
+        # Surfaced so a silent insightface/model failure (the "faces never save"
+        # symptom, common on offline Windows first-run) becomes diagnosable in
+        # the Services panel / logs instead of vanishing into a swallowed except.
+        self.last_error: str | None = None
         if _app is None:
             self._try_init()
 
@@ -194,24 +240,32 @@ class FaceRecognizer:
             # and load time.
             app = FaceAnalysis(
                 name=self._model_name,
+                root=insightface_root(),
                 providers=providers,
                 allowed_modules=["detection", "recognition"],
             )
             app.prepare(ctx_id=ctx_id, det_size=(self._det_size, self._det_size))
             self._app = app
             self._available = True
+            self.last_error = None
             log.info(
                 "FaceRecognizer ready (insightface %s, ep=CPU, modules=detection+recognition)",
                 self._model_name,
             )
-        except Exception:  # noqa: BLE001 — missing dep/model/network must not raise
+        except Exception as exc:  # noqa: BLE001 — missing dep/model/network must not raise
             self._app = None
             self._available = False
+            # Capture the concrete reason (ImportError / model-not-found / ORT EP /
+            # the NumPy-2 C-ext break) so the Services panel and logs can show
+            # *why* face recognition is off instead of failing silently.
+            self.last_error = f"{type(exc).__name__}: {exc}"
             if not _WARNED_UNAVAILABLE:
                 _WARNED_UNAVAILABLE = True
                 log.warning(
-                    "insightface unavailable (missing package, model, or network); "
-                    "face recognition disabled — manual click-to-track still works.",
+                    "insightface unavailable for model %r (%s); face recognition "
+                    "disabled — manual click-to-track still works.",
+                    self._model_name,
+                    self.last_error,
                     exc_info=True,
                 )
 

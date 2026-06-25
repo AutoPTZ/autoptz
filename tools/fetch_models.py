@@ -9,12 +9,15 @@ detection working even when later run offline:
 
 It downloads/exports the detector tiers and pose model into the platform
 app-data ``…/AutoPTZ/models`` dir (the same dir
-:class:`autoptz.engine.runtime.models.ModelManager` reads at engine start).
+:class:`autoptz.engine.runtime.models.ModelManager` reads at engine start), and
+pre-downloads the face-recognition pack (insightface ``buffalo_l``) into the
+insightface cache so face enrolment works when later run OFFLINE — the fix for
+"faces never save on an offline first-run".  Skip the face step with
+``--detector-only``.  ReID (boxmot) weights use their upstream cache and are not
+fetched here.
 
-Face (insightface) and ReID (boxmot) weights use their upstream caches and are
-not removed by this CLI.
-
-Exit code 0 if a usable detector ONNX is available afterwards, 1 otherwise.
+Exit code 0 if a usable detector ONNX is available afterwards, 1 otherwise.  A
+failed face download is a warning only (face is optional), not a hard failure.
 """
 
 from __future__ import annotations
@@ -39,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--detector-only",
         action="store_true",
-        help="Fetch detector tiers only; skip the pose model.",
+        help="Fetch detector tiers only; skip the pose and face models.",
     )
     parser.add_argument(
         "--remove",
@@ -98,6 +101,23 @@ def main(argv: list[str] | None = None) -> int:
             "network access, or set AUTOPTZ_MODEL_URL):\n  - %s",
             "\n  - ".join(failed),
         )
+
+    # Face pack (insightface buffalo_l): pre-download so offline runs can enrol
+    # faces.  Best-effort — a failure here is a warning, never a hard exit, since
+    # face recognition is optional (manual click-to-track still works).
+    if not args.detector_only:
+        from autoptz.engine.pipeline.identify import ensure_face_model, insightface_root
+
+        log.info("Fetching face model (insightface buffalo_l) into %s ...", insightface_root())
+        face_err = ensure_face_model()
+        if face_err:
+            log.warning(
+                "  → face model NOT available (offline face enrolment will be disabled): %s",
+                face_err,
+            )
+        else:
+            log.info("  → ready: insightface buffalo_l")
+
     return 0 if ok_any and not failed else (0 if ok_any else 1)
 
 

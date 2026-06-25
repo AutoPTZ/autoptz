@@ -90,6 +90,41 @@ class TestTrackerStatusNonBlocking:
             assert "boxmot" not in sys.modules, "tracker_status must not import boxmot"
 
 
+class TestFaceStatusModelPresence:
+    """face_status must reflect whether the model WEIGHTS are on disk, not just
+    whether the insightface package imports.
+
+    The "faces never save on Windows" symptom: an offline first-run has the
+    package installed but no ``buffalo_l`` weights, so SCRFD/ArcFace never load.
+    The old probe reported "ok" purely on package import — hiding the real cause.
+    """
+
+    def test_warns_when_package_present_but_model_missing(self, monkeypatch, tmp_path) -> None:
+        from autoptz.engine.runtime import diagnostics as diag
+
+        monkeypatch.setattr(diag, "_module_present", lambda name: name == "insightface")
+        monkeypatch.setenv("INSIGHTFACE_HOME", str(tmp_path))  # empty → no weights
+        row = diag.face_status()
+        assert row["state"] == "warn"
+        assert "model" in row["detail"].lower()
+
+    def test_ok_when_model_weights_present(self, monkeypatch, tmp_path) -> None:
+        from autoptz.engine.runtime import diagnostics as diag
+
+        monkeypatch.setattr(diag, "_module_present", lambda name: name == "insightface")
+        models = tmp_path / "models" / "buffalo_l"
+        models.mkdir(parents=True)
+        (models / "det_10g.onnx").write_bytes(b"x")
+        monkeypatch.setenv("INSIGHTFACE_HOME", str(tmp_path))
+        assert diag.face_status()["state"] == "ok"
+
+    def test_off_when_package_absent(self, monkeypatch) -> None:
+        from autoptz.engine.runtime import diagnostics as diag
+
+        monkeypatch.setattr(diag, "_module_present", lambda name: False)
+        assert diag.face_status()["state"] == "off"
+
+
 class TestInferencePoolRelease:
     """Releasing a pooled model drops the cached instance + re-arms the build."""
 
