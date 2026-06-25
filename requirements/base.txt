@@ -24,6 +24,13 @@ Pillow==12.2.0
 pydantic==2.11.3
 msgpack==1.2.1
 
+# ── networking / TLS ──────────────────────────────────────────────────────────
+# CA bundle for HTTPS. Frozen (PyInstaller) builds can lack the system trust
+# store, so the updater's TLS handshake to api.github.com failed silently —
+# the root cause of "Intel Macs can't check for updates". The checker uses
+# certifi's bundle when present (see autoptz/update/checker._ssl_context).
+certifi==2026.6.17
+
 # ── PTZ control ───────────────────────────────────────────────────────────────
 pyserial==3.5
 visca-over-ip==0.5.1
