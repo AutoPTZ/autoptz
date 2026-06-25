@@ -143,10 +143,22 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          # Compute SHA-256 for every release asset and write a single manifest.
+          # The in-app updater fetches this file to verify installers before launch.
+          find artifacts -type f | sort | while read -r f; do
+            sha256sum "$f" | awk -v fname="$(basename "$f")" '{print $1 "  " fname}'
+          done > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: |
+            artifacts/**/*
+            SHA256SUMS
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
