@@ -60,3 +60,68 @@ def apply_opencv_thread_cap(threads: int | None = None) -> None:
             cv2.setNumThreads(0)
     except Exception:  # noqa: BLE001 — a thread-cap hint must never block startup
         pass
+
+
+def apply_thread_caps(budget: int) -> None:
+    """Cap OMP/BLAS/MKL/NumExpr env vars and the torch intra-op pool.
+
+    Called from :func:`autoptz.engine.supervisor.Supervisor._apply_hardware_env`
+    immediately after ORT and OpenCV are capped, with the same per-camera thread
+    budget.
+
+    **Two paths, two mechanisms:**
+
+    *   **Process-per-camera (future)** — the child process inherits the env
+        before any library is imported, so all four env vars take full effect.
+    *   **In-process threaded path (current default)** — OMP/BLAS/MKL/NumExpr
+        env vars only bind *before the library's first import*; by the time this
+        runs those libraries may already be loaded and their thread pools already
+        sized.  The only runtime knob that reliably reaches an already-imported
+        library in-process is ``torch.set_num_threads``.  We therefore call it
+        unconditionally (guarded by importability) so the torch pool — the
+        heaviest in-process consumer via boxmot/insightface — is always capped.
+
+    Must never raise; a thread-cap hint must never block startup.
+    """
+    n = max(1, int(budget))
+    n_str = str(n)
+
+    # Publish env vars so:
+    #   • a process-per-camera child inherits them before importing any lib, and
+    #   • any library imported *after* this call (e.g. lazy-loaded reid backends)
+    #     picks up the correct value automatically.
+    for var in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        os.environ[var] = n_str
+
+    # torch.set_num_threads is a runtime call — it caps the already-running
+    # torch intra-op thread pool regardless of when torch was imported.
+    # Guard so a torch-less install is unaffected and never hard-fails.
+    _apply_torch_thread_cap(n)
+
+
+def _apply_torch_thread_cap(n: int) -> None:
+    """Set torch intra-op thread count to *n* if torch is importable; else no-op."""
+    try:
+        import torch
+
+        torch.set_num_threads(n)
+    except Exception:  # noqa: BLE001 — missing dep or import error → silent no-op
+        pass
+
+
+def env_torch_cap() -> int | None:
+    """Return the torch thread count if torch is importable, else None.
+
+    Utility for tests and diagnostics only — not used in hot paths.
+    """
+    try:
+        import torch
+
+        return int(torch.get_num_threads())
+    except Exception:  # noqa: BLE001
+        return None
