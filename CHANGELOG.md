@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.0-rc4] — 2026-06-25
+
+> Pre-release for testing — fixes the three issues reported on rc3 (safe-zone
+> centering, PTZ pan jitter, and Windows face-recognition diagnosability +
+> offline model bundling). **Please validate on your real cameras** — especially
+> physical-PTZ panning and Windows face enrollment — and report back before this
+> becomes the stable 2.2.0.
+
 ### Fixed
 
 - **Safe zone now centers the subject (was: froze them at the oval edge).** The
