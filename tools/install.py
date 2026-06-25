@@ -57,7 +57,25 @@ class SystemInfo:
 
     @property
     def has_intel_gpu(self) -> bool:
-        return any("intel" in name.lower() for name in self.gpu_names)
+        """True when any detected GPU is clearly Intel.
+
+        Matches canonical Intel GPU brand strings (Arc, Iris, UHD) *and* the
+        PCI vendor string "intel" so that lspci lines like "Intel Corporation
+        DG2 [Arc A770]" or "8086:" prefix entries are also caught.  A bare
+        substring "intel" in the adapter name is sufficient; vendor ID ``8086``
+        or the word "arc"/"iris"/"uhd" are additional signals.
+        """
+        _INTEL_TOKENS = ("intel", "arc", "iris", "uhd", "8086")
+        return any(any(tok in name.lower() for tok in _INTEL_TOKENS) for name in self.gpu_names)
+
+    @property
+    def has_discrete_non_intel_gpu(self) -> bool:
+        """True when any detected GPU is a discrete NVIDIA or AMD card."""
+        return self.has_nvidia_gpu or any(
+            "amd" in name.lower() or "radeon" in name.lower()
+            for name in self.gpu_names
+            if "intel" not in name.lower()
+        )
 
     def label(self) -> str:
         gpu_label = ", ".join(self.gpu_names) if self.gpu_names else "no GPU name detected"
@@ -177,14 +195,35 @@ def detect_system() -> SystemInfo:
 
 
 def _auto_accelerator(system: SystemInfo) -> Accelerator | None:
-    """Choose the safest useful accelerator for a normal local install."""
+    """Choose the safest useful accelerator for a normal local install.
+
+    Selection priority (first match wins):
+      1. macOS          → None  (base wheel; CoreML picked up automatically)
+      2. NVIDIA present → nvidia  (Windows or Linux)
+      3. Intel GPU      → openvino  (Arc / Iris / UHD on Windows or Linux)
+      4. Intel CPU only → openvino  (beats the stock CPU EP on all Intel boxes)
+      5. Windows AMD    → directml  (DX12 fallback; covers AMD/other dGPUs)
+      6. Everything else → None (base CPU EP)
+
+    OpenVINO is never auto-selected on macOS because there is no macOS wheel.
+    The ``--ci`` path forces ``accelerator="cpu"`` before this function is
+    called, so CI always lands on the None/base branch.
+    """
+    if system.is_macos:
+        return None
+    if system.has_nvidia_gpu:
+        return "nvidia"
+    # Intel GPU (Arc / Iris / UHD) on Windows or Linux → OpenVINO.
+    if system.has_intel_gpu:
+        return "openvino"
+    # Linux Intel CPU with no discrete GPU → OpenVINO beats the stock CPU EP.
+    # (Windows CPU-only boxes already get DirectML below, which is the existing behaviour.)
+    if system.is_linux and not system.has_discrete_non_intel_gpu:
+        cpu_info = _run_command_lines(("grep", "-m1", "model name", "/proc/cpuinfo"))
+        if any("intel" in line.lower() for line in cpu_info):
+            return "openvino"
     if system.is_windows:
         return "directml"
-    if system.is_linux and system.has_nvidia_gpu:
-        return "nvidia"
-    # Intel CPU/iGPU (no discrete NVIDIA): OpenVINO beats the stock CPU EP on Intel.
-    if system.is_linux and system.has_intel_gpu:
-        return "openvino"
     return None
 
 
@@ -203,6 +242,11 @@ def _resolve_accelerator(system: SystemInfo, requested: Accelerator) -> Accelera
             raise ValueError("The NVIDIA ONNX Runtime wheel is only for Windows/Linux.")
         return "nvidia"
     if requested == "openvino":
+        if system.is_macos:
+            raise ValueError(
+                "OpenVINO has no macOS wheel; use the default CoreML/CPU build"
+                " (omit --accelerator or pass --accelerator cpu)."
+            )
         return "openvino"
     raise ValueError(f"Unknown accelerator: {requested}")
 
