@@ -6,6 +6,31 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Safe zone now centers the subject (was: froze them at the oval edge).** The
+  PTZ controller's framing setpoint is the safe-zone **center**, not the frame
+  center: a subject inside the zone is now gently eased toward the middle (Center
+  Stage-style) instead of being held wherever they happened to enter the oval. A
+  **frame-edge guard** keeps a wide zone from ever stranding the subject at the
+  screen edge, and a configured **square** zone now respects its corners (the
+  `Roundness` control) instead of always behaving like an ellipse.
+- **Smoother PTZ tracking while the camera pans.** Ego-motion compensation is now
+  window-matched, so the controller no longer injects the camera's own pan speed
+  into its feed-forward on the frames between ego measurements (the main cause of
+  hunting). A brief target loss now resumes from the pre-loss speed instead of
+  cold-restarting the motion ramp (the "find" lurch). Note: this fixes the
+  control-loop side of the jitter; a detector/tracker dropping the box during very
+  fast pans is a separate item still under investigation.
+- **Windows face recognition failures are now diagnosable, and the model can ship
+  offline.** A failed insightface/model load no longer fails silently — the
+  Services panel reports the real reason (and "model not downloaded" when the
+  `buffalo_l` weights are absent) instead of a misleading "ok". The face pack is
+  now provisioned via `python -m tools.fetch_models` and bundled into installers,
+  so a fresh **offline** machine can enroll faces. (If face recognition is failing
+  for a non-network reason — e.g. a dependency/ABI break — the Services panel now
+  surfaces it so it can be fixed directly.)
+
 ## [2.2.0-rc3] — 2026-06-24
 
 > Pre-release for testing — adds **Center Stage** software auto-framing on top of
