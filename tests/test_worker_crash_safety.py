@@ -255,3 +255,102 @@ def test_inference_loop_stops_appearance_thread_on_fatal_exit() -> None:
 
     assert not t.is_alive(), "inference thread should exit cleanly on a fatal error"
     assert stopped.is_set(), "_stop_appearance_thread must run in the finally"
+
+
+# ── _infer_last_error: stale-error clearing + dead-thread visibility ──────────
+
+
+class _FakeDetector:
+    """Fake YOLO detector whose ``detect`` raises on the first N calls."""
+
+    def __init__(self, raise_calls: int = 0) -> None:
+        self.calls = 0
+        self.raise_calls = raise_calls
+
+    def detect(self, frame):  # noqa: ANN001, ANN202
+        self.calls += 1
+        if self.calls <= self.raise_calls:
+            raise RuntimeError("detect boom")
+        return []  # no detections → empty, healthy tick
+
+
+class _FakeTracker:
+    def update(self, detections, frame, fps=30.0):  # noqa: ANN001, ANN202, ANN001
+        return []
+
+
+class _FakeDetectStack:
+    def __init__(self, raise_calls: int = 0) -> None:
+        self.detector = _FakeDetector(raise_calls)
+        self.tracker = _FakeTracker()
+
+
+def test_transient_detect_failure_does_not_pin_stale_error() -> None:
+    """Finding #1: a transient detect/track failure sets ``_infer_last_error``,
+    but the NEXT successful tick must CLEAR it — otherwise the stale error gets
+    attached to every later healthy telemetry and the camera looks permanently
+    faulted long after it recovered."""
+    w = _worker(_OkSource())
+    # First call raises; subsequent calls succeed.
+    w._detect = _FakeDetectStack(raise_calls=1)  # type: ignore[assignment]
+
+    # Tick 1: detect raises → error is stashed for the Camera Info panel.
+    out1 = w._maybe_track(_frame())
+    assert out1 == []
+    assert w._infer_last_error is not None, "transient failure should stash an error"
+
+    # Tick 2: detect succeeds → the stale error MUST be cleared.
+    out2 = w._maybe_track(_frame())
+    assert out2 == []
+    assert w._infer_last_error is None, (
+        "a successful tick must clear the stale error so later healthy telemetry "
+        "does not report the camera as permanently faulted"
+    )
+
+
+def test_emit_telemetry_does_not_carry_cleared_error() -> None:
+    """End-to-end of finding #1: after a transient failure followed by a healthy
+    tick, ``_emit_telemetry`` must NOT attach the (now cleared) stale error."""
+    captured: list[TelemetryMsg] = []
+    w = CameraWorker(
+        "cam-crash-1234abcd",
+        _cfg(),
+        on_telemetry=captured.append,
+        frame_source=_OkSource(),
+    )
+    w._detect = _FakeDetectStack(raise_calls=1)  # type: ignore[assignment]
+
+    # Transient failure then recovery.
+    w._maybe_track(_frame())
+    assert w._infer_last_error is not None
+    w._maybe_track(_frame())
+    assert w._infer_last_error is None
+
+    w._emit_telemetry(tracks=[], health=HealthState.OK, last_error=None)
+
+    assert captured, "expected a telemetry emit"
+    assert captured[-1].health.last_error is None, (
+        "healthy telemetry must not carry the cleared transient error"
+    )
+
+
+def test_inference_loop_fatal_exit_surfaces_error_for_capture_telemetry() -> None:
+    """Finding #2: when the inference thread dies fatally, the fatal handler must
+    set ``_infer_last_error`` so the still-running capture telemetry surfaces a
+    dead, box-blind camera instead of showing it as healthy."""
+    w = _worker(_OkSource())
+    assert w._infer_last_error is None
+    # Make the loop setup raise fatally (outside the per-iteration guard).
+    w._build_inference_stacks = lambda: (_ for _ in ()).throw(RuntimeError("build boom"))  # type: ignore[assignment]
+
+    w._inference_start.set()
+    t = threading.Thread(target=w._inference_loop, daemon=True)
+    t.start()
+    t.join(timeout=5.0)
+
+    assert not t.is_alive()
+    assert w._infer_last_error is not None, (
+        "the inference fatal handler must pin an error so capture telemetry shows "
+        "the camera went box-blind"
+    )
+    assert "inference thread stopped" in w._infer_last_error

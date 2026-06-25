@@ -640,8 +640,10 @@ class CameraWorker:
         # WARNING in the capture / inference loops, so a persistent fault stays
         # visible without spamming a stack trace every tick.  _infer_last_error
         # surfaces the most recent inference-stage failure for the Camera Info
-        # panel (cleared implicitly once ticks succeed again and telemetry moves
-        # on).
+        # panel.  It is cleared on the next successful detect/track tick (see
+        # _maybe_track) so a transient failure does not pin a stale error onto
+        # later healthy telemetry; the inference fatal handler sets a terminal
+        # value so a dead inference thread stays visible while capture streams.
         self._last_tick_warn_t = 0.0
         self._last_infer_warn_t = 0.0
         self._infer_last_error: str | None = None
@@ -2789,8 +2791,13 @@ class CameraWorker:
                             exc_info=True,
                         )
                     self._infer_last_error = str(exc)
-        except Exception:  # noqa: BLE001 — fatal: log; finally still joins appearance
+        except Exception as exc:  # noqa: BLE001 — fatal: log; finally still joins appearance
             log.error("camera_id=%s inference thread died", self.camera_id, exc_info=True)
+            # The inference thread is gone but capture may keep streaming, so the
+            # UI would otherwise show a healthy-but-box-blind camera with no error.
+            # Pin a terminal error onto telemetry so the still-running capture loop
+            # surfaces *why* tracks stopped flowing.
+            self._infer_last_error = f"inference thread stopped: {exc}"
         finally:
             # ALWAYS join the appearance thread — even on a fatal error — so it is
             # never orphaned when inference goes down.
@@ -3526,6 +3533,11 @@ class CameraWorker:
             self._track_ms = (_t2 - _t1) * 1000.0
             self._record_stage("detect", self._detect_ms)
             self._record_stage("track", self._track_ms)
+            # Detect/track succeeded this tick — clear any stale inference error so
+            # a single transient failure does not pin last_error on every later
+            # healthy telemetry (the camera would otherwise look permanently
+            # faulted long after it recovered).
+            self._infer_last_error = None
         except Exception as exc:  # noqa: BLE001
             # Surface the FIRST detect/track failure at WARNING (then throttle) and
             # stash it as last_error so the Camera Info panel can show *why* the
