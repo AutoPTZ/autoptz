@@ -692,6 +692,25 @@ class PropertiesPanel(QWidget):
                 ),
             ),
         )
+        self._ptz_baud = QComboBox()
+        self._ptz_baud.setEditable(True)
+        self._ptz_baud.addItems(["9600", "38400", "115200"])
+        self._ptz_baud.setToolTip(
+            "VISCA-USB serial baud. 9600 suits most Sony cameras; many newer USB "
+            "PTZ cameras use 115200. Ignored by non-USB backends."
+        )
+        self._ptz_baud.currentTextChanged.connect(self._schedule)
+        apf.addRow(
+            "Baud (USB)",
+            _with_chip(
+                self._ptz_baud,
+                HelpBadge(
+                    "Serial speed for a VISCA-USB camera. If a USB camera doesn't move, "
+                    "try 115200 — a camera set to the wrong baud silently ignores every "
+                    "command. On the 'auto' backend this is detected for you."
+                ),
+            ),
+        )
         adv_ptz.add_widget(_wrap(apf))
         pz.add_widget(adv_ptz)
 
@@ -1371,6 +1390,7 @@ class PropertiesPanel(QWidget):
             _set_combo(self._backend, "auto" if is_center_stage else backend)
             self._backend.setEnabled(not is_center_stage)
             self._ptz_address.setText(pz.get("address") or "")
+            self._ptz_baud.setCurrentText(str(pz.get("baud", 9600)))
             self._auto_zoom.setChecked(bool(pz.get("auto_zoom", True)))
             self._vcam_out.setChecked(bool(pz.get("vcam_out", False)))
             # Advanced tracking tuning (sliders store hundredths of the cfg value).
@@ -1572,6 +1592,10 @@ class PropertiesPanel(QWidget):
             "digital" if self._center_stage.isChecked() else self._backend.currentText()
         )
         cfg["ptz"]["address"] = self._ptz_address.text().strip() or None
+        try:
+            cfg["ptz"]["baud"] = int(str(self._ptz_baud.currentText()).strip())
+        except (TypeError, ValueError):
+            cfg["ptz"]["baud"] = 9600
         cfg["ptz"]["auto_zoom"] = self._auto_zoom.isChecked()
         cfg["ptz"]["vcam_out"] = self._vcam_out.isChecked()
         cfg["ptz"]["zoom_framing"] = framing

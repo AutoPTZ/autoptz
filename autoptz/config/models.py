@@ -170,6 +170,11 @@ class PtzPresetSlot(BaseModel, frozen=True):
 class PTZConfig(BaseModel, frozen=True):
     backend: Literal["auto", "ndi", "visca_ip", "visca_usb", "onvif", "digital"] = "auto"
     address: str | None = None
+    # VISCA-USB serial baud rate.  Most legacy Sony cameras are 9600; many newer
+    # USB PTZ cameras run at 115200 and *silently ignore* every command at the
+    # wrong rate.  Used by the ``visca_usb`` backend; the ``auto`` backend probes
+    # for the right value during serial discovery (see ``engine.ptz.visca_serial``).
+    baud: int = Field(default=9600, ge=1200, le=921600)
     max_pan_speed: float = Field(default=0.7, ge=0.0, le=1.0)
     max_tilt_speed: float = Field(default=0.7, ge=0.0, le=1.0)
     max_zoom_speed: float = Field(default=0.3, ge=0.0, le=1.0)

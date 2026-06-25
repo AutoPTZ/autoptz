@@ -3060,11 +3060,17 @@ class CameraWorker:
             # this, NDI PTZ (auto-follow + manual) silently never builds.
             ndi_name: str | None = None
             src = getattr(self.config, "source", None)
-            if src is not None and getattr(src, "type", "") == "ndi":
+            src_type = getattr(src, "type", "") if src is not None else ""
+            if src_type == "ndi":
                 addr = (getattr(src, "address", "") or "").strip()
                 ndi_name = addr[len("ndi://") :] if addr.startswith("ndi://") else addr
 
-            backend = build_backend(self.config.ptz, ndi_name=ndi_name)
+            # Only USB/UVC sources auto-probe serial ports for a VISCA control
+            # port — so a network camera's "auto" never grabs an unrelated
+            # USB-serial device.
+            backend = build_backend(
+                self.config.ptz, ndi_name=ndi_name, is_usb=(src_type == "usb")
+            )
             if backend is None:
                 return
             self._ptz_backend = backend
