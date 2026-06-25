@@ -261,10 +261,25 @@ def plan_install(
     ui_only: bool = False,
     ci: bool = False,
     upgrade_pip: bool = False,
+    with_tracking: bool = False,
+    with_export: bool = False,
+    full: bool = False,
 ) -> InstallPlan:
-    """Build a deterministic pip plan without running it."""
+    """Build a deterministic pip plan without running it.
+
+    The default install is torch-free: the heavy boxmot (tracking) and
+    ultralytics (export) extras are opt-in via ``--with-tracking`` /
+    ``--with-export`` / ``--full``. ``--dev`` pulls them in through dev.txt
+    (the test suite needs them), so they are not added again here when dev is
+    selected.
+    """
     if ui_only and packaging:
         raise ValueError("--ui-only and --packaging target different environments.")
+    # dev.txt already references tracking.txt + export.txt, so contributors and
+    # CI (--dev) always get them. The explicit extras only matter for non-dev
+    # installs that opt in.
+    want_tracking = with_tracking or full
+    want_export = with_export or full
 
     requested = "cpu" if ci and accelerator == "auto" else accelerator
     selected = None if ui_only else _resolve_accelerator(system, requested)
@@ -305,6 +320,27 @@ def plan_install(
     if dev:
         profiles.append("dev")
         steps.append(_requirement_step("dev"))
+    # The torch-heavy extras. dev.txt already references both, so only add them
+    # explicitly when opted in without --dev (avoids a redundant pip step). They
+    # are skipped in --ui-only mode, which deliberately omits the ML stack.
+    if not ui_only and not dev:
+        if want_tracking:
+            profiles.append("tracking")
+            steps.append(_requirement_step("tracking"))
+            notes.append(
+                "tracking: boxmot adds BoT-SORT/DeepOCSORT/ByteTrack + OSNet ReID (pulls in torch)."
+            )
+        if want_export:
+            profiles.append("export")
+            steps.append(_requirement_step("export"))
+            notes.append(
+                "export: ultralytics adds the YOLO11 .pt → ONNX export fallback (pulls in torch)."
+            )
+    if not ui_only and not dev and not (want_tracking or want_export):
+        notes.append(
+            "Lean torch-free default: detection + IoU tracking only. Add --full"
+            " (or --with-tracking / --with-export) for boxmot/ultralytics."
+        )
     if packaging:
         profiles.append("packaging")
         steps.append(_requirement_step("packaging"))
@@ -373,6 +409,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "--ci", action="store_true", help="Use hardware-independent CI dependency choices."
     )
     parser.add_argument(
+        "--with-tracking",
+        action="store_true",
+        help="Add the boxmot tracking extra (BoT-SORT/DeepOCSORT/ReID; pulls in torch).",
+    )
+    parser.add_argument(
+        "--with-export",
+        action="store_true",
+        help="Add the ultralytics export extra (.pt → ONNX fallback; pulls in torch).",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Add both torch-heavy extras (tracking + export). Default install is torch-free.",
+    )
+    parser.add_argument(
         "--upgrade-pip", action="store_true", help="Upgrade pip before installing profiles."
     )
     parser.add_argument(
@@ -396,6 +447,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             ui_only=args.ui_only,
             ci=args.ci,
             upgrade_pip=args.upgrade_pip,
+            with_tracking=args.with_tracking,
+            with_export=args.with_export,
+            full=args.full,
         )
     except ValueError as exc:
         parser.error(str(exc))

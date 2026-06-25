@@ -1,0 +1,15 @@
+# AutoPTZ — optional export extra (heavy: pulls in PyTorch via ultralytics)
+# Install:
+#   python tools/install.py --with-export        # or --full
+#   pip install -r requirements/export.txt
+#
+# The DEFAULT install is torch-free: ModelManager provisions detector/pose
+# weights via the prebuilt-ONNX download (engine/runtime/models.py). This extra
+# adds the YOLO11 .pt → ONNX export fallback used only when that download is
+# unreachable.
+
+# Ultralytics is an OPTIONAL *fallback* used only when the prebuilt download is
+# unreachable; it exports the YOLO11 .pt → ONNX but pulls in torch (heavy).  Omit
+# it on minimal installs — detection still works via the prebuilt download, and
+# the engine degrades to live-preview-only only if BOTH paths fail.
+ultralytics>=8.3.0
