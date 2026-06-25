@@ -199,7 +199,7 @@ def test_download_update_writes_platform_asset(tmp_path, monkeypatch) -> None:
             self._done = True
             return b"appimage-bytes"
 
-    def _open(_request, timeout: float):
+    def _open(_request, timeout: float, **_kwargs: object):
         assert timeout > 0
         return _Response()
 

@@ -3,10 +3,23 @@
 The checker decides *which* release is newer.  This module handles the concrete
 "get the right file and start it" work in a UI-independent way so it is easy to
 test and safe to call from a background Qt task.
+
+Security hardening (see checker.py for the TLS context fix rationale):
+
+* :func:`download_update` uses the same certifi-backed SSL context as the
+  checker so HTTPS is verified even in frozen (PyInstaller) builds that lack the
+  system trust store.
+* :func:`verify_sha256` checks the downloaded installer against a ``SHA256SUMS``
+  (or ``<asset>.sha256``) file fetched from the same release before
+  :func:`launch_update` is called.  A tampered or corrupted installer is never
+  launched.  If the release has no checksum asset a ``WARNING`` is emitted and
+  the update proceeds (so existing releases without checksums still work), but
+  the gap is never silent.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import subprocess
@@ -18,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from autoptz.update.checker import UpdateInfo
+from autoptz.update.checker import UpdateInfo, _ssl_context
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +66,81 @@ def _safe_asset_name(name: str) -> str:
     return clean or "AutoPTZ-update"
 
 
+def verify_sha256(path: Path, expected_hex: str) -> bool:
+    """Return ``True`` iff the SHA-256 digest of *path* matches *expected_hex*.
+
+    Both digests are lower-cased before comparison.  The file is read in
+    ``_CHUNK_SIZE`` chunks so the installer is never fully loaded into memory.
+    """
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(_CHUNK_SIZE)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest().lower() == expected_hex.strip().lower()
+
+
+def _find_checksum_asset(
+    asset_name: str,
+    assets: tuple[tuple[str, str], ...],
+) -> tuple[str, str] | None:
+    """Return ``(name, url)`` for a checksum asset matching *asset_name*, or None.
+
+    Looks for two conventions (in preference order):
+
+    1. A ``<asset_name>.sha256`` sibling asset.
+    2. A ``SHA256SUMS`` (or ``sha256sums``) manifest asset.
+    """
+    # 1. Per-file sidecar: e.g. "AutoPTZ-2.1.0-setup.exe.sha256"
+    sidecar = asset_name.lower() + ".sha256"
+    for name, url in assets:
+        if name.lower() == sidecar:
+            return name, url
+    # 2. Aggregate manifest: "SHA256SUMS" or "sha256sums"
+    for name, url in assets:
+        if name.lower() in ("sha256sums", "sha256sums.txt"):
+            return name, url
+    return None
+
+
+def _parse_sha256sums(content: str, asset_name: str) -> str | None:
+    """Extract the hex digest for *asset_name* from a ``SHA256SUMS``-style file.
+
+    Handles both ``<hash>  <name>`` (two-space) and ``<hash> <name>`` formats.
+    If the file is a single-line sidecar (just the hash), returns that directly.
+    """
+    name_lower = asset_name.lower()
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) == 1:
+            # Single-line sidecar: the entire content is the hash.
+            return parts[0].lower()
+        digest, fname = parts[0], parts[1].lstrip("* \t")
+        if fname.lower() == name_lower:
+            return digest.lower()
+    return None
+
+
+def _fetch_text(url: str, opener: object | None = None) -> str:
+    """Fetch *url* as UTF-8 text using the certifi TLS context.
+
+    Raises ``RuntimeError`` on network/TLS/HTTP errors.
+    """
+    ctx = _ssl_context()
+    request = urllib.request.Request(url, headers={"User-Agent": "AutoPTZ-Updater"})
+    opener_obj = opener or urllib.request.urlopen
+    try:
+        with opener_obj(request, timeout=_TIMEOUT_S, context=ctx) as resp:  # type: ignore[misc]  # noqa: S310
+            return resp.read().decode("utf-8", errors="replace")
+    except (OSError, urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError(f"Could not fetch {url}: {exc}") from exc
+
+
 def download_update(
     info: UpdateInfo,
     *,
@@ -60,13 +148,14 @@ def download_update(
     opener: object | None = None,
     progress: DownloadProgress | None = None,
 ) -> DownloadedUpdate:
-    """Download this OS's release asset and return its local path.
+    """Download this OS's release asset, verify its SHA-256 hash, and return its local path.
 
     ``progress(downloaded, total)`` is called as bytes arrive so the UI can show
     a real progress bar (``total`` is 0 when the server omits Content-Length).
 
     Raises ``RuntimeError`` with a user-readable message when the release has no
-    usable asset for this OS or the network/file write fails.
+    usable asset for this OS, the network/file write fails, or the checksum
+    verification fails.  A missing checksum asset logs a ``WARNING`` and proceeds.
     """
     asset = info.asset_for_platform()
     if asset is None:
@@ -77,10 +166,11 @@ def download_update(
     path = target_dir / _safe_asset_name(asset_name)
     tmp_path = path.with_suffix(path.suffix + ".part")
 
+    ctx = _ssl_context()
     request = urllib.request.Request(url, headers={"User-Agent": "AutoPTZ-Updater"})
     opener_obj = opener or urllib.request.urlopen
     try:
-        with opener_obj(request, timeout=_TIMEOUT_S) as response:  # type: ignore[misc]  # noqa: S310
+        with opener_obj(request, timeout=_TIMEOUT_S, context=ctx) as response:  # type: ignore[misc]  # noqa: S310
             total = _content_length(response)
             with tmp_path.open("wb") as out:
                 _copy_stream(response, out, total, progress)
@@ -91,6 +181,38 @@ def download_update(
         except OSError:
             pass
         raise RuntimeError(f"Could not download AutoPTZ update: {exc}") from exc
+
+    # ── Checksum verification ──────────────────────────────────────────────────
+    checksum_asset = _find_checksum_asset(asset_name, info.assets)
+    if checksum_asset is None:
+        log.warning(
+            "AutoPTZ update: no SHA256SUMS or .sha256 asset found for release %s — "
+            "installer integrity could not be verified before launch.",
+            info.version,
+        )
+    else:
+        _cksum_name, cksum_url = checksum_asset
+        try:
+            cksum_text = _fetch_text(cksum_url, opener=opener)
+        except RuntimeError as exc:
+            raise RuntimeError(f"Could not fetch checksum for AutoPTZ update: {exc}") from exc
+        expected = _parse_sha256sums(cksum_text, asset_name)
+        if expected is None:
+            raise RuntimeError(
+                f"Checksum file for AutoPTZ {info.version} did not contain an entry "
+                f"for '{asset_name}'. Update aborted to prevent running an unverified installer."
+            )
+        if not verify_sha256(path, expected):
+            # Remove the tampered/corrupt file so it is never launched.
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise RuntimeError(
+                f"SHA-256 mismatch for '{asset_name}' — the downloaded installer may be "
+                "corrupted or tampered with. Update aborted."
+            )
+        log.info("AutoPTZ update: SHA-256 verified for %s (%s)", asset_name, info.version)
 
     return DownloadedUpdate(path=path, asset_name=asset_name, version=info.version)
 
