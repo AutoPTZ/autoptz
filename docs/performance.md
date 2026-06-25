@@ -10,12 +10,19 @@ provider (EP)** for your hardware and tunes the session per EP.
 
 - **Full graph optimization** (`ORT_ENABLE_ALL`).
 - **Per-EP acceleration options:**
-  - **CoreML** → `MLProgram` + `MLComputeUnits=ALL` (Apple Neural Engine / GPU,
-    including the AMD GPU on Intel Macs via Metal).
+  - **CoreML** → `MLProgram` + `MLComputeUnits=ALL`.  On Apple Silicon the
+    Neural Engine / GPU handles most ops in FP16.  On Intel Macs there is no
+    ANE; the realistic path is the CPU (the AMD GPU may handle some ops via
+    Metal, but FP32 is the effective precision — not FP16).
   - **TensorRT** → FP16 + a **persistent engine cache** so the multi-minute
     engine build happens once, not every launch, plus a timing cache.
   - **CUDA** → cuDNN heuristic conv-algo search.
-  - **DirectML** → device selection. **OpenVINO** → `AUTO` device, FP16.
+  - **DirectML** → device selection.  The FP32 ONNX model is passed through
+    as-is; DirectML does not auto-convert to FP16, so effective precision is
+    FP32.
+  - **OpenVINO** → `AUTO` device, FP16 hint.  The resolved device depends on
+    the runtime environment; on machines without a discrete GPU or NPU the
+    device falls back to CPU and effective precision is FP32.
 - **Thread capping** — intra-op threads default to `cores ÷ cameras` so several
   camera workers don't oversubscribe the CPU.
 - **Safe fallback** — a provider that rejects its options is retried bare, and any
@@ -28,13 +35,13 @@ Use `python tools/install.py --dry-run` to see what will be installed. The tool
 keeps the ONNX Runtime swap explicit because only one `onnxruntime*` wheel should
 be installed at a time:
 
-| Target | Install | EP order | Precision |
+| Target | Install | EP order | Effective precision |
 | --- | --- | --- | --- |
-| Apple Silicon | `python tools/install.py` | CoreML → CPU | FP16 (MLProgram) |
-| Intel Mac + AMD GPU | `python tools/install.py` | CoreML → CPU | FP16 |
-| Windows default | `python tools/install.py` | DirectML → CPU | FP16 |
+| Apple Silicon | `python tools/install.py` | CoreML → CPU | FP16 (ANE/GPU via MLProgram) |
+| Intel Mac | `python tools/install.py` | CoreML → CPU | FP32 (no ANE; CPU is the realistic path; AMD GPU may handle some ops) |
+| Windows default | `python tools/install.py` | DirectML → CPU | FP32 (FP32 model passed through, no auto-convert) |
 | Windows / Linux + NVIDIA | `python tools/install.py --accelerator nvidia` | TensorRT → CUDA → CPU | FP16 + engine cache |
-| Intel CPU/iGPU (any OS) | `python tools/install.py --accelerator openvino` | OpenVINO → CPU | FP16 |
+| Intel CPU/iGPU (any OS) | `python tools/install.py --accelerator openvino` | OpenVINO → CPU | FP32 (CPU device common; GPU/NPU device = FP16 hint) |
 | CPU only (any OS) | `python tools/install.py --accelerator cpu` | CPU | FP32 |
 
 Overrides (per the supervisor → env wiring): `AUTOPTZ_FORCE_EP`,

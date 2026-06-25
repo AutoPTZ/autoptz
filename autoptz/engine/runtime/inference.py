@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -181,12 +182,48 @@ def _wants_fp16(prefs: HardwarePrefs | None) -> bool:
     return prefs is None or prefs.precision in ("auto", "fp16")
 
 
-def effective_precision(ep: EP | str, prefs: HardwarePrefs | None = None) -> str:
-    """Return "fp16"/"fp32" actually used for *ep* under (env-resolved) prefs.
+def _ep_can_run_fp16(ep: EP) -> bool:
+    """Return True only when *ep* genuinely executes the model in FP16 on this host.
 
-    Accelerator EPs (CoreML/TensorRT/CUDA/DirectML/OpenVINO) run FP16 unless the
-    user forced fp32; the CPU EP is always FP32. Lets the UI show configured →
-    effective precision without querying the live session.
+    Rules (conservative — when in doubt we report FP32 so the UI never lies):
+
+    - **CoreML**: FP16 via MLProgram only on Apple Silicon (arm64/aarch64).
+      On Intel Macs the ANE is absent; CoreML effectively runs on the CPU in
+      FP32 even with ``MLComputeUnits=ALL``.
+    - **TensorRT / CUDA**: always FP16-capable (engine built with FP16 flags).
+    - **DirectML**: passes the FP32 ONNX model through without converting it,
+      so the compute stays in FP32.
+    - **OpenVINO**: reports FP32 conservatively.  The EP can run FP16 on a
+      dedicated GPU/NPU, but the device resolved at runtime may be "CPU"
+      (common on laptops).  Without querying the live session we cannot know
+      which device was actually chosen, so we err on the side of honesty.
+    - **CPU**: FP32 always.
+    """
+    if ep is EP.COREML:
+        machine = platform.machine().lower()
+        return machine in ("arm64", "aarch64")
+    if ep in (EP.TENSORRT, EP.CUDA):
+        return True
+    # DirectML, OpenVINO, CPU — FP32
+    return False
+
+
+def effective_precision(ep: EP | str, prefs: HardwarePrefs | None = None) -> str:
+    """Return "fp16"/"fp32"/"int8" actually used for *ep* under (env-resolved) prefs.
+
+    Precision is determined by both *what the user requested* and *what the EP
+    can genuinely deliver on this host*:
+
+    - If the user forced ``int8`` that is always returned verbatim (quantised
+      model path).
+    - If the user forced ``fp32`` that overrides any EP capability.
+    - Otherwise the EP's true hardware capability is consulted via
+      :func:`_ep_can_run_fp16`; only EPs that genuinely run FP16 on the
+      current host report ``fp16``.
+
+    This means the Camera Info / About panels never claim FP16 when the
+    hardware is quietly running FP32 (e.g. CoreML on an Intel Mac, DirectML,
+    OpenVINO with a CPU device).
     """
     prefs = _resolve_prefs(prefs)
     if prefs is not None and prefs.precision == "int8":
@@ -196,7 +233,9 @@ def effective_precision(ep: EP | str, prefs: HardwarePrefs | None = None) -> str
             ep = EP(ep)
         except ValueError:
             return "fp32"
-    return "fp16" if (ep in _ACCELERATED_EPS and _wants_fp16(prefs)) else "fp32"
+    if not _wants_fp16(prefs):
+        return "fp32"
+    return "fp16" if _ep_can_run_fp16(ep) else "fp32"
 
 
 _VALID_COREML_UNITS = ("ALL", "CPUAndGPU", "CPUOnly", "CPUAndNeuralEngine")
@@ -296,7 +335,7 @@ def make_session(
     so = _build_session_options(prefs, session_options)
     name = Path(model_path).name
 
-    precision = "fp16" if (chosen in _ACCELERATED_EPS and _wants_fp16(prefs)) else "fp32"
+    precision = effective_precision(chosen, prefs)
     logger.info("Creating ORT session | model=%s ep=%s precision=%s", name, chosen.value, precision)
 
     attempts: list[tuple[str, list[tuple[str, dict[str, object]] | str]]] = [
