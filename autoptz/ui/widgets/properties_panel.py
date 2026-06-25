@@ -818,6 +818,25 @@ class PropertiesPanel(QWidget):
             ),
         )
 
+        cuh, self._catch_up, self._catch_up_val = _slider(
+            0, 100, "How much the camera speeds up to catch an off-centre subject."
+        )
+        self._catch_up.valueChanged.connect(
+            lambda v: (self._catch_up_val.setText(f"{v}%"), self._schedule())
+        )
+        af.addRow(
+            "Catch-up speed",
+            _with_chip(
+                cuh,
+                HelpBadge(
+                    "Dynamic speed: the further the subject is from the framing, the faster "
+                    "the camera moves to catch up, easing back to the Tracking speed near "
+                    "centre for precision. 0% = fixed speed; higher = snappier catch-up of "
+                    "off-centre or fast-moving subjects."
+                ),
+            ),
+        )
+
         self._safe_zone = QCheckBox("Framing box (hold still while centered)")
         self._safe_zone.toggled.connect(self._schedule)
         af.addRow(
@@ -1402,6 +1421,8 @@ class PropertiesPanel(QWidget):
             self._lead_val.setText(f"{self._lead.value() * 10} ms")
             self._max_speed.setValue(int(round(float(pz.get("max_pan_speed", 0.7)) * 100)))
             self._max_speed_val.setText(f"{self._max_speed.value()}%")
+            self._catch_up.setValue(int(round(float(pz.get("catch_up_speed", 0.6)) * 100)))
+            self._catch_up_val.setText(f"{self._catch_up.value()}%")
             self._safe_zone.setChecked(bool(pz.get("safe_zone_enabled", True)))
             self._safe_x.setValue(int(round(float(pz.get("safe_zone_x", 0.0)) * 100)))
             self._safe_x_val.setText(_signed_pct(self._safe_x.value()))
@@ -1605,6 +1626,7 @@ class PropertiesPanel(QWidget):
         cfg["ptz"]["lead_time_s"] = self._lead.value() / 100.0
         cfg["ptz"]["max_pan_speed"] = self._max_speed.value() / 100.0
         cfg["ptz"]["max_tilt_speed"] = self._max_speed.value() / 100.0
+        cfg["ptz"]["catch_up_speed"] = self._catch_up.value() / 100.0
         cfg["ptz"]["safe_zone_enabled"] = self._safe_zone.isChecked()
         cfg["ptz"]["safe_zone_x"] = self._safe_x.value() / 100.0
         cfg["ptz"]["safe_zone_y"] = self._safe_y.value() / 100.0
