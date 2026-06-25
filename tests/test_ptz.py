@@ -301,17 +301,25 @@ class TestControllerMath:
         assert pan1 > pan0
 
     def test_deadzone_suppresses_small_error(self) -> None:
-        ctrl = PTZController(MockBackend(), _cfg(kp=0.6, deadzone_x=0.1, deadzone_y=0.1))
+        # The per-axis dead-zone path is the safe-zone-OFF behaviour.
+        ctrl = PTZController(
+            MockBackend(), _cfg(kp=0.6, safe_zone_enabled=False, deadzone_x=0.1, deadzone_y=0.1)
+        )
         pan, tilt, _ = ctrl.step((0.05, 0.08), (0.0, 0.0), 0.45, True, t=0.0)
         assert pan == pytest.approx(0.0, abs=1e-6)
         assert tilt == pytest.approx(0.0, abs=1e-6)
 
     def test_deadzone_passes_large_error(self) -> None:
-        ctrl = PTZController(MockBackend(), _cfg(kp=0.6, deadzone_x=0.05, deadzone_y=0.05))
+        ctrl = PTZController(
+            MockBackend(), _cfg(kp=0.6, safe_zone_enabled=False, deadzone_x=0.05, deadzone_y=0.05)
+        )
         pan, _, _ = ctrl.step((0.3, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
         assert pan > 0.0
 
-    def test_shifted_safe_zone_suppresses_error_around_box_center(self) -> None:
+    def test_shifted_safe_zone_holds_at_box_center(self) -> None:
+        # The setpoint is the zone centre: a subject AT the (offset) box centre is
+        # held still.  (Off-centre-inside-zone now eases toward centre — see
+        # TestSafeZoneCentering — rather than freezing as it used to.)
         ctrl = PTZController(
             MockBackend(),
             _cfg(
@@ -322,7 +330,7 @@ class TestControllerMath:
                 safe_zone_h=0.1,
             ),
         )
-        pan, tilt, _ = ctrl.step((0.34, -0.24), (0.0, 0.0), 0.45, True, t=0.0)
+        pan, tilt, _ = ctrl.step((0.3, -0.2), (0.0, 0.0), 0.45, True, t=0.0)
         assert pan == pytest.approx(0.0, abs=1e-6)
         assert tilt == pytest.approx(0.0, abs=1e-6)
 
@@ -344,6 +352,103 @@ class TestControllerMath:
         ctrl = PTZController(MockBackend(), _cfg(kp=0.6, invert_pan=True))
         pan, _, _ = ctrl.step((0.5, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
         assert pan < 0.0  # positive error + invert → negative command
+
+
+class TestSafeZoneCentering:
+    """The safe zone must ease the subject toward the zone CENTRE (Center-Stage
+    feel), not merely freeze them anywhere inside the oval (the old deadzone-only
+    behaviour that 'never centered' and let a big zone ignore the frame edges)."""
+
+    def _zone(self, **kw: object) -> PTZController:
+        defaults: dict[str, object] = {
+            "kp": 0.6,
+            "safe_zone_enabled": True,
+            "safe_zone_x": 0.0,
+            "safe_zone_y": 0.0,
+            "safe_zone_w": 0.15,
+            "safe_zone_h": 0.22,
+        }
+        defaults.update(kw)
+        return PTZController(MockBackend(), _cfg(**defaults))
+
+    def test_offcenter_subject_inside_zone_is_eased_to_center(self) -> None:
+        # Subject right-of-centre but inside the oval: old code froze (pan==0);
+        # now it eases back toward the centre (pan>0).
+        ctrl = self._zone()
+        pan, _, _ = ctrl.step((0.12, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
+        assert pan > 0.0
+
+    def test_centered_subject_holds_still(self) -> None:
+        # Within the small inner deadband around the zone centre → no micro-moves.
+        ctrl = self._zone()
+        pan, tilt, _ = ctrl.step((0.01, 0.01), (0.0, 0.0), 0.45, True, t=0.0)
+        assert pan == pytest.approx(0.0, abs=1e-6)
+        assert tilt == pytest.approx(0.0, abs=1e-6)
+
+    def test_offset_zone_drives_subject_to_box_center(self) -> None:
+        # The setpoint is the zone centre, not the frame centre: a subject at the
+        # FRAME centre with a right-shifted zone is moved toward the zone centre.
+        # Old code used frame-centre error → pan==0 (ignored the offset).
+        ctrl = self._zone(safe_zone_x=0.3, safe_zone_w=0.1, safe_zone_h=0.1)
+        pan, _, _ = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
+        assert pan < 0.0
+
+    def test_large_zone_still_centers_subject_near_frame_edge(self) -> None:
+        # A big safe zone must NOT let the subject sit at the frame edge.
+        ctrl = self._zone(safe_zone_w=0.9, safe_zone_h=0.9)
+        pan, _, _ = ctrl.step((0.85, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
+        assert pan > 0.0
+
+
+class TestWarmReacquire:
+    """A brief target loss (within the coast window) must resume smoothly, not
+    cold-reset the controller and re-ramp from a dead stop — the "find" lurch in
+    the find/lose/find cycle during pans."""
+
+    def _ctrl(self, coast_ms: int) -> PTZController:
+        return PTZController(
+            MockBackend(),
+            _cfg(kp=1.0, kd=0.0, aim_smoothing=0.0, safe_zone_enabled=False, max_accel=2.0),
+            coast_window_ms=coast_ms,
+            rate_hz=20.0,
+        )
+
+    def _ramp_to_steady(self, ctrl: PTZController, t0: float) -> tuple[float, float]:
+        t = t0
+        pan = 0.0
+        for _ in range(30):
+            pan, _, _ = ctrl.step((0.5, 0.0), (0.0, 0.0), 0.45, True, t=t)
+            t += 0.05
+        return pan, t
+
+    def test_brief_coast_reacquire_resumes_without_reramping(self) -> None:
+        ctrl = self._ctrl(coast_ms=1500)
+        steady, t = self._ramp_to_steady(ctrl, 0.0)
+        assert steady > 0.3
+        ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, False, t=t)  # one lost tick → COASTING
+        t += 0.05
+        pan_re, _, _ = ctrl.step((0.5, 0.0), (0.0, 0.0), 0.45, True, t=t)
+        assert pan_re == pytest.approx(steady, abs=0.06)  # warm: no slew from 0
+
+    def test_long_loss_reacquire_cold_resets(self) -> None:
+        ctrl = self._ctrl(coast_ms=100)  # coast expires after ~2 lost ticks
+        steady, t = self._ramp_to_steady(ctrl, 0.0)
+        for _ in range(5):  # long loss → COASTING → SEARCHING
+            ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, False, t=t)
+            t += 0.05
+        pan_re, _, _ = ctrl.step((0.5, 0.0), (0.0, 0.0), 0.45, True, t=t)
+        assert pan_re < steady - 0.1  # cold: slew limiter ramps from 0
+
+
+class TestZoneGeometry:
+    def test_square_zone_contains_corner_round_zone_excludes_it(self) -> None:
+        from autoptz.engine.ptz.controller import _zone_norm
+
+        # A corner point at (hw, hh): inside a square zone (roundness 0), outside
+        # an elliptical one (roundness 1) — so a configured "square" respects its
+        # corners instead of being treated as an ellipse.
+        assert _zone_norm(0.1, 0.1, 0.1, 0.1, 0.0) <= 1.0
+        assert _zone_norm(0.1, 0.1, 0.1, 0.1, 1.0) > 1.0
 
     def test_invert_tilt(self) -> None:
         ctrl = PTZController(MockBackend(), _cfg(kp=0.6, invert_tilt=True))

@@ -1,11 +1,16 @@
-"""Ego-motion freshness gate — the ping-pong fix.
+"""Ego-motion freshness gate — the pan-jitter fix.
 
-Bug: ego-motion is decimated (optical flow every Nth inference frame). On the
-off-cadence frames the cached estimate is reused, but `_estimate_aim_velocity`
-ran every tick and unconditionally SUBTRACTED that stale/decayed estimate from
-the per-frame aim velocity — producing a sawtooth "phantom" world-velocity that
-the controller's predictive lead chased, i.e. the camera ping-ponged when it AND
-the subject moved. Fix: only subtract ego when it was freshly measured this tick.
+Bug: ego-motion is decimated (optical flow every Nth inference frame, default 3).
+`_estimate_aim_velocity` ran every tick: on the off-cadence frames it computed the
+per-tick d(error)/dt but zero-subtracted ego, injecting the FULL camera-pan
+velocity into the controller's feed-forward on 2 of every 3 frames — so the camera
+hunted (find/lose/find) during pans.
+
+Fix (window matching): the ego estimate spans `interval` frames, so the subject
+velocity must be measured over the SAME window for the subtraction to cancel.  We
+only recompute on a freshly-measured (`_ego_fresh`) tick and HOLD the last value
+between fresh ticks (when ego comp is enabled).  With ego comp OFF there is no
+multi-frame estimate to match, so velocity is computed every tick as before.
 """
 
 from __future__ import annotations
@@ -29,7 +34,9 @@ def _worker(**ptz):
 
 
 class TestEgoFreshnessGate:
-    def test_stale_ego_is_not_subtracted(self):
+    def test_stale_ego_tick_holds_and_does_not_inject_raw_velocity(self):
+        # Off-cadence tick (ego enabled): the camera-pan-contaminated d(error)/dt
+        # must NOT be injected.  The last subject velocity (0.0 here) is held.
         w = _worker()
         w._prev_aim_err = (0.0, 0.0)
         w._prev_aim_t = 0.0
@@ -37,8 +44,34 @@ class TestEgoFreshnessGate:
         w._ego_vel = (0.5, 0.0)  # a (stale) cached ego estimate
         w._ego_fresh = False  # decimated/off-cadence → not freshly measured
         vx, _ = w._estimate_aim_velocity((0.1, 0.0), 0.1)
-        # raw d(err)/dt = 1.0, ego NOT subtracted, EMA(0.5) from 0 → 0.5
-        assert abs(vx - 0.5) < 1e-6
+        assert abs(vx - 0.0) < 1e-6  # held, not the raw d(err)/dt of 1.0
+
+    def test_offcadence_holds_last_velocity_when_ego_enabled(self):
+        # Window-matched fix: on an off-cadence (not-fresh) tick with ego comp
+        # ENABLED, the per-tick d(error)/dt is camera-pan-contaminated (ego spans
+        # `interval` frames, the error delta spans 1) — so instead of injecting it
+        # we HOLD the last subject velocity and do not roll the prev marker, so the
+        # next fresh tick's delta spans the same window the ego estimate covers.
+        w = _worker(ego_comp_enabled=True, ego_comp_interval=3)
+        w._prev_aim_err = (0.0, 0.0)
+        w._prev_aim_t = 0.0
+        w._aim_vel = (0.2, 0.0)  # last good (subject) velocity
+        w._ego_fresh = False  # off-cadence
+        vx, _ = w._estimate_aim_velocity((0.1, 0.0), 0.1)
+        assert abs(vx - 0.2) < 1e-6  # held, not the raw d(err)/dt of 1.0
+        assert w._prev_aim_err == (0.0, 0.0)  # prev NOT rolled
+        assert w._prev_aim_t == 0.0
+
+    def test_offcadence_still_computes_when_ego_disabled(self):
+        # With ego comp OFF there is no multi-frame estimate to window-match, so
+        # the per-tick velocity is still computed every tick (legacy behaviour).
+        w = _worker(ego_comp_enabled=False)
+        w._prev_aim_err = (0.0, 0.0)
+        w._prev_aim_t = 0.0
+        w._aim_vel = (0.0, 0.0)
+        w._ego_fresh = False
+        vx, _ = w._estimate_aim_velocity((0.1, 0.0), 0.1)
+        assert abs(vx - 0.5) < 1e-6  # raw 1.0, EMA(0.5) from 0 → 0.5
 
     def test_fresh_ego_is_subtracted(self):
         w = _worker()

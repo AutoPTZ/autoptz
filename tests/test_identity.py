@@ -128,6 +128,124 @@ class TestFaceRecognizer:
         assert rec.available is False
         assert rec.detect(np.zeros((480, 640, 3), dtype=np.uint8)) == []
 
+    def test_records_last_error_when_insightface_unavailable(self, monkeypatch):
+        # The silent-failure bug: when insightface (or its model) fails to load,
+        # the recognizer disables itself but gives no diagnosable reason, so the
+        # Windows "faces never save" symptom has no surfaced cause.  After the
+        # fix, the captured failure reason is readable via ``last_error``.
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "insightface" or name.startswith("insightface."):
+                raise ImportError("simulated: insightface unavailable")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        rec = FaceRecognizer()
+        assert rec.available is False
+        assert rec.last_error  # non-empty diagnostic
+        assert "insightface" in rec.last_error.lower()
+
+    def test_no_last_error_when_app_injected(self):
+        rec = FaceRecognizer(_app=_FakeApp())
+        assert rec.available is True
+        assert rec.last_error is None
+
+    def test_insightface_root_honors_env(self, monkeypatch, tmp_path):
+        from autoptz.engine.pipeline.identify import insightface_root
+
+        monkeypatch.setenv("INSIGHTFACE_HOME", str(tmp_path))
+        assert insightface_root() == str(tmp_path)
+
+    def test_insightface_root_defaults_to_home(self, monkeypatch, tmp_path):
+        from pathlib import Path
+
+        import autoptz.engine.runtime.models as models_mod
+        from autoptz.engine.pipeline.identify import insightface_root
+
+        monkeypatch.delenv("INSIGHTFACE_HOME", raising=False)
+        # No bundled pack and no user-cache pack → fall back to insightface's own
+        # default (~/.insightface), where it auto-downloads when online.
+        monkeypatch.setattr(models_mod, "bundled_models_dir", lambda: tmp_path / "nobundle")
+        monkeypatch.setattr(models_mod, "_models_cache_dir", lambda: tmp_path / "nocache")
+        assert insightface_root() == str(Path.home() / ".insightface")
+
+    def test_insightface_root_prefers_bundled_pack(self, monkeypatch, tmp_path):
+        # A packaged installer ships the pack under <bundled models>/insightface;
+        # the running app must resolve there so offline face enrolment works.
+        import autoptz.engine.runtime.models as models_mod
+        from autoptz.engine.pipeline.identify import insightface_root
+
+        monkeypatch.delenv("INSIGHTFACE_HOME", raising=False)
+        bundled_models = tmp_path / "bundled"
+        pack = bundled_models / "insightface" / "models" / "buffalo_l"
+        pack.mkdir(parents=True)
+        (pack / "det_10g.onnx").write_bytes(b"x")
+        monkeypatch.setattr(models_mod, "bundled_models_dir", lambda: bundled_models)
+        monkeypatch.setattr(models_mod, "_models_cache_dir", lambda: tmp_path / "nocache")
+        assert insightface_root() == str(bundled_models / "insightface")
+
+    def test_insightface_root_uses_user_cache_when_no_bundle(self, monkeypatch, tmp_path):
+        # A source/dev user who ran `fetch_models` has the pack in the app-data
+        # model cache; resolve there when nothing is bundled.
+        import autoptz.engine.runtime.models as models_mod
+        from autoptz.engine.pipeline.identify import insightface_root
+
+        monkeypatch.delenv("INSIGHTFACE_HOME", raising=False)
+        cache = tmp_path / "cache"
+        pack = cache / "insightface" / "models" / "buffalo_l"
+        pack.mkdir(parents=True)
+        (pack / "w600k_r50.onnx").write_bytes(b"x")
+        monkeypatch.setattr(models_mod, "bundled_models_dir", lambda: tmp_path / "nobundle")
+        monkeypatch.setattr(models_mod, "_models_cache_dir", lambda: cache)
+        assert insightface_root() == str(cache / "insightface")
+
+    def test_face_recognizer_passes_root_to_insightface(self, monkeypatch, tmp_path):
+        # A2: the model storage root must be controllable (so a bundled/relocated
+        # cache is honoured offline), threaded into FaceAnalysis like detector/pose.
+        import sys
+        import types
+
+        captured: dict[str, object] = {}
+
+        class _FakeFA:
+            def __init__(self, name, root=None, providers=None, allowed_modules=None, **kw):
+                captured["root"] = root
+
+            def prepare(self, **kw):
+                return None
+
+            def get(self, frame):
+                return []
+
+        fake_app = types.ModuleType("insightface.app")
+        fake_app.FaceAnalysis = _FakeFA  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "insightface", types.ModuleType("insightface"))
+        monkeypatch.setitem(sys.modules, "insightface.app", fake_app)
+        monkeypatch.setenv("INSIGHTFACE_HOME", str(tmp_path))
+
+        rec = FaceRecognizer()
+        assert rec.available is True
+        assert captured["root"] == str(tmp_path)
+
+    def test_ensure_face_model_returns_error_when_unavailable(self, monkeypatch):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "insightface" or name.startswith("insightface."):
+                raise ImportError("simulated: insightface unavailable")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        from autoptz.engine.pipeline.identify import ensure_face_model
+
+        err = ensure_face_model()
+        assert err and "insightface" in err.lower()  # graceful, never raises
+
     def test_injected_app_available(self):
         rec = FaceRecognizer(_app=_FakeApp())
         assert rec.available is True

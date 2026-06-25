@@ -107,15 +107,37 @@ def reid_status() -> dict[str, str]:
 
 
 def face_status() -> dict[str, str]:
-    """Face recognition (insightface SCRFD + ArcFace) availability."""
-    if _module_present("insightface"):
-        return _entry("face", "Face recognition", "ok", "insightface SCRFD + ArcFace")
-    return _entry(
-        "face",
-        "Face recognition",
-        "off",
-        "insightface not installed · manual click-to-track still works",
-    )
+    """Face recognition (insightface SCRFD + ArcFace) availability.
+
+    Reports on the *weights*, not just the package: an offline first-run (common
+    on Windows) has insightface installed but no ``buffalo_l`` pack, so the
+    models never load and faces silently fail to enroll/save.  That case is
+    surfaced as ``warn`` ("model not downloaded") instead of the old misleading
+    ``ok`` so the operator knows why faces aren't working.  Resolves the model
+    root via :func:`autoptz.engine.pipeline.identify.insightface_root` so it
+    checks the SAME place the recogniser loads from (bundled / cache / home).
+    """
+    if not _module_present("insightface"):
+        return _entry(
+            "face",
+            "Face recognition",
+            "off",
+            "insightface not installed · manual click-to-track still works",
+        )
+    from autoptz.engine.pipeline.identify import insightface_root  # noqa: PLC0415
+
+    model = os.environ.get("AUTOPTZ_FACE_MODEL", "buffalo_l")
+    model_dir = Path(insightface_root()) / "models" / model
+    has_weights = model_dir.is_dir() and any(model_dir.glob("*.onnx"))
+    if not has_weights:
+        return _entry(
+            "face",
+            "Face recognition",
+            "warn",
+            f"insightface installed but model {model!r} not downloaded "
+            "(needs network on first run) · manual click-to-track still works",
+        )
+    return _entry("face", "Face recognition", "ok", "insightface SCRFD + ArcFace")
 
 
 def pose_status() -> dict[str, str]:

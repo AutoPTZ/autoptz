@@ -64,6 +64,16 @@ _ACCEL_LEAD_MAX = 0.3  # hard cap on the acceleration-term contribution to the a
 # this fraction *beyond* the box edge before following resumes — kills the
 # start/stop chatter when they hover right on the boundary.
 _HOLD_HYSTERESIS = 0.25
+# Safe-zone CENTERING: the inner no-move deadband as a fraction of the zone's
+# half-extent.  Inside it the camera holds (anti-jitter); beyond it the subject
+# is eased back toward the zone centre (Center-Stage feel) instead of being
+# frozen wherever they entered the oval.  Smaller → tighter centring.
+_FRAMING_DEADBAND = 0.35
+# Frame-edge guard: once the subject's measured error reaches this fraction of
+# the half-frame (≈ near the screen edge), correct on the full offset toward the
+# zone centre regardless of zone size — a big safe zone must never let the
+# subject sit at/over the frame edge.
+_EDGE_GUARD = 0.9
 
 
 # ── one-euro filter ───────────────────────────────────────────────────────────
@@ -134,6 +144,37 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 def _shape(x: float) -> float:
     """Non-linear response curve: ease-in (gentle near zero, full speed at ±1)."""
     return math.copysign(abs(x) ** _POWER, x) if x != 0.0 else 0.0
+
+
+def _zone_norm(dx: float, dy: float, hw: float, hh: float, roundness: float) -> float:
+    """Normalized distance from a zone centre; ``<= 1.0`` means inside the zone.
+
+    Blends an ellipse (``roundness=1`` → ``(dx/hw)²+(dy/hh)²``) and a rectangle
+    (``roundness=0`` → ``max((dx/hw)², (dy/hh)²)``) so a configured "square" zone
+    actually contains its corners instead of being treated as an ellipse.  Both
+    forms equal 1.0 on the axis-aligned edge, so the boundary semantics are stable
+    across ``roundness``.
+    """
+    hw = max(1e-6, hw)
+    hh = max(1e-6, hh)
+    nx = (dx / hw) ** 2
+    ny = (dy / hh) ** 2
+    r = _clamp(roundness, 0.0, 1.0)
+    return r * (nx + ny) + (1.0 - r) * max(nx, ny)
+
+
+def _soft_deadband(d: float, dead: float) -> float:
+    """Zero within ``±dead``; beyond it, the excess (sign-preserving).
+
+    Feeding this to the PD makes the steady state ``|error| ≤ dead`` — the subject
+    settles *within* the deadband of the setpoint (i.e. centred), rather than the
+    PD holding wherever they happened to enter a wide region.
+    """
+    if dead <= 0.0:
+        return d
+    if abs(d) <= dead:
+        return 0.0
+    return math.copysign(abs(d) - dead, d)
 
 
 def _slew(prev: float, target: float, max_step: float) -> float:
@@ -446,6 +487,15 @@ class PTZController:
         # ── state transitions ─────────────────────────────────────────────────
         if p.track_active:
             if self._state != ControllerState.TRACKING:
+                # WARM re-acquire when the target was lost only BRIEFLY (still in
+                # the coast window): it's ~where it was, so keep the slew-limiter
+                # speed (and hold latch) so motion resumes from the pre-loss speed
+                # instead of re-ramping from a dead stop — that cold restart of the
+                # slew is the visible "find" lurch in the find/lose/find cycle
+                # during pans.  Everything else still resets (below), so there's no
+                # stale wind-up or filter/derivative artifact.
+                warm = self._state == ControllerState.COASTING
+
                 # (re-)acquired target: reset filters (and re-apply smoothing in
                 # case the tuning changed while we were searching)
                 self._filt_ex.reset()
@@ -463,11 +513,15 @@ class PTZController:
                 self._prev_pan_sign = 0
                 self._prev_tilt_sign = 0
                 self._flip_score = 0.0
-                self._slew_pan = 0.0
-                self._slew_tilt = 0.0
-                self._holding = False
                 self._zoom_height_ema = None
                 self._zoom_cmd = 0.0
+                if not warm:
+                    # COLD acquire (fresh target, or recovery after a long loss via
+                    # SEARCHING where the subject may be anywhere): also stop the
+                    # slew limiter and release the hold so motion ramps from rest.
+                    self._slew_pan = 0.0
+                    self._slew_tilt = 0.0
+                    self._holding = False
                 self._state = ControllerState.TRACKING
         else:
             if self._state == ControllerState.TRACKING:
@@ -516,20 +570,21 @@ class PTZController:
         ex, ey = p.error
         vx, vy = p.velocity
 
-        # 0. HOLD — while the subject is actually inside the framing region (its
-        #    *measured* position, not a velocity-predicted one), hold the camera
-        #    still: zero the error AND the feed-forward velocity so a parked
-        #    subject can't trigger micro-moves from velocity/aim noise.  Hysteresis
-        #    (see ``_update_hold``) stops it chattering at the edge.
+        # 0. FRAMING — remap the measured error onto the framing setpoint.  With a
+        #    safe zone this drives the subject toward the ZONE CENTRE (eased, with
+        #    an inner deadband + frame-edge guard) instead of freezing them
+        #    anywhere inside the oval; without one it's the legacy per-axis dead
+        #    zone around the frame centre.  ``holding`` (subject settled in the
+        #    deadband) zeroes the feed-forward velocity too so a parked subject
+        #    can't trigger micro-moves.  See ``_framing_error``.
         #
-        # 1. Only while *following* (outside the region) do we project the aim
+        # 1. Only while *following* (outside the deadband) do we project the aim
         #    forward by the lead time (+ measured loop latency when
         #    ``lead_time_auto``), so the camera leads real motion without nudging a
         #    stationary subject.  The velocity is ego-corrected, so this leads the
         #    subject's world motion, not the camera's own pan.
-        holding = self._update_hold(ex, ey, cfg)
+        ex, ey, holding = self._framing_error(ex, ey, cfg)
         if holding:
-            ex = ey = 0.0
             vx = vy = 0.0
         else:
             lead = float(getattr(cfg, "lead_time_s", 0.0))
@@ -640,29 +695,73 @@ class PTZController:
 
         return pan_cmd, tilt_cmd
 
-    def _update_hold(self, ex: float, ey: float, cfg: Any) -> bool:
-        """Return whether to HOLD (subject inside the framing region), with hysteresis.
+    def _framing_error(self, ex: float, ey: float, cfg: Any) -> tuple[float, float, bool]:
+        """Map measured (frame-centre) error → control error toward the setpoint.
 
-        Uses the *measured* error.  For the framing box (safe-zone) the region is an
-        ellipse matching the on-screen oval; otherwise it's the per-axis dead-zone.
-        Once holding, the subject must travel ``_HOLD_HYSTERESIS`` beyond the edge
-        to resume following — so hovering on the boundary doesn't start/stop chatter.
+        Returns ``(control_ex, control_ey, holding)``.  The PD drives the control
+        error to zero, so the *setpoint* is wherever the control error is zero:
+
+        - **Safe zone ON** → setpoint is the zone CENTRE.  An inner deadband
+          (``_FRAMING_DEADBAND`` of the zone) holds the camera still (anti-jitter);
+          beyond it the subject is eased back toward the centre via a soft deadband
+          (the Center-Stage feel — no freezing at the oval edge).  A frame-edge
+          guard (``_EDGE_GUARD``) abandons the deadband near the screen edge so a
+          *wide* zone can never strand the subject off-frame.  ``roundness`` shapes
+          the zone between ellipse and rectangle so a "square" respects its corners.
+        - **Safe zone OFF** → legacy per-axis dead-zone around the frame centre
+          (hold inside, full error outside), unchanged.
+
+        Hold uses the *measured* error and a hysteresis band so hovering on the
+        boundary doesn't start/stop chatter.
         """
-        if getattr(cfg, "safe_zone_enabled", False):
-            cx = float(getattr(cfg, "safe_zone_x", 0.0))
-            cy = float(getattr(cfg, "safe_zone_y", 0.0))
-            hw = max(1e-3, float(getattr(cfg, "safe_zone_w", 0.15)))
-            hh = max(1e-3, float(getattr(cfg, "safe_zone_h", 0.22)))
-            # Elliptical distance (1.0 == on the oval edge), matching the overlay.
-            dist = ((ex - cx) / hw) ** 2 + ((ey - cy) / hh) ** 2
-            inside = dist <= 1.0
-            outside = dist > (1.0 + _HOLD_HYSTERESIS) ** 2
-        else:
-            dzx = max(1e-6, float(getattr(cfg, "deadzone_x", 0.0)))
-            dzy = max(1e-6, float(getattr(cfg, "deadzone_y", 0.0)))
-            inside = abs(ex) <= dzx and abs(ey) <= dzy
-            m = 1.0 + _HOLD_HYSTERESIS
-            outside = abs(ex) > dzx * m or abs(ey) > dzy * m
+        if not getattr(cfg, "safe_zone_enabled", False):
+            holding = self._update_hold(ex, ey, cfg)
+            return (0.0, 0.0, True) if holding else (ex, ey, False)
+
+        cx = float(getattr(cfg, "safe_zone_x", 0.0))
+        cy = float(getattr(cfg, "safe_zone_y", 0.0))
+        hw = max(1e-3, float(getattr(cfg, "safe_zone_w", 0.15)))
+        hh = max(1e-3, float(getattr(cfg, "safe_zone_h", 0.22)))
+        roundness = float(getattr(cfg, "safe_zone_roundness", 1.0))
+        dx = ex - cx
+        dy = ey - cy
+
+        # Frame-edge guard: near the screen edge, drop the deadband/hold and drive
+        # on the full offset toward the zone centre (a wide zone must not let the
+        # subject sit at the edge).
+        if abs(ex) >= _EDGE_GUARD or abs(ey) >= _EDGE_GUARD:
+            self._holding = False
+            return dx, dy, False
+
+        dbx = _FRAMING_DEADBAND * hw
+        dby = _FRAMING_DEADBAND * hh
+        # Latch ON inside the inner deadband; release only past the OUTER zone edge
+        # (×(1+hyst)) — a wide quiet band, then ease all the way to centre.
+        inside_db = _zone_norm(dx, dy, dbx, dby, roundness) <= 1.0
+        outside_zone = _zone_norm(dx, dy, hw, hh, roundness) > (1.0 + _HOLD_HYSTERESIS) ** 2
+        if self._holding:
+            if outside_zone:
+                self._holding = False
+        elif inside_db:
+            self._holding = True
+        if self._holding:
+            return 0.0, 0.0, True
+
+        return _soft_deadband(dx, dbx), _soft_deadband(dy, dby), False
+
+    def _update_hold(self, ex: float, ey: float, cfg: Any) -> bool:
+        """Return whether to HOLD inside the per-axis dead-zone, with hysteresis.
+
+        Used only when the safe zone is OFF (the safe-zone case is handled by
+        :meth:`_framing_error`).  Once holding, the subject must travel
+        ``_HOLD_HYSTERESIS`` beyond the dead-zone edge to resume following — so
+        hovering on the boundary doesn't start/stop chatter.
+        """
+        dzx = max(1e-6, float(getattr(cfg, "deadzone_x", 0.0)))
+        dzy = max(1e-6, float(getattr(cfg, "deadzone_y", 0.0)))
+        inside = abs(ex) <= dzx and abs(ey) <= dzy
+        m = 1.0 + _HOLD_HYSTERESIS
+        outside = abs(ex) > dzx * m or abs(ey) > dzy * m
 
         if self._holding:
             if outside:

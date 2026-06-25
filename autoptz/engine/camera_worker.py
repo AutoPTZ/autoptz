@@ -1362,14 +1362,30 @@ class CameraWorker:
         (``self._ego_vel``, also error-space units/sec) leaves the subject's
         *world* motion, so the controller's velocity feed-forward stops chasing
         the camera's own pan/tilt (the hunting/oscillation fix).
+
+        **Window matching (the jitter fix):** ego-motion is measured only once per
+        ``ego_comp_interval`` frames and spans that whole window.  The per-tick
+        d(error)/dt spans a single frame, so subtracting the ego estimate only
+        cancels cleanly when the two cover the SAME interval.  We therefore only
+        recompute the velocity on a freshly-measured (``_ego_fresh``) tick — where
+        the error delta has accrued over the same window — and HOLD the last value
+        between fresh ticks.  Previously the off-cadence ticks zero-subtracted ego
+        and injected the full camera-pan velocity into the feed-forward on 2 of
+        every 3 frames, which is what made the camera hunt during pans.
         """
+        # With ego comp ENABLED, skip the off-cadence ticks (hold last velocity)
+        # so the error delta and the ego estimate always span the same window.
+        # With ego comp OFF there is no multi-frame estimate to match, so compute
+        # every tick as before (no ego is subtracted regardless).
+        ego_on = bool(getattr(self.config.ptz, "ego_comp_enabled", True))
+        if ego_on and not self._ego_fresh:
+            return self._aim_vel
+
         vx = vy = 0.0
         prev = self._prev_aim_err
         if prev is not None:
             dt = now - self._prev_aim_t
             if dt > 1e-3:
-                # Only trust ego-motion on a freshly-measured tick; a stale/decimated
-                # estimate would inject a phantom world-velocity (the ping-pong).
                 ego_vx, ego_vy = self._ego_vel if self._ego_fresh else (0.0, 0.0)
                 raw_vx = (err[0] - prev[0]) / dt - ego_vx
                 raw_vy = (err[1] - prev[1]) / dt - ego_vy
