@@ -159,6 +159,13 @@ class Supervisor:
         # Monotonic timestamp of the last health scan (throttled to
         # _HEALTH_SCAN_INTERVAL_S so tick() doesn't scan every 50 ms).
         self._last_health_scan_t: float = 0.0
+        # Per-camera monotonic timestamp of the most recent telemetry message,
+        # stamped by the wrapped on_telemetry callback (_make_telemetry_callback).
+        # Used by the health scan to detect a HUNG worker (alive but silent).
+        self._last_telemetry_t: dict[str, float] = {}
+        # Per-camera monotonic spawn timestamp, used to grant a warmup grace
+        # window before hang detection arms (model build emits no telemetry).
+        self._spawn_t: dict[str, float] = {}
 
     # ── lifecycle ───────────────────────────────────────────────────────────────
 
@@ -241,6 +248,9 @@ class Supervisor:
 
             workers = list(self._workers.items())
             self._workers.clear()
+            self._restart_state.clear()
+            self._last_telemetry_t.clear()
+            self._spawn_t.clear()
 
         # Join the pump outside the lock (it may call tick→lock).
         if pump is not None and pump is not threading.current_thread():
@@ -589,6 +599,8 @@ class Supervisor:
             worker = self._workers.pop(cid, None)
         # Clear any pending restart state so a removed camera isn't resurrected.
         self._restart_state.pop(cid, None)
+        self._last_telemetry_t.pop(cid, None)
+        self._spawn_t.pop(cid, None)
         if worker is not None:
             try:
                 worker.stop()
@@ -898,6 +910,22 @@ class Supervisor:
             camera_count,
         )
 
+    def _make_telemetry_callback(self, camera_id: str) -> Any:
+        """Wrap push_telemetry so the supervisor records a per-camera last-seen time.
+
+        The wrapper stamps a monotonic timestamp into ``_last_telemetry_t`` on
+        every message, then forwards to the UI-facing ``push_telemetry`` unchanged.
+        This keeps the 3-arg worker_factory contract and ``push_telemetry`` itself
+        untouched while giving the health scan a hang signal for BOTH worker types.
+        """
+        push = self._client.push_telemetry
+
+        def _cb(msg: Any) -> None:
+            self._last_telemetry_t[camera_id] = time.monotonic()
+            push(msg)
+
+        return _cb
+
     def _make_worker(self, camera_id: str, config: CameraConfig) -> Any:
         """Build a camera worker — a thread-based one, or (opt-in) a child process.
 
@@ -905,7 +933,7 @@ class Supervisor:
         AND no test/custom worker factory was injected, so the default and all
         tests keep the in-process threaded worker.
         """
-        on_telemetry = self._client.push_telemetry
+        on_telemetry = self._make_telemetry_callback(camera_id)
         from autoptz.engine.process_worker import (
             ProcessWorkerHandle,
             process_per_camera_enabled,
@@ -951,6 +979,7 @@ class Supervisor:
             if not self._running or camera_id in self._workers:
                 return
             self._workers[camera_id] = worker
+            self._spawn_t[camera_id] = time.monotonic()
             worker_count = len(self._workers)
         log.info(
             "spawned worker camera_id=%s name=%s (workers=%d)",

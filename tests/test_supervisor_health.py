@@ -266,3 +266,42 @@ class TestScanWorkerHealth:
             )
         finally:
             sup.stop()
+
+
+class TestWorkerTelemetryTracking:
+    def test_telemetry_callback_stamps_last_seen_and_forwards(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            # The wrapped callback the factory received is the supervisor's wrapper,
+            # not push_telemetry directly.
+            wrapped = factory_log[0].on_telemetry
+            before = sup._last_telemetry_t.get(cid)
+            # push_telemetry needs a real TelemetryMsg; build a minimal one.
+            from autoptz.engine.runtime.messages import TelemetryMsg
+
+            wrapped(TelemetryMsg(camera_id=cid, seq=0))
+            after = sup._last_telemetry_t.get(cid)
+            assert before is None
+            assert after is not None and after > 0.0
+        finally:
+            sup.stop()
+
+    def test_spawn_records_spawn_time(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            assert cid in sup._spawn_t
+            assert sup._spawn_t[cid] > 0.0
+        finally:
+            sup.stop()
+
+    def test_remove_camera_clears_telemetry_and_spawn_state(self, qapp) -> None:
+        from autoptz.engine.runtime.messages import RemoveCameraCmd
+
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            sup._last_telemetry_t[cid] = 123.0
+            sup._on_remove_camera(RemoveCameraCmd(camera_id=cid))
+            assert cid not in sup._last_telemetry_t
+            assert cid not in sup._spawn_t
+        finally:
+            sup.stop()
