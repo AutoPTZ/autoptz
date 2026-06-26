@@ -119,6 +119,31 @@ notarize_and_staple() {
     xcrun stapler staple "${target}"
 }
 
+# Build a compressed DMG, retrying a few times on transient failures. hdiutil's
+# image creation intermittently dies on CI with "hdiutil: create failed -
+# Resource busy" — a disk-arbitration race (a prior volume not fully detached,
+# Spotlight indexing the scratch dir, etc.), not a problem with the bundle, which
+# is already built and signed by this point. Without a retry, that flake sinks an
+# otherwise-good build — including the release-gating arm64 dmg, where it would
+# block the whole cross-platform release.
+create_dmg() {
+    local volname="$1" srcfolder="$2" dmg="$3"
+    local attempt
+    for (( attempt = 1; attempt <= 5; attempt++ )); do
+        rm -f "${dmg}"
+        if hdiutil create -volname "${volname}" -srcfolder "${srcfolder}" \
+                -ov -format UDZO "${dmg}"; then
+            return 0
+        fi
+        if (( attempt < 5 )); then
+            echo "!! hdiutil create failed (attempt ${attempt}/5) — retrying in $(( attempt * 5 ))s…" >&2
+            sleep "$(( attempt * 5 ))"
+        fi
+    done
+    echo "!! hdiutil create failed after 5 attempts for ${dmg}" >&2
+    return 1
+}
+
 # ── 1. venv ─────────────────────────────────────────────────────────────────
 if [[ ! -x "${PY}" ]]; then
     echo "==> Creating venv at ${VENV}"
@@ -200,9 +225,7 @@ if [[ "${MAKE_DMG:-0}" == "1" ]]; then
     STAGE="$(mktemp -d)"
     cp -R "${APP}" "${STAGE}/"
     ln -s /Applications "${STAGE}/Applications"
-    rm -f "${DMG}"
-    hdiutil create -volname "AutoPTZ ${VER}" -srcfolder "${STAGE}" \
-        -ov -format UDZO "${DMG}"
+    create_dmg "AutoPTZ ${VER}" "${STAGE}" "${DMG}"
     rm -rf "${STAGE}"
     echo "==> Built ${DMG}"
 
