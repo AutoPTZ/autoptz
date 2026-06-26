@@ -281,6 +281,52 @@ def test_child_drain_routes_ingest_identity() -> None:
     assert ingested == [rec.id]
 
 
+class TestIdentityRelay:
+    def test_harvested_identity_relays_to_sibling_not_source(self, qapp) -> None:  # noqa: ANN001
+        from autoptz.config.models import IdentityRecord
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        ingested: dict[str, list[str]] = {}
+
+        class _FakeHandle:
+            def __init__(self, camera_id, config, on_telemetry) -> None:  # noqa: ANN001
+                self.camera_id = camera_id
+                self.shm_name = f"cam_{camera_id[:8]}_preview"
+                self._cb = None
+                ingested[camera_id] = []
+
+            def is_alive(self) -> bool:
+                return True
+
+            def set_identity_service(self, _s) -> None: ...  # noqa: ANN001
+            def set_identity_callback(self, cb) -> None:  # noqa: ANN001
+                self._cb = cb
+
+            def set_inference_pool(self, _p) -> None: ...  # noqa: ANN001
+            def set_features(self, _f) -> None: ...  # noqa: ANN001
+            def ingest_identity(self, record) -> None:  # noqa: ANN001
+                ingested[self.camera_id].append(record.id)
+
+            def start(self) -> None: ...
+            def stop(self) -> None: ...
+
+        client = EngineClient()
+        cid_a = client.addCamera("usb://0", "RelayA")
+        cid_b = client.addCamera("usb://0", "RelayB")
+        client.drain_commands()
+        sup = Supervisor(client, store=None, worker_factory=_FakeHandle)
+        sup.start()
+        try:
+            src = sup._workers[cid_a]
+            rec = IdentityRecord(name="Person 1", enabled=False, labeled=False)
+            src._cb(rec)  # child A harvested -> parent callback fires
+            assert ingested[cid_b] == [rec.id], "sibling must receive the relay"
+            assert ingested[cid_a] == [], "source must NOT receive its own relay"
+        finally:
+            sup.stop()
+
+
 class TestChildLogging:
     def test_child_log_setup_installs_warning_handler(self) -> None:
         import logging

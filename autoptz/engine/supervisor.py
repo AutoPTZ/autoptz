@@ -968,6 +968,24 @@ class Supervisor:
 
         return _cb
 
+    def _relay_identity_to_siblings(self, source_cid: str, record: Any) -> None:
+        """Broadcast a harvested identity to every OTHER process worker.
+
+        No-op outside opt-in process-per-camera mode: threaded workers share one
+        in-process gallery (so they already see the record) and don't expose
+        ``ingest_identity``.  Best-effort per sibling; one failing relay never
+        blocks the others.
+        """
+        with self._lock:
+            siblings = [(cid, w) for cid, w in self._workers.items() if cid != source_cid]
+        for cid, worker in siblings:
+            relay = getattr(worker, "ingest_identity", None)
+            if callable(relay):
+                try:
+                    relay(record)
+                except Exception:  # noqa: BLE001
+                    log.debug("identity relay to %s failed", cid, exc_info=True)
+
     def _make_worker(self, camera_id: str, config: CameraConfig) -> Any:
         """Build a camera worker — a thread-based one, or (opt-in) a child process.
 
@@ -1041,7 +1059,17 @@ class Supervisor:
             self._client,
             "push_identity",
         ):
-            worker.set_identity_callback(self._client.push_identity)
+            push = self._client.push_identity
+
+            def _identity_cb(record: Any, _cid: str = camera_id) -> None:
+                # UI surfacing (unchanged), then fan-out to sibling processes so an
+                # unlabeled face harvested here becomes matchable on every camera.
+                try:
+                    push(record)
+                finally:
+                    self._relay_identity_to_siblings(_cid, record)
+
+            worker.set_identity_callback(_identity_cb)
 
         # Inject the shared inference pool (heavy models loaded once for all
         # cameras) and the current global feature switches.
