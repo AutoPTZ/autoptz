@@ -100,22 +100,70 @@ class CameraRecord:
             return 0.0
         return float(getattr(self.telemetry, "source_fps_cap", 0.0))
 
+    def _crop_norm(self) -> tuple[float, float, float, float] | None:
+        """Active digital-crop mapping params ``(cx, cy, cw, ch)`` in full-frame
+        pixels when Center Stage is driving the preview, else None.
+
+        When present, overlay coords normalized to the FULL frame must be
+        re-normalized into the CROPPED preview: a full-frame pixel ``px`` maps to
+        ``(px - c0) / clen`` along each axis. None ⇒ keep full-frame normalization
+        (legacy behavior, byte-identical).
+        """
+        if not self.telemetry:
+            return None
+        rect = getattr(self.telemetry, "digital_crop_rect", None)
+        if not rect:
+            return None
+        cx, cy, cw, ch = rect
+        if cw <= 0 or ch <= 0:
+            return None
+        return (float(cx), float(cy), float(cw), float(ch))
+
     def tracks_as_list(self) -> list[dict[str, Any]]:
         if not self.telemetry:
             return []
         # Detector produces pixel-space coords; the UI overlays expect normalized 0–1.
         w = max(1.0, float(self.telemetry.width or 1))
         h = max(1.0, float(self.telemetry.height or 1))
+        crop = self._crop_norm()
+        if crop is not None:
+            cx, cy, cw, ch = crop
+
+            def nx(px: float) -> float:
+                return max(0.0, min(1.0, (px - cx) / cw))
+
+            def ny(px: float) -> float:
+                return max(0.0, min(1.0, (px - cy) / ch))
+
+            def sx(dpx: float) -> float:  # delta (velocity): scale, no clamp
+                return dpx / cw
+
+            def sy(dpx: float) -> float:
+                return dpx / ch
+        else:
+
+            def nx(px: float) -> float:
+                return px / w
+
+            def ny(px: float) -> float:
+                return px / h
+
+            def sx(dpx: float) -> float:
+                return dpx / w
+
+            def sy(dpx: float) -> float:
+                return dpx / h
+
         result = []
         for t in self.telemetry.tracks:
             result.append(
                 {
                     "track_id": t.track_id,
                     "bbox": {
-                        "x1": t.bbox.x1 / w,
-                        "y1": t.bbox.y1 / h,
-                        "x2": t.bbox.x2 / w,
-                        "y2": t.bbox.y2 / h,
+                        "x1": nx(t.bbox.x1),
+                        "y1": ny(t.bbox.y1),
+                        "x2": nx(t.bbox.x2),
+                        "y2": ny(t.bbox.y2),
                     },
                     "identity": t.identity or "",
                     "identity_id": t.identity_id or "",
@@ -123,12 +171,22 @@ class CameraRecord:
                     "is_target": t.is_target,
                     "lost": bool(getattr(t, "lost", False)),
                     # Velocity normalized to frame fractions/frame for overlay drawing.
-                    "vx": getattr(t, "vx", 0.0) / w,
-                    "vy": getattr(t, "vy", 0.0) / h,
+                    "vx": sx(getattr(t, "vx", 0.0)),
+                    "vy": sy(getattr(t, "vy", 0.0)),
                     "aim": (
                         {
-                            "x": max(0.0, min(1.0, float(t.aim_x) / w)),
-                            "y": max(0.0, min(1.0, float(t.aim_y) / h)),
+                            # Aim is clamped to [0,1] in BOTH branches (legacy clamped
+                            # aim but not bbox); the crop nx/ny already clamp.
+                            "x": (
+                                nx(float(t.aim_x))
+                                if crop is not None
+                                else max(0.0, min(1.0, float(t.aim_x) / w))
+                            ),
+                            "y": (
+                                ny(float(t.aim_y))
+                                if crop is not None
+                                else max(0.0, min(1.0, float(t.aim_y) / h))
+                            ),
                             "source": t.aim_source or "",
                         }
                         if getattr(t, "aim_x", None) is not None
