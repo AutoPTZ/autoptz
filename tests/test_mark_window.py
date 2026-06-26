@@ -85,6 +85,14 @@ def test_usb_polling_disabled(qtapp) -> None:
     win.deleteLater()
 
 
+def test_tile_context_menu_disabled_in_mark(qtapp) -> None:
+    # The Mark wall must NOT offer the right-click tile menu (no removing cameras /
+    # retargeting the throwaway engine from the demo).
+    win = _win(qtapp)
+    assert win._wall._context_menu_enabled is False
+    win.deleteLater()
+
+
 def test_return_signal_and_no_relaunch_on_close(qtapp, monkeypatch) -> None:
     import autoptz.ui.mark_session as ms
 

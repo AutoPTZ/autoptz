@@ -185,6 +185,9 @@ class MarkWindow(MainWindow):
             frame_source=frame_source or self._engine.frame_source,
             theme=theme,
             parent=parent,
+            # No right-click tile context menu in the demo: the viewer must not be
+            # able to remove cameras / retarget the throwaway Mark engine.
+            context_menu_enabled=False,
         )
         self.setWindowTitle("AutoPTZ Mark")  # NO version (lives in About)
         self.resize(1200, 780)

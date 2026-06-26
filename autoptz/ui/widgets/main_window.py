@@ -69,12 +69,17 @@ class MainWindow(QMainWindow):
         frame_source: Any | None = None,
         theme: Any | None = None,
         parent: QWidget | None = None,
+        *,
+        context_menu_enabled: bool = True,
     ) -> None:
         super().__init__(parent)
         self._client = client
         self._log_model = log_model
         self._frames = frame_source
         self._theme = theme
+        # Right-click tile context menu gate, threaded to the CameraWall.  AutoPTZ
+        # Mark passes False (no camera-mutation menu in the demo); the app keeps it.
+        self._context_menu_enabled = bool(context_menu_enabled)
         self._docks: dict[str, QDockWidget] = {}
         self._selected_camera: str = ""
         self._shown_optional_setup_prompt = False
@@ -214,7 +219,12 @@ class MainWindow(QMainWindow):
         bar_col.addWidget(self._startup_progress_bar)
         self._style_startup_banner()
         col.addWidget(self._startup_bar)
-        self._wall = CameraWall(self._client, self._frames, holder)
+        self._wall = CameraWall(
+            self._client,
+            self._frames,
+            holder,
+            context_menu_enabled=self._context_menu_enabled,
+        )
         self._wall.cameraSelected.connect(self._on_camera_selected)
         self._wall.cameraInfoRequested.connect(self._on_camera_info_requested)
         self._wall.addCameraRequested.connect(self._open_cameras_menu)
