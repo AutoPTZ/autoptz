@@ -287,6 +287,9 @@ class MarkWindow(MainWindow):
             "on",
         ):
             self._engine.start()
+            # Auto-track a (seeded) target per camera so Center Stage visibly engages
+            # on the full profile; a no-op for the streams (no-inference) profile.
+            self._engine.auto_track_targets(seed=0xA17)
 
     # ── run lifecycle ────────────────────────────────────────────────────────────
 
@@ -387,6 +390,9 @@ class MarkWindow(MainWindow):
     def _on_step(self, step: StepResult) -> None:
         self._chart._steps.append(step)
         self._chart.set_steps(self._chart._steps, self._session.floor_fps)
+        # The ramp grew the wall this step; re-target so any newly added camera also
+        # locks on (idempotent — same seed re-commits the same per-position targets).
+        self._engine.auto_track_targets(seed=0xA17)
         if step.per_camera_fps:
             verb = "sustaining" if step.sustained else "dropped at"
             self._controls.set_verdict(f"{verb} {step.cameras} cam(s) @ {step.min_fps:.1f} fps")

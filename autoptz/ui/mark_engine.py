@@ -12,6 +12,7 @@ that calls :meth:`tick`; on close the GUI stops that timer FIRST, then
 from __future__ import annotations
 
 import logging
+import random
 import shutil
 import tempfile
 from pathlib import Path
@@ -171,6 +172,29 @@ class MarkEngineFactory:
                 except Exception:  # noqa: BLE001
                     log.debug("mark add_next_camera worker spawn failed", exc_info=True)
         return cid
+
+    def auto_track_targets(self, *, seed: int = 0) -> None:
+        """Auto-track a seeded random target per camera so Center Stage engages.
+
+        Only meaningful for the **full** profile (which runs detection + tracking);
+        the streams profile has no tracks to follow, so this is a no-op there.  Uses
+        the engine's existing target-set path (``client.setTarget``): a small seeded
+        track id (1..3) per camera position lands on one of the early synthetic
+        tracks so the demo visibly locks on rather than sitting idle.  Deterministic
+        for a given seed (keyed by camera position, not the random uuid).
+        """
+        if not get_profile(self._session.profile).features.get("tracking", False):
+            return
+        rng = random.Random(seed)
+        setter = getattr(self._client, "setTarget", None)
+        if not callable(setter):
+            return
+        for cid in self._camera_ids:
+            track_id = rng.randint(1, 3)
+            try:
+                setter(cid, track_id)
+            except Exception:  # noqa: BLE001 — a demo target must never crash the engine
+                log.debug("mark auto-track set_target failed for %s", cid, exc_info=True)
 
     def start(self) -> None:
         # NDI senders must broadcast BEFORE the NDIAdapter polls for sources.

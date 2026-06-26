@@ -99,6 +99,80 @@ def test_add_next_camera_grows_wall_and_caps_at_max():
         eng.stop()
 
 
+def test_auto_track_sets_targets_full_profile(qapp):
+    """The full profile auto-tracks a (seeded) target per camera so Center Stage
+    visibly engages.  Uses the engine's existing target-set path (client.setTarget),
+    which records the target on the camera model and enqueues a SetTargetCmd."""
+    from autoptz.ui import mark_engine
+
+    # A recording supervisor that also routes set_target to a fake worker.
+    targets: dict[str, int] = {}
+
+    class _RecSup(_FakeSupervisor):
+        pass
+
+    eng = mark_engine.MarkEngineFactory(
+        MarkSession(profile="full", source="synthetic", max_cameras=3),
+        supervisor_factory=lambda c, s: _RecSup(c, s),
+    )
+    eng.start()
+    try:
+        # Grow the wall to 3 cameras, then auto-track.
+        eng.add_next_camera()
+        eng.add_next_camera()
+        eng.auto_track_targets(seed=1234)
+        ids = eng.client.cameraModel.camera_ids()
+        assert len(ids) == 3
+        for cid in ids:
+            rec = eng.client.cameraModel.get_record(cid)
+            # A target track id was committed on every camera (non-None, >= 1).
+            assert rec.target_track_id is not None
+            assert rec.target_track_id >= 1
+            targets[cid] = rec.target_track_id
+        # Deterministic for the same seed (a fresh engine yields the same per-index
+        # targets, keyed by position not id since ids are random uuids).
+        eng2 = mark_engine.MarkEngineFactory(
+            MarkSession(profile="full", source="synthetic", max_cameras=3),
+            supervisor_factory=lambda c, s: _RecSup(c, s),
+        )
+        eng2.start()
+        try:
+            eng2.add_next_camera()
+            eng2.add_next_camera()
+            eng2.auto_track_targets(seed=1234)
+            t1 = [
+                eng.client.cameraModel.get_record(c).target_track_id
+                for c in eng.client.cameraModel.camera_ids()
+            ]
+            t2 = [
+                eng2.client.cameraModel.get_record(c).target_track_id
+                for c in eng2.client.cameraModel.camera_ids()
+            ]
+            assert t1 == t2
+        finally:
+            eng2.stop()
+    finally:
+        eng.stop()
+
+
+def test_auto_track_noop_when_not_full_profile(qapp):
+    """The streams profile (no inference) does NOT auto-track — nothing to follow."""
+    from autoptz.ui import mark_engine
+
+    eng = mark_engine.MarkEngineFactory(
+        MarkSession(profile="streams", source="synthetic", max_cameras=2),
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    eng.start()
+    try:
+        eng.auto_track_targets(seed=1)
+        for cid in eng.client.cameraModel.camera_ids():
+            rec = eng.client.cameraModel.get_record(cid)
+            assert rec.target_track_id is None
+    finally:
+        eng.stop()
+
+
 def test_model_choice_primes_detector_tier():
     """The session model selects the isolated client's detector tier.
 
