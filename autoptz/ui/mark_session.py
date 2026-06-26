@@ -74,6 +74,12 @@ def _delete(store: object, key: str) -> None:
 
 
 def relaunch_argv(*, mark: bool) -> list[str]:
+    """DEPRECATED: build the relaunch arg-vector for the old subprocess Mark flow.
+
+    AutoPTZ Mark is now an in-process swap (Help → Run AutoPTZ Mark…); nothing in
+    the app calls this anymore.  Retained for backward compatibility / the
+    deprecated ``--mark`` flag only.
+    """
     if getattr(sys, "frozen", False):
         argv = [sys.executable]
     else:
@@ -84,4 +90,8 @@ def relaunch_argv(*, mark: bool) -> list[str]:
 
 
 def relaunch(*, mark: bool) -> None:
+    """DEPRECATED: spawn a fresh AutoPTZ process (old subprocess Mark flow).
+
+    Unused by the in-process Mark lifecycle; kept for backward compatibility.
+    """
     subprocess.Popen(relaunch_argv(mark=mark), close_fds=True)  # noqa: S603 — fixed argv

@@ -55,6 +55,13 @@ class TestGeometryClear:
 
 
 class TestRelaunchArgv:
+    """``relaunch``/``relaunch_argv`` are a DEPRECATED shim now.
+
+    AutoPTZ Mark is an in-process swap (Help → Run AutoPTZ Mark…), so nothing in
+    the app calls these anymore — but the helpers stay for backward compatibility
+    and are still exercised here so the argv shape doesn't silently rot.
+    """
+
     def test_dev_argv(self, monkeypatch) -> None:
         monkeypatch.setattr(sys, "frozen", False, raising=False)
         argv = relaunch_argv(mark=True)

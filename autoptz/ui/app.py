@@ -188,36 +188,14 @@ def _build_main_window(
     )
 
 
-def _build_mark_window(
-    client: Any,
-    *,
-    frames: Any,
-    theme: Any,
-    store: Any,
-) -> Any:
-    """Construct the headful AutoPTZ Mark window for ``--mark`` launches.
-
-    Clears the persisted window geometry first so Mark gets its own layout rather
-    than inheriting the main window's, then reads (or defaults) the handed-off
-    :class:`MarkSession`.
-    """
-    from autoptz.ui.mark_session import MarkSession, clear_window_geometry, load_mark_session
-    from autoptz.ui.widgets.mark_window import MarkWindow
-
-    try:
-        clear_window_geometry(store)
-    except Exception:  # noqa: BLE001
-        log.debug("could not clear window geometry for Mark", exc_info=True)
-    session = load_mark_session(store) or MarkSession()
-    return MarkWindow(client, frames, session=session, store=store, theme=theme)
-
-
 def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
     """Launch the AutoPTZ UI.  Returns the process exit code.
 
-    ``mode="mark"`` routes to the headful AutoPTZ Mark window (relaunched from the
-    Help menu); ``mode="normal"`` (default) is the standard app and is byte-for-byte
-    unchanged from before the Mark feature.
+    Always builds the normal :class:`MainWindow`.  AutoPTZ Mark is reached
+    **in-process** from Help → Run AutoPTZ Mark… (the MainWindow suspends and shows
+    an isolated :class:`MarkWindow`), so there is no longer a subprocess relaunch.
+    ``mode="mark"`` is accepted as a deprecated no-op (so a stale ``--mark`` flag
+    doesn't crash) and simply builds the normal window.
     """
     from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, Signal, Slot
     from PySide6.QtWidgets import QApplication
@@ -228,7 +206,8 @@ def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
     from autoptz.ui.log_bridge import LogListModel, QtLogHandler
     from autoptz.ui.theme import ThemeController
 
-    is_mark = mode == "mark"
+    if mode == "mark":
+        log.info("`--mark` is deprecated; use Help → Run AutoPTZ Mark… (in-process).")
 
     # Preserve fractional display scaling so our UI-scale font sizes stay crisp on
     # high-DPI screens (must be set before the QApplication is constructed).
@@ -346,10 +325,7 @@ def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
 
     # ── theme + window ─────────────────────────────────────────────────────────
     theme = ThemeController(app, client)
-    if is_mark:
-        window = _build_mark_window(client, frames=frames, theme=theme, store=store)
-    else:
-        window = _build_main_window(client, log_model=log_model, frames=frames, theme=theme)
+    window = _build_main_window(client, log_model=log_model, frames=frames, theme=theme)
     window.show()
 
     def _present_window() -> None:
@@ -372,9 +348,7 @@ def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
     # ── engine auto-start ──────────────────────────────────────────────────────
     # Restore the last on/off state (default ON) and start after the window is
     # shown and exposed so the first paint happens before heavy ingest/ML work.
-    # Skipped in Mark mode: the Mark window owns its own engine via the ramp
-    # controller, so the app must NOT auto-start a second supervisor here.
-    if not is_mark and bool(store.get_setting("engine_running", True)):
+    if bool(store.get_setting("engine_running", True)):
 
         class _CameraAccessBridge(QObject):
             resolved = Signal(bool)
@@ -402,17 +376,6 @@ def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
         QTimer.singleShot(750, _auto_start_when_engine_ready)
 
     exit_code = app.exec()
-
-    # Mark mode: clear the handed-off session so a stale one can't re-route a
-    # subsequent normal launch back into Mark (Return-to-AutoPTZ already clears
-    # it; this covers a plain window close).
-    if is_mark:
-        try:
-            from autoptz.ui.mark_session import clear_mark_session
-
-            clear_mark_session(store)
-        except Exception:  # noqa: BLE001
-            log.debug("could not clear mark_session on exit", exc_info=True)
 
     # Persist the engine on/off state for the next launch.
     try:

@@ -8,14 +8,25 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **AutoPTZ Mark — headful GUI benchmark (Help → "Run AutoPTZ Mark…").** A
-  3DMark-style mode: a pre-flight notice (how it works, estimated run time, profile
-  / source / floor / max / dwell) hands off a session and relaunches the app into a
-  dedicated **AutoPTZ Mark** window that visibly ramps simulated cameras at 30 fps,
-  runs the real detection → tracking → Center-Stage pipeline on moving synthetic
-  people, shows a live HUD (step / camera count / per-camera fps / ETA + a ramp
-  chart), and saves a scored result to `benchmarks/`. "Return to AutoPTZ" relaunches
-  the normal app. The existing headless `--benchmark` is unchanged.
+- **AutoPTZ Mark 1.0.0 — polished, self-contained GUI benchmark (Help → "Run
+  AutoPTZ Mark…").** A 3DMark-style mode rebuilt around an **in-process swap**: a
+  confirm dialog explains it will suspend AutoPTZ, then the main window hides and a
+  dedicated **AutoPTZ Mark** window takes over — no subprocess relaunch. The Mark
+  window subclasses the main shell (reusing the camera wall, tiles, theme, and
+  docks) but drives a **fully isolated** engine stack (its own temp-file
+  `ConfigStore` + `EngineClient` + `Supervisor`, populated with ONLY fake synthetic
+  / NDI cameras), so real cameras never appear and closing Mark never kills the app.
+  It visibly ramps simulated cameras at 30 fps running the real detection →
+  tracking → Center-Stage pipeline on lively, deterministic synthetic people, with
+  a live ramp chart, a `MarkControlPanel` (source / camera count / "sustaining N
+  cams @ X fps" verdict / Start-Stop), a per-tile `MarkDetailsPanel` (resolution /
+  fps / source / people / stage-ms), and an embedded logs panel. On exit you choose
+  **Return to AutoPTZ** (resumes the app and restores the prior engine state) or
+  **Quit**; the OS close button routes through Return and never silently quits.
+  Version lives in a new **About AutoPTZ Mark** dialog (with a guide, FPS targets,
+  and do/don't notes), not the title. Results are saved to `benchmarks/`. The
+  existing headless `--benchmark` is unchanged; the old `--mark` subprocess flag is
+  now a deprecated no-op.
 
 ## [2.2.0-rc6] — 2026-06-26
 

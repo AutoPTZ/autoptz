@@ -185,7 +185,7 @@ def main() -> None:
     parser.add_argument(
         "--mark",
         action="store_true",
-        help="Open the AutoPTZ Mark GUI benchmark window (relaunched from the Help menu).",
+        help="Deprecated: AutoPTZ Mark now opens in-process from Help → Run AutoPTZ Mark….",
     )
     args = parser.parse_args()
 
@@ -214,10 +214,10 @@ def main() -> None:
         )
 
     if args.mark:
-        # Headful AutoPTZ Mark benchmark window (relaunched from the Help menu).
-        from autoptz.ui.app import run
-
-        sys.exit(run(mode="mark"))
+        # Deprecated shim: AutoPTZ Mark is now an in-process swap reached from
+        # Help → Run AutoPTZ Mark…, so --mark just launches the normal app (no
+        # subprocess relaunch).
+        logger.warning("--mark is deprecated; use Help → Run AutoPTZ Mark… (in-process).")
 
     # Default: launch the UI
     from autoptz.ui.app import run
