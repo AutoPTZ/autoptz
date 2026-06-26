@@ -182,6 +182,11 @@ def main() -> None:
         default=None,
         help="Write the AutoPTZ Mark report as JSON to this path.",
     )
+    parser.add_argument(
+        "--mark",
+        action="store_true",
+        help="Open the AutoPTZ Mark GUI benchmark window (relaunched from the Help menu).",
+    )
     args = parser.parse_args()
 
     install_console_logging(level=getattr(logging, args.log_level))
