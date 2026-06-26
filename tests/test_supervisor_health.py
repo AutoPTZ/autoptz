@@ -197,7 +197,7 @@ class TestScanWorkerHealth:
         sup, client, factory_log, cid = _build(qapp)
         try:
             # Seed some restart state.
-            sup._restart_state[cid] = (2, 9999.0)
+            sup._restart_state[cid] = (2, 9999.0, False)
             # Route a RemoveCamera command.
             sup._on_remove_camera(RemoveCameraCmd(camera_id=cid))
             assert cid not in sup._restart_state
@@ -215,7 +215,7 @@ class TestScanWorkerHealth:
                 # Advance well past previous back-off so this attempt always fires.
                 now += _MAX_BACKOFF_S + 1.0
                 sup._scan_worker_health(now)
-                attempts, next_t = sup._restart_state.get(cid, (0, now))
+                attempts, next_t, _f = sup._restart_state.get(cid, (0, now, False))
                 expected_backoff = min(_MAX_BACKOFF_S, _BASE_BACKOFF_S * (2**i))
                 assert abs((next_t - now) - expected_backoff) < 0.01, (
                     f"attempt {i + 1}: expected backoff {expected_backoff}, got {next_t - now}"
@@ -259,7 +259,7 @@ class TestScanWorkerHealth:
             sup._workers[cid]._alive = False
             t_crash = now + 2.0
             sup._scan_worker_health(t_crash)  # attempt 1 fresh start
-            attempts, next_allowed_t = sup._restart_state[cid]
+            attempts, next_allowed_t, _failed = sup._restart_state[cid]
             assert attempts == 1
             # next_allowed_t should reflect _BASE_BACKOFF_S (1 s), not a 2^2 delay.
             assert abs((next_allowed_t - t_crash) - _BASE_BACKOFF_S) < 0.01, (
@@ -364,5 +364,47 @@ class TestHangDetection:
             sup._last_telemetry_t[cid] = now - 0.05  # fresh telemetry
             sup._scan_worker_health(now)
             assert len(factory_log) == 1  # untouched
+        finally:
+            sup.stop()
+
+
+class TestPermanentFailed:
+    def test_failed_flag_and_accessor_set_at_cap(self, qapp, caplog) -> None:
+        import logging
+
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            now = 1000.0
+            with caplog.at_level(logging.ERROR):
+                for _ in range(_MAX_RESTART_ATTEMPTS):
+                    sup._workers[cid]._alive = False
+                    now += _MAX_BACKOFF_S + 1.0
+                    sup._scan_worker_health(now)
+            assert sup.is_camera_failed(cid) is True
+            assert cid in sup.failed_cameras()
+            # Exactly one clear permanent-failure ERROR log (not per-scan spam).
+            errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+            assert any("permanently failed" in r.getMessage().lower() for r in errors)
+        finally:
+            sup.stop()
+
+    def test_not_failed_before_cap(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            sup._workers[cid]._alive = False
+            sup._scan_worker_health(1000.0)  # attempt 1 only
+            assert sup.is_camera_failed(cid) is False
+            assert sup.failed_cameras() == []
+        finally:
+            sup.stop()
+
+    def test_remove_clears_failed_state(self, qapp) -> None:
+        from autoptz.engine.runtime.messages import RemoveCameraCmd
+
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            sup._restart_state[cid] = (_MAX_RESTART_ATTEMPTS, 9999.0, True)
+            sup._on_remove_camera(RemoveCameraCmd(camera_id=cid))
+            assert sup.is_camera_failed(cid) is False
         finally:
             sup.stop()

@@ -163,9 +163,10 @@ class Supervisor:
         self._last_pump_warn_t = 0.0
 
         # ── worker health monitoring + auto-restart ──────────────────────────────
-        # Per-camera backoff state: cid → (attempts, next_allowed_t).
-        # Cleared when a worker is healthy again or the camera is removed.
-        self._restart_state: dict[str, tuple[int, float]] = {}
+        # Per-camera restart state: cid → (attempts, next_allowed_t, failed).
+        # ``failed`` latches True when attempts hit _MAX_RESTART_ATTEMPTS so the
+        # UI can show a permanent-failure badge.  Cleared on recovery or removal.
+        self._restart_state: dict[str, tuple[int, float, bool]] = {}
         # Monotonic timestamp of the last health scan (throttled to
         # _HEALTH_SCAN_INTERVAL_S so tick() doesn't scan every 50 ms).
         self._last_health_scan_t: float = 0.0
@@ -530,12 +531,12 @@ class Supervisor:
                 )
 
             # Worker appears dead (or hung).  Check back-off state.
-            attempts, next_allowed_t = self._restart_state.get(cid, (0, 0.0))
+            attempts, next_allowed_t, _failed = self._restart_state.get(cid, (0, 0.0, False))
 
             if attempts >= _MAX_RESTART_ATTEMPTS:
-                # Already gave up — log once (when attempts first hits the cap
-                # the counter was bumped; subsequent scans see == cap, skip).
-                # The "log once" is enforced by the sentinel value stored below.
+                # Already gave up — the permanent-failure ERROR was logged once
+                # when attempts first hit the cap (see the cap branch below); the
+                # latched ``failed`` flag keeps subsequent scans silent.
                 continue
 
             if now < next_allowed_t:
@@ -568,16 +569,23 @@ class Supervisor:
 
             new_attempts = attempts + 1
             backoff = min(_MAX_BACKOFF_S, _BASE_BACKOFF_S * (2 ** (new_attempts - 1)))
-            self._restart_state[cid] = (new_attempts, now + backoff)
 
             if new_attempts >= _MAX_RESTART_ATTEMPTS:
-                log.warning(
-                    "camera_id=%s worker failed %d times — giving up on auto-restart",
+                # Latch the permanent-failure flag so is_camera_failed()/the UI can
+                # surface it, and log a single clear ERROR (future scans hit the
+                # "already gave up" guard above and stay silent).
+                self._restart_state[cid] = (new_attempts, now + backoff, True)
+                log.error(
+                    "camera_id=%s permanently failed: %d auto-restart attempts "
+                    "exhausted — giving up (camera will not be relaunched until "
+                    "removed/re-added)",
                     cid,
                     new_attempts,
                 )
                 # Don't respawn; keep the sentinel so future scans skip this camera.
                 continue
+
+            self._restart_state[cid] = (new_attempts, now + backoff, False)
 
             try:
                 self._spawn_worker(cid)
@@ -1084,6 +1092,15 @@ class Supervisor:
             return None
         with self._lock:
             return self._workers.get(camera_id)
+
+    def is_camera_failed(self, camera_id: str) -> bool:
+        """True iff auto-restart has permanently given up on this camera."""
+        state = self._restart_state.get(camera_id)
+        return bool(state is not None and state[2])
+
+    def failed_cameras(self) -> list[str]:
+        """Camera ids that auto-restart has permanently given up on."""
+        return [cid for cid, st in self._restart_state.items() if st[2]]
 
     def _default_worker_factory(
         self,
