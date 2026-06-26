@@ -55,6 +55,44 @@ class TestSyntheticPeople:
         assert not np.array_equal(fa, fb), "cameras should not move in lockstep"
 
 
+def test_motion_is_deterministic_per_camera_and_frame() -> None:
+    # Same camera_id replayed from frame 0 yields byte-identical frames.
+    a1 = SyntheticAdapter("cam-det1", address="anim", width=320, height=240, target_fps=30.0)
+    a2 = SyntheticAdapter("cam-det1", address="anim", width=320, height=240, target_fps=30.0)
+    a1._open()
+    a2._open()
+    fa = [a1._read_frame() for _ in range(5)]
+    fb = [a2._read_frame() for _ in range(5)]
+    a1._close()
+    a2._close()
+    for x, y in zip(fa, fb, strict=True):
+        assert x is not None and y is not None
+        assert np.array_equal(x, y), "same camera_id must be frame-for-frame reproducible"
+
+
+def test_motion_is_lively_not_constant_velocity() -> None:
+    # The old motion was a fixed ±0.32-amplitude sinusoid, so a silhouette never got
+    # closer than ~15% of the frame width from the right edge.  Lively motion includes
+    # an occasional smooth walk-off/return glide that pushes a person all the way off
+    # the right edge.  Over a window covering one exit cycle (210 frames @ 30 fps = 7 s)
+    # the rightmost foreground column therefore reaches the very edge of the frame —
+    # something the gentle sinusoid can never do.
+    w = 640
+    a = SyntheticAdapter("cam-live", address="anim", width=w, height=480, target_fps=30.0)
+    a._open()
+    frames = [a._read_frame() for _ in range(210)]
+    a._close()
+    frames = [f for f in frames if f is not None]
+
+    max_right = 0
+    for f in frames:
+        mask = f.max(axis=2) > 60
+        cols = np.nonzero(mask.any(axis=0))[0]
+        if cols.size:
+            max_right = max(max_right, int(cols.max()))
+    assert max_right >= w - 4, "a person should glide off the right edge (lively walk-off)"
+
+
 def _real_detector():
     """Return a PersonDetector backed by a cached real model, or None."""
     from autoptz.engine.pipeline.detect import PersonDetector

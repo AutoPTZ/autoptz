@@ -1172,6 +1172,23 @@ class SyntheticAdapter(SourceAdapter):
         self._people = bool(people)
         # Stable per-camera count (2–4) + per-person phase so silhouettes drift apart.
         self._n_people = 2 + (abs(hash(camera_id)) % 3)  # 2..4
+        # Per-person deterministic motion descriptors: varied speed, path shape, and an
+        # occasional smooth entry/exit glide.  Seeded by (camera_id, k) so the scene is
+        # lively yet frame-for-frame reproducible (tests assert per-camera decorrelation
+        # + replay determinism + detector-friendly silhouettes).
+        self._people_motion: list[dict[str, float]] = []
+        for k in range(self._n_people):
+            seed = abs(hash((camera_id, "person", k)))
+            self._people_motion.append(
+                {
+                    "speed": 0.6 + (seed % 100) / 100.0 * 0.9,  # 0.6..1.5
+                    "path": float(seed % 3),  # 0 sine, 1 lissajous, 2 drift
+                    "amp_x": 0.22 + ((seed >> 3) % 100) / 100.0 * 0.20,  # 0.22..0.42
+                    "amp_y": 0.06 + ((seed >> 7) % 100) / 100.0 * 0.12,  # 0.06..0.18
+                    "phase": (seed % 997) / 997.0 * 2.0 * float(np.pi),
+                    "exit_period": 4.0 + float(seed % 4),  # smooth off/on cycle (s)
+                }
+            )
 
     def _resolve_path(self) -> str | None:
         addr = self._address
@@ -1278,16 +1295,39 @@ class SyntheticAdapter(SourceAdapter):
         return np.ascontiguousarray(frame)
 
     def _draw_people(self, frame: NDArray[np.uint8], t: float) -> None:
-        """Draw N moving person silhouettes (head circle + torso + legs)."""
+        """Draw N moving silhouettes with varied, lively, but deterministic motion.
+
+        Motion is a function of ``(camera_id, person_index, frame_index)`` only — the
+        same camera replayed from frame 0 is byte-identical, so synthetic-camera tests
+        stay reproducible while the scene looks alive (varying speeds, multiple path
+        shapes, occasional smooth walk-off/return).  Silhouettes stay ≥ ``0.42*h`` tall
+        so the real detector still fires.
+        """
         h, w = self._h, self._w
-        person_h = int(0.42 * h)  # ~200–300px tall at 720p; >> detector noise floor
+        person_h = int(0.42 * h)  # detector-friendly height (>> noise floor)
         half_w = max(8, int(person_h * 0.16))
+        head_r = max(6, int(person_h * 0.13))
         for k in range(self._n_people):
-            ph = self._phase + k * (2.0 * float(np.pi) / max(1, self._n_people))
-            cx = int((0.5 + 0.32 * np.sin(t * (0.9 + 0.12 * k) + ph)) * w)
-            cy = int((0.55 + 0.10 * np.cos(t * (0.7 + 0.1 * k) + ph)) * h)
+            m = self._people_motion[k]
+            tt = t * m["speed"] + m["phase"]
+            if m["path"] == 0.0:  # gentle sine sweep
+                fx = 0.5 + m["amp_x"] * np.sin(tt)
+                fy = 0.55 + m["amp_y"] * np.cos(tt * 0.8)
+            elif m["path"] == 1.0:  # lissajous (figure-eight feel)
+                fx = 0.5 + m["amp_x"] * np.sin(tt * 1.3)
+                fy = 0.55 + m["amp_y"] * np.sin(tt * 0.9 + 1.1)
+            else:  # slow lateral drift + bob
+                fx = 0.5 + m["amp_x"] * np.sin(tt * 0.5) + 0.06 * np.sin(tt * 4.0)
+                fy = 0.55 + m["amp_y"] * np.cos(tt * 0.6)
+            # Occasional smooth entry/exit: ease the person off the right edge and back.
+            cycle = (t % m["exit_period"]) / m["exit_period"]
+            if cycle > 0.85:  # last 15% of the cycle: glide off-frame
+                fx = fx + (cycle - 0.85) / 0.15 * 0.8
+            cx = int(min(1.2, max(-0.2, fx)) * w)
+            cy = int(min(0.95, max(0.20, fy)) * h)
+            if cx < -half_w or cx > w + half_w:
+                continue  # fully off-frame this instant
             top = cy - person_h // 2
-            head_r = max(6, int(person_h * 0.13))
             # legs
             cv2.rectangle(frame, (cx - half_w, cy), (cx - 2, top + person_h), (60, 60, 70), -1)
             cv2.rectangle(frame, (cx + 2, cy), (cx + half_w, top + person_h), (60, 60, 70), -1)
