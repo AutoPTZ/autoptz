@@ -253,6 +253,12 @@ def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
     app.setWindowIcon(app_icon())
     _set_macos_app_name("AutoPTZ")
 
+    # In-process Mark swap (Help → Run AutoPTZ Mark…): hiding MainWindow or closing
+    # MarkWindow must NOT quit the app.  Only an explicit quit (the visible
+    # MainWindow closed, or Mark's Quit choice) calls app.quit().  This single line
+    # is the linchpin of the suspend/resume lifecycle.
+    app.setQuitOnLastWindowClosed(False)
+
     # Persistent config store — creates the DB on first run.
     store = ConfigStore()
 

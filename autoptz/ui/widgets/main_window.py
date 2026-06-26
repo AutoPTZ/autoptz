@@ -39,6 +39,7 @@ from autoptz.ui.widgets.camera_info_panel import CameraInfoPanel
 from autoptz.ui.widgets.camera_wall import CameraWall
 from autoptz.ui.widgets.common import on_theme_changed
 from autoptz.ui.widgets.dialogs import AboutDialog, ModelManagerDialog, NetworkCameraDialog
+from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 from autoptz.ui.widgets.dialogs.model_manager import (
     model_setup_reminder_suppressed,
     startup_missing_model_keys,
@@ -77,6 +78,11 @@ class MainWindow(QMainWindow):
         self._docks: dict[str, QDockWidget] = {}
         self._selected_camera: str = ""
         self._shown_optional_setup_prompt = False
+        # In-process AutoPTZ Mark swap (Help → Run AutoPTZ Mark…): the live Mark
+        # window (or None) and whether the main engine was running when we suspended
+        # into Mark (so Return-to-AutoPTZ can restore that exact state).
+        self._mark_window: Any | None = None
+        self._engine_was_running = False
         # Discovery state: a running modal scan (USB rescan / NDI rescan), plus
         # USB and NDI source lists kept populated in the background so opening
         # the Cameras menu never probes devices on the GUI thread.
@@ -833,38 +839,63 @@ class MainWindow(QMainWindow):
         AboutDialog(self._client, self).exec()
 
     def _start_mark(self) -> None:
-        """Help → Run AutoPTZ Mark…: pre-flight, store the session, relaunch.
+        """Help → Run AutoPTZ Mark…: confirm (it will SUSPEND AutoPTZ), then swap.
 
-        Hands the chosen :class:`MarkSession` to the relaunched ``--mark`` process
-        via the ``ConfigStore`` (not argv), clears the persisted window geometry so
-        the Mark window gets its own layout, relaunches into ``--mark``, and quits
-        *after* the relaunch is spawned.
+        The pre-flight dialog explains the run will suspend the live app and
+        collects the source / N-cameras / FPS guidance.  On confirm we suspend
+        (stop the engine if running + hide) and construct/show an isolated
+        :class:`MarkWindow` IN-PROCESS — there is no subprocess relaunch.  On exit
+        the user chooses Return (resume) or Quit; the OS close button routes
+        through Return.
         """
-        from PySide6.QtWidgets import QApplication, QDialog
-
-        from autoptz.ui.mark_session import (
-            clear_window_geometry,
-            relaunch,
-            store_mark_session,
-        )
-        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+        from PySide6.QtWidgets import QDialog
 
         dlg = MarkPreflightDialog(parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        store = getattr(self._client, "_store", None)
-        if store is None:
-            log.warning("No config store available; cannot launch AutoPTZ Mark.")
+        self._enter_mark_mode(dlg.session())
+
+    def _enter_mark_mode(self, session: Any) -> None:
+        """Suspend the live app and swap in an isolated Mark window (in-process)."""
+        from autoptz.ui.widgets.mark_window import MarkWindow
+
+        self._engine_was_running = bool(_safe(lambda: self._client.engineRunning, False))
+        if self._engine_was_running:
+            try:
+                self._client.stopEngine()
+            except Exception:  # noqa: BLE001
+                log.debug("stop engine before mark failed", exc_info=True)
+        self.hide()
+        win = MarkWindow(session=session, theme=self._theme, frame_source=self._frames)
+        win.returnToAppRequested.connect(lambda: self._exit_mark_mode(quit_app=False))
+        win.quitRequested.connect(lambda: self._exit_mark_mode(quit_app=True))
+        # OS-close (no deliberate return/quit) → treat as Return, never silent quit.
+        win.closedUnexpectedly.connect(lambda: self._exit_mark_mode(quit_app=False))
+        self._mark_window = win
+        win.show()
+
+    def _exit_mark_mode(self, *, quit_app: bool) -> None:
+        """Tear down the Mark window, then resume the app or quit per the choice."""
+        win = self._mark_window
+        self._mark_window = None
+        if win is not None:
+            try:
+                win.close()
+            except Exception:  # noqa: BLE001
+                log.debug("closing mark window failed", exc_info=True)
+        if quit_app:
+            from PySide6.QtWidgets import QApplication
+
+            QApplication.quit()
             return
-        try:
-            store_mark_session(store, dlg.session())
-            clear_window_geometry(store)
-            store.flush()
-        except Exception:  # noqa: BLE001
-            log.exception("Failed to stage the AutoPTZ Mark session")
-            return
-        relaunch(mark=True)
-        QApplication.instance().quit()  # quit AFTER Popen so the relaunch survives
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if self._engine_was_running:
+            try:
+                self._client.startEngine()
+            except Exception:  # noqa: BLE001
+                log.debug("resume engine after mark failed", exc_info=True)
 
     def _open_model_manager(
         self,
