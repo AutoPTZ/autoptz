@@ -33,6 +33,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from autoptz.engine.camera_worker import _PREVIEW_H, _PREVIEW_W, CameraWorker
@@ -951,7 +952,7 @@ class Supervisor:
             camera_count,
         )
 
-    def _make_telemetry_callback(self, camera_id: str) -> Any:
+    def _make_telemetry_callback(self, camera_id: str) -> Callable[[Any], None]:
         """Wrap push_telemetry so the supervisor records a per-camera last-seen time.
 
         The wrapper stamps a monotonic timestamp into ``_last_telemetry_t`` on
@@ -1021,6 +1022,7 @@ class Supervisor:
                 return
             self._workers[camera_id] = worker
             self._spawn_t[camera_id] = time.monotonic()
+            self._last_telemetry_t.pop(camera_id, None)
             worker_count = len(self._workers)
         log.info(
             "spawned worker camera_id=%s name=%s (workers=%d)",

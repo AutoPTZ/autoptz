@@ -353,6 +353,16 @@ class TestHangDetection:
             assert len(factory_log) == 2  # respawned despite being alive
             assert original.stop_calls == 1  # old (hung) worker was stopped
             assert sup._workers[cid] is factory_log[1]
+
+            # Guard: a freshly-respawned worker must NOT be immediately re-hung.
+            # Simulate the new worker emitting telemetry so it looks healthy, then
+            # run one more scan a small delta later (still within the warmup grace
+            # window) — no third spawn should occur.
+            sup._last_telemetry_t[cid] = now  # fresh telemetry from the new worker
+            sup._scan_worker_health(now + 0.5)
+            assert len(factory_log) == 2, (
+                "New worker was immediately re-respawned — hang-detection thrash detected"
+            )
         finally:
             sup.stop()
 
@@ -385,6 +395,18 @@ class TestPermanentFailed:
             # Exactly one clear permanent-failure ERROR log (not per-scan spam).
             errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
             assert any("permanently failed" in r.getMessage().lower() for r in errors)
+            # Run additional scans (still dead, past backoff) — the ERROR must NOT
+            # fire again; exactly one "permanently failed" record across all scans.
+            now += _MAX_BACKOFF_S + 1.0
+            sup._scan_worker_health(now)
+            now += _MAX_BACKOFF_S + 1.0
+            sup._scan_worker_health(now)
+            perm_logs = [
+                r for r in caplog.records if "permanently failed" in r.getMessage().lower()
+            ]
+            assert len(perm_logs) == 1, (
+                f"Expected exactly 1 'permanently failed' log, got {len(perm_logs)}"
+            )
         finally:
             sup.stop()
 
