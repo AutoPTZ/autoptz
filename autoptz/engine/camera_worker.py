@@ -4918,6 +4918,17 @@ class CameraWorker:
             and (now - self._last_infer_t) > _INFER_STALL_S
         )
 
+    def _inference_stall_age(self, now: float) -> float:
+        """Seconds since the last inference tick while tracking is active.
+
+        Returns 0.0 when not applicable (no inferred frames yet, or tracking
+        disabled) and is clamped to >= 0.0 against clock skew.  Pure, side-effect
+        free; safe to call from the capture thread.
+        """
+        if self._frames_inferred <= 0 or not self._tracking_enabled:
+            return 0.0
+        return max(0.0, now - self._last_infer_t)
+
     def _apply_inference_watchdog(self, now: float) -> None:
         """Watchdog action — called once per telemetry tick from the capture thread.
 
@@ -4989,7 +5000,11 @@ class CameraWorker:
             pose=self._pose_overlay(),
             ptz=self._ptz_state(),
             tracking_status=self._tracking_status_info(tracks, time.monotonic()),
-            health=HealthInfo(state=health, last_error=last_error),
+            health=HealthInfo(
+                state=health,
+                last_error=last_error,
+                inference_stall_age_s=self._inference_stall_age(time.monotonic()),
+            ),
         )
         self._seq += 1
         try:
