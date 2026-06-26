@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 
 from tools.install import SystemInfo, _auto_accelerator, _resolve_accelerator, plan_install
@@ -208,29 +206,23 @@ def test_linux_pci_8086_matches_intel_gpu() -> None:
 
 
 def test_linux_intel_cpu_only_auto_uses_openvino() -> None:
-    """Intel CPU with no GPU listed → OpenVINO via /proc/cpuinfo probe."""
-    system = SystemInfo("Linux", "x86_64", ())  # no GPU name detected
-
-    with patch(
-        "tools.install._run_command_lines",
-        return_value=("model name : Intel(R) Core(TM) i7-1165G7 @ 2.80GHz",),
-    ):
-        result = _auto_accelerator(system)
-
-    assert result == "openvino"
+    """Intel CPU with no GPU listed → OpenVINO (from SystemInfo.cpu_brand)."""
+    system = SystemInfo("Linux", "x86_64", (), "Intel(R) Core(TM) i7-1165G7 @ 2.80GHz")
+    assert _auto_accelerator(system) == "openvino"
 
 
 def test_linux_amd_cpu_no_gpu_falls_through_to_none() -> None:
     """AMD/unknown CPU with no GPU → None (base CPU EP)."""
-    system = SystemInfo("Linux", "x86_64", ())
+    system = SystemInfo("Linux", "x86_64", (), "AMD Ryzen 9 5950X")
+    assert _auto_accelerator(system) is None
 
-    with patch(
-        "tools.install._run_command_lines",
-        return_value=("model name : AMD Ryzen 9 5950X",),
-    ):
-        result = _auto_accelerator(system)
 
-    assert result is None
+def test_plan_install_is_deterministic_without_cpu_probe() -> None:
+    """plan_install must not re-probe the host: no cpu_brand → no openvino, on any OS."""
+    system = SystemInfo("Linux", "x86_64", ())  # nothing detected
+    assert _auto_accelerator(system) is None
+    plan = plan_install(system, full=True)
+    assert plan.profiles == ("base", "tracking", "export")
 
 
 def test_linux_nvidia_beats_intel_when_both_present() -> None:
