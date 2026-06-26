@@ -335,6 +335,33 @@ class TestIdentityServiceCRUD:
         assert rec.enabled is True
         assert rec in service.labeled_identities()
 
+    def test_ingest_record_adds_unlabeled_and_is_idempotent(self) -> None:
+        import numpy as np
+
+        from autoptz.engine.identity.service import IdentityService
+
+        svc = IdentityService()  # no store -> pure in-memory
+        emb = np.ones(512, dtype=np.float32)
+        rec = IdentityRecord(
+            name="Person 7",
+            embeddings=[embedding_to_bytes(emb)],
+            enabled=False,
+            labeled=False,
+        )
+        v0 = svc.version
+
+        assert svc.ingest_record(rec) is True
+        got = svc.get(rec.id)
+        assert got is not None and got.name == "Person 7"
+        # Template indexed -> the record is matchable.
+        assert any(r.id == rec.id for r in svc.matchable_identities())
+        assert svc.version > v0
+
+        # Idempotent: re-ingesting the same record changes nothing.
+        v1 = svc.version
+        assert svc.ingest_record(rec) is False
+        assert svc.version == v1
+
     def test_add_unlabeled_is_memory_only(self):
         service, _ = _make_service()
         rec = service.add_unlabeled(_vec(11), thumbnail=b"png")

@@ -20,11 +20,30 @@ How the boundary is crossed (the scaffolding the engine was designed around):
   opt-in rather than the default.
 
 **Identity:** labeled identities converge through the shared SQLite DB (each child
-opens its own connection).  Live cross-process propagation of *unlabeled* harvested
-faces is not implemented in this mode yet.
+opens its own connection).  *Unlabeled* auto-harvested faces are propagated live
+via a parent-side relay: a "Person N" harvested in one child is forwarded over its
+``identity_q`` to the parent, which re-broadcasts it to every other child as an
+``ingest_identity`` command so the same face becomes matchable on every camera.
+Residual gap: a record harvested while a sibling is still spawning is dropped (it
+re-harvests on that sibling's next clean frame).
+Template-accrual gap: the relay fires on initial harvest and enroll
+(``_push_identity``) but NOT on ``add_embedding`` — additional templates accrued
+for an already-harvested Person N are not forwarded to siblings.  Siblings
+therefore hold only the initial template until they re-harvest that face
+independently.  This is a completeness gap, not a correctness bug: labeled
+identities converge via the shared SQLite DB, and unlabeled ones still match on
+the initial template.
 
-**Status — EXPERIMENTAL.** The IPC + lifecycle plumbing here is unit-tested with a
-synthetic source, but the throughput / RAM / real-camera + PTZ behaviour needs
+**RAM trade-off:** an ORT ``InferenceSession`` is not picklable, so each child
+builds **its own** inference pool — roughly one model set per camera.  That extra
+RAM is the whole reason this mode is opt-in rather than the default: it buys true
+multi-core parallelism (GIL bypass) at the cost of duplicated model memory.
+
+**Status — EXPERIMENTAL.** The IPC + lifecycle plumbing here is hardened and
+unit-tested with a synthetic source: child liveness drives the supervisor's
+auto-restart, ``stop()`` escalates join → terminate → log cleanly, child
+setup/crash logs surface to the operator, and unlabeled identities relay across
+children.  The throughput / RAM / real-camera + PTZ behaviour still needs
 validation on a real multi-camera rig before this is anything more than opt-in.
 """
 
@@ -104,6 +123,25 @@ def _safe_put(q: Any, item: Any) -> None:
         pass
 
 
+def _configure_child_logging() -> None:
+    """Make a child's WARNING+ logs visible to the operator (best-effort).
+
+    A spawned child does not inherit the parent's handlers, so its setup/crash
+    warnings would otherwise go nowhere.  Install a single stderr handler at
+    WARNING (the child's *telemetry*, not its logs, is the primary channel — but
+    a crash must still be visible somewhere) and leave the level at WARNING so the
+    child stays quiet on the hot path.
+    """
+    import sys
+
+    root = logging.getLogger()
+    root.setLevel(logging.WARNING)
+    if not root.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        root.addHandler(handler)
+
+
 def run_camera_process(
     spec: WorkerSpec,
     cmd_q: Any,
@@ -116,10 +154,10 @@ def run_camera_process(
     re-raises — a child that fails to build should exit cleanly so the supervisor
     can surface/respawn it, not hang.
     """
-    # Quiet the child's root logger to WARNING (its telemetry, not its logs, is
-    # what the parent consumes); the parent owns the in-app log view.
+    # A child does not inherit the parent's handlers; install our own so setup /
+    # crash WARNINGs are visible, kept at WARNING so the hot path stays quiet.
     try:
-        logging.getLogger().setLevel(logging.WARNING)
+        _configure_child_logging()
     except Exception:  # noqa: BLE001
         pass
 
@@ -236,6 +274,11 @@ class ProcessWorkerHandle:
     to the same callbacks the threaded path uses, via a small daemon drain thread.
     """
 
+    # Marks a worker as living in its own process so the supervisor's identity
+    # relay targets ONLY these (cross-process siblings) and stays a true no-op for
+    # the threaded default path, where every worker already shares one gallery.
+    _is_process_worker = True
+
     def __init__(
         self,
         camera_id: str,
@@ -318,6 +361,10 @@ class ProcessWorkerHandle:
             name=f"camproc-{self.camera_id[:8]}",
             daemon=True,
         )
+        # Ensure the child's stderr is line-unbuffered so a crash log isn't lost
+        # in the pipe buffer when it exits abnormally (opt-in mode only). Spawn
+        # inherits the env at fork time.
+        os.environ.setdefault("PYTHONUNBUFFERED", "1")
         self._proc.start()
         self._started = True
         self._drain_stop.clear()
@@ -345,12 +392,45 @@ class ProcessWorkerHandle:
         proc = self._proc
         if proc is not None:
             try:
+                # 1) Bounded graceful join: the child should exit on the _STOP sentinel.
                 proc.join(timeout=timeout)
+                # 2) Escalate to terminate() if it's still alive past the deadline.
                 if proc.is_alive():
+                    log.debug(
+                        "camera process %s did not stop on sentinel — terminating",
+                        self.camera_id,
+                    )
                     proc.terminate()
                     proc.join(timeout=2.0)
+                # 3) Truly unclean: survived terminate(). Surface it.
+                if proc.is_alive():
+                    log.warning("camera process %s did not exit after terminate()", self.camera_id)
             except Exception:  # noqa: BLE001
                 log.debug("camera process %s join/terminate failed", self.camera_id, exc_info=True)
+        # Join the event-drain thread so it doesn't outlive the handle (best-effort).
+        drain = self._drain_thread
+        if drain is not None and drain is not threading.current_thread():
+            try:
+                drain.join(timeout=1.0)
+            except Exception:  # noqa: BLE001
+                pass
+        # Release the queues now that nothing reads/writes them: each mp.Queue owns
+        # a background feeder thread + OS pipe FDs, so dropping the refs without
+        # close() leaks both until GC — which accumulates on a flapping camera that
+        # respawns a fresh handle each restart.  cancel_join_thread() first so close
+        # never blocks on an undelivered _STOP put when the child is already gone.
+        for q in (self._cmd_q, self._telemetry_q, self._identity_q):
+            if q is None:
+                continue
+            try:
+                q.cancel_join_thread()
+                q.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._cmd_q = None
+        self._telemetry_q = None
+        self._identity_q = None
+        self._drain_thread = None
         self._proc = None
         self._started = False
 
@@ -373,6 +453,10 @@ class ProcessWorkerHandle:
 
     def set_target_identity(self, identity_id: Any) -> None:
         self._send("set_target_identity", (identity_id,))
+
+    def ingest_identity(self, record: Any) -> None:
+        """Relay an identity harvested in another process into this child's gallery."""
+        self._send("ingest_identity", (record,))
 
     def enroll_track(self, *args: Any) -> None:
         self._send("enroll_track", args)

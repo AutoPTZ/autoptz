@@ -968,6 +968,40 @@ class Supervisor:
 
         return _cb
 
+    def _relay_identity_to_siblings(self, source_cid: str, record: Any) -> None:
+        """Broadcast a harvested identity to every OTHER process worker.
+
+        True no-op outside opt-in process-per-camera mode: threaded workers share
+        one in-process gallery (so a harvested record is already visible to every
+        sibling), so we only relay to workers flagged ``_is_process_worker`` —
+        ``ProcessWorkerHandle``s whose child holds a *separate* gallery.  Threaded
+        ``CameraWorker``s also expose ``ingest_identity`` but are deliberately
+        skipped here, keeping the default path free of any cross-thread supervisor
+        -lock traffic.  Best-effort per sibling; one failing relay never blocks the
+        others.
+
+        The early-return on the disabled path is intentionally lock-free: when
+        process-per-camera is off every worker shares the same in-process gallery
+        and no relay is necessary, so we avoid touching the supervisor RLock at all.
+        """
+        from autoptz.engine.process_worker import process_per_camera_enabled
+
+        if not process_per_camera_enabled():
+            return
+        with self._lock:
+            siblings = [
+                (cid, w)
+                for cid, w in self._workers.items()
+                if cid != source_cid and getattr(w, "_is_process_worker", False)
+            ]
+        for cid, worker in siblings:
+            relay = getattr(worker, "ingest_identity", None)
+            if callable(relay):
+                try:
+                    relay(record)
+                except Exception:  # noqa: BLE001
+                    log.debug("identity relay to %s failed", cid, exc_info=True)
+
     def _make_worker(self, camera_id: str, config: CameraConfig) -> Any:
         """Build a camera worker — a thread-based one, or (opt-in) a child process.
 
@@ -981,8 +1015,13 @@ class Supervisor:
             process_per_camera_enabled,
         )
 
+        # ``==`` (not ``is``): ``self._default_worker_factory`` is a bound method, and
+        # Python mints a fresh bound-method object on every attribute access, so an
+        # ``is`` check here is ALWAYS False — which silently disabled the entire
+        # opt-in process path.  Bound methods compare equal by (instance, function),
+        # so ``==`` is True only when no custom/test factory was injected.
         use_process = (
-            self._worker_factory is self._default_worker_factory and process_per_camera_enabled()
+            self._worker_factory == self._default_worker_factory and process_per_camera_enabled()
         )
         if not use_process:
             return self._worker_factory(camera_id, config, on_telemetry)
@@ -1000,6 +1039,16 @@ class Supervisor:
         except Exception:  # noqa: BLE001
             db_path = ""
         log.info("spawning camera %s as its own PROCESS (experimental)", camera_id)
+        try:
+            camera_count = len(self._client.cameraModel.camera_ids())
+        except Exception:  # noqa: BLE001
+            camera_count = 0
+        if camera_count >= 4:
+            log.info(
+                "process-per-camera active with %d cameras — each child rebuilds its "
+                "own model set (more RAM) in exchange for GIL relief across cores.",
+                camera_count,
+            )
         return ProcessWorkerHandle(
             camera_id,
             config,
@@ -1041,7 +1090,17 @@ class Supervisor:
             self._client,
             "push_identity",
         ):
-            worker.set_identity_callback(self._client.push_identity)
+            push = self._client.push_identity
+
+            def _identity_cb(record: Any, _cid: str = camera_id) -> None:
+                # UI surfacing (unchanged), then fan-out to sibling processes so an
+                # unlabeled face harvested here becomes matchable on every camera.
+                try:
+                    push(record)
+                finally:
+                    self._relay_identity_to_siblings(_cid, record)
+
+            worker.set_identity_callback(_identity_cb)
 
         # Inject the shared inference pool (heavy models loaded once for all
         # cameras) and the current global feature switches.

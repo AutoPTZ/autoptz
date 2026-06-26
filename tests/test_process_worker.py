@@ -74,6 +74,68 @@ class TestEnabledFlag:
             assert process_per_camera_enabled() is True
 
 
+class TestRelayIdentityLockFree:
+    """_relay_identity_to_siblings must be a lock-free no-op in threaded (default) mode."""
+
+    def _make_supervisor(self, qapp):  # noqa: ANN001
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        client = EngineClient()
+        sup = Supervisor(client, store=None)
+        sup._ensure_identity_service = lambda: None  # type: ignore[method-assign]
+        sup._ensure_inference_pool = lambda: None  # type: ignore[method-assign]
+        return sup
+
+    def test_relay_is_noop_when_disabled(self, qapp, monkeypatch) -> None:
+        """With AUTOPTZ_PROCESS_PER_CAMERA unset the relay returns immediately without
+        touching any worker, confirming the lock-free early-return path."""
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.delenv("AUTOPTZ_PROCESS_PER_CAMERA", raising=False)
+        sup = self._make_supervisor(qapp)
+
+        # Add a fake process worker so we can confirm it is never called.
+        fake_worker = MagicMock()
+        fake_worker._is_process_worker = True
+        sup._workers["cam-other"] = fake_worker
+
+        sentinel = object()
+        # Patch at the source module so the local import inside the method picks up the mock.
+        with patch(
+            "autoptz.engine.process_worker.process_per_camera_enabled",
+            return_value=False,
+        ) as mock_gate:
+            sup._relay_identity_to_siblings("cam-source", sentinel)
+            mock_gate.assert_called_once()
+
+        # The fake worker must never have been touched.
+        fake_worker.ingest_identity.assert_not_called()
+
+    def test_relay_skips_threaded_workers(self, qapp, monkeypatch) -> None:
+        """Even if process-per-camera is enabled, threaded CameraWorkers are skipped
+        (they have no ``_is_process_worker`` flag) — relay is a structural no-op for them."""
+        monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+        sup = self._make_supervisor(qapp)
+
+        # Install a fake threaded worker (no _is_process_worker attr).
+        class _FakeThreadedWorker:
+            ingest_calls: list = []
+
+            def ingest_identity(self, record):  # noqa: ANN001
+                self.ingest_calls.append(record)
+
+        fake = _FakeThreadedWorker()
+        sup._workers["cam-other"] = fake
+
+        sentinel = object()
+        sup._relay_identity_to_siblings("cam-source", sentinel)
+        # Threaded worker must NOT have received the relay.
+        assert fake.ingest_calls == [], (
+            "relay incorrectly forwarded identity to a threaded CameraWorker"
+        )
+
+
 class TestHandleProxy:
     """The handle must serialize each supervisor method call onto the command queue
     (post-start), and buffer pre-start feature/defer config into the spec."""
@@ -165,6 +227,301 @@ class TestHandleIsAlive:
         h = self._handle()
         h._proc = _FakeProc()
         assert h.is_running is True
+
+
+class TestHandleStop:
+    """stop() must escalate join -> terminate -> join and log an unclean exit."""
+
+    def _handle(self):  # noqa: ANN202
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        return ProcessWorkerHandle(cid, _config(cid), on_telemetry=lambda _m: None, db_path="")
+
+    def test_stop_terminates_when_join_times_out(self) -> None:
+        h = self._handle()
+
+        class _StuckProc:
+            """Joins never finish; terminate() makes it die."""
+
+            def __init__(self) -> None:
+                self.alive = True
+                self.terminated = False
+
+            def is_alive(self) -> bool:
+                return self.alive
+
+            def join(self, timeout=None) -> None:  # noqa: ANN001
+                return None  # never transitions on its own
+
+            def terminate(self) -> None:
+                self.terminated = True
+                self.alive = False
+
+        proc = _StuckProc()
+        h._proc = proc  # type: ignore[assignment]
+        h._cmd_q = None  # exercise the no-queue branch
+        h._started = True
+
+        h.stop(timeout=0.01)
+
+        assert proc.terminated, "a child that won't join must be terminated"
+        assert h._proc is None
+        assert h._started is False
+
+    def test_stop_warns_when_child_survives_terminate(self, caplog) -> None:  # noqa: ANN001
+        h = self._handle()
+
+        class _ZombieProc:
+            def is_alive(self) -> bool:
+                return True  # never dies, even after terminate
+
+            def join(self, timeout=None) -> None:  # noqa: ANN001
+                return None
+
+            def terminate(self) -> None:
+                return None
+
+        h._proc = _ZombieProc()  # type: ignore[assignment]
+        h._started = True
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            h.stop(timeout=0.01)
+        assert any("did not exit" in r.message.lower() for r in caplog.records), (
+            "an unclean child exit must surface as a WARNING"
+        )
+        assert h._proc is None
+
+    def test_stop_closes_queues_and_drops_refs(self) -> None:
+        """stop() must release the three mp.Queues (close + cancel feeder join) and
+        drop the references, so a respawned/flapping camera doesn't leak feeder
+        threads + pipe FDs on every restart.
+        """
+        h = self._handle()
+
+        class _FakeQ:
+            def __init__(self) -> None:
+                self.closed = False
+                self.cancelled = False
+
+            def put(self, _item) -> None:  # noqa: ANN001
+                return None
+
+            def cancel_join_thread(self) -> None:
+                self.cancelled = True
+
+            def close(self) -> None:
+                self.closed = True
+
+        cmd_q, tel_q, ident_q = _FakeQ(), _FakeQ(), _FakeQ()
+        h._cmd_q = cmd_q  # type: ignore[assignment]
+        h._telemetry_q = tel_q  # type: ignore[assignment]
+        h._identity_q = ident_q  # type: ignore[assignment]
+        h._proc = None  # no child to join
+        h._started = True
+
+        h.stop(timeout=0.01)
+
+        for q in (cmd_q, tel_q, ident_q):
+            assert q.cancelled, "each queue's feeder-join must be cancelled"
+            assert q.closed, "each queue must be closed to release its pipe FDs"
+        assert h._cmd_q is None
+        assert h._telemetry_q is None
+        assert h._identity_q is None
+
+
+class TestIngestIdentityProxy:
+    def test_ingest_identity_enqueues_command(self) -> None:
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        h = ProcessWorkerHandle(cid, _config(cid), on_telemetry=lambda _m: None, db_path="")
+
+        class _FakeQ:
+            def __init__(self) -> None:
+                self.items: list = []
+
+            def put(self, item) -> None:  # noqa: ANN001
+                self.items.append(item)
+
+        q = _FakeQ()
+        h._cmd_q = q
+        h._started = True
+
+        from autoptz.config.models import IdentityRecord
+
+        rec = IdentityRecord(name="Person 3", enabled=False, labeled=False)
+        h.ingest_identity(rec)
+        assert any(name == "ingest_identity" for (name, _a, _k) in q.items)
+
+    def test_ingest_identity_noop_before_start(self) -> None:
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        h = ProcessWorkerHandle(cid, _config(cid), on_telemetry=lambda _m: None, db_path="")
+        from autoptz.config.models import IdentityRecord
+
+        # No queue yet -> must not raise.
+        h.ingest_identity(IdentityRecord(name="Person 4", enabled=False, labeled=False))
+
+
+def test_child_drain_routes_ingest_identity() -> None:
+    import queue as _queue
+
+    from autoptz.config.models import IdentityRecord
+    from autoptz.engine.process_worker import _STOP, _drain_commands
+
+    ingested: list = []
+
+    class _FakeWorker:
+        def ingest_identity(self, record) -> None:  # noqa: ANN001
+            ingested.append(record.id)
+
+    rec = IdentityRecord(name="Person 9", enabled=False, labeled=False)
+    q: _queue.Queue = _queue.Queue()
+    q.put(("ingest_identity", (rec,), {}))
+    q.put((_STOP, (), {}))
+    _drain_commands(_FakeWorker(), q)
+    assert ingested == [rec.id]
+
+
+class TestIdentityRelay:
+    def test_harvested_identity_relays_to_sibling_not_source(self, qapp, monkeypatch) -> None:  # noqa: ANN001
+        from autoptz.config.models import IdentityRecord
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        # Process-per-camera must be enabled so the relay's early-return guard passes.
+        monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+
+        ingested: dict[str, list[str]] = {}
+
+        class _FakeHandle:
+            # Marks this as a process worker so the relay treats it like a real
+            # ProcessWorkerHandle (cross-process sibling), not a threaded worker.
+            _is_process_worker = True
+
+            def __init__(self, camera_id, config, on_telemetry) -> None:  # noqa: ANN001
+                self.camera_id = camera_id
+                self.shm_name = f"cam_{camera_id[:8]}_preview"
+                self._cb = None
+                ingested[camera_id] = []
+
+            def is_alive(self) -> bool:
+                return True
+
+            def set_identity_service(self, _s) -> None: ...  # noqa: ANN001
+            def set_identity_callback(self, cb) -> None:  # noqa: ANN001
+                self._cb = cb
+
+            def set_inference_pool(self, _p) -> None: ...  # noqa: ANN001
+            def set_features(self, _f) -> None: ...  # noqa: ANN001
+            def ingest_identity(self, record) -> None:  # noqa: ANN001
+                ingested[self.camera_id].append(record.id)
+
+            def start(self) -> None: ...
+            def stop(self) -> None: ...
+
+        client = EngineClient()
+        cid_a = client.addCamera("usb://0", "RelayA")
+        cid_b = client.addCamera("usb://0", "RelayB")
+        client.drain_commands()
+        sup = Supervisor(client, store=None, worker_factory=_FakeHandle)
+        sup.start()
+        try:
+            src = sup._workers[cid_a]
+            rec = IdentityRecord(name="Person 1", enabled=False, labeled=False)
+            src._cb(rec)  # child A harvested -> parent callback fires
+            assert ingested[cid_b] == [rec.id], "sibling must receive the relay"
+            assert ingested[cid_a] == [], "source must NOT receive its own relay"
+        finally:
+            sup.stop()
+
+    def test_threaded_default_path_does_not_relay(self, qapp) -> None:  # noqa: ANN001
+        """Threaded (in-process) workers share one gallery, so the relay must be a
+        true no-op for them — even though ``CameraWorker`` now exposes
+        ``ingest_identity``.  Relaying would needlessly take the supervisor lock and
+        re-ingest a record every sibling already sees.
+        """
+        from autoptz.config.models import IdentityRecord
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        ingested: dict[str, list[str]] = {}
+
+        class _FakeThreadedWorker:
+            """Mimics the threaded ``CameraWorker`` surface (no process marker)."""
+
+            def __init__(self, camera_id, config, on_telemetry) -> None:  # noqa: ANN001
+                self.camera_id = camera_id
+                self.shm_name = f"cam_{camera_id[:8]}_preview"
+                self._cb = None
+                ingested[camera_id] = []
+
+            def is_alive(self) -> bool:
+                return True
+
+            def set_identity_service(self, _s) -> None: ...  # noqa: ANN001
+            def set_identity_callback(self, cb) -> None:  # noqa: ANN001
+                self._cb = cb
+
+            def set_inference_pool(self, _p) -> None: ...  # noqa: ANN001
+            def set_features(self, _f) -> None: ...  # noqa: ANN001
+            def ingest_identity(self, record) -> None:  # noqa: ANN001
+                ingested[self.camera_id].append(record.id)
+
+            def start(self) -> None: ...
+            def stop(self) -> None: ...
+
+        client = EngineClient()
+        cid_a = client.addCamera("usb://0", "ThreadA")
+        cid_b = client.addCamera("usb://0", "ThreadB")
+        client.drain_commands()
+        sup = Supervisor(client, store=None, worker_factory=_FakeThreadedWorker)
+        sup.start()
+        try:
+            src = sup._workers[cid_a]
+            rec = IdentityRecord(name="Person 2", enabled=False, labeled=False)
+            src._cb(rec)  # threaded worker harvested -> parent callback fires
+            assert ingested[cid_b] == [], "threaded sibling must NOT be relayed to"
+            assert ingested[cid_a] == [], "source must NOT receive its own relay"
+        finally:
+            sup.stop()
+
+
+class TestMakeWorkerGuidance:
+    def test_guidance_log_at_four_cameras(self, qapp, monkeypatch, caplog) -> None:  # noqa: ANN001
+        import logging
+
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+        client = EngineClient()
+        cids = [client.addCamera("usb://0", f"Guide{i}") for i in range(4)]
+        client.drain_commands()
+        sup = Supervisor(client, store=None)  # default factory -> process path is eligible
+
+        with caplog.at_level(logging.INFO):
+            sup._make_worker(cids[0], _config(cids[0]))
+        assert any(
+            "gil" in r.message.lower() or "process-per-camera" in r.message.lower()
+            for r in caplog.records
+        ), "expected a GIL-relief guidance log at >=4 cameras"
+
+
+class TestChildLogging:
+    def test_child_log_setup_installs_warning_handler(self) -> None:
+        import logging
+
+        from autoptz.engine.process_worker import _configure_child_logging
+
+        root = logging.getLogger()
+        saved_handlers = list(root.handlers)
+        saved_level = root.level
+        try:
+            root.handlers = []
+            _configure_child_logging()
+            assert root.handlers, "child must install at least one log handler"
+            assert root.level <= logging.WARNING
+        finally:
+            root.handlers = saved_handlers
+            root.setLevel(saved_level)
 
 
 class TestEndToEndSpawn:
