@@ -16,10 +16,10 @@ import os
 import sys
 from typing import Any
 
-logging.basicConfig(
-    level=logging.WARNING,
-    format="%(levelname)s  %(name)s  %(message)s",
-)
+from autoptz.logsetup import install_console_logging
+
+# Coloured console logging (level + per-camera tint; TTY-gated, no-op when piped).
+install_console_logging(level=logging.WARNING)
 logger = logging.getLogger("autoptz")
 
 
@@ -150,7 +150,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
+    install_console_logging(level=getattr(logging, args.log_level))
 
     if args.selftest:
         selftest()
