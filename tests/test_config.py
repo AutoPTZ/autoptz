@@ -343,9 +343,7 @@ class TestSettings:
         store.set_setting("experimental_features", payload)
         assert store.get_setting("experimental_features", {}) == payload
 
-    def test_experimental_features_absent_returns_empty_default(
-        self, store: ConfigStore
-    ) -> None:
+    def test_experimental_features_absent_returns_empty_default(self, store: ConfigStore) -> None:
         # Feature-inactive baseline: never written → caller's empty default.
         assert store.get_setting("experimental_features", {}) == {}
 
