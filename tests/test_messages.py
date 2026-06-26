@@ -114,6 +114,31 @@ class TestTelemetryMsg:
         assert restored.height == 1080
         assert restored.dropped_frames == 7
 
+    def test_digital_crop_rect_defaults_none(self) -> None:
+        msg = TelemetryMsg(camera_id="c", seq=0)
+        assert msg.digital_crop_rect is None
+
+    def test_digital_crop_rect_round_trip(self) -> None:
+        # Center Stage active: an Optional tuple must survive msgpack + pydantic.
+        msg = TelemetryMsg(
+            camera_id="c",
+            seq=1,
+            width=1920,
+            height=1080,
+            digital_crop_rect=(100, 50, 600, 400),
+        )
+        restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+        assert restored.digital_crop_rect == (100, 50, 600, 400)
+        # msgpack decodes sequences as lists; pydantic must coerce back to a
+        # 4-int tuple so the UI can unpack (cx, cy, cw, ch) directly.
+        assert isinstance(restored.digital_crop_rect, tuple)
+        assert all(isinstance(v, int) for v in restored.digital_crop_rect)
+
+    def test_digital_crop_rect_none_round_trip(self) -> None:
+        msg = TelemetryMsg(camera_id="c", seq=2)
+        restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+        assert restored.digital_crop_rect is None
+
     def test_stage_timings_default_zero(self) -> None:
         msg = TelemetryMsg(camera_id="c", seq=0)
         assert msg.face_ms == 0.0
