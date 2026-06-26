@@ -169,6 +169,15 @@ class MarkEngineFactory:
                     spawn(cid)
                 except Exception:  # noqa: BLE001
                     log.debug("mark add_next_camera worker spawn failed", exc_info=True)
+        # _add_synthetic_camera/_add_ndi_camera mutate cameraModel DIRECTLY (not via
+        # client.addCamera), so the client's cameraAdded signal — which the wall
+        # listens to, to build the new tile + reflow — is never emitted.  Emit it
+        # here (this runs on the GUI thread via MarkWindow._grow_one_slot) so the
+        # new camera actually appears as a tile (3DMark-style growing wall).
+        try:
+            self._client.cameraAdded.emit(cid)
+        except Exception:  # noqa: BLE001
+            log.debug("mark cameraAdded emit failed", exc_info=True)
         return cid
 
     def auto_track_targets(self, *, seed: int = 0) -> None:
@@ -200,6 +209,13 @@ class MarkEngineFactory:
             self._ndi_fleet.open()
         self._supervisor.start(run_pump=False, staged=True)
         self._started = True
+        # The factory starts the supervisor directly (bypassing client.startEngine),
+        # so reflect the running state on the isolated client for the status bar.
+        self._client._engine_running = True
+        try:
+            self._client.engineStateChanged.emit()
+        except Exception:  # noqa: BLE001
+            log.debug("mark engineStateChanged emit failed", exc_info=True)
 
     def tick(self) -> None:
         # Keep the adopted NDI fleet broadcasting each GUI tick (the ramp adopts
@@ -214,6 +230,12 @@ class MarkEngineFactory:
             sup.tick()
 
     def stop(self) -> None:
+        self._started = False
+        try:
+            self._client._engine_running = False
+            self._client.engineStateChanged.emit()
+        except Exception:  # noqa: BLE001
+            log.debug("mark engine-state clear failed", exc_info=True)
         try:
             self._supervisor.stop()
         except Exception:  # noqa: BLE001

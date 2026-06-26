@@ -30,9 +30,10 @@ read off ``self._controls``.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QMetaObject, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
@@ -211,6 +212,11 @@ class MarkWindow(MainWindow):
         # cramped/scrolled the content); the showEvent maximizes once on first show.
         self.resize(1280, 820)
         self._autostarted_ramp = False
+        # Cross-thread camera-grow handoff: the ramp runs on a worker thread but
+        # adding a camera mutates the Qt model (builds the tile), which MUST happen
+        # on the GUI thread.  The worker posts _grow_one_slot and waits on the event.
+        self._grow_event = threading.Event()
+        self._grow_result: str | None = None
         self._inject_mark_ui()
         self._hide_nonessential_docks()
         self._start_pump()
@@ -394,6 +400,42 @@ class MarkWindow(MainWindow):
             self._controller.stop()
             self._controls.set_verdict("Stopping…")
 
+    @Slot()
+    def _grow_one_slot(self) -> None:
+        """Add the next fake camera ON THE GUI THREAD.
+
+        Qt model mutation (which builds the new wall tile) must run on the GUI
+        thread; the ramp's worker thread posts this slot and waits on the event.
+        """
+        try:
+            self._grow_result = self._engine.add_next_camera()
+        except Exception:  # noqa: BLE001
+            log.exception("Mark add_next_camera failed")
+            self._grow_result = None
+        finally:
+            self._grow_event.set()
+
+    def _grow_one_threadsafe(self) -> str | None:
+        """``on_grow`` for the ramp sampler — marshals the camera add to the GUI thread.
+
+        The sampler calls this from its worker thread when the ramp steps up; the
+        actual ``add_next_camera`` (model insert + worker spawn + tile creation) is
+        run on the GUI thread so the new tile actually appears.  Returns the new
+        camera id (None at the cap or on timeout).  Direct call when already on the
+        GUI thread (e.g. tests).
+        """
+        from PySide6.QtCore import QThread
+
+        if QThread.currentThread() is self.thread():
+            return self._engine.add_next_camera()
+        self._grow_event.clear()
+        self._grow_result = None
+        QMetaObject.invokeMethod(self, "_grow_one_slot", Qt.ConnectionType.QueuedConnection)
+        if not self._grow_event.wait(10.0):
+            log.warning("Mark camera-grow timed out waiting for the GUI thread")
+            return None
+        return self._grow_result
+
     def _build_sample_factory(self) -> Any:
         """Return the controller's ``sample_factory`` — always ADOPTS the engine.
 
@@ -421,7 +463,7 @@ class MarkWindow(MainWindow):
                     fleet=engine.ndi_fleet,
                     cameras=engine.camera_ids,
                     adopted_started=engine.is_started,
-                    on_grow=engine.add_next_camera,
+                    on_grow=self._grow_one_threadsafe,
                 )
 
                 def sample_fn(n: int) -> list[float]:
@@ -441,7 +483,7 @@ class MarkWindow(MainWindow):
                 supervisor=engine.supervisor,
                 cameras=engine.camera_ids,
                 adopted_started=engine.is_started,
-                on_grow=engine.add_next_camera,
+                on_grow=self._grow_one_threadsafe,
             )
 
             def sample_fn(n: int) -> list[float]:

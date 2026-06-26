@@ -351,7 +351,15 @@ def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
     # AUTOPTZ_START_MARK is set (or /tmp/autoptz_start_mark exists) open the Mark
     # pre-flight automatically so the demo can be launched headlessly/scripted.
     # Inert in normal use.
-    if os.environ.get("AUTOPTZ_START_MARK") or os.path.exists("/tmp/autoptz_start_mark"):
+    if os.path.exists("/tmp/autoptz_start_mark_now"):
+        # Skip the pre-flight and enter Mark directly with a small fast session
+        # (for scripted/visual validation of the Mark window itself).
+        from autoptz.ui.mark_session import MarkSession
+
+        QTimer.singleShot(
+            1200, lambda: window._enter_mark_mode(MarkSession(max_cameras=4, dwell_s=5.0))
+        )
+    elif os.environ.get("AUTOPTZ_START_MARK") or os.path.exists("/tmp/autoptz_start_mark"):
         QTimer.singleShot(1200, window._start_mark)
 
     # ── engine auto-start ──────────────────────────────────────────────────────

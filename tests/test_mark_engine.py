@@ -99,6 +99,36 @@ def test_add_next_camera_grows_wall_and_caps_at_max():
         eng.stop()
 
 
+def test_add_next_camera_emits_cameraAdded_for_the_wall():
+    """The wall builds tiles from the client's ``cameraAdded`` signal, but the
+    progressive add mutates the camera model DIRECTLY — so ``add_next_camera`` must
+    emit ``cameraAdded`` itself, otherwise the grown cameras never become tiles
+    (the observed "1 tile for N cams" bug: model count grows, wall stays at one)."""
+    eng, _ = _factory()
+    eng.start()
+    seen: list[str] = []
+    eng.client.cameraAdded.connect(seen.append)
+    try:
+        cid2 = eng.add_next_camera()
+        cid3 = eng.add_next_camera()
+        assert cid2 in seen and cid3 in seen
+    finally:
+        eng.stop()
+
+
+def test_start_stop_reflect_engine_running_for_status_bar():
+    """The factory starts the supervisor directly (not ``client.startEngine``), so it
+    must mark the isolated client running/stopped — else the Mark status bar reads
+    'Engine stopped' through the whole demo."""
+    eng, _ = _factory()
+    try:
+        eng.start()
+        assert eng.client.engineRunning is True
+    finally:
+        eng.stop()
+    assert eng.client.engineRunning is False
+
+
 def test_auto_track_sets_targets_full_profile(qapp):
     """The full profile auto-tracks a (seeded) target per camera so Center Stage
     visibly engages.  Uses the engine's existing target-set path (client.setTarget),
