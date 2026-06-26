@@ -38,6 +38,7 @@ class SystemInfo:
     os_name: str
     machine: str
     gpu_names: tuple[str, ...] = ()
+    cpu_brand: str = ""
 
     @property
     def is_macos(self) -> bool:
@@ -67,6 +68,11 @@ class SystemInfo:
         """
         _INTEL_TOKENS = ("intel", "arc", "iris", "uhd", "8086")
         return any(any(tok in name.lower() for tok in _INTEL_TOKENS) for name in self.gpu_names)
+
+    @property
+    def has_intel_cpu(self) -> bool:
+        """True when the detected CPU brand string is Intel."""
+        return "intel" in self.cpu_brand.lower()
 
     @property
     def has_discrete_non_intel_gpu(self) -> bool:
@@ -184,13 +190,29 @@ def _detect_gpu_names(os_name: str) -> tuple[str, ...]:
     return _dedupe(names)
 
 
+def _detect_cpu_brand(os_name: str) -> str:
+    """Best-effort CPU brand string (for Intel-CPU accelerator selection)."""
+    if os_name == "Linux":
+        for line in _run_command_lines(("grep", "-m1", "model name", "/proc/cpuinfo")):
+            return line.split(":", 1)[1].strip() if ":" in line else line
+        return ""
+    if os_name == "Darwin":
+        out = _run_command_lines(("sysctl", "-n", "machdep.cpu.brand_string"))
+        return out[0] if out else ""
+    if os_name == "Windows":
+        # platform.processor() returns the brand on Windows (e.g. "Intel64 Family ...").
+        return platform.processor() or ""
+    return ""
+
+
 def detect_system() -> SystemInfo:
-    """Inspect OS, architecture, and best-effort GPU names for install planning."""
+    """Inspect OS, architecture, and best-effort GPU/CPU names for install planning."""
     os_name = platform.system()
     return SystemInfo(
         os_name=os_name,
         machine=platform.machine(),
         gpu_names=_detect_gpu_names(os_name),
+        cpu_brand=_detect_cpu_brand(os_name),
     )
 
 
@@ -218,10 +240,10 @@ def _auto_accelerator(system: SystemInfo) -> Accelerator | None:
         return "openvino"
     # Linux Intel CPU with no discrete GPU → OpenVINO beats the stock CPU EP.
     # (Windows CPU-only boxes already get DirectML below, which is the existing behaviour.)
-    if system.is_linux and not system.has_discrete_non_intel_gpu:
-        cpu_info = _run_command_lines(("grep", "-m1", "model name", "/proc/cpuinfo"))
-        if any("intel" in line.lower() for line in cpu_info):
-            return "openvino"
+    # Reads the CPU brand captured in SystemInfo (probed once at detect_system) so
+    # plan_install stays deterministic from its inputs instead of re-probing the host.
+    if system.is_linux and not system.has_discrete_non_intel_gpu and system.has_intel_cpu:
+        return "openvino"
     if system.is_windows:
         return "directml"
     return None
