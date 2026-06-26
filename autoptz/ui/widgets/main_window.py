@@ -38,7 +38,12 @@ from autoptz.ui import theme as T
 from autoptz.ui.widgets.camera_info_panel import CameraInfoPanel
 from autoptz.ui.widgets.camera_wall import CameraWall
 from autoptz.ui.widgets.common import on_theme_changed
-from autoptz.ui.widgets.dialogs import AboutDialog, ModelManagerDialog, NetworkCameraDialog
+from autoptz.ui.widgets.dialogs import (
+    AboutDialog,
+    ExperimentalFeaturesDialog,
+    ModelManagerDialog,
+    NetworkCameraDialog,
+)
 from autoptz.ui.widgets.dialogs.model_manager import (
     model_setup_reminder_suppressed,
     startup_missing_model_keys,
@@ -485,6 +490,14 @@ class MainWindow(QMainWindow):
         self._act_prereleases.toggled.connect(self._updates.set_include_prereleases)
         updates.addAction(self._act_prereleases)
         helpm.addSeparator()
+        helpm.addAction(
+            _action(
+                self,
+                "Experimental Features…",
+                self._show_experimental,
+                tip="Toggle experimental engine flags and new-camera tracking defaults.",
+            )
+        )
         helpm.addAction(_action(self, "About AutoPTZ", self._show_about))
 
     def _build_scale_menu(self, view: QMenu) -> None:
@@ -819,6 +832,9 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         AboutDialog(self._client, self).exec()
+
+    def _show_experimental(self) -> None:
+        ExperimentalFeaturesDialog(self._client, self).exec()
 
     def _open_model_manager(
         self,

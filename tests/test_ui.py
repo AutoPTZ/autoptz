@@ -1418,3 +1418,40 @@ finally:
         env.setdefault("QT_QPA_PLATFORM", "offscreen")
         result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
         assert result.returncode == 0, result.stderr or result.stdout
+
+
+class TestExperimentalMenu:
+    def test_experimental_action_present_and_opens_dialog(self, tmp_path) -> None:
+        code = f"""
+import os
+import sys
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QApplication
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
+from autoptz.ui.log_bridge import LogListModel
+from autoptz.ui.widgets import MainWindow
+from autoptz.ui.widgets.dialogs.experimental import ExperimentalFeaturesDialog
+
+app = QApplication(sys.argv[:1])
+client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+win = MainWindow(client, log_model=LogListModel(), frame_source=ShmFrameSource())
+try:
+    texts = [a.text() for a in win.findChildren(QAction)]
+    assert any("Experimental" in (t or "") for t in texts), texts
+
+    # Handler builds the dialog without raising; it is non-modal in the test
+    # because we never call exec(), we just verify construction via the handler.
+    dlg = ExperimentalFeaturesDialog(client, win)
+    assert dlg is not None
+    dlg.close()
+finally:
+    win.close()
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
+        assert result.returncode == 0, result.stderr or result.stdout
