@@ -20,11 +20,23 @@ How the boundary is crossed (the scaffolding the engine was designed around):
   opt-in rather than the default.
 
 **Identity:** labeled identities converge through the shared SQLite DB (each child
-opens its own connection).  Live cross-process propagation of *unlabeled* harvested
-faces is not implemented in this mode yet.
+opens its own connection).  *Unlabeled* auto-harvested faces are propagated live
+via a parent-side relay: a "Person N" harvested in one child is forwarded over its
+``identity_q`` to the parent, which re-broadcasts it to every other child as an
+``ingest_identity`` command so the same face becomes matchable on every camera.
+Residual gap: a record harvested while a sibling is still spawning is dropped (it
+re-harvests on that sibling's next clean frame).
 
-**Status — EXPERIMENTAL.** The IPC + lifecycle plumbing here is unit-tested with a
-synthetic source, but the throughput / RAM / real-camera + PTZ behaviour needs
+**RAM trade-off:** an ORT ``InferenceSession`` is not picklable, so each child
+builds **its own** inference pool — roughly one model set per camera.  That extra
+RAM is the whole reason this mode is opt-in rather than the default: it buys true
+multi-core parallelism (GIL bypass) at the cost of duplicated model memory.
+
+**Status — EXPERIMENTAL.** The IPC + lifecycle plumbing here is hardened and
+unit-tested with a synthetic source: child liveness drives the supervisor's
+auto-restart, ``stop()`` escalates join → terminate → log cleanly, child
+setup/crash logs surface to the operator, and unlabeled identities relay across
+children.  The throughput / RAM / real-camera + PTZ behaviour still needs
 validation on a real multi-camera rig before this is anything more than opt-in.
 """
 
@@ -119,9 +131,7 @@ def _configure_child_logging() -> None:
     root.setLevel(logging.WARNING)
     if not root.handlers:
         handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
         root.addHandler(handler)
 
 
@@ -382,9 +392,7 @@ class ProcessWorkerHandle:
                     proc.join(timeout=2.0)
                 # 3) Truly unclean: survived terminate(). Surface it.
                 if proc.is_alive():
-                    log.warning(
-                        "camera process %s did not exit after terminate()", self.camera_id
-                    )
+                    log.warning("camera process %s did not exit after terminate()", self.camera_id)
             except Exception:  # noqa: BLE001
                 log.debug("camera process %s join/terminate failed", self.camera_id, exc_info=True)
         # Join the event-drain thread so it doesn't outlive the handle (best-effort).
