@@ -999,8 +999,13 @@ class Supervisor:
             process_per_camera_enabled,
         )
 
+        # ``==`` (not ``is``): ``self._default_worker_factory`` is a bound method, and
+        # Python mints a fresh bound-method object on every attribute access, so an
+        # ``is`` check here is ALWAYS False — which silently disabled the entire
+        # opt-in process path.  Bound methods compare equal by (instance, function),
+        # so ``==`` is True only when no custom/test factory was injected.
         use_process = (
-            self._worker_factory is self._default_worker_factory and process_per_camera_enabled()
+            self._worker_factory == self._default_worker_factory and process_per_camera_enabled()
         )
         if not use_process:
             return self._worker_factory(camera_id, config, on_telemetry)
@@ -1018,6 +1023,16 @@ class Supervisor:
         except Exception:  # noqa: BLE001
             db_path = ""
         log.info("spawning camera %s as its own PROCESS (experimental)", camera_id)
+        try:
+            camera_count = len(self._client.cameraModel.camera_ids())
+        except Exception:  # noqa: BLE001
+            camera_count = 0
+        if camera_count >= 4:
+            log.info(
+                "process-per-camera active with %d cameras — each child rebuilds its "
+                "own model set (more RAM) in exchange for GIL relief across cores.",
+                camera_count,
+            )
         return ProcessWorkerHandle(
             camera_id,
             config,

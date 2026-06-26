@@ -327,6 +327,27 @@ class TestIdentityRelay:
             sup.stop()
 
 
+class TestMakeWorkerGuidance:
+    def test_guidance_log_at_four_cameras(self, qapp, monkeypatch, caplog) -> None:  # noqa: ANN001
+        import logging
+
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+        client = EngineClient()
+        cids = [client.addCamera("usb://0", f"Guide{i}") for i in range(4)]
+        client.drain_commands()
+        sup = Supervisor(client, store=None)  # default factory -> process path is eligible
+
+        with caplog.at_level(logging.INFO):
+            sup._make_worker(cids[0], _config(cids[0]))
+        assert any(
+            "gil" in r.message.lower() or "process-per-camera" in r.message.lower()
+            for r in caplog.records
+        ), "expected a GIL-relief guidance log at >=4 cameras"
+
+
 class TestChildLogging:
     def test_child_log_setup_installs_warning_handler(self) -> None:
         import logging
