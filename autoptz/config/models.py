@@ -62,6 +62,11 @@ class SourceConfig(BaseModel, frozen=True):
     password: str = ""
     substream: bool = False
     fps: float = Field(default=30.0, gt=0.0, le=240.0)
+    # Requested capture/compose size.  Honored by the synthetic source (AutoPTZ
+    # Mark's resolution control), which composes frames at exactly this size; real
+    # capture sources negotiate their own size and ignore these.  0 → source default.
+    width: int = Field(default=0, ge=0, le=7680)
+    height: int = Field(default=0, ge=0, le=4320)
 
 
 # ── Reconnect ─────────────────────────────────────────────────────────────────
