@@ -103,8 +103,21 @@ class MarkEngineFactory:
     def is_started(self) -> bool:
         return self._started
 
+    @property
+    def max_cameras(self) -> int:
+        return max(1, int(self._session.max_cameras))
+
     def _setup_fake_cameras(self) -> None:
-        n = max(1, int(self._session.max_cameras))
+        """Register only the FIRST camera (3DMark-style progressive wall).
+
+        The wall starts at one camera and grows via :meth:`add_next_camera` as the
+        ramp advances.  For NDI the full fleet of senders is still built up front
+        (senders can't be reconfigured per-step cheaply and all broadcast at once),
+        but only the first ``ndi://`` camera is registered on the client; the rest
+        are registered one at a time by :meth:`add_next_camera`.
+        """
+        n = self.max_cameras
+        self._ndi_names: list[str] = []
         if self._session.source == "ndi":
             from autoptz.benchmark.ndi_sim import (
                 MarkNDIFleet,
@@ -114,12 +127,45 @@ class MarkEngineFactory:
 
             if ndi_sim_available():
                 self._ndi_fleet = MarkNDIFleet(n)
-                for i, name in enumerate(self._ndi_fleet.names()):
-                    self._camera_ids.append(_add_ndi_camera(self._client, name, i))
+                self._ndi_names = list(self._ndi_fleet.names())
+                if self._ndi_names:
+                    self._camera_ids.append(
+                        _add_ndi_camera(self._client, self._ndi_names[0], 0)
+                    )
                 return
             log.warning("NDI requested but cyndilib unavailable; using synthetic cameras.")
-        for i in range(n):
-            self._camera_ids.append(_add_synthetic_camera(self._client, i))
+        w, h = self._session.resolution_size()
+        self._camera_ids.append(_add_synthetic_camera(self._client, 0, width=w, height=h))
+
+    def add_next_camera(self) -> str | None:
+        """Add the next fake camera to the wall (progressive ramp).  None at the cap.
+
+        Registers the next synthetic/NDI camera on the isolated client and, when the
+        supervisor is already running, spawns just that one worker (no full restart),
+        which emits the provider-attach so the new tile starts rendering.
+        """
+        index = len(self._camera_ids)
+        if index >= self.max_cameras:
+            return None
+        if self._session.source == "ndi" and self._ndi_fleet is not None:
+            if index >= len(self._ndi_names):
+                return None
+            from autoptz.benchmark.ndi_sim import _add_ndi_camera
+
+            cid = _add_ndi_camera(self._client, self._ndi_names[index], index)
+        else:
+            w, h = self._session.resolution_size()
+            cid = _add_synthetic_camera(self._client, index, width=w, height=h)
+        self._camera_ids.append(cid)
+        # Bring up just the new worker if the engine is already running.
+        if self._started:
+            spawn = getattr(self._supervisor, "_spawn_worker", None)
+            if callable(spawn):
+                try:
+                    spawn(cid)
+                except Exception:  # noqa: BLE001
+                    log.debug("mark add_next_camera worker spawn failed", exc_info=True)
+        return cid
 
     def start(self) -> None:
         # NDI senders must broadcast BEFORE the NDIAdapter polls for sources.

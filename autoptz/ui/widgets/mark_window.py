@@ -346,6 +346,7 @@ class MarkWindow(MainWindow):
                     fleet=engine.ndi_fleet,
                     cameras=engine.camera_ids,
                     adopted_started=engine.is_started,
+                    on_grow=engine.add_next_camera,
                 )
 
                 def sample_fn(n: int) -> list[float]:
@@ -365,6 +366,7 @@ class MarkWindow(MainWindow):
                 supervisor=engine.supervisor,
                 cameras=engine.camera_ids,
                 adopted_started=engine.is_started,
+                on_grow=engine.add_next_camera,
             )
 
             def sample_fn(n: int) -> list[float]:

@@ -52,7 +52,12 @@ def test_isolated_engine_only_fake_cameras(qtapp) -> None:
     win = _win(qtapp)
     # Mark's client is NOT the default store; only fake cameras present.
     assert str(win._engine.store._path) != str(default_db_path())
-    assert len(win._engine.client.cameraModel.camera_ids()) == 3
+    # 3DMark-style progressive wall: starts at ONE camera and grows as the ramp
+    # advances (was: all N pre-added blank up front).
+    ids = win._engine.client.cameraModel.camera_ids()
+    assert len(ids) == 1
+    rec = win._engine.client.cameraModel.get_record(ids[0])
+    assert rec.camera_config.source.type == "synthetic"
     win.deleteLater()
 
 
@@ -221,8 +226,10 @@ def test_control_spin_seeded_from_session_max_cameras(qtapp) -> None:
 def test_engine_exposes_preadded_camera_ids(qtapp) -> None:
     win = _win(qtapp)
     try:
+        # The wall starts at ONE camera (progressive ramp) and ``camera_ids``
+        # mirrors the model; add_next_camera grows it up to the session max.
         ids = win._engine.camera_ids
-        assert len(ids) == 3
+        assert len(ids) == 1
         assert set(ids) == set(win._engine.client.cameraModel.camera_ids())
     finally:
         win.close()

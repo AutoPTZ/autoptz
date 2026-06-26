@@ -173,6 +173,7 @@ class MarkNDIFleetSampler:
         width: int = 1280,
         height: int = 720,
         fps: float = 30.0,
+        on_grow: Callable[[], str | None] | None = None,
     ) -> None:
         if not _CYNDILIB_OK:
             raise RuntimeError("cyndilib not available; NDI sim disabled")
@@ -189,6 +190,11 @@ class MarkNDIFleetSampler:
         self._sup = supervisor
         self._cameras = list(cameras) if cameras else []
         self._started = bool(adopted_started)
+        # Progressive ramp (adopted path): grow the registered NDI cameras one at a
+        # time as the ramp steps up.  ``on_grow`` registers the next ndi:// camera on
+        # the client + spawns its worker (the Mark factory's add_next_camera).  The
+        # full fleet of SENDERS is already broadcasting; only the registration grows.
+        self._on_grow = on_grow
 
     @staticmethod
     def _drain_events() -> None:
@@ -218,6 +224,14 @@ class MarkNDIFleetSampler:
 
         reader = fps_reader or _default_fps_reader
         if self._adopted:
+            # 3DMark-style progressive ramp: register the next ndi:// cameras one at a
+            # time (the senders already broadcast the full fleet).
+            if self._on_grow is not None:
+                while len(self._cameras) < n:
+                    cid = self._on_grow()
+                    if cid is None:
+                        break
+                    self._cameras.append(cid)
             # The Mark window's GUI pump drives the adopted supervisor AND pumps the
             # adopted fleet — ticking/pumping here would race two threads.  Just wait
             # the dwell, then read the first ``n`` pre-added NDI cameras' fps.

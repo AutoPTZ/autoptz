@@ -227,6 +227,55 @@ class TestSupervisorSampler:
         finally:
             sampler.close()
 
+    def test_adopted_sampler_grows_cameras_progressively(self, qapp) -> None:
+        """An ADOPTED sampler with an ``on_grow`` hook adds cameras ONE AT A TIME.
+
+        3DMark-style: the wall starts at 1 camera and grows as the ramp steps up.
+        The sampler calls ``on_grow`` (the Mark factory's add-next) to register the
+        next synthetic camera on the SAME client + supervisor, never building a
+        second supervisor.
+        """
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        injected = EngineClient()
+        sup = Supervisor(injected, store=None, worker_factory=_FakeSamplerWorker)
+        sup.prime_features(dict(get_profile("full").features))
+        # Pre-add only ONE camera (the idle wall starts at 1), start the supervisor.
+        cams = [_add_synthetic_camera(injected, 0)]
+        sup.start(run_pump=False)
+
+        def on_grow() -> str:
+            cid = _add_synthetic_camera(injected, len(cams))
+            cams.append(cid)
+            sup._spawn_worker(cid)  # bring up just the new worker (no full restart)
+            return cid
+
+        try:
+            sampler = _SupervisorSampler(
+                get_profile("full"),
+                client=injected,
+                supervisor=sup,
+                cameras=cams,
+                adopted_started=True,
+                on_grow=on_grow,
+            )
+            # Step 1: one camera, no growth.
+            fps1 = sampler.sample(1, dwell_s=0.0, max_ticks=3, tick_sleep_s=0.0)
+            assert len(fps1) == 1
+            assert len(injected.cameraModel.camera_ids()) == 1
+            # Step 2: the sampler grows the wall to 2.
+            fps2 = sampler.sample(2, dwell_s=0.0, max_ticks=3, tick_sleep_s=0.0)
+            assert len(fps2) == 2
+            assert len(injected.cameraModel.camera_ids()) == 2
+            # Step 3: grows to 3.
+            sampler.sample(3, dwell_s=0.0, max_ticks=3, tick_sleep_s=0.0)
+            assert len(injected.cameraModel.camera_ids()) == 3
+            sampler.close()
+            assert sup.is_running is True  # adopted supervisor left running
+        finally:
+            sup.stop()
+
     def test_adopted_sampler_reuses_supervisor_and_cameras(self, qapp) -> None:
         """An ADOPTED sampler reuses an external supervisor + pre-added cameras and
         adds no new cameras (the Mark double-stack fix): it must not build a second

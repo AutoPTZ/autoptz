@@ -52,8 +52,9 @@ def test_in_process_swap_isolated_engine_then_return(qtapp) -> None:
     # cameras are registered.
     assert mark._client is not win._client
     assert str(mark._engine.store._path) != str(default_db_path())
+    # Progressive wall: starts at ONE synthetic camera and grows as the ramp runs.
     ids = mark._engine.client.cameraModel.camera_ids()
-    assert len(ids) == 2
+    assert len(ids) == 1
     for cid in ids:
         rec = mark._engine.client.cameraModel.get_record(cid)
         assert rec.camera_config.source.type == "synthetic"

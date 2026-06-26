@@ -171,13 +171,20 @@ def _default_fps_reader(client: Any, camera_id: str) -> float:
     return float(getattr(rec, "fps", 0.0) or 0.0)
 
 
-def _add_synthetic_camera(client: Any, index: int) -> str:
+def _add_synthetic_camera(
+    client: Any,
+    index: int,
+    *,
+    width: int = 0,
+    height: int = 0,
+) -> str:
     """Register one self-paced synthetic camera on the client's model.
 
     Done directly via a ``CameraRecord`` (not ``client.addCamera``, which infers a
     USB source from the URI scheme).  The 30 fps cap means the real worker paces
     the synthetic source so it never free-spins (~16000 fps would tear the shm
-    triple-buffer).
+    triple-buffer).  A non-zero ``width``/``height`` (AutoPTZ Mark's resolution
+    control) sizes the composed synthetic scene; 0 keeps the source default.
     """
     from autoptz.config.models import CameraConfig, SourceConfig
     from autoptz.ui.list_models import CameraRecord
@@ -187,7 +194,13 @@ def _add_synthetic_camera(client: Any, index: int) -> str:
     cfg = CameraConfig(
         id=camera_id,
         name=name,
-        source=SourceConfig(type="synthetic", address="anim", fps=30.0),
+        source=SourceConfig(
+            type="synthetic",
+            address="anim",
+            fps=30.0,
+            width=int(width),
+            height=int(height),
+        ),
     )
     rec = CameraRecord(
         camera_id=camera_id,
@@ -226,6 +239,7 @@ class _SupervisorSampler:
         supervisor: Any | None = None,
         cameras: list[str] | None = None,
         adopted_started: bool = False,
+        on_grow: Callable[[], str | None] | None = None,
     ) -> None:
         # When *client* is injected (the headful Mark window passes the SAME
         # EngineClient its CameraWall is bound to), the synthetic cameras land on
@@ -250,6 +264,12 @@ class _SupervisorSampler:
         # Pre-seed with adopted camera ids so _ensure_cameras never re-adds them.
         self._cameras: list[str] = list(cameras) if cameras else []
         self._started = bool(adopted_started)
+        # 3DMark-style progressive ramp (adopted path only): when the ramp steps to
+        # N and the wall holds fewer, call ``on_grow`` to add the next camera ONE AT
+        # A TIME on the SAME client + supervisor.  ``on_grow`` returns the new id and
+        # is expected to register it on the model AND spawn its worker (the Mark
+        # factory's ``add_next_camera``).  None → no growth (fixed pre-added set).
+        self._on_grow = on_grow
 
     @staticmethod
     def _drain_events() -> None:
@@ -293,6 +313,15 @@ class _SupervisorSampler:
     ) -> list[float]:
         reader = fps_reader or _default_fps_reader
         if self._adopted:
+            # 3DMark-style progressive ramp: grow the wall to N one camera at a time
+            # (the wall started at 1).  ``on_grow`` adds the next synthetic/NDI camera
+            # on the SAME client + supervisor and spawns its worker.
+            if self._on_grow is not None:
+                while len(self._cameras) < n:
+                    cid = self._on_grow()
+                    if cid is None:
+                        break  # hit the camera cap
+                    self._cameras.append(cid)
             # The Mark window's GUI pump (33 ms QTimer) is the SOLE driver of the
             # adopted supervisor — ticking it here too would race two threads on one
             # supervisor.  Just observe the pre-added cameras over the dwell, then

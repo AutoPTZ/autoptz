@@ -60,15 +60,57 @@ def test_store_is_isolated_not_the_default_db():
         eng.stop()
 
 
-def test_only_fake_cameras_registered():
-    eng, _ = _factory()
+def test_starts_with_one_camera_for_progressive_ramp():
+    """3DMark-style: the idle wall starts at ONE synthetic camera, not all N.
+
+    Cameras are added one at a time as the ramp advances (via add_next_camera),
+    so the wall visibly grows rather than showing N blank tiles up front.
+    """
+    eng, _ = _factory()  # session max_cameras=3
     try:
         ids = eng.client.cameraModel.camera_ids()
-        assert len(ids) == 3
-        # All synthetic, named "AutoPTZ Mark N"
-        for cid in ids:
+        assert len(ids) == 1
+        rec = eng.client.cameraModel.get_record(ids[0])
+        assert rec.camera_config.source.type == "synthetic"
+        assert eng.camera_ids == ids
+    finally:
+        eng.stop()
+
+
+def test_add_next_camera_grows_wall_and_caps_at_max():
+    eng, made = _factory()  # session max_cameras=3
+    eng.start()
+    try:
+        assert len(eng.client.cameraModel.camera_ids()) == 1
+        cid2 = eng.add_next_camera()
+        assert cid2 is not None
+        assert len(eng.client.cameraModel.camera_ids()) == 2
+        cid3 = eng.add_next_camera()
+        assert cid3 is not None
+        assert len(eng.client.cameraModel.camera_ids()) == 3
+        # Capped at session.max_cameras (3): no further growth.
+        assert eng.add_next_camera() is None
+        assert len(eng.client.cameraModel.camera_ids()) == 3
+        # All synthetic.
+        for cid in eng.client.cameraModel.camera_ids():
             rec = eng.client.cameraModel.get_record(cid)
             assert rec.camera_config.source.type == "synthetic"
+    finally:
+        eng.stop()
+
+
+def test_synthetic_cameras_use_session_resolution():
+    """The pre-added + grown synthetic cameras carry the session's resolution size."""
+    from autoptz.ui import mark_engine
+
+    eng = mark_engine.MarkEngineFactory(
+        MarkSession(source="synthetic", max_cameras=3, resolution="1080p"),
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    try:
+        cid = eng.client.cameraModel.camera_ids()[0]
+        src = eng.client.cameraModel.get_record(cid).camera_config.source
+        assert (src.width, src.height) == (1920, 1080)
     finally:
         eng.stop()
 
