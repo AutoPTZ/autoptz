@@ -219,6 +219,25 @@ class IdentityService:
             self._bump()
         return rec
 
+    def ingest_record(self, record: IdentityRecord) -> bool:
+        """Index a pre-built identity from another process, in-memory + idempotent.
+
+        Used by the opt-in process-per-camera relay: an unlabeled "Person N"
+        harvested in one child is broadcast to the others so the same face is
+        matchable everywhere (labeled identities already converge via the shared
+        DB).  Preserves the record's id (cross-process identity) and bumps the
+        version so each worker's versioned reload picks it up.  Memory-only —
+        never persisted here (avoids double-writing labeled records the DB already
+        owns).  Returns True iff the gallery actually changed.
+        """
+        with self._lock:
+            held = self._records.get(record.id)
+            if held is not None and held.updated_at >= record.updated_at:
+                return False  # we already have this (or a newer) copy
+            self._index(record)
+            self._bump()
+            return True
+
     def add_embedding(
         self,
         identity_id: str,
