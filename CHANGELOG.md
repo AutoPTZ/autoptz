@@ -18,8 +18,8 @@ follow [Semantic Versioning](https://semver.org/).
   / NDI cameras), so real cameras never appear and closing Mark never kills the app.
   It visibly ramps simulated cameras at 30 fps running the real detection →
   tracking → Center-Stage pipeline on lively, deterministic synthetic people, with
-  a live ramp chart, a `MarkControlPanel` (source / camera count / "sustaining N
-  cams @ X fps" verdict / Start-Stop), a per-tile `MarkDetailsPanel` (resolution /
+  a live ramp chart, a `MarkControlPanel` (live "sustaining N cams @ X fps" verdict
+  + Stop + Exit Mark), a per-tile `MarkDetailsPanel` (resolution /
   fps / source / people / stage-ms), and an embedded logs panel. On exit you choose
   **Return to AutoPTZ** (resumes the app and restores the prior engine state) or
   **Quit**; the OS close button routes through Return and never silently quits.
@@ -47,6 +47,18 @@ follow [Semantic Versioning](https://semver.org/).
   (720p/1080p/4k → synthetic frame size) and **model** (auto/nano/small → detector
   tier), and the full profile **auto-tracks a seeded target per camera** so Center
   Stage visibly engages. The headless `--benchmark` path is unchanged.
+- **AutoPTZ Mark UX overhaul — auto-start, simpler controls, friendlier pre-flight.**
+  The Mark window now **auto-starts the ramp** on show (no Start button) and opens
+  maximized so the wall + panels fit. `MarkControlPanel` is trimmed to a verdict
+  line + **Stop** + **Exit Mark…** (the redundant Source/Cameras re-ask is gone —
+  the pre-flight is the single source of truth). The menu bar keeps **View →
+  Appearance** (theme) / UI Scale / Panels and **Help → About AutoPTZ Mark**, and
+  hides the camera/engine-management menus. The right-click **tile context menu is
+  disabled** in Mark so the demo viewer can't mutate the throwaway engine. The
+  **pre-flight** is rewritten in plain language with **dropdowns** (Max cameras,
+  Target FPS, Time per step, Resolution, Model) instead of spinboxes/jargon, and its
+  **Start asks a confirm** ("This suspends AutoPTZ and runs the simulation.
+  Continue?") before entering Mark.
 
 ## [2.2.0-rc6] — 2026-06-26
 
