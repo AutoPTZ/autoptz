@@ -6,6 +6,92 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.0-rc6] — 2026-06-26
+
+> Pre-release for testing. Headline: a **major multi-camera CPU reduction**
+> (validated on real cameras at ~2.3×) plus colored logging and two camera-handling
+> fixes, on top of the reliability/PTZ/install work from the rc5 line. **Please
+> validate on your real cameras** and report back before this becomes stable 2.2.0.
+> Known next step: with several cameras the engine is now CPU-light but still
+> Python-GIL-bound on per-frame work (some inference frames are skipped) — a
+> process-per-camera path and an on-device benchmark are in progress.
+
+### Performance
+
+- **Multi-camera CPU cut ~2.3× — the dominant cost was ONNX Runtime thread-pool
+  spin-wait, not inference.** Profiling a live 4-camera session showed ORT worker
+  threads *busy-spinning* between intermittent runs (detect every Nth frame,
+  pose/face a few Hz) as the single largest CPU consumer. Spinning is now disabled
+  on every model session, and the insightface (face) sessions — which bypassed the
+  thread cap and ran cores-wide — are capped and de-spun too. Measured on an M4 Pro
+  with 4 real cameras and all services on: **~930% → ~411% CPU (≈66% → ≈29% of the
+  machine)**, and the second-to-second CPU *bursts* are gone.
+- **CPU/BLAS thread pools are bounded to the per-camera budget** (OMP / OpenBLAS /
+  MKL / NumExpr / torch), so several camera workers no longer oversubscribe the CPU.
+
+### Added
+
+- **Colored logging.** The console colors each level (info green, warning yellow,
+  errors bold red) and gives every camera a stable color so multi-camera output is
+  easy to scan; the in-app Logs panel tints messages per-camera too. Auto-disables
+  when output is piped/redirected (honors `NO_COLOR`).
+- **Synthetic camera source** (`source type: synthetic`) for headless multi-camera
+  testing with no physical camera or OS camera permission, plus `AUTOPTZ_DB_PATH`
+  (isolated profile) and `AUTOPTZ_SKIP_CAMERA_PREFLIGHT` (start the engine with no
+  local camera, for NDI/RTSP/synthetic or headless runs).
+- **Unified "Tracking Speed" preset** (Calm / Normal / Fast / Sport) with a
+  nonlinear dead-band for steadier framing.
+- **Center Stage** gained multi-person **group framing** (auto-widens to keep
+  everyone in shot), shot-size-aware headroom and subtle lead-room, plus a
+  dead-zone hold, calmer zoom, sharper upscale, and a 30 fps virtual-camera output.
+- **Off-thread PTZ command pump** (opt-in via `AUTOPTZ_PTZ_PUMP`) that emits motion
+  at a fixed rate off the inference hot path, with a stop-on-loss heartbeat.
+- **OpenVINO is auto-selected for Intel CPU / iGPU / Arc** systems at install.
+
+### Changed
+
+- **Torch-free default install.** The heavy tracking (boxmot) and export
+  (ultralytics) stacks are now opt-in extras (`--with-tracking` / `--with-export`
+  / `--full`); the default install is leaner.
+
+### Fixed
+
+- **USB cameras are identified by their stable device id, not the volatile
+  `usb://<index>`** — fixes enabling/disabling or deleting the *wrong* camera after
+  the USB enumeration order shifts.
+- **Center Stage now zooms in on far subjects** instead of leaving a distant person
+  small in frame (the minimum-crop floor is now per-framing).
+- **PTZ stop-on-loss:** an ONVIF dead-man's-switch timeout and a VISCA
+  halt-on-reconnect stop a runaway pan when the target/transport drops.
+- **Crash-safe worker threads** — a failed capture/inference thread is surfaced and
+  auto-restarted instead of dying silently, and hot-path errors are visible.
+- **Honest precision reporting** per execution provider / host (no more misleading
+  "fp16" where the host runs fp32).
+- Accelerator auto-selection is deterministic from detected host info (fixes a
+  Linux-only CI failure).
+
+### Security
+
+- **The updater verifies the downloaded installer (SHA-256) over a pinned-TLS
+  connection before launching it.**
+
+## [2.2.0-rc5] — 2026-06-25
+
+> Pre-release for testing — PTZ tracking responsiveness + USB-PTZ and updater fixes.
+
+### Added
+
+- **Auto-detect USB (VISCA-over-serial) PTZ cameras** with a configurable baud rate,
+  so a UVC camera with a companion VISCA serial port is driven without manual setup.
+- **Dynamic, error-proportional catch-up tracking speed** — the controller speeds up
+  to close a large framing error and eases off as it closes, for snappier yet stable
+  following.
+
+### Fixed
+
+- Update flow: distinct check states, a loading indicator, and Intel-Mac TLS +
+  architecture safety.
+
 ## [2.2.0-rc4] — 2026-06-25
 
 > Pre-release for testing — fixes the three issues reported on rc3 (safe-zone
