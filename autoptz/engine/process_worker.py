@@ -267,6 +267,11 @@ class ProcessWorkerHandle:
     to the same callbacks the threaded path uses, via a small daemon drain thread.
     """
 
+    # Marks a worker as living in its own process so the supervisor's identity
+    # relay targets ONLY these (cross-process siblings) and stays a true no-op for
+    # the threaded default path, where every worker already shares one gallery.
+    _is_process_worker = True
+
     def __init__(
         self,
         camera_id: str,
@@ -402,6 +407,22 @@ class ProcessWorkerHandle:
                 drain.join(timeout=1.0)
             except Exception:  # noqa: BLE001
                 pass
+        # Release the queues now that nothing reads/writes them: each mp.Queue owns
+        # a background feeder thread + OS pipe FDs, so dropping the refs without
+        # close() leaks both until GC — which accumulates on a flapping camera that
+        # respawns a fresh handle each restart.  cancel_join_thread() first so close
+        # never blocks on an undelivered _STOP put when the child is already gone.
+        for q in (self._cmd_q, self._telemetry_q, self._identity_q):
+            if q is None:
+                continue
+            try:
+                q.cancel_join_thread()
+                q.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._cmd_q = None
+        self._telemetry_q = None
+        self._identity_q = None
         self._drain_thread = None
         self._proc = None
         self._started = False

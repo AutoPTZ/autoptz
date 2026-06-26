@@ -229,6 +229,43 @@ class TestHandleStop:
         )
         assert h._proc is None
 
+    def test_stop_closes_queues_and_drops_refs(self) -> None:
+        """stop() must release the three mp.Queues (close + cancel feeder join) and
+        drop the references, so a respawned/flapping camera doesn't leak feeder
+        threads + pipe FDs on every restart.
+        """
+        h = self._handle()
+
+        class _FakeQ:
+            def __init__(self) -> None:
+                self.closed = False
+                self.cancelled = False
+
+            def put(self, _item) -> None:  # noqa: ANN001
+                return None
+
+            def cancel_join_thread(self) -> None:
+                self.cancelled = True
+
+            def close(self) -> None:
+                self.closed = True
+
+        cmd_q, tel_q, ident_q = _FakeQ(), _FakeQ(), _FakeQ()
+        h._cmd_q = cmd_q  # type: ignore[assignment]
+        h._telemetry_q = tel_q  # type: ignore[assignment]
+        h._identity_q = ident_q  # type: ignore[assignment]
+        h._proc = None  # no child to join
+        h._started = True
+
+        h.stop(timeout=0.01)
+
+        for q in (cmd_q, tel_q, ident_q):
+            assert q.cancelled, "each queue's feeder-join must be cancelled"
+            assert q.closed, "each queue must be closed to release its pipe FDs"
+        assert h._cmd_q is None
+        assert h._telemetry_q is None
+        assert h._identity_q is None
+
 
 class TestIngestIdentityProxy:
     def test_ingest_identity_enqueues_command(self) -> None:
@@ -290,6 +327,10 @@ class TestIdentityRelay:
         ingested: dict[str, list[str]] = {}
 
         class _FakeHandle:
+            # Marks this as a process worker so the relay treats it like a real
+            # ProcessWorkerHandle (cross-process sibling), not a threaded worker.
+            _is_process_worker = True
+
             def __init__(self, camera_id, config, on_telemetry) -> None:  # noqa: ANN001
                 self.camera_id = camera_id
                 self.shm_name = f"cam_{camera_id[:8]}_preview"
@@ -322,6 +363,57 @@ class TestIdentityRelay:
             rec = IdentityRecord(name="Person 1", enabled=False, labeled=False)
             src._cb(rec)  # child A harvested -> parent callback fires
             assert ingested[cid_b] == [rec.id], "sibling must receive the relay"
+            assert ingested[cid_a] == [], "source must NOT receive its own relay"
+        finally:
+            sup.stop()
+
+    def test_threaded_default_path_does_not_relay(self, qapp) -> None:  # noqa: ANN001
+        """Threaded (in-process) workers share one gallery, so the relay must be a
+        true no-op for them — even though ``CameraWorker`` now exposes
+        ``ingest_identity``.  Relaying would needlessly take the supervisor lock and
+        re-ingest a record every sibling already sees.
+        """
+        from autoptz.config.models import IdentityRecord
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        ingested: dict[str, list[str]] = {}
+
+        class _FakeThreadedWorker:
+            """Mimics the threaded ``CameraWorker`` surface (no process marker)."""
+
+            def __init__(self, camera_id, config, on_telemetry) -> None:  # noqa: ANN001
+                self.camera_id = camera_id
+                self.shm_name = f"cam_{camera_id[:8]}_preview"
+                self._cb = None
+                ingested[camera_id] = []
+
+            def is_alive(self) -> bool:
+                return True
+
+            def set_identity_service(self, _s) -> None: ...  # noqa: ANN001
+            def set_identity_callback(self, cb) -> None:  # noqa: ANN001
+                self._cb = cb
+
+            def set_inference_pool(self, _p) -> None: ...  # noqa: ANN001
+            def set_features(self, _f) -> None: ...  # noqa: ANN001
+            def ingest_identity(self, record) -> None:  # noqa: ANN001
+                ingested[self.camera_id].append(record.id)
+
+            def start(self) -> None: ...
+            def stop(self) -> None: ...
+
+        client = EngineClient()
+        cid_a = client.addCamera("usb://0", "ThreadA")
+        cid_b = client.addCamera("usb://0", "ThreadB")
+        client.drain_commands()
+        sup = Supervisor(client, store=None, worker_factory=_FakeThreadedWorker)
+        sup.start()
+        try:
+            src = sup._workers[cid_a]
+            rec = IdentityRecord(name="Person 2", enabled=False, labeled=False)
+            src._cb(rec)  # threaded worker harvested -> parent callback fires
+            assert ingested[cid_b] == [], "threaded sibling must NOT be relayed to"
             assert ingested[cid_a] == [], "source must NOT receive its own relay"
         finally:
             sup.stop()

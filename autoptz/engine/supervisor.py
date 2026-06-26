@@ -971,13 +971,21 @@ class Supervisor:
     def _relay_identity_to_siblings(self, source_cid: str, record: Any) -> None:
         """Broadcast a harvested identity to every OTHER process worker.
 
-        No-op outside opt-in process-per-camera mode: threaded workers share one
-        in-process gallery (so they already see the record) and don't expose
-        ``ingest_identity``.  Best-effort per sibling; one failing relay never
-        blocks the others.
+        True no-op outside opt-in process-per-camera mode: threaded workers share
+        one in-process gallery (so a harvested record is already visible to every
+        sibling), so we only relay to workers flagged ``_is_process_worker`` —
+        ``ProcessWorkerHandle``s whose child holds a *separate* gallery.  Threaded
+        ``CameraWorker``s also expose ``ingest_identity`` but are deliberately
+        skipped here, keeping the default path free of any cross-thread supervisor
+        -lock traffic.  Best-effort per sibling; one failing relay never blocks the
+        others.
         """
         with self._lock:
-            siblings = [(cid, w) for cid, w in self._workers.items() if cid != source_cid]
+            siblings = [
+                (cid, w)
+                for cid, w in self._workers.items()
+                if cid != source_cid and getattr(w, "_is_process_worker", False)
+            ]
         for cid, worker in siblings:
             relay = getattr(worker, "ingest_identity", None)
             if callable(relay):
