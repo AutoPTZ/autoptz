@@ -3543,9 +3543,6 @@ class CameraWorker:
             x, y, cw, ch = framer.frame_for(target, w, h, fit_width=self._digital_target_is_group)
         else:
             x, y, cw, ch = framer.full_frame(w, h)
-        # Record the crop active for THIS frame so telemetry can carry it and the
-        # UI can re-normalize overlays into the cropped preview.
-        self._last_digital_crop_rect = (int(x), int(y), int(cw), int(ch))
         nowm = time.monotonic()
         if nowm - self._cs_diag_t > 2.0:
             self._cs_diag_t = nowm
@@ -3568,7 +3565,12 @@ class CameraWorker:
         # The crop is almost always UPSCALED to the output → INTER_LINEAR looks
         # soft. Pick by scale factor: cubic up, area down, linear ~1:1.
         interp = pick_interpolation((int(crop.shape[1]), int(crop.shape[0])), (ow, oh))
-        return cv2.resize(crop, (ow, oh), interpolation=interp)
+        out = cv2.resize(crop, (ow, oh), interpolation=interp)
+        # Record the crop active for THIS frame — only AFTER a successful resize, so
+        # a resize exception leaves the rect at the last actually-painted frame. The
+        # UI re-normalizes overlays into the cropped preview using this rect.
+        self._last_digital_crop_rect = (int(x), int(y), int(cw), int(ch))
+        return out
 
     def _current_digital_target(self) -> tuple[float, float, float, float] | None:
         """The bbox (x1,y1,x2,y2) Center Stage should frame this tick, or None.
