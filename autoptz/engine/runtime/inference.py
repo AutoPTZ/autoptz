@@ -294,6 +294,35 @@ def _provider_options(ep: EP, prefs: HardwarePrefs | None) -> dict[str, object]:
     return {}
 
 
+def _apply_low_idle_threading(so: ort.SessionOptions) -> None:
+    """Stop ORT worker threads from busy-spinning while idle.
+
+    AutoPTZ runs each model only intermittently (detect every Nth frame, pose/face
+    a few Hz), so an ORT session spends most of its life *idle between runs*.  By
+    default ORT's intra-op worker threads **busy-spin** (~200 ms) before parking,
+    which on a multi-camera box turns several mostly-idle sessions into a wall of
+    CPU — profiling showed ``ThreadPoolTempl::WorkerLoop`` as the single largest
+    consumer.  Disabling spinning makes workers block immediately on a condition
+    variable instead, collapsing idle/intermittent CPU at the cost of a few hundred
+    microseconds of wake-up latency per run (negligible next to a 10-40 ms model).
+
+    We also force a single, sequential inter-op pool: AutoPTZ runs one graph per
+    call, so a parallel inter-op pool only adds another idle spinner.
+    """
+    # Keys are stable ORT session-config entries (>=1.6); unknown keys are ignored
+    # by older runtimes, so this stays safe across the EP matrix.
+    try:
+        so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        so.add_session_config_entry("session.inter_op.allow_spinning", "0")
+    except Exception:  # noqa: BLE001 — a tuning hint must never block session build
+        pass
+    try:
+        so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        so.inter_op_num_threads = 1
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _build_session_options(
     prefs: HardwarePrefs | None,
     base: ort.SessionOptions | None,
@@ -303,6 +332,7 @@ def _build_session_options(
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     if prefs and prefs.intra_op_threads:
         so.intra_op_num_threads = max(1, int(prefs.intra_op_threads))
+    _apply_low_idle_threading(so)
     return so
 
 

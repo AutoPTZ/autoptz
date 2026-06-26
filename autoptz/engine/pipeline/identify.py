@@ -24,8 +24,11 @@ This module owns *embedding + matching*; gallery storage/CRUD lives in
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import threading
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -43,6 +46,82 @@ ARCFACE_DIM = 512
 
 # Default cosine-similarity floor for a confident identity match.
 DEFAULT_MATCH_THRESHOLD = 0.35
+
+
+def _face_intra_threads() -> int:
+    """Per-session intra-op thread budget for the insightface sessions.
+
+    Follows the supervisor's published per-camera budget
+    (``AUTOPTZ_ORT_INTRA_THREADS``) so face stays in lockstep with detector/pose;
+    falls back to a small fixed cap when nothing is published.  Face runs only a
+    few Hz on one target, so a tight cap costs little latency and avoids a
+    cores-wide CPU pool per session.
+    """
+    raw = os.environ.get("AUTOPTZ_ORT_INTRA_THREADS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    cores = os.cpu_count() or 4
+    return max(1, min(4, cores - 1))
+
+
+# The monkeypatch below swaps a process-global method (``ort.InferenceSession``).
+# The normal path (shared pool) serialises face builds via the pool lock, but the
+# degraded *per-worker* fallback (``worker.stacks._build_face_stack``) can run on
+# all camera threads at once.  Two overlapping patch/restore cycles would corrupt
+# the saved original, so we serialise entry here.
+_PATCH_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _capped_insightface_sessions(intra_threads: int) -> Iterator[None]:
+    """Force every ORT session insightface builds to be capped + non-spinning.
+
+    insightface's ``model_zoo.get_model`` only forwards ``providers`` /
+    ``provider_options`` to ``onnxruntime.InferenceSession`` — it gives no hook to
+    pass ``SessionOptions``.  Left to its defaults, each buffalo_l sub-model
+    (SCRFD detector + ArcFace embedder) spins up a **cores-wide, busy-spinning**
+    intra-op pool, which on a multi-camera box is a dominant, mostly-idle CPU sink
+    (profiling: ORT ``WorkerLoop`` was the single largest consumer).
+
+    We therefore wrap construction in a scoped patch of
+    ``onnxruntime.InferenceSession.__init__`` that injects a tuned ``SessionOptions``
+    (small intra-op pool, single sequential inter-op pool, spinning disabled) when
+    the caller didn't supply one.  Patching ``__init__`` on the class — not
+    rebinding the name — is required so insightface's ``PickableInferenceSession``
+    subclass (whose ``super().__init__`` resolves to the live method) picks it up.
+    Always restored, even on failure; a no-op if onnxruntime is unavailable.
+    """
+    try:
+        import onnxruntime as ort  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — no ORT → nothing to cap
+        yield
+        return
+
+    orig_init = ort.InferenceSession.__init__
+
+    def patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        if not kwargs.get("sess_options"):
+            so = ort.SessionOptions()
+            so.intra_op_num_threads = max(1, int(intra_threads))
+            so.inter_op_num_threads = 1
+            with contextlib.suppress(Exception):
+                so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            with contextlib.suppress(Exception):
+                so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+                so.add_session_config_entry("session.inter_op.allow_spinning", "0")
+            kwargs["sess_options"] = so
+        orig_init(self, *args, **kwargs)
+
+    with _PATCH_LOCK:
+        ort.InferenceSession.__init__ = patched_init
+        try:
+            yield
+        finally:
+            ort.InferenceSession.__init__ = orig_init
+
 
 # Logged-once guard so a missing dependency is reported a single time.
 _WARNED_UNAVAILABLE = False
@@ -268,13 +347,14 @@ class FaceRecognizer:
             # keypoints) + the ArcFace embedding.  The default pack also loads 2D/3D
             # landmark + gender/age models we never use; skipping them trims memory
             # and load time.
-            app = FaceAnalysis(
-                name=self._model_name,
-                root=insightface_root(),
-                providers=providers,
-                allowed_modules=["detection", "recognition"],
-            )
-            app.prepare(ctx_id=ctx_id, det_size=(self._det_size, self._det_size))
+            with _capped_insightface_sessions(_face_intra_threads()):
+                app = FaceAnalysis(
+                    name=self._model_name,
+                    root=insightface_root(),
+                    providers=providers,
+                    allowed_modules=["detection", "recognition"],
+                )
+                app.prepare(ctx_id=ctx_id, det_size=(self._det_size, self._det_size))
             self._app = app
             self._available = True
             self.last_error = None

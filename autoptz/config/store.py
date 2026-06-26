@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import sys
 import threading
@@ -60,6 +61,17 @@ def default_config_dir() -> Path:
 
 
 def default_db_path() -> Path:
+    """Path to the config DB.
+
+    Honours ``AUTOPTZ_DB_PATH`` so an alternate profile (or an isolated
+    synthetic-camera setup for scaling/CPU tests) can be selected without
+    disturbing the default ``~/Library/Application Support/AutoPTZ/autoptz.db``.
+    Models and caches resolve independently of this path, so only the
+    camera/identity/settings store is redirected.
+    """
+    override = os.environ.get("AUTOPTZ_DB_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
     return default_config_dir() / "autoptz.db"
 
 
