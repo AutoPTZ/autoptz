@@ -684,17 +684,22 @@ class MainWindow(QMainWindow):
 
     def _find_camera(self, uri: str, unique_id: str) -> str | None:
         model = self._client.cameraModel
+        cameras: list[tuple[str, str, str, str]] = []
         for cid in _safe(lambda: model.camera_ids(), []) or []:
             rec = model.get_record(cid)
             cfg = getattr(rec, "camera_config", None)
             src = getattr(cfg, "source", None)
             if src is None:
                 continue
-            if unique_id and getattr(src, "unique_id", None) == unique_id:
-                return cid
-            if getattr(src, "address", None) == uri:
-                return cid
-        return None
+            cameras.append(
+                (
+                    cid,
+                    str(getattr(src, "type", "") or ""),
+                    str(getattr(src, "unique_id", "") or ""),
+                    str(getattr(src, "address", "") or ""),
+                )
+            )
+        return _match_camera_id(cameras, uri, unique_id)
 
     def _run_scan(self, label: str, work: Any, on_done: Any) -> None:
         """Run a blocking discovery ``work()`` off the GUI thread with a busy dialog.
@@ -1365,3 +1370,40 @@ def _safe(fn: Any, default: Any) -> Any:
         return fn()
     except Exception:  # noqa: BLE001
         return default
+
+
+def _match_camera_id(
+    cameras: list[tuple[str, str, str, str]],
+    uri: str,
+    unique_id: str,
+) -> str | None:
+    """Resolve a scanned device → the matching camera id, or None.
+
+    ``cameras`` is ``(camera_id, source_type, source_unique_id, source_address)``.
+
+    USB cameras are identified **only by their stable ``unique_id``**: the
+    ``usb://<index>`` address is volatile (it shifts when a device is replugged or
+    another camera is added), so matching USB by address could resolve to — and
+    then disable/delete — the *wrong* camera after enumeration changes (the
+    reported bug).  As a last resort, an id-less USB device matches another id-less
+    USB camera at the same address, but never one that carries a different known id.
+
+    Network sources (rtsp/onvif/ndi) keep address matching — their address (URL /
+    NDI name) *is* their stable identity.
+    """
+    # unique_id match first (works for any source type).
+    if unique_id:
+        for cid, _stype, suid, _addr in cameras:
+            if suid and suid == unique_id:
+                return cid
+    # Address fallback, scoped by source type.
+    for cid, stype, suid, addr in cameras:
+        if addr != uri:
+            continue
+        if stype == "usb":
+            # Only when BOTH sides lack a stable id (never override a known id).
+            if not unique_id and not suid:
+                return cid
+        else:
+            return cid
+    return None
