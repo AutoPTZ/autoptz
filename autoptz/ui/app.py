@@ -21,6 +21,7 @@ Wiring that is reused verbatim from the engine layer:
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import threading
 import warnings
@@ -78,7 +79,20 @@ def _start_engine_after_macos_camera_preflight(client: object, bridge: object | 
     AVFoundation/OpenCV camera permission must be requested from the GUI process,
     not from a capture worker thread.  If the OS prompt is pending, this returns
     immediately and starts the engine from the async permission callback.
+
+    ``AUTOPTZ_SKIP_CAMERA_PREFLIGHT`` forces the engine to start regardless of
+    camera authorization — for setups with no local camera (NDI / RTSP / the
+    synthetic test source) or headless/CI runs, where gating on the camera prompt
+    would otherwise keep the engine from ever starting.
     """
+    if os.environ.get("AUTOPTZ_SKIP_CAMERA_PREFLIGHT", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        client.startEngine()  # type: ignore[attr-defined]
+        return
     if sys.platform != "darwin" or bridge is None:
         client.startEngine()  # type: ignore[attr-defined]
         return

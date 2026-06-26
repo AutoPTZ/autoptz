@@ -146,15 +146,27 @@ def build_frame_source(camera_id: str, config: CameraConfig) -> FrameSource:
     Importing ``ingest`` pulls in ``cv2``; if that is unavailable we raise so
     the worker can fall back to a no-signal state without crashing the engine.
     """
-    from autoptz.engine.pipeline.ingest import NDIAdapter, RTSPAdapter, USBAdapter
+    from autoptz.engine.pipeline.ingest import (
+        NDIAdapter,
+        RTSPAdapter,
+        SyntheticAdapter,
+        USBAdapter,
+    )
 
     source = config.source
     target_fps = source.fps
     stall = config.reconnect.stall_timeout_s
 
-    if source.type == "usb":
+    if source.type == "synthetic":
+        adapter: Any = SyntheticAdapter(
+            camera_id,
+            address=source.address,
+            target_fps=target_fps,
+            stall_timeout=stall,
+        )
+    elif source.type == "usb":
         dev = _resolve_usb_device(source)
-        adapter: Any = USBAdapter(
+        adapter = USBAdapter(
             camera_id,
             source=dev,
             target_fps=target_fps,

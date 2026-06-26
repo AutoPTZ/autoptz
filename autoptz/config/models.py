@@ -54,8 +54,8 @@ class ThemeConfig(BaseModel, frozen=True):
 
 
 class SourceConfig(BaseModel, frozen=True):
-    type: Literal["usb", "rtsp", "onvif", "ndi"] = "usb"
-    address: str = ""  # index (USB), URL (RTSP/ONVIF), name (NDI)
+    type: Literal["usb", "rtsp", "onvif", "ndi", "synthetic"] = "usb"
+    address: str = ""  # index (USB), URL (RTSP/ONVIF), name (NDI), content path/keyword (synthetic)
     unique_id: str | None = None  # stable device id (USB: AVFoundation uniqueID)
     source_label: str = ""  # friendly kind ("Built-in"/"Continuity Camera"/…)
     username: str = ""

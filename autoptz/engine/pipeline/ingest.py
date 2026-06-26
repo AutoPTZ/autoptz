@@ -23,6 +23,7 @@ Optional dependencies:
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import threading
 import time
@@ -30,6 +31,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -1093,3 +1095,181 @@ class NDIAdapter(SourceAdapter):
         self._receiver = None
         self._finder = None
         self._video_frame = None
+
+
+# ── Synthetic Adapter (test / scaling, no camera or OS permission needed) ────────
+
+
+def _find_people_sample() -> str | None:
+    """Best-effort path to a bundled people image (ultralytics asset), else None.
+
+    Used only when present at runtime; AutoPTZ never redistributes these samples.
+    """
+    try:
+        import importlib.util  # noqa: PLC0415
+
+        spec = importlib.util.find_spec("ultralytics")
+        if spec and spec.submodule_search_locations:
+            base = Path(next(iter(spec.submodule_search_locations)))
+            for rel in ("assets/zidane.jpg", "assets/bus.jpg"):
+                cand = base / rel
+                if cand.exists():
+                    return str(cand)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+class SyntheticAdapter(SourceAdapter):
+    """Procedural / file-backed synthetic source — needs no camera or OS permission.
+
+    Built for scaling tests and headless CPU validation: it fabricates a moving
+    BGR scene at the pipeline resolution so the *whole* pipeline (capture handoff →
+    detection → tracking → pose → face → ego-motion → paint) runs exactly as for a
+    real camera, but deterministically and on any machine (no AVFoundation/USB/NDI,
+    no camera permission).  ``address`` selects the content:
+
+    * a path to a **video** file  → looped frame-by-frame (real motion + people);
+    * a path to an **image** file → panned/zoomed to synthesise motion;
+    * ``""`` / ``"anim"``          → a procedurally generated animated scene;
+    * ``"people"``                 → a bundled ultralytics people sample if present.
+
+    The scene is panned every frame so motion-dependent stages (tracking, pose,
+    ego-motion optical flow) get genuine work rather than a static image.
+    """
+
+    def __init__(
+        self,
+        camera_id: str,
+        *,
+        address: str = "",
+        width: int = 1280,
+        height: int = 720,
+        target_fps: float = 30.0,
+        shm_writer: ShmWriter | None = None,
+        stall_timeout: float = _STALL_TIMEOUT_DEFAULT,
+    ) -> None:
+        super().__init__(camera_id, shm_writer, target_fps, stall_timeout)
+        self._address = (address or "").strip()
+        self._w = int(shm_writer.width) if shm_writer is not None else int(width)
+        self._h = int(shm_writer.height) if shm_writer is not None else int(height)
+        self._base: NDArray[np.uint8] | None = None
+        self._video: object | None = None
+        self._idx = 0
+        # Effective delivered-fps telemetry (logged every few seconds): when the
+        # downstream pipeline can't keep up, the worker pulls slower than target
+        # and this drops below the configured fps — the frame-drop signal.
+        self._fps_t0 = 0.0
+        self._fps_n0 = 0
+        # Per-camera phase offset so N synthetic cameras don't move in lockstep
+        # (keeps detection/tracking/ego work uncorrelated across cameras).
+        self._phase = (abs(hash(camera_id)) % 997) / 997.0 * 2.0 * float(np.pi)
+
+    def _resolve_path(self) -> str | None:
+        addr = self._address
+        if addr in ("", "anim", "synthetic"):
+            return None
+        if addr == "people":
+            return _find_people_sample()
+        return addr
+
+    def _open(self) -> bool:
+        self._idx = 0
+        path = self._resolve_path()
+        if path and os.path.exists(path):
+            cap = cv2.VideoCapture(path)
+            if cap.isOpened():
+                ok, _ = cap.read()
+                count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                if ok and count and count > 1.5:  # a real (multi-frame) video
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    self._video = cap
+                    log.info("camera_id=%s SyntheticAdapter looping video %s", self.camera_id, path)
+                    return True
+                cap.release()
+            img = cv2.imread(path)
+            if img is not None:
+                self._base = cv2.resize(img, (self._w, self._h))
+                log.info("camera_id=%s SyntheticAdapter animating image %s", self.camera_id, path)
+                return True
+        # Nothing usable supplied → fall back to a people sample (so detection-driven
+        # stages still fire) and finally to a pure procedural scene.
+        ps = _find_people_sample()
+        if ps:
+            img = cv2.imread(ps)
+            if img is not None:
+                self._base = cv2.resize(img, (self._w, self._h))
+        log.info(
+            "camera_id=%s SyntheticAdapter %s scene %dx%d@%.0ffps",
+            self.camera_id,
+            "people-sample" if self._base is not None else "procedural",
+            self._w,
+            self._h,
+            self._target_fps,
+        )
+        return True
+
+    def _read_frame(self) -> NDArray[np.uint8] | None:
+        self._idx += 1
+        now = time.monotonic()
+        if self._fps_t0 == 0.0:
+            self._fps_t0, self._fps_n0 = now, self._idx
+        elif now - self._fps_t0 >= 5.0:
+            eff = (self._idx - self._fps_n0) / (now - self._fps_t0)
+            # INFO normally (shows in the in-app log panel); WARNING under the test
+            # debug flag so headless scaling runs capture it on stderr.
+            emit = (
+                log.warning
+                if os.environ.get("AUTOPTZ_SYNTH_DEBUG", "").strip().lower()
+                in ("1", "true", "yes", "on")
+                else log.info
+            )
+            emit(
+                "camera_id=%s synthetic effective fps=%.1f (target=%.0f)",
+                self.camera_id,
+                eff,
+                self._target_fps,
+            )
+            self._fps_t0, self._fps_n0 = now, self._idx
+        cap = self._video
+        if cap is not None:
+            ok, frm = cap.read()  # type: ignore[union-attr]
+            if not ok:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # type: ignore[union-attr]
+                ok, frm = cap.read()  # type: ignore[union-attr]
+            if not ok or frm is None:
+                return None
+            if frm.shape[1] != self._w or frm.shape[0] != self._h:
+                frm = cv2.resize(frm, (self._w, self._h))
+            return np.ascontiguousarray(frm)
+        return self._compose()
+
+    def _compose(self) -> NDArray[np.uint8]:
+        w, h, i = self._w, self._h, self._idx
+        t = i / max(1.0, self._target_fps)
+        # Pan (simulated camera/ego motion): slow sinusoid + tiny high-freq jitter.
+        dx = int(round(0.04 * w * np.sin(t * 0.8 + self._phase) + 2.0 * np.sin(t * 11.0)))
+        dy = int(round(0.03 * h * np.cos(t * 0.6 + self._phase)))
+        if self._base is not None:
+            frame = np.roll(self._base, (dy, dx), axis=(0, 1))
+        else:
+            ramp = ((np.arange(w) + i * 2) % 256).astype(np.uint8)
+            grad = np.tile(ramp, (h, 1))
+            frame = np.empty((h, w, 3), dtype=np.uint8)
+            frame[..., 0] = grad
+            frame[..., 1] = np.uint8(80)
+            frame[..., 2] = 255 - grad
+        # A moving foreground block: extra motion for the tracker to chase.
+        bx = int((0.5 + 0.35 * np.sin(t * 1.3 + self._phase)) * w)
+        by = int((0.5 + 0.25 * np.cos(t * 1.1)) * h)
+        cv2.rectangle(frame, (bx - 60, by - 120), (bx + 60, by + 120), (30, 30, 220), -1)
+        return np.ascontiguousarray(frame)
+
+    def _close(self) -> None:
+        cap = self._video
+        if cap is not None:
+            try:
+                cap.release()  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001
+                pass
+            self._video = None
