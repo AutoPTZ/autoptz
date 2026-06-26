@@ -104,3 +104,58 @@ def test_features_primed_from_profile():
         assert made["sup"]._features  # non-empty (profile feature flags)
     finally:
         eng.stop()
+
+
+def test_factory_owns_a_frame_source():
+    """The factory exposes its OWN ShmFrameSource (the Mark wall binds to it).
+
+    The blank-tile bug was the factory owning no frame source: synthetic workers
+    wrote to the Mark engine's shm but nothing was attached to read it, so every
+    tile stayed blank.  The factory must own one so the window can bind its wall.
+    """
+    from autoptz.ui.frames import ShmFrameSource
+
+    eng, _ = _factory()
+    try:
+        assert isinstance(eng.frame_source, ShmFrameSource)
+    finally:
+        eng.stop()
+
+
+def test_provider_attach_detach_wired_to_frame_source(qapp):
+    """The isolated client's provider attach/detach drive the factory's frame source.
+
+    Mirrors app.py's wiring (~304-311): providerAttachRequested(cid,shm,w,h) →
+    frames.attach(cid,shm,h,w) and providerDetachRequested → frames.detach, both
+    queued.  Without this the Mark wall never reads the synthetic workers' shm.
+    """
+    from PySide6.QtCore import QCoreApplication
+
+    eng, _ = _factory()
+    try:
+        frames = eng.frame_source
+        # Emit an attach on the isolated client; QueuedConnection delivers on pump.
+        eng.client.providerAttachRequested.emit("cam-1", "cam_abc_preview", 1280, 720)
+        QCoreApplication.instance().processEvents()
+        assert frames.is_known("cam-1")
+        # The h/w order is honored (attach takes height,width; signal carries w,h).
+        shm_name, height, width = frames._intents["cam-1"]
+        assert (shm_name, height, width) == ("cam_abc_preview", 720, 1280)
+        # Detach removes it.
+        eng.client.providerDetachRequested.emit("cam-1")
+        QCoreApplication.instance().processEvents()
+        assert not frames.is_known("cam-1")
+    finally:
+        eng.stop()
+
+
+def test_stop_detaches_frame_source(qapp):
+    from PySide6.QtCore import QCoreApplication
+
+    eng, _ = _factory()
+    eng.client.providerAttachRequested.emit("cam-9", "cam_xyz_preview", 1280, 720)
+    QCoreApplication.instance().processEvents()
+    assert eng.frame_source.is_known("cam-9")
+    eng.stop()
+    # Teardown releases every reader/intent so the discarded session leaks nothing.
+    assert not eng.frame_source.is_known("cam-9")

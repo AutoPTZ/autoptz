@@ -866,7 +866,10 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 log.debug("stop engine before mark failed", exc_info=True)
         self.hide()
-        win = MarkWindow(session=session, theme=self._theme, frame_source=self._frames)
+        # Do NOT pass the main app's frame source: MarkWindow owns an ISOLATED one
+        # wired to its own engine's shm (passing self._frames here was the blank-tile
+        # bug — the main source is attached to the MAIN engine's shm, not Mark's).
+        win = MarkWindow(session=session, theme=self._theme)
         win.returnToAppRequested.connect(lambda: self._exit_mark_mode(quit_app=False))
         win.quitRequested.connect(lambda: self._exit_mark_mode(quit_app=True))
         # OS-close (no deliberate return/quit) → treat as Return, never silent quit.

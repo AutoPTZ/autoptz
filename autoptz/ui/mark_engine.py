@@ -17,10 +17,13 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import Qt
+
 from autoptz.benchmark.profiles import get_profile
 from autoptz.benchmark.runner import _add_synthetic_camera
 from autoptz.config.store import ConfigStore
 from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
 from autoptz.ui.mark_session import MarkSession
 
 log = logging.getLogger(__name__)
@@ -51,6 +54,20 @@ class MarkEngineFactory:
         self._supervisor.prime_features(dict(get_profile(session.profile).features))
         self._ndi_fleet: Any | None = None
         self._started = False
+        # The Mark wall binds to THIS frame source (NOT the main app's).  Wiring the
+        # isolated client's provider attach/detach to it is what makes the synthetic
+        # workers' shm actually render — without it every tile stayed blank.  Mirrors
+        # autoptz/ui/app.py: providerAttachRequested carries (cid, shm, w, h) while
+        # ShmFrameSource.attach takes (cid, shm, height, width), so the lambda swaps.
+        self._frame_source = ShmFrameSource()
+        self._client.providerAttachRequested.connect(
+            lambda cid, shm, w, h: self._frame_source.attach(cid, shm, h, w),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._client.providerDetachRequested.connect(
+            self._frame_source.detach,
+            Qt.ConnectionType.QueuedConnection,
+        )
         # The camera ids pre-added to the idle wall — the ramp ADOPTS these (and the
         # supervisor below) so only ONE engine stack ever runs (no doubled tiles).
         self._camera_ids: list[str] = []
@@ -59,6 +76,11 @@ class MarkEngineFactory:
     @property
     def client(self) -> Any:
         return self._client
+
+    @property
+    def frame_source(self) -> ShmFrameSource:
+        """The isolated frame source the Mark wall binds to (own shm readers)."""
+        return self._frame_source
 
     @property
     def store(self) -> Any:
@@ -123,6 +145,11 @@ class MarkEngineFactory:
             self._supervisor.stop()
         except Exception:  # noqa: BLE001
             log.debug("mark supervisor stop failed", exc_info=True)
+        # Release every shm reader/intent so the discarded session leaks nothing.
+        try:
+            self._frame_source.detach_all()
+        except Exception:  # noqa: BLE001
+            log.debug("mark frame source detach failed", exc_info=True)
         if self._ndi_fleet is not None:
             try:
                 self._ndi_fleet.close()

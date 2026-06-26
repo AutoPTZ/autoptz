@@ -173,10 +173,16 @@ class MarkWindow(MainWindow):
         # Route the isolated client's log slots (capture-level / copy / export) at
         # the Mark session's own bridge, not the main app's.
         self._engine.client.set_log_bridge(self._log_model, self._log_handler)
+        # CRITICAL: bind the wall to the ISOLATED engine's frame source, never the
+        # main app's.  The main app's ShmFrameSource is attached to the MAIN engine's
+        # shm; the Mark synthetic workers write to the Mark engine's shm, so binding
+        # to anything but ``self._engine.frame_source`` leaves every tile blank.  An
+        # explicit ``frame_source`` arg (offscreen tests) overrides, but production
+        # passes None → the isolated source is used.
         super().__init__(
             self._engine.client,
             log_model=self._log_model,
-            frame_source=frame_source,
+            frame_source=frame_source or self._engine.frame_source,
             theme=theme,
             parent=parent,
         )
