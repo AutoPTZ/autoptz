@@ -1367,15 +1367,25 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(900, self._maybe_show_model_setup_on_startup)
             QTimer.singleShot(2500, self._updates.maybe_check_on_startup)
 
+    def _should_persist_geometry(self) -> bool:
+        """Whether to save window geometry/state on close (Mark overrides → False).
+
+        The Mark window is a throwaway maximized window backed by a temp store that
+        ``engine.stop()`` closes on exit; persisting its geometry there both is
+        meaningless and triggers a debounced write against the closed store.
+        """
+        return True
+
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        try:
-            self._client.setSetting(
-                "win_geometry",
-                bytes(self.saveGeometry().toBase64()).decode("ascii"),
-            )
-            self._client.setSetting("win_state", self._encode_state())
-        except Exception:  # noqa: BLE001
-            log.debug("save geometry/state failed", exc_info=True)
+        if self._should_persist_geometry():
+            try:
+                self._client.setSetting(
+                    "win_geometry",
+                    bytes(self.saveGeometry().toBase64()).decode("ascii"),
+                )
+                self._client.setSetting("win_state", self._encode_state())
+            except Exception:  # noqa: BLE001
+                log.debug("save geometry/state failed", exc_info=True)
         super().closeEvent(event)
         # app.setQuitOnLastWindowClosed(False) (set in app.run() for the Mark
         # in-process swap) means the event loop will NOT auto-quit when this window

@@ -227,6 +227,11 @@ class MarkWindow(MainWindow):
     def _should_poll_usb(self) -> bool:
         return False
 
+    def _should_persist_geometry(self) -> bool:
+        # Throwaway maximized window backed by a temp store that engine.stop()
+        # closes on exit — don't persist its geometry (would hit the closed store).
+        return False
+
     def _build_menus(self) -> None:  # override: View (basics) + Help (About/Exit)
         """A trimmed menu bar: basic View shell + Help.
 
