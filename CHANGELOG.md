@@ -28,6 +28,26 @@ follow [Semantic Versioning](https://semver.org/).
   existing headless `--benchmark` is unchanged; the old `--mark` subprocess flag is
   now a deprecated no-op.
 
+### Fixed
+
+- **AutoPTZ Mark blank tiles — the isolated engine now renders.** The Mark engine
+  factory owned no frame source and the window bound its wall to the *main* app's
+  `ShmFrameSource` (attached to the main engine's shared memory), so the Mark
+  synthetic workers wrote frames nothing read — every tile stayed blank at 0 fps.
+  `MarkEngineFactory` now owns its own `ShmFrameSource` and wires the isolated
+  client's provider attach/detach to it (mirroring `app.py`), and the window binds
+  its wall to that isolated source.
+
+### Changed
+
+- **AutoPTZ Mark ramps cameras one at a time (3DMark-style) instead of showing all
+  N blank up front.** The wall starts at a single camera and grows as each ramp
+  step sustains, via `MarkEngineFactory.add_next_camera()` (which spawns just the
+  new worker on the running supervisor). The pre-flight now carries **resolution**
+  (720p/1080p/4k → synthetic frame size) and **model** (auto/nano/small → detector
+  tier), and the full profile **auto-tracks a seeded target per camera** so Center
+  Stage visibly engages. The headless `--benchmark` path is unchanged.
+
 ## [2.2.0-rc6] — 2026-06-26
 
 > Pre-release for testing. Headline: a **major multi-camera CPU reduction**
