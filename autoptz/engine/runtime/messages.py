@@ -183,6 +183,13 @@ class TelemetryMsg(BaseModel):
     # size) — fed to the UI's Camera Info panel.  0 until a frame is read.
     width: int = 0
     height: int = 0
+    # Active Center-Stage digital crop ``(x, y, w, h)`` in FULL-frame pixels, or
+    # None when Center Stage is not driving the painted preview this tick. The UI
+    # uses it to re-normalize overlay boxes/aim into the cropped+scaled preview
+    # so the detection/track/face/pose overlays follow the digital crop instead
+    # of floating over the full frame. None ⇒ overlays keep full-frame
+    # normalization (unchanged legacy behavior).
+    digital_crop_rect: tuple[int, int, int, int] | None = None
     # Cumulative count of frame read() misses / decode failures since start —
     # surfaced as "dropped frames" in Camera Info.
     dropped_frames: int = 0
