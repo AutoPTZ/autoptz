@@ -148,6 +148,40 @@ def main() -> None:
         default=None,
         help="Write the benchmark report as JSON to this path.",
     )
+    parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        help="Run the AutoPTZ Mark throughput benchmark (headless) and exit.",
+    )
+    parser.add_argument(
+        "--benchmark-profile",
+        default="full",
+        choices=["full", "streams"],
+        help="Benchmark profile: 'full' (all inference) or 'streams' (capture only).",
+    )
+    parser.add_argument(
+        "--benchmark-duration",
+        type=float,
+        default=20.0,
+        help="Per-step dwell in seconds (default 20).",
+    )
+    parser.add_argument(
+        "--benchmark-max-cameras",
+        type=int,
+        default=16,
+        help="Maximum synthetic cameras to ramp to (default 16).",
+    )
+    parser.add_argument(
+        "--benchmark-floor",
+        type=float,
+        default=24.0,
+        help="Minimum sustained fps floor for a camera count to count (default 24).",
+    )
+    parser.add_argument(
+        "--benchmark-json",
+        default=None,
+        help="Write the AutoPTZ Mark report as JSON to this path.",
+    )
     args = parser.parse_args()
 
     install_console_logging(level=getattr(logging, args.log_level))
@@ -160,6 +194,19 @@ def main() -> None:
         from autoptz.engine.runtime.bench import run_acceleration_bench
 
         raise SystemExit(run_acceleration_bench(tier=args.bench_tier, json_path=args.bench_json))
+
+    if args.benchmark:
+        from autoptz.benchmark import run_benchmark
+
+        raise SystemExit(
+            run_benchmark(
+                profile=args.benchmark_profile,
+                floor_fps=args.benchmark_floor,
+                max_cameras=args.benchmark_max_cameras,
+                dwell_s=args.benchmark_duration,
+                json_path=args.benchmark_json,
+            )
+        )
 
     # Default: launch the UI
     from autoptz.ui.app import run
