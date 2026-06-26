@@ -545,6 +545,77 @@ class TestCameraRecord:
         # vy_norm_full = 4/1080; crop-space = (4/1080)*(1080/400) = 4/400 = 0.01
         assert t["vy"] == pytest.approx(4.0 / 400.0)
 
+    def test_faces_unchanged_without_crop_rect(self, qapp) -> None:
+        from autoptz.engine.runtime.messages import BBox, FaceBox, TelemetryMsg
+        from autoptz.ui.engine_client import CameraRecord
+
+        rec = CameraRecord("id1", "usb://0", "Cam")
+        rec.telemetry = TelemetryMsg(
+            camera_id="id1",
+            seq=0,
+            width=1920,
+            height=1080,
+            faces=[FaceBox(bbox=BBox(x1=220, y1=130, x2=400, y2=290), identity="A", score=0.7)],
+        )
+        b = rec.faces_as_list()[0]["bbox"]
+        assert b["x1"] == pytest.approx(220 / 1920)
+        assert b["y2"] == pytest.approx(290 / 1080)
+
+    def test_faces_mapped_into_crop_space(self, qapp) -> None:
+        from autoptz.engine.runtime.messages import BBox, FaceBox, TelemetryMsg
+        from autoptz.ui.engine_client import CameraRecord
+
+        rec = CameraRecord("id1", "usb://0", "Cam")
+        rec.telemetry = TelemetryMsg(
+            camera_id="id1",
+            seq=0,
+            width=1920,
+            height=1080,
+            digital_crop_rect=(100, 50, 600, 400),
+            faces=[FaceBox(bbox=BBox(x1=220, y1=130, x2=400, y2=290), identity="A", score=0.7)],
+        )
+        b = rec.faces_as_list()[0]["bbox"]
+        assert b["x1"] == pytest.approx(0.2)
+        assert b["y1"] == pytest.approx(0.2)
+        assert b["x2"] == pytest.approx(0.5)
+        assert b["y2"] == pytest.approx(0.6)
+
+    def test_pose_unchanged_without_crop_rect(self, qapp) -> None:
+        from autoptz.engine.runtime.messages import PoseKeypoint, TelemetryMsg
+        from autoptz.ui.engine_client import CameraRecord
+
+        rec = CameraRecord("id1", "usb://0", "Cam")
+        rec.telemetry = TelemetryMsg(
+            camera_id="id1",
+            seq=0,
+            width=1920,
+            height=1080,
+            pose=[PoseKeypoint(x=310.0, y=210.0, conf=0.9)],
+        )
+        k = rec.pose_as_list()[0]
+        assert k["x"] == pytest.approx(310 / 1920)
+        assert k["y"] == pytest.approx(210 / 1080)
+        assert k["conf"] == pytest.approx(0.9)
+
+    def test_pose_mapped_into_crop_space(self, qapp) -> None:
+        # keypoint pixel (310,210) in 1920x1080, crop (100,50,600,400) → (0.35,0.4).
+        from autoptz.engine.runtime.messages import PoseKeypoint, TelemetryMsg
+        from autoptz.ui.engine_client import CameraRecord
+
+        rec = CameraRecord("id1", "usb://0", "Cam")
+        rec.telemetry = TelemetryMsg(
+            camera_id="id1",
+            seq=0,
+            width=1920,
+            height=1080,
+            digital_crop_rect=(100, 50, 600, 400),
+            pose=[PoseKeypoint(x=310.0, y=210.0, conf=0.9)],
+        )
+        k = rec.pose_as_list()[0]
+        assert k["x"] == pytest.approx(0.35)
+        assert k["y"] == pytest.approx(0.4)
+        assert k["conf"] == pytest.approx(0.9)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CameraListModel

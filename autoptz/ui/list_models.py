@@ -203,13 +203,30 @@ class CameraRecord:
             return []
         w = max(1.0, float(self.telemetry.width or 1))
         h = max(1.0, float(self.telemetry.height or 1))
+        crop = self._crop_norm()
+        if crop is not None:
+            cx, cy, cw, ch = crop
+
+            def nx(px: float) -> float:
+                return max(0.0, min(1.0, (px - cx) / cw))
+
+            def ny(px: float) -> float:
+                return max(0.0, min(1.0, (px - cy) / ch))
+        else:
+
+            def nx(px: float) -> float:
+                return px / w
+
+            def ny(px: float) -> float:
+                return px / h
+
         return [
             {
                 "bbox": {
-                    "x1": f.bbox.x1 / w,
-                    "y1": f.bbox.y1 / h,
-                    "x2": f.bbox.x2 / w,
-                    "y2": f.bbox.y2 / h,
+                    "x1": nx(f.bbox.x1),
+                    "y1": ny(f.bbox.y1),
+                    "x2": nx(f.bbox.x2),
+                    "y2": ny(f.bbox.y2),
                 },
                 "identity": f.identity or "",
                 "score": f.score,
@@ -223,6 +240,17 @@ class CameraRecord:
             return []
         w = max(1.0, float(self.telemetry.width or 1))
         h = max(1.0, float(self.telemetry.height or 1))
+        crop = self._crop_norm()
+        if crop is not None:
+            cx, cy, cw, ch = crop
+            return [
+                {
+                    "x": max(0.0, min(1.0, (k.x - cx) / cw)),
+                    "y": max(0.0, min(1.0, (k.y - cy) / ch)),
+                    "conf": k.conf,
+                }
+                for k in getattr(self.telemetry, "pose", []) or []
+            ]
         return [
             {"x": k.x / w, "y": k.y / h, "conf": k.conf}
             for k in getattr(self.telemetry, "pose", []) or []
