@@ -6,6 +6,17 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **AutoPTZ Mark — headful GUI benchmark (Help → "Run AutoPTZ Mark…").** A
+  3DMark-style mode: a pre-flight notice (how it works, estimated run time, profile
+  / source / floor / max / dwell) hands off a session and relaunches the app into a
+  dedicated **AutoPTZ Mark** window that visibly ramps simulated cameras at 30 fps,
+  runs the real detection → tracking → Center-Stage pipeline on moving synthetic
+  people, shows a live HUD (step / camera count / per-camera fps / ETA + a ramp
+  chart), and saves a scored result to `benchmarks/`. "Return to AutoPTZ" relaunches
+  the normal app. The existing headless `--benchmark` is unchanged.
+
 ## [2.2.0-rc6] — 2026-06-26
 
 > Pre-release for testing. Headline: a **major multi-camera CPU reduction**
