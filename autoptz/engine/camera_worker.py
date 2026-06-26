@@ -820,6 +820,20 @@ class CameraWorker:
         """
         self._injected_identity_service = service
 
+    def ingest_identity(self, record: Any) -> None:
+        """Index an identity relayed from another camera process (opt-in mode).
+
+        Best-effort: a missing identity service (identity features off) is a no-op.
+        Targets the injected gallery — the same object the face stack matches
+        against — so a face harvested on another camera becomes matchable here.
+        """
+        service = self._injected_identity_service
+        if service is not None and hasattr(service, "ingest_record"):
+            try:
+                service.ingest_record(record)
+            except Exception:  # noqa: BLE001
+                log.debug("camera_id=%s ingest_identity failed", self.camera_id, exc_info=True)
+
     def set_inference_pool(self, pool: Any | None) -> None:
         """Inject the process-wide shared inference pool (heavy models once).
 

@@ -418,6 +418,10 @@ class ProcessWorkerHandle:
     def set_target_identity(self, identity_id: Any) -> None:
         self._send("set_target_identity", (identity_id,))
 
+    def ingest_identity(self, record: Any) -> None:
+        """Relay an identity harvested in another process into this child's gallery."""
+        self._send("ingest_identity", (record,))
+
     def enroll_track(self, *args: Any) -> None:
         self._send("enroll_track", args)
 

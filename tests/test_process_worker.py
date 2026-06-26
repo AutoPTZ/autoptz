@@ -230,6 +230,57 @@ class TestHandleStop:
         assert h._proc is None
 
 
+class TestIngestIdentityProxy:
+    def test_ingest_identity_enqueues_command(self) -> None:
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        h = ProcessWorkerHandle(cid, _config(cid), on_telemetry=lambda _m: None, db_path="")
+
+        class _FakeQ:
+            def __init__(self) -> None:
+                self.items: list = []
+
+            def put(self, item) -> None:  # noqa: ANN001
+                self.items.append(item)
+
+        q = _FakeQ()
+        h._cmd_q = q
+        h._started = True
+
+        from autoptz.config.models import IdentityRecord
+
+        rec = IdentityRecord(name="Person 3", enabled=False, labeled=False)
+        h.ingest_identity(rec)
+        assert any(name == "ingest_identity" for (name, _a, _k) in q.items)
+
+    def test_ingest_identity_noop_before_start(self) -> None:
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        h = ProcessWorkerHandle(cid, _config(cid), on_telemetry=lambda _m: None, db_path="")
+        from autoptz.config.models import IdentityRecord
+
+        # No queue yet -> must not raise.
+        h.ingest_identity(IdentityRecord(name="Person 4", enabled=False, labeled=False))
+
+
+def test_child_drain_routes_ingest_identity() -> None:
+    import queue as _queue
+
+    from autoptz.config.models import IdentityRecord
+    from autoptz.engine.process_worker import _STOP, _drain_commands
+
+    ingested: list = []
+
+    class _FakeWorker:
+        def ingest_identity(self, record) -> None:  # noqa: ANN001
+            ingested.append(record.id)
+
+    rec = IdentityRecord(name="Person 9", enabled=False, labeled=False)
+    q: _queue.Queue = _queue.Queue()
+    q.put(("ingest_identity", (rec,), {}))
+    q.put((_STOP, (), {}))
+    _drain_commands(_FakeWorker(), q)
+    assert ingested == [rec.id]
+
+
 class TestChildLogging:
     def test_child_log_setup_installs_warning_handler(self) -> None:
         import logging
