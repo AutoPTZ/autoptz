@@ -230,6 +230,25 @@ class TestHandleStop:
         assert h._proc is None
 
 
+class TestChildLogging:
+    def test_child_log_setup_installs_warning_handler(self) -> None:
+        import logging
+
+        from autoptz.engine.process_worker import _configure_child_logging
+
+        root = logging.getLogger()
+        saved_handlers = list(root.handlers)
+        saved_level = root.level
+        try:
+            root.handlers = []
+            _configure_child_logging()
+            assert root.handlers, "child must install at least one log handler"
+            assert root.level <= logging.WARNING
+        finally:
+            root.handlers = saved_handlers
+            root.setLevel(saved_level)
+
+
 class TestEndToEndSpawn:
     """Spawn a real child process with a synthetic source (no camera, no models):
     frames must reach shared memory and telemetry must flow back, then stop cleanly."""

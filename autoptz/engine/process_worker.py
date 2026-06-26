@@ -104,6 +104,27 @@ def _safe_put(q: Any, item: Any) -> None:
         pass
 
 
+def _configure_child_logging() -> None:
+    """Make a child's WARNING+ logs visible to the operator (best-effort).
+
+    A spawned child does not inherit the parent's handlers, so its setup/crash
+    warnings would otherwise go nowhere.  Install a single stderr handler at
+    WARNING (the child's *telemetry*, not its logs, is the primary channel — but
+    a crash must still be visible somewhere) and leave the level at WARNING so the
+    child stays quiet on the hot path.
+    """
+    import sys
+
+    root = logging.getLogger()
+    root.setLevel(logging.WARNING)
+    if not root.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        root.addHandler(handler)
+
+
 def run_camera_process(
     spec: WorkerSpec,
     cmd_q: Any,
@@ -116,10 +137,10 @@ def run_camera_process(
     re-raises — a child that fails to build should exit cleanly so the supervisor
     can surface/respawn it, not hang.
     """
-    # Quiet the child's root logger to WARNING (its telemetry, not its logs, is
-    # what the parent consumes); the parent owns the in-app log view.
+    # A child does not inherit the parent's handlers; install our own so setup /
+    # crash WARNINGs are visible, kept at WARNING so the hot path stays quiet.
     try:
-        logging.getLogger().setLevel(logging.WARNING)
+        _configure_child_logging()
     except Exception:  # noqa: BLE001
         pass
 
@@ -318,6 +339,10 @@ class ProcessWorkerHandle:
             name=f"camproc-{self.camera_id[:8]}",
             daemon=True,
         )
+        # Ensure the child's stderr is line-unbuffered so a crash log isn't lost
+        # in the pipe buffer when it exits abnormally (opt-in mode only). Spawn
+        # inherits the env at fork time.
+        os.environ.setdefault("PYTHONUNBUFFERED", "1")
         self._proc.start()
         self._started = True
         self._drain_stop.clear()
