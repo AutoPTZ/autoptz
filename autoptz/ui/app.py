@@ -170,8 +170,55 @@ def _start_engine_after_macos_camera_preflight(client: object, bridge: object | 
         _report_blocked("unavailable")
 
 
-def run(argv: list[str] | None = None) -> int:
-    """Launch the AutoPTZ UI.  Returns the process exit code."""
+def _build_main_window(
+    client: Any,
+    *,
+    log_model: Any,
+    frames: Any,
+    theme: Any,
+) -> Any:
+    """Construct the normal :class:`MainWindow` (extracted for mode routing)."""
+    from autoptz.ui.widgets import MainWindow
+
+    return MainWindow(
+        client,
+        log_model=log_model,
+        frame_source=frames,
+        theme=theme,
+    )
+
+
+def _build_mark_window(
+    client: Any,
+    *,
+    frames: Any,
+    theme: Any,
+    store: Any,
+) -> Any:
+    """Construct the headful AutoPTZ Mark window for ``--mark`` launches.
+
+    Clears the persisted window geometry first so Mark gets its own layout rather
+    than inheriting the main window's, then reads (or defaults) the handed-off
+    :class:`MarkSession`.
+    """
+    from autoptz.ui.mark_session import MarkSession, clear_window_geometry, load_mark_session
+    from autoptz.ui.widgets.mark_window import MarkWindow
+
+    try:
+        clear_window_geometry(store)
+    except Exception:  # noqa: BLE001
+        log.debug("could not clear window geometry for Mark", exc_info=True)
+    session = load_mark_session(store) or MarkSession()
+    return MarkWindow(client, frames, session=session, store=store, theme=theme)
+
+
+def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
+    """Launch the AutoPTZ UI.  Returns the process exit code.
+
+    ``mode="mark"`` routes to the headful AutoPTZ Mark window (relaunched from the
+    Help menu); ``mode="normal"`` (default) is the standard app and is byte-for-byte
+    unchanged from before the Mark feature.
+    """
     from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, Signal, Slot
     from PySide6.QtWidgets import QApplication
 
@@ -180,7 +227,8 @@ def run(argv: list[str] | None = None) -> int:
     from autoptz.ui.frames import ShmFrameSource
     from autoptz.ui.log_bridge import LogListModel, QtLogHandler
     from autoptz.ui.theme import ThemeController
-    from autoptz.ui.widgets import MainWindow
+
+    is_mark = mode == "mark"
 
     # Preserve fractional display scaling so our UI-scale font sizes stay crisp on
     # high-DPI screens (must be set before the QApplication is constructed).
@@ -194,7 +242,10 @@ def run(argv: list[str] | None = None) -> int:
     from autoptz import version as _app_version
     from autoptz.ui.branding import app_icon
 
-    app = QApplication(argv if argv is not None else sys.argv)
+    # Reuse an existing QApplication when one is already live (e.g. a relaunch
+    # within the same process, or tests that route through run() repeatedly);
+    # constructing a second QApplication in one process aborts.
+    app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("AutoPTZ")
     app.setOrganizationName("AutoPTZ")
     app.setApplicationVersion(_app_version())
@@ -289,12 +340,10 @@ def run(argv: list[str] | None = None) -> int:
 
     # ── theme + window ─────────────────────────────────────────────────────────
     theme = ThemeController(app, client)
-    window = MainWindow(
-        client,
-        log_model=log_model,
-        frame_source=frames,
-        theme=theme,
-    )
+    if is_mark:
+        window = _build_mark_window(client, frames=frames, theme=theme, store=store)
+    else:
+        window = _build_main_window(client, log_model=log_model, frames=frames, theme=theme)
     window.show()
 
     def _present_window() -> None:
@@ -317,7 +366,9 @@ def run(argv: list[str] | None = None) -> int:
     # ── engine auto-start ──────────────────────────────────────────────────────
     # Restore the last on/off state (default ON) and start after the window is
     # shown and exposed so the first paint happens before heavy ingest/ML work.
-    if bool(store.get_setting("engine_running", True)):
+    # Skipped in Mark mode: the Mark window owns its own engine via the ramp
+    # controller, so the app must NOT auto-start a second supervisor here.
+    if not is_mark and bool(store.get_setting("engine_running", True)):
 
         class _CameraAccessBridge(QObject):
             resolved = Signal(bool)
@@ -345,6 +396,17 @@ def run(argv: list[str] | None = None) -> int:
         QTimer.singleShot(750, _auto_start_when_engine_ready)
 
     exit_code = app.exec()
+
+    # Mark mode: clear the handed-off session so a stale one can't re-route a
+    # subsequent normal launch back into Mark (Return-to-AutoPTZ already clears
+    # it; this covers a plain window close).
+    if is_mark:
+        try:
+            from autoptz.ui.mark_session import clear_mark_session
+
+            clear_mark_session(store)
+        except Exception:  # noqa: BLE001
+            log.debug("could not clear mark_session on exit", exc_info=True)
 
     # Persist the engine on/off state for the next launch.
     try:

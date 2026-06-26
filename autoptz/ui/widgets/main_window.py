@@ -485,6 +485,14 @@ class MainWindow(QMainWindow):
         self._act_prereleases.toggled.connect(self._updates.set_include_prereleases)
         updates.addAction(self._act_prereleases)
         helpm.addSeparator()
+        helpm.addAction(
+            _action(
+                self,
+                "Run AutoPTZ Mark…",
+                self._start_mark,
+                tip="Benchmark this machine with simulated cameras (3DMark-style).",
+            )
+        )
         helpm.addAction(_action(self, "About AutoPTZ", self._show_about))
 
     def _build_scale_menu(self, view: QMenu) -> None:
@@ -819,6 +827,40 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         AboutDialog(self._client, self).exec()
+
+    def _start_mark(self) -> None:
+        """Help → Run AutoPTZ Mark…: pre-flight, store the session, relaunch.
+
+        Hands the chosen :class:`MarkSession` to the relaunched ``--mark`` process
+        via the ``ConfigStore`` (not argv), clears the persisted window geometry so
+        the Mark window gets its own layout, relaunches into ``--mark``, and quits
+        *after* the relaunch is spawned.
+        """
+        from PySide6.QtWidgets import QApplication, QDialog
+
+        from autoptz.ui.mark_session import (
+            clear_window_geometry,
+            relaunch,
+            store_mark_session,
+        )
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        store = getattr(self._client, "_store", None)
+        if store is None:
+            log.warning("No config store available; cannot launch AutoPTZ Mark.")
+            return
+        try:
+            store_mark_session(store, dlg.session())
+            clear_window_geometry(store)
+            store.flush()
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to stage the AutoPTZ Mark session")
+            return
+        relaunch(mark=True)
+        QApplication.instance().quit()  # quit AFTER Popen so the relaunch survives
 
     def _open_model_manager(
         self,

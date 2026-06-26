@@ -213,6 +213,12 @@ def main() -> None:
             )
         )
 
+    if args.mark:
+        # Headful AutoPTZ Mark benchmark window (relaunched from the Help menu).
+        from autoptz.ui.app import run
+
+        sys.exit(run(mode="mark"))
+
     # Default: launch the UI
     from autoptz.ui.app import run
 
