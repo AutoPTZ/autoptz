@@ -1148,6 +1148,7 @@ class SyntheticAdapter(SourceAdapter):
         target_fps: float = 30.0,
         shm_writer: ShmWriter | None = None,
         stall_timeout: float = _STALL_TIMEOUT_DEFAULT,
+        people: bool | None = None,
     ) -> None:
         super().__init__(camera_id, shm_writer, target_fps, stall_timeout)
         self._address = (address or "").strip()
@@ -1164,6 +1165,13 @@ class SyntheticAdapter(SourceAdapter):
         # Per-camera phase offset so N synthetic cameras don't move in lockstep
         # (keeps detection/tracking/ego work uncorrelated across cameras).
         self._phase = (abs(hash(camera_id)) % 997) / 997.0 * 2.0 * float(np.pi)
+        # People silhouettes: on by default for the procedural/anim scene so the
+        # detector/tracker/center-stage have moving targets to engage and show.
+        if people is None:
+            people = self._address in ("", "anim", "synthetic")
+        self._people = bool(people)
+        # Stable per-camera count (2–4) + per-person phase so silhouettes drift apart.
+        self._n_people = 2 + (abs(hash(camera_id)) % 3)  # 2..4
 
     def _resolve_path(self) -> str | None:
         addr = self._address
@@ -1259,11 +1267,36 @@ class SyntheticAdapter(SourceAdapter):
             frame[..., 0] = grad
             frame[..., 1] = np.uint8(80)
             frame[..., 2] = 255 - grad
-        # A moving foreground block: extra motion for the tracker to chase.
-        bx = int((0.5 + 0.35 * np.sin(t * 1.3 + self._phase)) * w)
-        by = int((0.5 + 0.25 * np.cos(t * 1.1)) * h)
-        cv2.rectangle(frame, (bx - 60, by - 120), (bx + 60, by + 120), (30, 30, 220), -1)
+        # A moving foreground: person silhouettes (default) so detection→tracking→
+        # center-stage engage, or the legacy plain block when people are disabled.
+        if self._people:
+            self._draw_people(frame, t)
+        else:
+            bx = int((0.5 + 0.35 * np.sin(t * 1.3 + self._phase)) * w)
+            by = int((0.5 + 0.25 * np.cos(t * 1.1)) * h)
+            cv2.rectangle(frame, (bx - 60, by - 120), (bx + 60, by + 120), (30, 30, 220), -1)
         return np.ascontiguousarray(frame)
+
+    def _draw_people(self, frame: NDArray[np.uint8], t: float) -> None:
+        """Draw N moving person silhouettes (head circle + torso + legs)."""
+        h, w = self._h, self._w
+        person_h = int(0.42 * h)  # ~200–300px tall at 720p; >> detector noise floor
+        half_w = max(8, int(person_h * 0.16))
+        for k in range(self._n_people):
+            ph = self._phase + k * (2.0 * float(np.pi) / max(1, self._n_people))
+            cx = int((0.5 + 0.32 * np.sin(t * (0.9 + 0.12 * k) + ph)) * w)
+            cy = int((0.55 + 0.10 * np.cos(t * (0.7 + 0.1 * k) + ph)) * h)
+            top = cy - person_h // 2
+            head_r = max(6, int(person_h * 0.13))
+            # legs
+            cv2.rectangle(frame, (cx - half_w, cy), (cx - 2, top + person_h), (60, 60, 70), -1)
+            cv2.rectangle(frame, (cx + 2, cy), (cx + half_w, top + person_h), (60, 60, 70), -1)
+            # torso
+            cv2.rectangle(
+                frame, (cx - half_w, top + 2 * head_r), (cx + half_w, cy), (140, 90, 60), -1
+            )
+            # head
+            cv2.circle(frame, (cx, top + head_r), head_r, (170, 150, 130), -1)
 
     def _close(self) -> None:
         cap = self._video
