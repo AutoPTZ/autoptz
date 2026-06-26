@@ -10,6 +10,7 @@ Export, Clear, and auto-scroll round it out.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
@@ -125,7 +126,15 @@ class LogTableModel(QAbstractTableModel):
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
             return row[index.column()]
         if role == Qt.ItemDataRole.ForegroundRole:
-            return QColor(_level_color(row[1]))
+            # Warnings/errors always keep their level colour so they stand out.
+            # For normal rows, tint the Message column per-camera so multi-camera
+            # output is scannable; other columns use the level colour.
+            level = row[1]
+            if index.column() == 3 and level not in ("WARNING", "ERROR", "CRITICAL"):
+                cam = _camera_color(row[3])
+                if cam is not None:
+                    return cam
+            return QColor(_level_color(level))
         return None
 
     # ── source tracking ──────────────────────────────────────────────────────────
@@ -379,3 +388,33 @@ def _level_color(level: str) -> str:
     if level == "DEBUG":
         return T.CURRENT.muted
     return T.CURRENT.text
+
+
+# Stable per-camera tint for the in-app Message column (mirrors the console's
+# per-camera colouring). Distinct, mid-saturation hues that read on dark + light.
+_CAM_RE = re.compile(r"camera_id=([0-9a-fA-F-]{6,})")
+_CAMERA_HEX: tuple[str, ...] = (
+    "#4aa3ff",
+    "#ff9f43",
+    "#ff6bd6",
+    "#9ad24a",
+    "#ffd23f",
+    "#33d6c4",
+    "#c678ff",
+    "#7cd0ff",
+    "#ff7a7a",
+    "#b6e24a",
+    "#5ad2a0",
+    "#ffb84a",
+    "#86a8ff",
+    "#ff5fae",
+)
+
+
+def _camera_color(message: str) -> QColor | None:
+    """Return a stable QColor for the camera_id in *message*, or None if absent."""
+    m = _CAM_RE.search(message)
+    if not m:
+        return None
+    cid = m.group(1)
+    return QColor(_CAMERA_HEX[hash(cid) % len(_CAMERA_HEX)])
