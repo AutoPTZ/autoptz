@@ -115,11 +115,12 @@ EXPERIMENTAL_FLAGS: tuple[ExperimentalFlag, ...] = (
         description=(
             "Target for the CoreML execution provider on Apple/Intel-Mac builds. "
             "Auto uses ALL; 'CPUOnly' measures whether the GPU helps, 'CPUAndGPU' "
-            "pins the discrete GPU. Invalid values fall back to ALL."
+            "pins the discrete GPU, 'CPUAndNeuralEngine' targets the Apple Neural "
+            "Engine. Invalid values fall back to ALL."
         ),
         default="",
         kind="choice",
-        choices=("", "ALL", "CPUAndGPU", "CPUOnly"),
+        choices=("", "ALL", "CPUAndGPU", "CPUOnly", "CPUAndNeuralEngine"),
         restart_required=True,
     ),
     ExperimentalFlag(
