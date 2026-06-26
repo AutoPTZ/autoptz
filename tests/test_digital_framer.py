@@ -51,6 +51,30 @@ class TestDesiredCrop:
         )
         assert h >= 0.34 * 1080 - 1
 
+    def test_far_subject_zooms_tighter_with_lower_min_frac(self):
+        # The far-subject under-zoom fix: a person far from the camera (small in
+        # frame) must zoom in MORE when the framing allows a lower min_frac. With a
+        # tight-framing floor the crop is much smaller (subject appears larger).
+        far = (910, 500, 1010, 680)  # ~100x180 person, far in a 1080 frame
+        _, _, _, h_loose = desired_crop(
+            far, 1920, 1080, out_aspect=ASPECT, fill=0.70, min_frac=0.34, max_frac=0.78
+        )
+        _, _, _, h_tight = desired_crop(
+            far, 1920, 1080, out_aspect=ASPECT, fill=0.70, min_frac=0.16, max_frac=0.78
+        )
+        assert h_tight < h_loose  # lower floor → tighter crop → subject larger
+
+    def test_centerstage_framing_min_frac_ordering(self):
+        # Tighter framings must permit a tighter min crop than looser ones, else a
+        # far subject can't be zoomed in for closeups.
+        from autoptz.engine.camera_worker import _CENTERSTAGE_FRAMING
+
+        for key, vals in _CENTERSTAGE_FRAMING.items():
+            assert len(vals) == 4, f"{key} tuple must be (fill, min_frac, max_frac, headroom)"
+        face_min = _CENTERSTAGE_FRAMING["face"][1]
+        full_min = _CENTERSTAGE_FRAMING["full_body"][1]
+        assert face_min < full_min
+
 
 class TestDigitalFramer:
     def test_smoothing_converges_toward_target(self):

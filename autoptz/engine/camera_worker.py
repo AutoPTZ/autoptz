@@ -97,11 +97,17 @@ def _push_due(now: float, last: float, min_period: float) -> bool:
 # space above the head, while a full-body shot wants more margin so the subject
 # isn't jammed against the top. Closer shots → less headroom, wider shots → more.
 # The old fixed 0.10 is kept for ``upper_body`` as the midpoint.
-_CENTERSTAGE_FRAMING: dict[str, tuple[float, float, float]] = {
-    "face": (0.86, 0.50, 0.06),  # tight head/face closeup (~2.0x), minimal headroom
-    "head_shoulders": (0.80, 0.62, 0.08),  # head + shoulders (~1.6x)
-    "upper_body": (0.70, 0.74, 0.10),  # head + chest (~1.35x) — default midpoint
-    "full_body": (0.58, 0.94, 0.14),  # whole person, more margin above the head
+# (subject fill of crop, MIN crop frac, MAX crop frac, headroom). ``min_frac`` is
+# the tight-zoom floor: it must be small for closer framings or a FAR subject can
+# never be zoomed in (the crop floors out and the subject stays a speck). Tighter
+# framings allow a tighter crop; full_body stays conservative so a whole-person
+# shot doesn't over-zoom. True specks are already dropped upstream by
+# ``tracking.min_detection_size_frac``, so a low floor here is safe.
+_CENTERSTAGE_FRAMING: dict[str, tuple[float, float, float, float]] = {
+    "face": (0.86, 0.12, 0.50, 0.06),  # tight head/face closeup, zooms in on far faces
+    "head_shoulders": (0.80, 0.16, 0.62, 0.08),  # head + shoulders
+    "upper_body": (0.70, 0.22, 0.74, 0.10),  # head + chest — default midpoint
+    "full_body": (0.58, 0.34, 0.94, 0.14),  # whole person, conservative min zoom
 }
 
 _DEFAULT_TELEMETRY_HZ = 10.0
@@ -3503,7 +3509,7 @@ class CameraWorker:
         # Crop tightness AND shot-size-aware headroom follow the live "Framing"
         # dropdown (set live so a preset change re-composes without a restart).
         framing = getattr(self.config.tracking, "framing", "upper_body")
-        framer.fill, framer.max_frac, framer.headroom = _CENTERSTAGE_FRAMING.get(
+        framer.fill, framer.min_frac, framer.max_frac, framer.headroom = _CENTERSTAGE_FRAMING.get(
             framing, _CENTERSTAGE_FRAMING["upper_body"]
         )
         # Subtle digital lead-room ("nose room"): bias the crop toward the
