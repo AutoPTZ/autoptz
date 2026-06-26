@@ -71,6 +71,16 @@ _HEALTH_SCAN_INTERVAL_S = 2.0  # how often tick() runs the health scan
 _BASE_BACKOFF_S = 1.0  # initial restart back-off
 _MAX_BACKOFF_S = 30.0  # maximum restart back-off (exponential cap)
 _MAX_RESTART_ATTEMPTS = 5  # give up after this many consecutive failures
+# A worker can be ALIVE yet HUNG (capture/inference threads stuck, no telemetry).
+# Treat it as unhealthy and respawn it through the same backoff path once its
+# telemetry is older than this.  Deliberately above the 2.0 s inference-stall
+# threshold so a transient stall (which the worker itself recovers from) does not
+# trigger a process-level restart.
+_WORKER_HANG_S = 5.0
+# Grace window after (re)spawn during which hang detection is suppressed: a fresh
+# worker is opening the camera + building models and legitimately emits no
+# telemetry for a few seconds.  Must exceed worst-case warmup-before-first-frame.
+_WORKER_WARMUP_GRACE_S = 8.0
 
 
 def _log_macos_capture_path() -> None:
@@ -471,6 +481,22 @@ class Supervisor:
 
     # ── worker health monitoring ─────────────────────────────────────────────────
 
+    def _worker_hung(self, cid: str, now: float) -> bool:
+        """True iff an alive worker has gone silent past the warmup grace window.
+
+        Pure predicate (no side effects).  A worker spawned less than
+        ``_WORKER_WARMUP_GRACE_S`` ago is never hung (it is still opening the
+        camera / building models).  Past warmup, the worker is hung iff its most
+        recent telemetry is older than ``_WORKER_HANG_S`` — and a worker that has
+        never reported telemetry at all is anchored to its spawn time, so a
+        worker that never starts streaming is eventually flagged.
+        """
+        spawn_t = self._spawn_t.get(cid)
+        if spawn_t is None or (now - spawn_t) < _WORKER_WARMUP_GRACE_S:
+            return False
+        last_seen = self._last_telemetry_t.get(cid, spawn_t)
+        return (now - last_seen) > _WORKER_HANG_S
+
     def _scan_worker_health(self, now: float) -> None:
         """Check every worker's liveness and restart any that have died.
 
@@ -491,12 +517,19 @@ class Supervisor:
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s is_alive() raised", cid, exc_info=True)
 
-            if alive:
+            hung = alive and self._worker_hung(cid, now)
+            if alive and not hung:
                 # Worker is healthy — clear any stale restart state.
                 self._restart_state.pop(cid, None)
                 continue
+            if hung:
+                log.warning(
+                    "camera_id=%s alive but telemetry stale (>%.1fs) — treating as hung",
+                    cid,
+                    _WORKER_HANG_S,
+                )
 
-            # Worker appears dead.  Check back-off state.
+            # Worker appears dead (or hung).  Check back-off state.
             attempts, next_allowed_t = self._restart_state.get(cid, (0, 0.0))
 
             if attempts >= _MAX_RESTART_ATTEMPTS:

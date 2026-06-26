@@ -12,6 +12,8 @@ from autoptz.engine.supervisor import (
     _BASE_BACKOFF_S,
     _MAX_BACKOFF_S,
     _MAX_RESTART_ATTEMPTS,
+    _WORKER_HANG_S,
+    _WORKER_WARMUP_GRACE_S,
 )
 
 # ── helpers / fakes ──────────────────────────────────────────────────────────
@@ -303,5 +305,64 @@ class TestWorkerTelemetryTracking:
             sup._on_remove_camera(RemoveCameraCmd(camera_id=cid))
             assert cid not in sup._last_telemetry_t
             assert cid not in sup._spawn_t
+        finally:
+            sup.stop()
+
+
+class TestHangDetection:
+    def test_no_hang_within_warmup_grace(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            # Spawn just happened; telemetry never arrived. Within warmup → not hung.
+            spawn_t = sup._spawn_t[cid]
+            assert sup._worker_hung(cid, spawn_t + _WORKER_WARMUP_GRACE_S - 0.1) is False
+        finally:
+            sup.stop()
+
+    def test_hung_when_no_telemetry_past_warmup(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            spawn_t = sup._spawn_t[cid]
+            # Past warmup, still no telemetry → hung.
+            now = spawn_t + _WORKER_WARMUP_GRACE_S + _WORKER_HANG_S + 0.1
+            assert sup._worker_hung(cid, now) is True
+        finally:
+            sup.stop()
+
+    def test_hung_when_telemetry_goes_stale(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            spawn_t = sup._spawn_t[cid]
+            past_warmup = spawn_t + _WORKER_WARMUP_GRACE_S + 1.0
+            sup._last_telemetry_t[cid] = past_warmup  # fresh telemetry arrives
+            assert sup._worker_hung(cid, past_warmup + _WORKER_HANG_S - 0.1) is False
+            assert sup._worker_hung(cid, past_warmup + _WORKER_HANG_S + 0.1) is True
+        finally:
+            sup.stop()
+
+    def test_alive_but_hung_worker_is_respawned(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            original = factory_log[0]
+            assert original._alive is True  # alive, not dead
+            # Force "past warmup, telemetry stale".
+            sup._spawn_t[cid] = 0.0
+            sup._last_telemetry_t[cid] = 0.0
+            now = _WORKER_WARMUP_GRACE_S + _WORKER_HANG_S + 100.0
+            sup._scan_worker_health(now)
+            assert len(factory_log) == 2  # respawned despite being alive
+            assert original.stop_calls == 1  # old (hung) worker was stopped
+            assert sup._workers[cid] is factory_log[1]
+        finally:
+            sup.stop()
+
+    def test_healthy_streaming_worker_not_respawned(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            sup._spawn_t[cid] = 0.0
+            now = _WORKER_WARMUP_GRACE_S + 100.0
+            sup._last_telemetry_t[cid] = now - 0.05  # fresh telemetry
+            sup._scan_worker_health(now)
+            assert len(factory_log) == 1  # untouched
         finally:
             sup.stop()
