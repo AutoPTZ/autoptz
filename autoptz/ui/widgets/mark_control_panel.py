@@ -33,6 +33,7 @@ class MarkControlPanel(QWidget):
     maxCamerasChanged = Signal(int)
     startClicked = Signal()
     stopClicked = Signal()
+    exitClicked = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -78,9 +79,15 @@ class MarkControlPanel(QWidget):
         self._stop_btn = QPushButton("Stop")
         self._stop_btn.setEnabled(False)
         self._stop_btn.clicked.connect(self.stopClicked.emit)
+        # Visible exit affordance: the user can deliberately leave Mark (Return /
+        # Quit, optional save) instead of only via the OS close button.
+        self._exit_btn = QPushButton("Exit Mark…")
+        self._exit_btn.setToolTip("Return to AutoPTZ or quit (optionally saving results).")
+        self._exit_btn.clicked.connect(self.exitClicked.emit)
         btn_row.addWidget(self._start_btn)
         btn_row.addWidget(self._stop_btn)
         btn_row.addStretch(1)
+        btn_row.addWidget(self._exit_btn)
         col.addLayout(btn_row)
 
     def _on_source_changed(self) -> None:
@@ -91,6 +98,18 @@ class MarkControlPanel(QWidget):
 
     def selected_max_cameras(self) -> int:
         return int(self._spin.value())
+
+    def set_max_cameras(self, n: int) -> None:
+        """Seed the camera-count spin AND cap its maximum to *n*.
+
+        The Mark window pre-adds exactly ``session.max_cameras`` cameras to the
+        idle wall and the ramp ADOPTS that fixed set, so the ramp can never exceed
+        it — capping the spin's maximum keeps the panel's count in lockstep with
+        the pre-added wall (one source of truth) and stops the user from selecting
+        a count with no backing camera."""
+        n = max(1, int(n))
+        self._spin.setRange(1, n)
+        self._spin.setValue(n)
 
     def set_verdict(self, text: str) -> None:
         self._verdict_label.setText(text)

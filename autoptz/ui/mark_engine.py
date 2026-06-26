@@ -50,6 +50,10 @@ class MarkEngineFactory:
         self._supervisor = factory(self._client, self._store)
         self._supervisor.prime_features(dict(get_profile(session.profile).features))
         self._ndi_fleet: Any | None = None
+        self._started = False
+        # The camera ids pre-added to the idle wall — the ramp ADOPTS these (and the
+        # supervisor below) so only ONE engine stack ever runs (no doubled tiles).
+        self._camera_ids: list[str] = []
         self._setup_fake_cameras()
 
     @property
@@ -64,6 +68,19 @@ class MarkEngineFactory:
     def supervisor(self) -> Any:
         return self._supervisor
 
+    @property
+    def camera_ids(self) -> list[str]:
+        """The pre-added camera ids on the idle wall (the ramp adopts these)."""
+        return list(self._camera_ids)
+
+    @property
+    def ndi_fleet(self) -> Any:
+        return self._ndi_fleet
+
+    @property
+    def is_started(self) -> bool:
+        return self._started
+
     def _setup_fake_cameras(self) -> None:
         n = max(1, int(self._session.max_cameras))
         if self._session.source == "ndi":
@@ -76,19 +93,27 @@ class MarkEngineFactory:
             if ndi_sim_available():
                 self._ndi_fleet = MarkNDIFleet(n)
                 for i, name in enumerate(self._ndi_fleet.names()):
-                    _add_ndi_camera(self._client, name, i)
+                    self._camera_ids.append(_add_ndi_camera(self._client, name, i))
                 return
             log.warning("NDI requested but cyndilib unavailable; using synthetic cameras.")
         for i in range(n):
-            _add_synthetic_camera(self._client, i)
+            self._camera_ids.append(_add_synthetic_camera(self._client, i))
 
     def start(self) -> None:
         # NDI senders must broadcast BEFORE the NDIAdapter polls for sources.
         if self._ndi_fleet is not None:
             self._ndi_fleet.open()
         self._supervisor.start(run_pump=False, staged=True)
+        self._started = True
 
     def tick(self) -> None:
+        # Keep the adopted NDI fleet broadcasting each GUI tick (the ramp adopts
+        # this fleet rather than building a second one).
+        if self._ndi_fleet is not None:
+            try:
+                self._ndi_fleet.pump_once()
+            except Exception:  # noqa: BLE001
+                log.debug("mark NDI fleet pump failed", exc_info=True)
         sup = self._supervisor
         if sup is not None and getattr(sup, "is_running", False):
             sup.tick()

@@ -153,3 +153,227 @@ def test_chart_kept_from_old_implementation(qtapp) -> None:
     chart.resize(200, 120)
     chart.repaint()
     chart.deleteLater()
+
+
+# ── Finding #2: embedded LogsPanel streams the isolated Mark logs ──────────────
+
+
+def test_logs_dock_hosts_real_logs_panel(qtapp) -> None:
+    """The Logs dock holds a real LogsPanel bound to the Mark log model — NOT the
+    'Logs unavailable' QLabel placeholder (log_model=None used to produce that)."""
+    from autoptz.ui.widgets.logs_panel import LogsPanel
+
+    win = _win(qtapp)
+    try:
+        logs_dock = win._docks.get("logs")
+        assert logs_dock is not None
+        assert logs_dock.isVisible() or not logs_dock.isHidden()
+        panel = logs_dock.widget()
+        assert isinstance(panel, LogsPanel)
+    finally:
+        win.close()
+
+
+def test_logs_stream_into_mark_model(qtapp) -> None:
+    """A log record routed through the root logger lands in the Mark log model."""
+    import logging as _logging
+
+    win = _win(qtapp)
+    try:
+        before = len(win._log_model.rows())
+        # WARNING so the record passes regardless of the root logger's level in the
+        # test process (the real app raises the root to INFO; tests don't).
+        _logging.getLogger("autoptz.engine.supervisor").warning("mark-test-log-line")
+        qtapp.processEvents()
+        rows = win._log_model.rows()
+        assert len(rows) > before
+        assert any("mark-test-log-line" in r["message"] for r in rows)
+    finally:
+        win.close()
+
+
+def test_log_handler_detached_on_close(qtapp) -> None:
+    """Mark's root-logger handler must be removed on exit so it never leaks into
+    the resumed main app (which would write into the discarded Mark model)."""
+    import logging as _logging
+
+    win = _win(qtapp)
+    handler = win._log_handler
+    assert handler in _logging.getLogger().handlers
+    win.close()
+    assert handler not in _logging.getLogger().handlers
+    assert win._log_handler is None
+
+
+# ── Finding #3: single engine stack + reconciled camera count ─────────────────
+
+
+def test_control_spin_seeded_from_session_max_cameras(qtapp) -> None:
+    """The control panel's camera count is seeded from session.max_cameras (was a
+    fixed default of 8), so the SAME number drives the pre-added wall and ramp."""
+    win = _win(qtapp)  # _win builds MarkSession(max_cameras=3)
+    try:
+        assert win._controls.selected_max_cameras() == 3
+    finally:
+        win.close()
+
+
+def test_engine_exposes_preadded_camera_ids(qtapp) -> None:
+    win = _win(qtapp)
+    try:
+        ids = win._engine.camera_ids
+        assert len(ids) == 3
+        assert set(ids) == set(win._engine.client.cameraModel.camera_ids())
+    finally:
+        win.close()
+
+
+def test_sample_factory_adopts_engine_no_new_cameras(qtapp) -> None:
+    """The ramp's sampler ADOPTS the factory's supervisor + pre-added cameras — it
+    must NOT build a second supervisor or add duplicate cameras (the double-stack
+    bug: two Supervisors + doubled tiles)."""
+    win = _win(qtapp)
+    try:
+        before = list(win._engine.client.cameraModel.camera_ids())
+        factory = win._build_sample_factory()
+        assert factory is not None  # always adopts now (was None for synthetic)
+        sample_fn = factory()
+        sampler = sample_fn._sampler
+        # Adopts the SAME supervisor the window owns (no second one built).
+        assert sampler._sup is win._engine.supervisor
+        assert sampler._adopted is True
+        # Pre-seeded with the factory's camera ids → ramping never re-adds them.
+        assert sampler._cameras == before
+        # Closing the sampler must NOT tear down the adopted (window-owned) engine.
+        sampler.close()
+        assert list(win._engine.client.cameraModel.camera_ids()) == before
+    finally:
+        win.close()
+
+
+# ── Finding #1: visible Return / Quit exit affordance with optional save ──────
+
+
+def test_control_panel_has_exit_button(qtapp) -> None:
+    win = _win(qtapp)
+    try:
+        assert hasattr(win._controls, "_exit_btn")
+        assert win._controls._exit_btn.isEnabled()
+    finally:
+        win.close()
+
+
+def test_request_exit_return_emits_return(qtapp, monkeypatch) -> None:
+    import autoptz.ui.widgets.dialogs.mark_exit as me
+
+    win = _win(qtapp)
+    seen: list[str] = []
+    win.returnToAppRequested.connect(lambda: seen.append("return"))
+    win.closedUnexpectedly.connect(lambda: seen.append("closed"))
+
+    class _Dlg:
+        def __init__(self, *a, **k) -> None: ...
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+
+            return QDialog.DialogCode.Accepted
+
+        def choice(self):
+            return me.RETURN
+
+        def save_results(self):
+            return False
+
+    monkeypatch.setattr(me, "MarkExitDialog", _Dlg)
+    win._request_exit()
+    assert seen == ["return"]  # deliberate return must not also fire closedUnexpectedly
+    win.close()
+
+
+def test_request_exit_quit_emits_quit(qtapp, monkeypatch) -> None:
+    import autoptz.ui.widgets.dialogs.mark_exit as me
+
+    win = _win(qtapp)
+    seen: list[str] = []
+    win.quitRequested.connect(lambda: seen.append("quit"))
+
+    class _Dlg:
+        def __init__(self, *a, **k) -> None: ...
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+
+            return QDialog.DialogCode.Accepted
+
+        def choice(self):
+            return me.QUIT
+
+        def save_results(self):
+            return False
+
+    monkeypatch.setattr(me, "MarkExitDialog", _Dlg)
+    win._request_exit()
+    assert seen == ["quit"]
+    win.close()
+
+
+def test_request_exit_cancel_stays(qtapp, monkeypatch) -> None:
+    import autoptz.ui.widgets.dialogs.mark_exit as me
+
+    win = _win(qtapp)
+    seen: list[str] = []
+    win.returnToAppRequested.connect(lambda: seen.append("return"))
+    win.quitRequested.connect(lambda: seen.append("quit"))
+
+    class _Dlg:
+        def __init__(self, *a, **k) -> None: ...
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+
+            return QDialog.DialogCode.Rejected
+
+        def choice(self):
+            return None
+
+        def save_results(self):
+            return False
+
+    monkeypatch.setattr(me, "MarkExitDialog", _Dlg)
+    win._request_exit()
+    assert seen == []  # cancel → stay in Mark, no exit signal
+    win.close()
+
+
+def test_request_exit_save_persists_result(qtapp, monkeypatch) -> None:
+    import autoptz.ui.widgets.dialogs.mark_exit as me
+
+    win = _win(qtapp)
+    win._result = BenchmarkResult(
+        profile="full",
+        weight=1.0,
+        floor_fps=24.0,
+        max_cameras=3,
+        sustained_cameras=2,
+        min_fps_at_sustained=28.0,
+        score=2.0,
+        steps=[],
+    )
+    saved: list[object] = []
+    monkeypatch.setattr(win, "_persist_result", lambda r: saved.append(r))
+
+    class _Dlg:
+        def __init__(self, *a, **k) -> None: ...
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+
+            return QDialog.DialogCode.Accepted
+
+        def choice(self):
+            return me.RETURN
+
+        def save_results(self):
+            return True
+
+    monkeypatch.setattr(me, "MarkExitDialog", _Dlg)
+    win._request_exit()
+    assert saved == [win._result]  # save box checked → result persisted on exit
+    win.close()

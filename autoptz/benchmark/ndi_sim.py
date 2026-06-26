@@ -166,6 +166,10 @@ class MarkNDIFleetSampler:
         *,
         client: Any,
         supervisor_factory: Callable[[Any, Any], Any] | None = None,
+        supervisor: Any | None = None,
+        fleet: MarkNDIFleet | None = None,
+        cameras: list[str] | None = None,
+        adopted_started: bool = False,
         width: int = 1280,
         height: int = 720,
         fps: float = 30.0,
@@ -178,10 +182,13 @@ class MarkNDIFleetSampler:
         self._client = client
         self._w, self._h, self._fps = int(width), int(height), float(fps)
         self._factory = supervisor_factory or _default_supervisor_factory
-        self._fleet: MarkNDIFleet | None = None
-        self._sup: Any | None = None
-        self._cameras: list[str] = []
-        self._started = False
+        # Adopt the Mark window's fleet + supervisor + pre-added cameras so only ONE
+        # NDI fleet broadcasts and only ONE supervisor runs (no duplicate sources).
+        self._adopted = supervisor is not None
+        self._fleet = fleet
+        self._sup = supervisor
+        self._cameras = list(cameras) if cameras else []
+        self._started = bool(adopted_started)
 
     @staticmethod
     def _drain_events() -> None:
@@ -210,6 +217,14 @@ class MarkNDIFleetSampler:
         from autoptz.benchmark.runner import _default_fps_reader
 
         reader = fps_reader or _default_fps_reader
+        if self._adopted:
+            # The Mark window's GUI pump drives the adopted supervisor AND pumps the
+            # adopted fleet — ticking/pumping here would race two threads.  Just wait
+            # the dwell, then read the first ``n`` pre-added NDI cameras' fps.
+            assert self._fleet is not None
+            time.sleep(max(0.0, dwell_s) if dwell_s > 0.0 else 0.01)
+            self._drain_events()
+            return [reader(self._client, cid) for cid in self._cameras[:n]]
         # NDI senders/receivers can't be reconfigured per-step cheaply, so build
         # the full fleet up to the max count once on the first sample.
         self._ensure_fleet(n)
@@ -235,6 +250,9 @@ class MarkNDIFleetSampler:
         return [reader(self._client, cid) for cid in self._cameras[:n]]
 
     def close(self) -> None:
+        # Never tear down an ADOPTED supervisor/fleet — the Mark window owns them.
+        if self._adopted:
+            return
         if self._sup is not None:
             try:
                 self._sup.stop()

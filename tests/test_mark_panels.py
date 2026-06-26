@@ -39,6 +39,34 @@ def test_control_panel_emits_stop(qtapp) -> None:
     p.deleteLater()
 
 
+def test_control_panel_exit_button_stays_enabled_while_running(qtapp) -> None:
+    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+
+    p = MarkControlPanel()
+    seen = []
+    p.exitClicked.connect(lambda: seen.append("exit"))
+    p.set_running(True)
+    # The exit affordance must remain usable mid-run so the user can always leave.
+    assert p._exit_btn.isEnabled()
+    p._exit_btn.click()
+    assert seen == ["exit"]
+    p.deleteLater()
+
+
+def test_control_panel_set_max_cameras_caps_spin(qtapp) -> None:
+    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+
+    p = MarkControlPanel()
+    p.set_max_cameras(4)
+    # Seeds the value AND caps the maximum so the ramp can't exceed the pre-added
+    # wall (one source of truth for the camera count).
+    assert p.selected_max_cameras() == 4
+    assert p._spin.maximum() == 4
+    p._spin.setValue(99)  # clamped to the new maximum
+    assert p.selected_max_cameras() == 4
+    p.deleteLater()
+
+
 def test_control_panel_reports_selected_source_and_count(qtapp) -> None:
     from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
 

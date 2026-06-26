@@ -227,6 +227,39 @@ class TestSupervisorSampler:
         finally:
             sampler.close()
 
+    def test_adopted_sampler_reuses_supervisor_and_cameras(self, qapp) -> None:
+        """An ADOPTED sampler reuses an external supervisor + pre-added cameras and
+        adds no new cameras (the Mark double-stack fix): it must not build a second
+        supervisor, must not register extra cameras, and close() must not stop the
+        adopted supervisor (the owner does)."""
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        injected = EngineClient()
+        sup = Supervisor(injected, store=None, worker_factory=_FakeSamplerWorker)
+        sup.prime_features(dict(get_profile("full").features))
+        # Pre-add 2 cameras and start the supervisor (mirrors the Mark factory).
+        cams = [_add_synthetic_camera(injected, i) for i in range(2)]
+        sup.start(run_pump=False)
+        try:
+            sampler = _SupervisorSampler(
+                get_profile("full"),
+                client=injected,
+                supervisor=sup,
+                cameras=cams,
+                adopted_started=True,
+            )
+            assert sampler._adopted is True
+            assert sampler._sup is sup  # no second supervisor built
+            # Sampling does NOT add cameras (the adopted set is reused).
+            sampler.sample(2, dwell_s=0.0, max_ticks=5, tick_sleep_s=0.0)
+            assert injected.cameraModel.camera_ids() == cams
+            # close() leaves the adopted supervisor running (owner stops it).
+            sampler.close()
+            assert sup.is_running is True
+        finally:
+            sup.stop()
+
 
 class TestRunBenchmarkWiring:
     def test_run_benchmark_with_injected_supervisor(self, qapp, capsys) -> None:

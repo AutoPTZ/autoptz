@@ -206,7 +206,16 @@ def _default_supervisor_factory(client: Any, store: Any) -> Any:
 
 
 class _SupervisorSampler:
-    """Drives a headless Supervisor over N synthetic cameras and samples fps."""
+    """Drives a headless Supervisor over N synthetic cameras and samples fps.
+
+    The headful Mark window can **adopt** an already-built engine stack so a ramp
+    reuses the ONE supervisor + pre-added cameras the Mark window already shows on
+    the idle wall, instead of spinning up a second supervisor over a disjoint set
+    of cameras (which doubled tiles and CPU).  Pass ``supervisor=`` (already
+    primed) and ``cameras=`` (the pre-added camera ids) to adopt; ``adopted_started``
+    says whether that supervisor's workers are already running so the first sample
+    doesn't double-start it.
+    """
 
     def __init__(
         self,
@@ -214,6 +223,9 @@ class _SupervisorSampler:
         *,
         supervisor_factory: Callable[[Any, Any], Any] | None = None,
         client: Any | None = None,
+        supervisor: Any | None = None,
+        cameras: list[str] | None = None,
+        adopted_started: bool = False,
     ) -> None:
         # When *client* is injected (the headful Mark window passes the SAME
         # EngineClient its CameraWall is bound to), the synthetic cameras land on
@@ -225,12 +237,19 @@ class _SupervisorSampler:
 
             client = EngineClient()
         self._client = client
-        factory = supervisor_factory or _default_supervisor_factory
-        store = getattr(client, "_store", None)
-        self._sup = factory(self._client, store)
-        self._sup.prime_features(dict(self._profile.features))
-        self._cameras: list[str] = []
-        self._started = False
+        # Adopt an existing supervisor (the Mark window's) when supplied so only
+        # ONE stack ever runs; otherwise build a private one.
+        self._adopted = supervisor is not None
+        if supervisor is not None:
+            self._sup = supervisor
+        else:
+            factory = supervisor_factory or _default_supervisor_factory
+            store = getattr(client, "_store", None)
+            self._sup = factory(self._client, store)
+            self._sup.prime_features(dict(self._profile.features))
+        # Pre-seed with adopted camera ids so _ensure_cameras never re-adds them.
+        self._cameras: list[str] = list(cameras) if cameras else []
+        self._started = bool(adopted_started)
 
     @staticmethod
     def _drain_events() -> None:
@@ -252,6 +271,17 @@ class _SupervisorSampler:
         while len(self._cameras) < n:
             self._cameras.append(_add_synthetic_camera(self._client, len(self._cameras)))
 
+    @staticmethod
+    def _dwell_observe(dwell_s: float) -> None:
+        """Sleep the dwell while the external (GUI) pump drives the supervisor.
+
+        Used by the adopted path: the Mark window's QTimer ticks the supervisor and
+        delivers telemetry on the GUI thread, so the worker just waits before
+        reading fps.  ``dwell_s == 0`` (tests) yields a single short settle so any
+        already-queued telemetry has a chance to land.
+        """
+        time.sleep(max(0.0, dwell_s) if dwell_s > 0.0 else 0.01)
+
     def sample(
         self,
         n: int,
@@ -262,6 +292,13 @@ class _SupervisorSampler:
         fps_reader: Callable[[Any, str], float] | None = None,
     ) -> list[float]:
         reader = fps_reader or _default_fps_reader
+        if self._adopted:
+            # The Mark window's GUI pump (33 ms QTimer) is the SOLE driver of the
+            # adopted supervisor — ticking it here too would race two threads on one
+            # supervisor.  Just observe the pre-added cameras over the dwell, then
+            # read the first ``n`` cameras' fps (the ramp is a measurement window).
+            self._dwell_observe(dwell_s)
+            return [reader(self._client, cid) for cid in self._cameras[:n]]
         had = len(self._cameras)
         self._ensure_cameras(n)
         if not self._started:
@@ -291,6 +328,10 @@ class _SupervisorSampler:
         return [reader(self._client, cid) for cid in self._cameras[:n]]
 
     def close(self) -> None:
+        # Never tear down an ADOPTED supervisor — the Mark window owns its
+        # lifecycle (closeEvent → engine.stop).  Only stop a supervisor we built.
+        if self._adopted:
+            return
         try:
             self._sup.stop()
         except Exception:  # noqa: BLE001

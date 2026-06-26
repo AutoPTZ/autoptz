@@ -35,11 +35,13 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
+    QDialog,
     QDockWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from autoptz.benchmark.profiles import get_profile
 from autoptz.benchmark.runner import BenchmarkResult, StepResult
 from autoptz.ui import theme as T
 from autoptz.ui.mark_session import MarkSession
@@ -147,6 +149,7 @@ class MarkWindow(MainWindow):
         frame_source: Any | None = None,
         parent: QWidget | None = None,
     ) -> None:
+        from autoptz.ui.log_bridge import LogListModel, QtLogHandler
         from autoptz.ui.mark_engine import MarkEngineFactory
 
         self._session = session or MarkSession()
@@ -157,9 +160,22 @@ class MarkWindow(MainWindow):
         self._result: BenchmarkResult | None = None
         self._benchmarks_dir: Any | None = None
         self._returning = False
+        # A dedicated log model + handler so the inherited LogsPanel streams the
+        # ISOLATED Mark session's logs (was: log_model=None → the dock showed a
+        # static "Logs unavailable" label).  The handler is attached to the root
+        # logger here and removed in closeEvent so Mark sessions never leak handlers
+        # back into the resumed main app.
+        self._log_model = LogListModel()
+        # Annotated optional: closeEvent detaches + clears it (idempotent).
+        self._log_handler: QtLogHandler | None = QtLogHandler(self._log_model)
+        self._log_handler.setLevel(logging.INFO)
+        logging.getLogger().addHandler(self._log_handler)
+        # Route the isolated client's log slots (capture-level / copy / export) at
+        # the Mark session's own bridge, not the main app's.
+        self._engine.client.set_log_bridge(self._log_model, self._log_handler)
         super().__init__(
             self._engine.client,
-            log_model=None,
+            log_model=self._log_model,
             frame_source=frame_source,
             theme=theme,
             parent=parent,
@@ -176,10 +192,14 @@ class MarkWindow(MainWindow):
     def _should_poll_usb(self) -> bool:
         return False
 
-    def _build_menus(self) -> None:  # override: Help / About only
+    def _build_menus(self) -> None:  # override: Help / About + Exit
         bar = self.menuBar()
         helpm = bar.addMenu("&Help")
         helpm.addAction(_action(self, "About AutoPTZ Mark", self._show_about_mark))
+        helpm.addSeparator()
+        # A second, always-visible path to the deliberate Return / Quit choice
+        # (the primary one is the control panel's "Exit Mark…" button).
+        helpm.addAction(_action(self, "Exit AutoPTZ Mark…", self._request_exit))
 
     def _refresh_engine_state(self) -> None:
         # The Mark window has no Engine menu (the ramp owns the engine), so the
@@ -210,8 +230,13 @@ class MarkWindow(MainWindow):
         """
         self._chart = _MarkRampChart()
         self._controls = MarkControlPanel()
+        # Keep the control-panel camera count in lockstep with the session so the
+        # SAME number drives the pre-added wall and the ramp (was: spin default 8
+        # vs session.max_cameras 16 → two different counts).
+        self._controls.set_max_cameras(self._session.max_cameras)
         self._controls.startClicked.connect(self.start_run)
         self._controls.stopClicked.connect(self.stop_run)
+        self._controls.exitClicked.connect(self._request_exit)
 
         # Insert chart + controls at the TOP of the inherited central column,
         # above the CameraWall (index 0/1 keep the startup banner first).
@@ -289,33 +314,60 @@ class MarkWindow(MainWindow):
             self._controls.set_verdict("Stopping…")
 
     def _build_sample_factory(self) -> Any:
-        """Return the controller's ``sample_factory`` (or None for the default).
+        """Return the controller's ``sample_factory`` — always ADOPTS the engine.
 
-        ``None`` → :class:`MarkRampController` builds the real ``_SupervisorSampler``
-        on the isolated client (synthetic in-process cameras).  For ``source ==
-        "ndi"`` (and cyndilib present), return a zero-arg factory that builds a
-        :class:`MarkNDIFleetSampler` so a real ``MarkNDIFleet`` is broadcast and
-        ingested through the live NDIAdapter on the isolated client.  If cyndilib
-        is unavailable we fall back to the synthetic default (the control panel
-        already disables the NDI radio in that case).
+        The Mark window already owns ONE isolated engine stack (the factory's
+        supervisor + the cameras pre-added to the idle wall, plus any NDI fleet).
+        The ramp must drive THAT stack, not build a second supervisor over a
+        disjoint camera set (which doubled tiles + CPU and broadcast duplicate NDI
+        sources).  So the returned factory builds a sampler that adopts the
+        existing supervisor + pre-added cameras (and, for NDI, the existing fleet);
+        ``_SupervisorSampler``/``MarkNDIFleetSampler`` then sample fps without
+        adding cameras or starting a second supervisor.
         """
-        if self._session.source != "ndi":
-            return None
-        from autoptz.benchmark.ndi_sim import ndi_sample_factory, ndi_sim_available
+        profile = get_profile(self._session.profile)
+        dwell = self._session.dwell_s
+        engine = self._engine
 
-        if not ndi_sim_available():
-            log.warning("NDI source requested but cyndilib is unavailable; using synthetic.")
-            return None
+        if self._session.source == "ndi" and engine.ndi_fleet is not None:
+            from autoptz.benchmark.ndi_sim import MarkNDIFleetSampler
 
-        def factory() -> Any:
-            return ndi_sample_factory(
-                self._session.profile,
-                self._session.dwell_s,
-                client=self._engine.client,
-                max_cameras=self._controls.selected_max_cameras(),
+            def ndi_factory() -> Any:
+                sampler = MarkNDIFleetSampler(
+                    profile,
+                    client=engine.client,
+                    supervisor=engine.supervisor,
+                    fleet=engine.ndi_fleet,
+                    cameras=engine.camera_ids,
+                    adopted_started=engine.is_started,
+                )
+
+                def sample_fn(n: int) -> list[float]:
+                    return sampler.sample(n, dwell_s=dwell, max_ticks=2000, tick_sleep_s=0.005)
+
+                sample_fn._sampler = sampler  # type: ignore[attr-defined]
+                return sample_fn
+
+            return ndi_factory
+
+        from autoptz.benchmark.runner import _SupervisorSampler
+
+        def syn_factory() -> Any:
+            sampler = _SupervisorSampler(
+                profile,
+                client=engine.client,
+                supervisor=engine.supervisor,
+                cameras=engine.camera_ids,
+                adopted_started=engine.is_started,
             )
 
-        return factory
+            def sample_fn(n: int) -> list[float]:
+                return sampler.sample(n, dwell_s=dwell, max_ticks=2000, tick_sleep_s=0.005)
+
+            sample_fn._sampler = sampler  # type: ignore[attr-defined]
+            return sample_fn
+
+        return syn_factory
 
     # ── controller slots ─────────────────────────────────────────────────────────
 
@@ -409,6 +461,28 @@ class MarkWindow(MainWindow):
         self._returning = True
         self.quitRequested.emit()
 
+    def _request_exit(self) -> None:
+        """Show the deliberate Return / Quit choice with an optional save.
+
+        This is the visible exit affordance (control-panel button + Help menu).
+        ``Cancel`` stays in Mark; ``Return`` / ``Quit`` optionally persist the last
+        result (if any) and then route through :meth:`request_return` /
+        :meth:`request_quit` — which set ``_returning`` BEFORE emitting so the
+        deliberate path never also fires ``closedUnexpectedly``.
+        """
+        from autoptz.ui.widgets.dialogs.mark_exit import QUIT, RETURN, MarkExitDialog
+
+        dlg = MarkExitDialog(has_result=self._result is not None, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return  # Cancel → stay in Mark
+        if dlg.save_results() and self._result is not None:
+            self._persist_result(self._result)
+        choice = dlg.choice()
+        if choice == QUIT:
+            self.request_quit()
+        elif choice == RETURN:
+            self.request_return()
+
     def closeEvent(self, event: Any) -> None:  # noqa: N802 — Qt override
         """Stop the pump FIRST, then the controller, then the isolated engine.
 
@@ -434,9 +508,26 @@ class MarkWindow(MainWindow):
             self._engine.stop()
         except Exception:  # noqa: BLE001
             log.debug("mark engine stop failed", exc_info=True)
+        self._detach_log_handler()
         if not self._returning:
             self.closedUnexpectedly.emit()
         super().closeEvent(event)
+
+    def _detach_log_handler(self) -> None:
+        """Remove the Mark session's root-logger handler (idempotent).
+
+        Mark attaches its own ``QtLogHandler`` to the root logger; on exit it must
+        be detached so the resumed main app never accumulates a stale handler
+        writing into the (now-discarded) Mark log model.
+        """
+        handler = getattr(self, "_log_handler", None)
+        if handler is None:
+            return
+        self._log_handler = None
+        try:
+            logging.getLogger().removeHandler(handler)
+        except Exception:  # noqa: BLE001
+            log.debug("mark log handler detach failed", exc_info=True)
 
     def _close_should_quit_app(self, event: Any) -> bool:  # noqa: ARG002
         """Closing the Mark window NEVER quits the app — it routes via signals.
