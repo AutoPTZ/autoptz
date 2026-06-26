@@ -1,4 +1,9 @@
-"""AutoPTZ Mark pre-flight dialog: defaults, ETA formula, NDI gating (offscreen)."""
+"""AutoPTZ Mark pre-flight dialog (offscreen): friendly dropdowns + confirm.
+
+The pre-flight uses plain language and dropdowns (no spinboxes / no "FPS floor" /
+"Dwell" jargon) for Max cameras, Target FPS, Time per step, Resolution, and
+Model, plus Source + Profile.  Its Start asks a confirm before accepting.
+"""
 
 from __future__ import annotations
 
@@ -23,22 +28,67 @@ class TestPreflight:
         s = dlg.session()
         assert s.profile in ("full", "streams")
         assert s.source == "synthetic"
-        assert s.floor_fps == 24.0
-        assert s.max_cameras == 16
-        assert 14.0 <= s.dwell_s <= 21.0
+        assert s.floor_fps in (24.0, 30.0, 60.0)
+        assert s.max_cameras in (4, 8, 12, 16)
+        assert s.dwell_s in (5.0, 10.0, 15.0, 20.0)
+        assert s.resolution in ("720p", "1080p", "4k")
+        assert s.model in ("auto", "nano", "small")
         dlg.deleteLater()
 
     def test_defaults_round_trip_non_default(self, qtapp) -> None:
         from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 
         dlg = MarkPreflightDialog(
-            defaults=MarkSession(profile="streams", floor_fps=20.0, max_cameras=8, dwell_s=18.0)
+            defaults=MarkSession(
+                profile="streams",
+                floor_fps=30.0,
+                max_cameras=8,
+                dwell_s=10.0,
+                resolution="1080p",
+                model="nano",
+            )
         )
         s = dlg.session()
         assert s.profile == "streams"
-        assert s.floor_fps == 20.0
+        assert s.floor_fps == 30.0
         assert s.max_cameras == 8
-        assert s.dwell_s == 18.0
+        assert s.dwell_s == 10.0
+        assert s.resolution == "1080p"
+        assert s.model == "nano"
+        dlg.deleteLater()
+
+    def test_controls_are_dropdowns_not_spinboxes(self, qtapp) -> None:
+        from PySide6.QtWidgets import QComboBox, QSpinBox
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+        # The parameter pickers are all combo boxes; no spinbox jargon remains.
+        for name in ("_max_combo", "_fps_combo", "_step_combo", "_res_combo", "_model_combo"):
+            assert isinstance(getattr(dlg, name), QComboBox)
+        assert not dlg.findChildren(QSpinBox)
+        dlg.deleteLater()
+
+    def test_no_jargon_in_text(self, qtapp) -> None:
+        from PySide6.QtWidgets import QLabel
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+        text = " ".join(lbl.text() for lbl in dlg.findChildren(QLabel)).lower()
+        # The jargon the user called out must be gone.
+        assert "fps floor" not in text
+        assert "dwell" not in text
+        assert "can't hold the fps floor" not in text
+        assert "relaunch" not in text
+        dlg.deleteLater()
+
+    def test_resolution_and_model_options_present(self, qtapp) -> None:
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+        res_keys = {dlg._res_combo.itemData(i) for i in range(dlg._res_combo.count())}
+        model_keys = {dlg._model_combo.itemData(i) for i in range(dlg._model_combo.count())}
+        assert {"720p", "1080p", "4k"} <= res_keys
+        assert {"auto", "nano", "small"} <= model_keys
         dlg.deleteLater()
 
     def test_eta_formula(self, qtapp) -> None:
@@ -50,9 +100,11 @@ class TestPreflight:
     def test_eta_label_updates_on_control_change(self, qtapp) -> None:
         from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 
-        dlg = MarkPreflightDialog(defaults=MarkSession())
+        dlg = MarkPreflightDialog(defaults=MarkSession(max_cameras=4))
         before = dlg._eta_label.text()
-        dlg._max_spin.setValue(dlg._max_spin.value() + 4)
+        # Pick a different max-cameras option → ETA changes.
+        idx = (dlg._max_combo.currentIndex() + 1) % dlg._max_combo.count()
+        dlg._max_combo.setCurrentIndex(idx)
         after = dlg._eta_label.text()
         assert before != after
         dlg.deleteLater()
@@ -62,9 +114,30 @@ class TestPreflight:
         from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 
         dlg = MarkPreflightDialog(defaults=MarkSession())
-        # The NDI option is only enabled when cyndilib is present.
         assert dlg._ndi_radio.isEnabled() == ndi_sim_available()
-        # When NDI is unavailable the chosen source falls back to synthetic.
         if not ndi_sim_available():
             assert dlg.session().source == "synthetic"
+        dlg.deleteLater()
+
+    def test_start_confirms_before_accept(self, qtapp, monkeypatch) -> None:
+        from PySide6.QtWidgets import QDialog, QMessageBox
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+
+        # Declining the confirm keeps the dialog open (no accept).
+        monkeypatch.setattr(
+            QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No
+        )
+        accepted: list[str] = []
+        monkeypatch.setattr(QDialog, "accept", lambda self: accepted.append("accept"))
+        dlg._on_start()
+        assert accepted == []  # declined → no accept
+
+        # Confirming accepts.
+        monkeypatch.setattr(
+            QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
+        )
+        dlg._on_start()
+        assert accepted == ["accept"]
         dlg.deleteLater()
