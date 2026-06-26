@@ -332,6 +332,23 @@ class TestSettings:
         store.set_setting("k", 2)
         assert store.get_setting("k") == 2
 
+    def test_experimental_features_dict_round_trips(self, store: ConfigStore) -> None:
+        payload = {
+            "AUTOPTZ_PTZ_PUMP": "1",
+            "AUTOPTZ_REID_DEVICE": "cpu",
+            "AUTOPTZ_NDI_COLOR_FORMAT": "fastest",
+            "stage_spread": True,
+            "group_framing": False,
+        }
+        store.set_setting("experimental_features", payload)
+        assert store.get_setting("experimental_features", {}) == payload
+
+    def test_experimental_features_absent_returns_empty_default(
+        self, store: ConfigStore
+    ) -> None:
+        # Feature-inactive baseline: never written → caller's empty default.
+        assert store.get_setting("experimental_features", {}) == {}
+
 
 # ── Store: layout CRUD ─────────────────────────────────────────────────────────
 
