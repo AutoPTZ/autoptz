@@ -120,6 +120,28 @@ def test_os_close_routes_through_return(qtapp, monkeypatch) -> None:
     assert not win.isHidden()
 
 
+def test_mark_os_close_does_not_quit_app(qtapp, monkeypatch) -> None:
+    """A Mark window OS-close must route to Return, never quit the app.
+
+    Guards the interaction with the new MainWindow quit-on-close path: the Mark
+    window inherits closeEvent and chains super(), but its OS-close must NOT trip
+    the primary window's QApplication.quit().
+    """
+    from PySide6.QtWidgets import QApplication
+
+    import autoptz.ui.widgets.main_window as mw
+
+    win = _main(qtapp)
+    monkeypatch.setattr(mw, "MarkPreflightDialog", _FakeDlg, raising=False)
+    win._start_mark()
+    mark = win._mark_window
+    quit_called = {"n": 0}
+    monkeypatch.setattr(QApplication, "quit", lambda *a: quit_called.__setitem__("n", 1))
+    mark.close()
+    assert quit_called["n"] == 0
+    assert not win.isHidden()  # resumed via Return
+
+
 def test_engine_resumes_if_was_running(qtapp, monkeypatch) -> None:
     import autoptz.ui.widgets.main_window as mw
 
@@ -135,6 +157,45 @@ def test_engine_resumes_if_was_running(qtapp, monkeypatch) -> None:
     assert stopped["n"] == 1  # suspended on enter
     win._mark_window.request_return()
     assert started["n"] == 1  # resumed on return
+
+
+def test_main_close_quits_app(qtapp, monkeypatch) -> None:
+    """Closing the visible MainWindow (no Mark swap) terminates the app.
+
+    With setQuitOnLastWindowClosed(False) global (for the Mark in-process swap),
+    the visible main window's close must explicitly quit, or app.exec() hangs.
+    """
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QApplication
+
+    win = _main(qtapp)
+    quit_called = {"n": 0}
+    monkeypatch.setattr(QApplication, "quit", lambda *a: quit_called.__setitem__("n", 1))
+    assert win._mark_window is None  # not in a Mark swap
+    win.closeEvent(QCloseEvent())
+    assert quit_called["n"] == 1
+
+
+def test_main_close_during_mark_swap_does_not_quit(qtapp, monkeypatch) -> None:
+    """A close that arrives while a Mark swap is active must NOT quit the app.
+
+    The main window is hidden (not closed) during Mark; but guard defensively so
+    any stray close while ``_mark_window`` is set does not tear down the process.
+    """
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QApplication
+
+    import autoptz.ui.widgets.main_window as mw
+
+    win = _main(qtapp)
+    monkeypatch.setattr(mw, "MarkPreflightDialog", _FakeDlg, raising=False)
+    win._start_mark()
+    assert win._mark_window is not None  # in a Mark swap
+    quit_called = {"n": 0}
+    monkeypatch.setattr(QApplication, "quit", lambda *a: quit_called.__setitem__("n", 1))
+    win.closeEvent(QCloseEvent())
+    assert quit_called["n"] == 0
+    win._mark_window.close()
 
 
 def test_app_run_sets_no_quit_on_last_window_closed(qtapp, monkeypatch) -> None:

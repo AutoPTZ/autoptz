@@ -1364,6 +1364,26 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             log.debug("save geometry/state failed", exc_info=True)
         super().closeEvent(event)
+        # app.setQuitOnLastWindowClosed(False) (set in app.run() for the Mark
+        # in-process swap) means the event loop will NOT auto-quit when this window
+        # closes.  A genuine user close of the visible main window must therefore
+        # terminate the app explicitly, or app.exec() hangs with no visible window.
+        if self._close_should_quit_app(event):
+            from PySide6.QtWidgets import QApplication
+
+            QApplication.quit()
+
+    def _close_should_quit_app(self, event: QCloseEvent) -> bool:
+        """Whether closing this window should terminate the app (Mark overrides).
+
+        True only for a genuine, accepted close of the primary MainWindow that is
+        NOT mid-Mark-swap.  A close arriving while a Mark swap is active
+        (``_mark_window`` set) is the suspended main window — Mark owns the
+        lifecycle then, so it must not quit.  The :class:`MarkWindow` subclass
+        overrides this to always return False (its OS-close routes through
+        ``closedUnexpectedly`` → Return, never a silent app quit).
+        """
+        return self._mark_window is None and event.isAccepted()
 
     def _clear_minimized_state(self) -> None:
         state = self.windowState()

@@ -438,6 +438,16 @@ class MarkWindow(MainWindow):
             self.closedUnexpectedly.emit()
         super().closeEvent(event)
 
+    def _close_should_quit_app(self, event: Any) -> bool:  # noqa: ARG002
+        """Closing the Mark window NEVER quits the app — it routes via signals.
+
+        Return/Quit are owned by the suspended :class:`MainWindow` (through
+        ``returnToAppRequested`` / ``quitRequested`` / ``closedUnexpectedly``); an
+        OS-close here must not trip the primary window's quit-on-close path that
+        ``MainWindow.closeEvent`` runs via ``super().closeEvent``.
+        """
+        return False
+
     # ── test seams ───────────────────────────────────────────────────────────────
 
     @classmethod
