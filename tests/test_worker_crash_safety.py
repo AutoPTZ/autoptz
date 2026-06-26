@@ -354,3 +354,55 @@ def test_inference_loop_fatal_exit_surfaces_error_for_capture_telemetry() -> Non
         "the camera went box-blind"
     )
     assert "inference thread stopped" in w._infer_last_error
+
+
+# ── process handle composes with the supervisor's auto-restart ────────────────
+
+
+def test_supervisor_restarts_dead_process_handle(qapp) -> None:  # noqa: ANN001
+    """A handle whose is_alive() goes False is torn down and respawned via the
+    backoff path — the same path a dead child process travels in opt-in mode.
+
+    The process-per-camera handle (ProcessWorkerHandle) only adds a different
+    factory; the supervisor's health scan calls ``worker.is_alive()`` for BOTH
+    worker types and respawns through the shared backoff path. This proves a
+    process-style handle (is_alive() flips False) composes with that path.
+    """
+    from autoptz.engine.supervisor import Supervisor
+    from autoptz.ui.engine_client import EngineClient
+
+    built: list[str] = []
+
+    class _FakeHandle:
+        def __init__(self, camera_id, config, on_telemetry) -> None:  # noqa: ANN001
+            self.camera_id = camera_id
+            self.shm_name = f"cam_{camera_id[:8]}_preview"
+            self._alive = True
+            built.append(camera_id)
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+        def set_identity_service(self, _s) -> None: ...  # noqa: ANN001
+        def set_identity_callback(self, _c) -> None: ...  # noqa: ANN001
+        def set_inference_pool(self, _p) -> None: ...  # noqa: ANN001
+        def set_features(self, _f) -> None: ...  # noqa: ANN001
+        def start(self) -> None: ...
+        def stop(self) -> None:
+            self._alive = False
+
+    client = EngineClient()
+    cid = client.addCamera("usb://0", "ProcRestart")
+    client.drain_commands()  # clear the AddCameraCmd so it isn't double-spawned
+    sup = Supervisor(client, store=None, worker_factory=_FakeHandle)
+    sup.start()
+    try:
+        handle = sup._workers[cid]
+        handle._alive = False  # simulate the child process dying
+        # Drive the health scan past its throttle window.
+        sup._last_health_scan_t = 0.0
+        sup._scan_worker_health(now=1000.0)
+        assert built.count(cid) == 2, "supervisor should have respawned the dead handle"
+        assert sup._restart_state.get(cid, (0, 0.0, False))[0] == 1
+    finally:
+        sup.stop()
