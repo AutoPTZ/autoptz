@@ -952,6 +952,37 @@ class Supervisor:
             camera_count,
         )
 
+        self._apply_experimental_env()
+
+    def _apply_experimental_env(self) -> None:
+        """Publish the user's experimental-flag selections into ``os.environ``.
+
+        Read once at engine start (from inside :meth:`_apply_hardware_env`, before
+        any worker spawns) so the flags take effect on the next engine run.  For
+        each known flag: set the env var when the saved value differs from the
+        flag's engine default, else pop it so the in-code fallback runs.  Keys in
+        the saved dict that are not env flags (the per-camera ``TrackingConfig``
+        defaults) are ignored here — they are consumed when a NEW camera is added.
+
+        Absent / unreadable settings are the feature-inactive baseline: every
+        managed key is popped, leaving today's behaviour unchanged.
+        """
+        from autoptz.engine.runtime.experimental_flags import EXPERIMENTAL_FLAGS
+
+        try:
+            saved = self._store.get_setting("experimental_features", {}) if self._store else {}
+        except Exception:  # noqa: BLE001 — bad/absent settings fall back to defaults
+            saved = {}
+        if not isinstance(saved, dict):
+            saved = {}
+
+        for flag in EXPERIMENTAL_FLAGS:
+            value = saved.get(flag.env_key, flag.default)
+            if value != flag.default and value not in (None, ""):
+                os.environ[flag.env_key] = str(value)
+            else:
+                os.environ.pop(flag.env_key, None)
+
     def _make_telemetry_callback(self, camera_id: str) -> Callable[[Any], None]:
         """Wrap push_telemetry so the supervisor records a per-camera last-seen time.
 
