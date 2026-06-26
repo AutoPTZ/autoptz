@@ -624,6 +624,11 @@ class CameraWorker:
         # keeps the prior height-only sizing). Read by the Center Stage crop path.
         self._digital_target_is_group: bool = False
         self._cs_diag_t: float = 0.0  # throttle for the Center Stage diagnostic log
+        # The active Center-Stage digital crop (x, y, w, h) in full-frame pixels
+        # for the most recently framed output, or None when Center Stage is not
+        # driving the painted frame. Stamped onto each TelemetryMsg so the UI can
+        # re-normalize overlay boxes/aim into the cropped preview.
+        self._last_digital_crop_rect: tuple[int, int, int, int] | None = None
         self._detect: _DetectStack | None = None
         self._pooled_detector = False
         # True when the detector is the unified YOLO11-pose model (boxes+keypoints
@@ -3508,6 +3513,7 @@ class CameraWorker:
 
         backend = self._ptz_backend
         if not isinstance(backend, DigitalPTZBackend) or frame is None:
+            self._last_digital_crop_rect = None
             return frame
         import cv2
 
@@ -3537,6 +3543,9 @@ class CameraWorker:
             x, y, cw, ch = framer.frame_for(target, w, h, fit_width=self._digital_target_is_group)
         else:
             x, y, cw, ch = framer.full_frame(w, h)
+        # Record the crop active for THIS frame so telemetry can carry it and the
+        # UI can re-normalize overlays into the cropped preview.
+        self._last_digital_crop_rect = (int(x), int(y), int(cw), int(ch))
         nowm = time.monotonic()
         if nowm - self._cs_diag_t > 2.0:
             self._cs_diag_t = nowm
@@ -3552,6 +3561,7 @@ class CameraWorker:
             )
         crop = frame[y : y + ch, x : x + cw]
         if crop.size == 0:
+            self._last_digital_crop_rect = None
             return frame
         from autoptz.engine.pipeline.vcam import pick_interpolation
 
@@ -4992,6 +5002,7 @@ class CameraWorker:
             ep=self._ep,
             width=self._frame_w,
             height=self._frame_h,
+            digital_crop_rect=self._last_digital_crop_rect,
             dropped_frames=self._dropped_frames,
             latency_ms=self._latency_ms,
             ingest_ms=self._ingest_ms,
