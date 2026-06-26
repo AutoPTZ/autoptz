@@ -202,6 +202,31 @@ class TestSupervisorSampler:
         finally:
             sampler.close()
 
+    def test_sampler_registers_cameras_on_injected_client(self, qapp) -> None:
+        """An injected client (the Mark window's) receives the synthetic cameras.
+
+        Without this the window's CameraWall — bound to that client — stays empty
+        during a run (the sampler would build a private client instead).
+        """
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        injected = EngineClient()
+
+        def factory(client, store):
+            return Supervisor(client, store=store, worker_factory=_FakeSamplerWorker)
+
+        sampler = _SupervisorSampler(
+            get_profile("full"), supervisor_factory=factory, client=injected
+        )
+        try:
+            assert sampler._client is injected
+            sampler.sample(2, dwell_s=0.0, max_ticks=3, tick_sleep_s=0.0)
+            # The synthetic cameras landed on the SAME client the wall observes.
+            assert len(injected.cameraModel.camera_ids()) == 2
+        finally:
+            sampler.close()
+
 
 class TestRunBenchmarkWiring:
     def test_run_benchmark_with_injected_supervisor(self, qapp, capsys) -> None:

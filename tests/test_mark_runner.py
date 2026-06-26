@@ -59,3 +59,56 @@ class TestRampController:
         c = MarkRampController(profile="full", dwell_s=0.0, sample_factory=factory)
         done, steps, progress = _drive(c, qapp)
         assert "error" in done and "kaboom" in done["error"]
+
+    def test_default_factory_threads_injected_client(self, qapp) -> None:
+        """The default sampler registers its synthetic cameras on the injected client.
+
+        Drives the controller WITHOUT a sample_factory (so the real default
+        ``_SupervisorSampler`` path runs) but with a fake supervisor factory so no
+        real inference happens, and asserts the synthetic cameras land on the
+        client we handed the controller (the window's CameraWall client).
+        """
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+        from tests.test_benchmark_runner import _FakeSamplerWorker
+
+        injected = EngineClient()
+
+        def sup_factory(client, store):
+            return Supervisor(client, store=store, worker_factory=_FakeSamplerWorker)
+
+        c = MarkRampController(
+            profile="full",
+            floor_fps=0.0,  # accept any fps so the ramp reaches max_cameras
+            max_cameras=2,
+            dwell_s=0.0,
+            client=injected,
+            supervisor_factory=sup_factory,
+        )
+        done, steps, progress = _drive(c, qapp)
+        assert "error" not in done, done.get("error")
+        # Cameras registered on the SAME client the window's wall is bound to.
+        assert len(injected.cameraModel.camera_ids()) == 2
+
+    def test_thread_is_joinable_after_run(self, qapp) -> None:
+        """The worker QThread is joinable via wait() so the controller drops its
+        ref only after the thread has truly finished.
+
+        Guards the 'QThread: Destroyed while thread is still running' abort: after
+        the run completes the thread must be truly finished before any ref drops.
+        The controller is moved INTO the thread via moveToThread, so the QThread
+        is intentionally unparented — joinability, not parenting, is the contract.
+        """
+        c = MarkRampController(
+            profile="full",
+            floor_fps=24.0,
+            max_cameras=1,
+            dwell_s=0.0,
+            sample_factory=lambda: (lambda n: [40.0] * n),
+        )
+        done, steps, progress = _drive(c, qapp)
+        assert "error" not in done
+        # Held by the controller and joinable (moveToThread → unparented thread).
+        assert c._thread is not None
+        assert c.wait(2000) is True
+        assert c._thread.isFinished()

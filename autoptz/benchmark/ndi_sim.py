@@ -9,6 +9,10 @@ tests skip.
 from __future__ import annotations
 
 import logging
+import time
+import uuid
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -115,3 +119,156 @@ class MarkNDIFleet:
     def close(self) -> None:
         for s in self._senders:
             s.close()
+
+
+def _add_ndi_camera(client: Any, ndi_name: str, index: int) -> str:
+    """Register one NDI camera (``ndi://<name>``) on the client's model.
+
+    Built directly via a ``CameraRecord`` with a ``type="ndi"`` source so the real
+    ``NDIAdapter`` ingests the matching :class:`MarkNDISender` broadcast.
+    """
+    from autoptz.config.models import CameraConfig, SourceConfig
+    from autoptz.ui.list_models import CameraRecord
+
+    camera_id = str(uuid.uuid4())
+    uri = f"ndi://{ndi_name}"
+    cfg = CameraConfig(
+        id=camera_id,
+        name=ndi_name,
+        source=SourceConfig(type="ndi", address=uri),
+    )
+    rec = CameraRecord(
+        camera_id=camera_id,
+        source_uri=uri,
+        display_name=ndi_name,
+        camera_config=cfg,
+    )
+    client.cameraModel.add_camera(rec)
+    return camera_id
+
+
+class MarkNDIFleetSampler:
+    """Sample fps over N real NDI sources (a :class:`MarkNDIFleet`) on a client.
+
+    Mirrors ``runner._SupervisorSampler`` but ingests through the REAL NDIAdapter:
+    it broadcasts a :class:`MarkNDIFleet` and registers ``ndi://`` cameras on the
+    injected ``EngineClient`` (the Mark window's, so its CameraWall renders the
+    tiles), then drives a headless Supervisor while pumping the fleet each tick.
+
+    Requires cyndilib; constructing it without it raises (callers gate on
+    :func:`ndi_sim_available`).  Validated live by the user — cyndilib is absent in
+    CI/.venv, so the unit suite only asserts the import-guard + factory wiring.
+    """
+
+    def __init__(
+        self,
+        profile: Any,
+        *,
+        client: Any,
+        supervisor_factory: Callable[[Any, Any], Any] | None = None,
+        width: int = 1280,
+        height: int = 720,
+        fps: float = 30.0,
+    ) -> None:
+        if not _CYNDILIB_OK:
+            raise RuntimeError("cyndilib not available; NDI sim disabled")
+        from autoptz.benchmark.runner import _default_supervisor_factory
+
+        self._profile = profile
+        self._client = client
+        self._w, self._h, self._fps = int(width), int(height), float(fps)
+        self._factory = supervisor_factory or _default_supervisor_factory
+        self._fleet: MarkNDIFleet | None = None
+        self._sup: Any | None = None
+        self._cameras: list[str] = []
+        self._started = False
+
+    @staticmethod
+    def _drain_events() -> None:
+        from PySide6.QtCore import QCoreApplication
+
+        app = QCoreApplication.instance()
+        if app is not None:
+            app.processEvents()
+
+    def _ensure_fleet(self, n: int) -> None:
+        if self._fleet is None:
+            self._fleet = MarkNDIFleet(n, width=self._w, height=self._h, fps=self._fps)
+            self._fleet.open()
+            for i, name in enumerate(self._fleet.names()):
+                self._cameras.append(_add_ndi_camera(self._client, name, i))
+
+    def sample(
+        self,
+        n: int,
+        *,
+        dwell_s: float,
+        max_ticks: int,
+        tick_sleep_s: float,
+        fps_reader: Callable[[Any, str], float] | None = None,
+    ) -> list[float]:
+        from autoptz.benchmark.runner import _default_fps_reader
+
+        reader = fps_reader or _default_fps_reader
+        # NDI senders/receivers can't be reconfigured per-step cheaply, so build
+        # the full fleet up to the max count once on the first sample.
+        self._ensure_fleet(n)
+        assert self._fleet is not None
+        if self._sup is None:
+            store = getattr(self._client, "_store", None)
+            self._sup = self._factory(self._client, store)
+            self._sup.prime_features(dict(self._profile.features))
+        if not self._started:
+            self._sup.start(run_pump=False)
+            self._started = True
+
+        deadline = time.monotonic() + max(0.0, dwell_s)
+        ticks = 0
+        while ticks < max_ticks and (ticks == 0 or time.monotonic() < deadline):
+            self._fleet.pump_once()
+            self._sup.tick()
+            self._drain_events()
+            ticks += 1
+            if tick_sleep_s > 0.0:
+                time.sleep(tick_sleep_s)
+        self._drain_events()
+        return [reader(self._client, cid) for cid in self._cameras[:n]]
+
+    def close(self) -> None:
+        if self._sup is not None:
+            try:
+                self._sup.stop()
+            except Exception:  # noqa: BLE001
+                log.debug("ndi sampler supervisor stop failed", exc_info=True)
+        if self._fleet is not None:
+            try:
+                self._fleet.close()
+            except Exception:  # noqa: BLE001
+                log.debug("ndi sampler fleet close failed", exc_info=True)
+
+
+def ndi_sample_factory(
+    profile: str,
+    dwell_s: float,
+    *,
+    client: Any,
+    max_cameras: int,
+    supervisor_factory: Callable[[Any, Any], Any] | None = None,
+) -> Callable[[int], list[float]]:
+    """Build a :class:`MarkNDIFleetSampler` and return its ``sample_fn(n)``.
+
+    Raises if cyndilib is unavailable (callers gate on :func:`ndi_sim_available`).
+    """
+    from autoptz.benchmark.profiles import get_profile
+
+    sampler = MarkNDIFleetSampler(
+        get_profile(profile),
+        client=client,
+        supervisor_factory=supervisor_factory,
+    )
+
+    def sample_fn(n: int) -> list[float]:
+        return sampler.sample(n, dwell_s=dwell_s, max_ticks=2000, tick_sleep_s=0.005)
+
+    sample_fn._sampler = sampler  # type: ignore[attr-defined]  # for close()
+    return sample_fn

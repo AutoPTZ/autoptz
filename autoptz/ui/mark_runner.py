@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -34,11 +35,23 @@ class _MarkCancelled(Exception):
 def _default_sample_factory(
     profile: str,
     dwell_s: float,
+    *,
+    client: Any | None = None,
+    supervisor_factory: Callable[[Any, Any], Any] | None = None,
 ) -> Callable[[int], list[float]]:
-    """Build a real _SupervisorSampler and return its sample_fn(n)."""
+    """Build a real _SupervisorSampler and return its sample_fn(n).
+
+    When *client* is supplied (the Mark window passes the SAME EngineClient its
+    CameraWall is bound to), the sampler registers its synthetic cameras on that
+    client so the wall's tiles render and frames flow during the ramp.
+    """
     from autoptz.benchmark.runner import _SupervisorSampler
 
-    sampler = _SupervisorSampler(get_profile(profile))
+    sampler = _SupervisorSampler(
+        get_profile(profile),
+        client=client,
+        supervisor_factory=supervisor_factory,
+    )
 
     def sample_fn(n: int) -> list[float]:
         return sampler.sample(n, dwell_s=dwell_s, max_ticks=2000, tick_sleep_s=0.005)
@@ -61,6 +74,8 @@ class MarkRampController(QObject):
         max_cameras: int = 16,
         dwell_s: float = 15.0,
         sample_factory: Callable[[], Callable[[int], list[float]]] | None = None,
+        client: Any | None = None,
+        supervisor_factory: Callable[[Any, Any], Any] | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -69,24 +84,51 @@ class MarkRampController(QObject):
         self._max = max(1, int(max_cameras))
         self._dwell = max(0.0, float(dwell_s))
         self._sample_factory = sample_factory
+        # The default sampler registers its synthetic cameras on this client; the
+        # window passes the SAME client its CameraWall is bound to so tiles render.
+        self._client = client
+        self._supervisor_factory = supervisor_factory
         self._cancel = False
         self._thread: QThread | None = None
 
     def start(self) -> None:
         self._cancel = False
+        # Standard worker-object pattern: the controller is moved INTO the thread,
+        # so the thread must be unparented (a parented QObject cannot moveToThread).
+        # We hold a strong ref in ``self._thread`` and free it via ``deleteLater``
+        # only after it has truly finished — never destroy a still-running QThread
+        # (that aborts with "QThread: Destroyed while thread is still running").
         thread = QThread()
         self.moveToThread(thread)
         thread.started.connect(self._run)
+        thread.finished.connect(thread.deleteLater)
         thread.start()
         self._thread = thread
 
     def stop(self) -> None:
         self._cancel = True
 
+    def wait(self, timeout_ms: int = 5000) -> bool:
+        """Block until the worker thread has finished (for clean teardown).
+
+        Returns True if the thread finished within *timeout_ms* (or was never
+        started).  Callers on the GUI thread should pump events while waiting if
+        they also need queued finished/error signals delivered first.
+        """
+        thread = self._thread
+        if thread is None:
+            return True
+        return bool(thread.wait(timeout_ms))
+
     def _build_sample_fn(self) -> Callable[[int], list[float]]:
         if self._sample_factory is not None:
             return self._sample_factory()
-        return _default_sample_factory(self._profile, self._dwell)
+        return _default_sample_factory(
+            self._profile,
+            self._dwell,
+            client=self._client,
+            supervisor_factory=self._supervisor_factory,
+        )
 
     def _on_step(self, step: StepResult) -> None:
         self.step_completed.emit(step)

@@ -213,13 +213,21 @@ class _SupervisorSampler:
         profile: BenchmarkProfile,
         *,
         supervisor_factory: Callable[[Any, Any], Any] | None = None,
+        client: Any | None = None,
     ) -> None:
-        from autoptz.ui.engine_client import EngineClient
-
+        # When *client* is injected (the headful Mark window passes the SAME
+        # EngineClient its CameraWall is bound to), the synthetic cameras land on
+        # that client's model so tiles + frames actually render during the ramp.
+        # The headless CLI passes None → we build a private client.
         self._profile = profile
-        self._client = EngineClient()
+        if client is None:
+            from autoptz.ui.engine_client import EngineClient
+
+            client = EngineClient()
+        self._client = client
         factory = supervisor_factory or _default_supervisor_factory
-        self._sup = factory(self._client, None)
+        store = getattr(client, "_store", None)
+        self._sup = factory(self._client, store)
         self._sup.prime_features(dict(self._profile.features))
         self._cameras: list[str] = []
         self._started = False

@@ -257,6 +257,11 @@ class MarkWindow(QMainWindow):
             max_cameras=self._session.max_cameras,
             dwell_s=self._session.dwell_s,
             sample_factory=self._build_sample_factory(),
+            # Drive the SAME EngineClient our CameraWall is bound to so the
+            # synthetic cameras register on it and the tiles + frames render
+            # during the ramp (the default sampler would otherwise build a
+            # private client the wall never observes).
+            client=self._client,
         )
         controller.progress.connect(self._on_progress)
         controller.step_completed.connect(self._on_step)
@@ -285,23 +290,50 @@ class MarkWindow(QMainWindow):
             log.exception("relaunch to normal app failed")
         self.close()
 
+    def closeEvent(self, event: Any) -> None:  # noqa: N802 — Qt override
+        """Stop + join any in-flight ramp before the window is destroyed.
+
+        Without this, closing mid-run would drop the controller ref while its
+        QThread is still executing → "QThread: Destroyed while thread is running".
+        """
+        controller = self._controller
+        if controller is not None:
+            try:
+                controller.stop()
+                controller.wait(5000)
+            except Exception:  # noqa: BLE001
+                log.debug("controller stop/wait on close failed", exc_info=True)
+            self._controller = None
+        super().closeEvent(event)
+
     def _build_sample_factory(self) -> Any:
         """Return the controller's ``sample_factory`` (or None for the default).
 
         ``None`` → :class:`MarkRampController` builds the real ``_SupervisorSampler``
-        (synthetic in-process cameras).  NDI mode is the user-validated path; if
-        cyndilib is unavailable we silently fall back to the synthetic default.
+        on the window's client (synthetic in-process cameras).  For ``source ==
+        "ndi"`` (and cyndilib present), return a zero-arg factory that builds a
+        :class:`MarkNDIFleetSampler` so a real ``MarkNDIFleet`` is broadcast and
+        ingested through the live NDIAdapter on the window's client.  If cyndilib
+        is unavailable we fall back to the synthetic default (the pre-flight dialog
+        already disables the NDI radio in that case).
         """
         if self._session.source != "ndi":
             return None
-        from autoptz.benchmark.ndi_sim import ndi_sim_available
+        from autoptz.benchmark.ndi_sim import ndi_sample_factory, ndi_sim_available
 
         if not ndi_sim_available():
             log.warning("NDI source requested but cyndilib is unavailable; using synthetic.")
             return None
-        # NDI fleets are validated live by the user; the synthetic sampler still
-        # measures throughput, so default to it until the NDI ingest path is wired.
-        return None
+
+        def factory() -> Any:
+            return ndi_sample_factory(
+                self._session.profile,
+                self._session.dwell_s,
+                client=self._client,
+                max_cameras=self._session.max_cameras,
+            )
+
+        return factory
 
     # ── controller slots ────────────────────────────────────────────────────────
 
@@ -340,7 +372,22 @@ class MarkWindow(QMainWindow):
     # ── helpers ──────────────────────────────────────────────────────────────────
 
     def _teardown_controller(self) -> None:
+        """Drop our ref to the controller, but only after its thread has finished.
+
+        ``finished``/``error`` are emitted from inside the worker's ``_run`` (it
+        calls ``thread.quit()`` in its ``finally`` *after* emitting), so when this
+        slot fires the QThread may still be unwinding its event loop.  We wait for
+        it to truly finish before releasing the last strong ref — dropping it
+        mid-run would let the QThread be destroyed while running and abort.  The
+        controller self-deletes via ``thread.finished -> deleteLater``.
+        """
+        controller = self._controller
         self._controller = None
+        if controller is not None:
+            try:
+                controller.wait(5000)
+            except Exception:  # noqa: BLE001
+                log.debug("controller wait failed", exc_info=True)
 
     def _persist_result(self, result: BenchmarkResult) -> None:
         from autoptz.benchmark.results import save_mark_result
