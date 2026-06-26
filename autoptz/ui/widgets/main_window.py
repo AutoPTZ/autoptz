@@ -144,11 +144,15 @@ class MainWindow(QMainWindow):
         # devices without opening them); the cross-platform fallback opens each device,
         # which is too costly to poll, so there we keep the on-open refresh.
         self._usb_poll_timer: QTimer | None = None
-        if _safe(lambda: self._client.usbEnumerationCheap(), False):
+        if self._should_poll_usb() and _safe(lambda: self._client.usbEnumerationCheap(), False):
             self._usb_poll_timer = QTimer(self)
             self._usb_poll_timer.setInterval(3000)
             self._usb_poll_timer.timeout.connect(self._refresh_usb_async)
             self._usb_poll_timer.start()
+
+    def _should_poll_usb(self) -> bool:
+        """Override point: Mark mode disables USB polling (its cameras are fake)."""
+        return True
 
     # ── section title bars ──────────────────────────────────────────────────────
 

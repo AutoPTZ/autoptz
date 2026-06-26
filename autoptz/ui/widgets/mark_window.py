@@ -1,22 +1,30 @@
-"""MarkWindow — the headful AutoPTZ Mark benchmark window.
+"""MarkWindow — the polished, self-contained AutoPTZ Mark benchmark window.
 
-A dedicated window the app relaunches into under ``--mark``.  It embeds the real
-:class:`CameraWall` (so Center-Stage / framing overlays render on each tile while
-the ramp runs) and a top HUD: step / N-cameras / per-camera fps / ETA + a
-``QPainter`` ramp chart (green sustained → red fail), Start / Stop / Return
-controls, and a results panel that appears when the run finishes.
+``MarkWindow`` **subclasses** :class:`MainWindow` so it inherits the camera wall,
+tiles, theme, dock layout, and status bar — but it owns a fully **isolated**
+engine stack via :class:`MarkEngineFactory` (its own temp-file ``ConfigStore`` +
+``EngineClient`` + ``Supervisor``, populated with ONLY fake synthetic / NDI
+cameras).  Sharing the main app's client/store was the original bug: real
+cameras appeared in the Mark wall and closing Mark killed the whole app.
 
-The ramp itself runs on a worker thread via :class:`MarkRampController`; this
-window only marshals its queued signals into HUD updates.  On finish it persists
-the result via :func:`save_mark_result`.  "Return to AutoPTZ" relaunches the
-normal app and closes this window.
+The window trims the inherited shell down to the benchmark essentials:
+  * title is JUST ``"AutoPTZ Mark"`` (version lives in :class:`AboutMarkDialog`);
+  * ``_build_menus`` is overridden to a single Help → About entry;
+  * the Properties / People / Services right docks are hidden (details + logs stay);
+  * a HUD ramp chart + :class:`MarkControlPanel` + :class:`MarkDetailsPanel` are
+    injected around the inherited wall;
+  * ``_should_poll_usb`` returns ``False`` so the inherited USB poll never probes
+    the fake client.
 
-Test seams (offscreen):
-  * :meth:`_wall_type` — the embedded wall class (so a test can ``findChild`` it).
-  * :meth:`_status_text` / :meth:`_results_text` / :meth:`_score_value` — read the
-    HUD/results without painting.
-  * The slots ``_on_progress`` / ``_on_step`` / ``_on_finished`` / ``_on_error`` can
-    be driven directly with fake ``StepResult`` / ``BenchmarkResult`` values.
+It runs a 33 ms GUI ``QTimer`` pump calling ``engine.tick()`` (mirroring
+``app.py``) and drives the ramp via :class:`MarkRampController` on the isolated
+client.  On close it stops the pump FIRST, then the controller, then the engine,
+and emits a return/exit signal — it NEVER relaunches a subprocess.
+
+Test seams (offscreen): ``_wall_type`` (the embedded wall class), the controller
+slots ``_on_progress`` / ``_on_step`` / ``_on_finished`` / ``_on_error`` can be
+driven with fake ``StepResult`` / ``BenchmarkResult`` values, and the verdict is
+read off ``self._controls``.
 """
 
 from __future__ import annotations
@@ -24,13 +32,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QMainWindow,
-    QPushButton,
+    QDockWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +44,9 @@ from autoptz.benchmark.runner import BenchmarkResult, StepResult
 from autoptz.ui import theme as T
 from autoptz.ui.mark_session import MarkSession
 from autoptz.ui.widgets.camera_wall import CameraWall
+from autoptz.ui.widgets.main_window import MainWindow, _action
+from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+from autoptz.ui.widgets.mark_details_panel import MarkDetailsPanel
 
 log = logging.getLogger(__name__)
 
@@ -124,120 +132,132 @@ class _MarkRampChart(QWidget):
             painter.end()
 
 
-class MarkWindow(QMainWindow):
-    """Headful AutoPTZ Mark window: embedded camera wall + ramp HUD + results."""
+class MarkWindow(MainWindow):
+    """AutoPTZ Mark: a MainWindow subclass over a fully isolated engine stack."""
+
+    returnToAppRequested = Signal()
+    quitRequested = Signal()
+    closedUnexpectedly = Signal()
 
     def __init__(
         self,
-        client: Any,
-        frame_source: Any,
         *,
         session: MarkSession | None = None,
-        store: Any | None = None,
         theme: Any | None = None,
+        frame_source: Any | None = None,
+        parent: QWidget | None = None,
     ) -> None:
-        super().__init__()
-        self._client = client
-        self._frames = frame_source
+        from autoptz.ui.mark_engine import MarkEngineFactory
+
         self._session = session or MarkSession()
-        # Persist target for results: prefer an explicit store, else the client's.
-        self._store = store if store is not None else getattr(client, "_store", None)
-        self._theme = theme
+        # The isolated stack (temp-file store + own client/supervisor, fake-only
+        # cameras) MUST exist before super().__init__ binds the wall to a client.
+        self._engine = MarkEngineFactory(self._session)
         self._controller: Any | None = None
         self._result: BenchmarkResult | None = None
         self._benchmarks_dir: Any | None = None
-
-        self.setWindowTitle("AutoPTZ Mark")
-        self.resize(1100, 740)
-
-        central = QWidget(self)
-        root = QVBoxLayout(central)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
-
-        root.addWidget(self._build_hud())
-        self._wall = CameraWall(client, frame_source)
-        root.addWidget(self._wall, 1)
-        root.addWidget(self._build_controls())
-        root.addWidget(self._build_results_panel())
-
-        self.setCentralWidget(central)
+        self._returning = False
+        super().__init__(
+            self._engine.client,
+            log_model=None,
+            frame_source=frame_source,
+            theme=theme,
+            parent=parent,
+        )
+        self.setWindowTitle("AutoPTZ Mark")  # NO version (lives in About)
+        self.resize(1200, 780)
+        self._inject_mark_ui()
+        self._hide_nonessential_docks()
+        self._start_pump()
         self._refresh_idle_status()
 
-    # ── construction helpers ────────────────────────────────────────────────────
+    # ── overrides ────────────────────────────────────────────────────────────────
 
-    def _build_hud(self) -> QWidget:
-        hud = QWidget(self)
-        row = QHBoxLayout(hud)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(16)
+    def _should_poll_usb(self) -> bool:
+        return False
 
-        self._status_label = QLabel("")
-        self._status_label.setStyleSheet("font-weight: 600;")
-        self._fps_label = QLabel("")
-        self._fps_label.setStyleSheet(f"color: {T.CURRENT.subtext};")
-        self._eta_label = QLabel("")
-        self._eta_label.setStyleSheet(f"color: {T.CURRENT.subtext};")
+    def _build_menus(self) -> None:  # override: Help / About only
+        bar = self.menuBar()
+        helpm = bar.addMenu("&Help")
+        helpm.addAction(_action(self, "About AutoPTZ Mark", self._show_about_mark))
 
-        row.addWidget(self._status_label)
-        row.addStretch(1)
-        row.addWidget(self._fps_label)
-        row.addWidget(self._eta_label)
+    def _refresh_engine_state(self) -> None:
+        # The Mark window has no Engine menu (the ramp owns the engine), so the
+        # inherited handler's references to ``_act_start`` etc. don't apply.  Keep
+        # the inherited startup-progress banner refresh, which is still wired.
+        self._refresh_startup_progress()
 
-        outer = QWidget(self)
-        col = QVBoxLayout(outer)
-        col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(6)
-        col.addWidget(hud)
-        self._chart = _MarkRampChart(outer)
-        col.addWidget(self._chart)
-        return outer
+    def _show_about_mark(self) -> None:
+        from autoptz.ui.widgets.dialogs.about_mark import AboutMarkDialog
 
-    def _build_controls(self) -> QWidget:
-        bar = QWidget(self)
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+        AboutMarkDialog(self._engine.client, self).exec()
 
-        self._start_btn = QPushButton("Start")
-        self._start_btn.clicked.connect(self.start_run)
-        self._stop_btn = QPushButton("Stop")
-        self._stop_btn.clicked.connect(self.stop_run)
-        self._stop_btn.setEnabled(False)
-        self._return_btn = QPushButton("Return to AutoPTZ")
-        self._return_btn.clicked.connect(self.return_to_app)
+    # ── construction helpers ─────────────────────────────────────────────────────
 
-        row.addWidget(self._start_btn)
-        row.addWidget(self._stop_btn)
-        row.addStretch(1)
-        row.addWidget(self._return_btn)
-        return bar
+    def _hide_nonessential_docks(self) -> None:
+        for key in ("properties", "people", "services"):
+            dock = self._docks.get(key)
+            if dock is not None:
+                dock.setVisible(False)
 
-    def _build_results_panel(self) -> QWidget:
-        self._results_panel = QWidget(self)
-        col = QVBoxLayout(self._results_panel)
-        col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(4)
+    def _inject_mark_ui(self) -> None:
+        """Inject the HUD chart + controls + details around the inherited wall.
 
-        self._score_label = QLabel("")
-        self._score_label.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {T.TRACKING};")
-        self._results_label = QLabel("")
-        self._results_label.setWordWrap(True)
-        self._results_label.setStyleSheet(f"color: {T.CURRENT.subtext};")
+        The chart and controls go above the central CameraWall; the per-stream
+        details panel rides in a right dock (replacing the inherited camera-info
+        tab content for the Mark context).  Tile selection (inherited) drives the
+        details panel via :meth:`_on_camera_selected`.
+        """
+        self._chart = _MarkRampChart()
+        self._controls = MarkControlPanel()
+        self._controls.startClicked.connect(self.start_run)
+        self._controls.stopClicked.connect(self.stop_run)
 
-        open_row = QHBoxLayout()
-        self._open_folder_btn = QPushButton("Open results folder")
-        self._open_folder_btn.clicked.connect(self._open_results_folder)
-        open_row.addWidget(self._open_folder_btn)
-        open_row.addStretch(1)
+        # Insert chart + controls at the TOP of the inherited central column,
+        # above the CameraWall (index 0/1 keep the startup banner first).
+        central = self.centralWidget()
+        layout = central.layout() if central is not None else None
+        if isinstance(layout, QVBoxLayout):
+            layout.insertWidget(1, self._chart)
+            layout.insertWidget(2, self._controls)
 
-        col.addWidget(self._score_label)
-        col.addWidget(self._results_label)
-        col.addLayout(open_row)
-        self._results_panel.setVisible(False)
-        return self._results_panel
+        # Replace the right "Camera Info" dock content with the Mark details panel.
+        self._details = MarkDetailsPanel(self._engine.client)
+        info_dock = self._docks.get("camera_info")
+        if isinstance(info_dock, QDockWidget):
+            info_dock.setWidget(self._details)
+            info_dock.setWindowTitle("Details")
+            info_dock.setVisible(True)
+            info_dock.raise_()
 
-    # ── run lifecycle ───────────────────────────────────────────────────────────
+    def _on_camera_selected(self, camera_id: str) -> None:
+        # Drive the Mark details panel from the inherited tile-selection slot.
+        self._selected_camera = camera_id
+        details = getattr(self, "_details", None)
+        if details is not None:
+            details.set_camera(camera_id)
+
+    def _start_pump(self) -> None:
+        import os
+
+        from PySide6.QtCore import QTimer
+
+        self._pump = QTimer(self)
+        self._pump.setInterval(33)  # ~30 Hz
+        self._pump.timeout.connect(self._engine.tick)
+        self._pump.start()
+        # Offscreen lifecycle tests construct the window to poke private state /
+        # drive fake signals; they set this flag so the real Supervisor (model
+        # loading + staged camera open) never spins up.
+        if os.environ.get("AUTOPTZ_MARK_NO_AUTOSTART", "").strip().lower() not in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
+            self._engine.start()
+
+    # ── run lifecycle ────────────────────────────────────────────────────────────
 
     def start_run(self) -> None:
         if self._controller is not None:
@@ -246,22 +266,15 @@ class MarkWindow(QMainWindow):
 
         self._result = None
         self._chart.set_steps([], self._session.floor_fps)
-        self._results_panel.setVisible(False)
-        self._start_btn.setEnabled(False)
-        self._stop_btn.setEnabled(True)
-        self._status_label.setText("Starting AutoPTZ Mark…")
-
+        self._controls.set_running(True)
+        self._controls.set_verdict("Starting…")
         controller = MarkRampController(
             profile=self._session.profile,
             floor_fps=self._session.floor_fps,
-            max_cameras=self._session.max_cameras,
+            max_cameras=self._controls.selected_max_cameras(),
             dwell_s=self._session.dwell_s,
             sample_factory=self._build_sample_factory(),
-            # Drive the SAME EngineClient our CameraWall is bound to so the
-            # synthetic cameras register on it and the tiles + frames render
-            # during the ramp (the default sampler would otherwise build a
-            # private client the wall never observes).
-            client=self._client,
+            client=self._engine.client,  # ISOLATED client the wall is bound to
         )
         controller.progress.connect(self._on_progress)
         controller.step_completed.connect(self._on_step)
@@ -273,48 +286,17 @@ class MarkWindow(QMainWindow):
     def stop_run(self) -> None:
         if self._controller is not None:
             self._controller.stop()
-            self._status_label.setText("Stopping…")
-        self._stop_btn.setEnabled(False)
-
-    def return_to_app(self) -> None:
-        from autoptz.ui.mark_session import clear_mark_session, relaunch
-
-        if self._store is not None:
-            try:
-                clear_mark_session(self._store)
-            except Exception:  # noqa: BLE001
-                log.debug("clear_mark_session failed", exc_info=True)
-        try:
-            relaunch(mark=False)
-        except Exception:  # noqa: BLE001
-            log.exception("relaunch to normal app failed")
-        self.close()
-
-    def closeEvent(self, event: Any) -> None:  # noqa: N802 — Qt override
-        """Stop + join any in-flight ramp before the window is destroyed.
-
-        Without this, closing mid-run would drop the controller ref while its
-        QThread is still executing → "QThread: Destroyed while thread is running".
-        """
-        controller = self._controller
-        if controller is not None:
-            try:
-                controller.stop()
-                controller.wait(5000)
-            except Exception:  # noqa: BLE001
-                log.debug("controller stop/wait on close failed", exc_info=True)
-            self._controller = None
-        super().closeEvent(event)
+            self._controls.set_verdict("Stopping…")
 
     def _build_sample_factory(self) -> Any:
         """Return the controller's ``sample_factory`` (or None for the default).
 
         ``None`` → :class:`MarkRampController` builds the real ``_SupervisorSampler``
-        on the window's client (synthetic in-process cameras).  For ``source ==
+        on the isolated client (synthetic in-process cameras).  For ``source ==
         "ndi"`` (and cyndilib present), return a zero-arg factory that builds a
         :class:`MarkNDIFleetSampler` so a real ``MarkNDIFleet`` is broadcast and
-        ingested through the live NDIAdapter on the window's client.  If cyndilib
-        is unavailable we fall back to the synthetic default (the pre-flight dialog
+        ingested through the live NDIAdapter on the isolated client.  If cyndilib
+        is unavailable we fall back to the synthetic default (the control panel
         already disables the NDI radio in that case).
         """
         if self._session.source != "ndi":
@@ -329,45 +311,44 @@ class MarkWindow(QMainWindow):
             return ndi_sample_factory(
                 self._session.profile,
                 self._session.dwell_s,
-                client=self._client,
-                max_cameras=self._session.max_cameras,
+                client=self._engine.client,
+                max_cameras=self._controls.selected_max_cameras(),
             )
 
         return factory
 
-    # ── controller slots ────────────────────────────────────────────────────────
+    # ── controller slots ─────────────────────────────────────────────────────────
 
     def _on_progress(self, step_index: int, total: int, eta_s: float) -> None:
-        self._status_label.setText(f"Ramping… step {step_index} of {total}")
-        self._eta_label.setText(f"ETA: ~{int(round(eta_s))} s")
+        self._controls.set_verdict(
+            f"Ramping… step {step_index} of {total} (ETA ~{int(round(eta_s))} s)"
+        )
 
     def _on_step(self, step: StepResult) -> None:
         self._chart._steps.append(step)
         self._chart.set_steps(self._chart._steps, self._session.floor_fps)
         if step.per_camera_fps:
-            self._fps_label.setText(
-                f"{step.cameras} cam(s): min {step.min_fps:.1f} fps / mean {step.mean_fps:.1f} fps"
-            )
+            verb = "sustaining" if step.sustained else "dropped at"
+            self._controls.set_verdict(f"{verb} {step.cameras} cam(s) @ {step.min_fps:.1f} fps")
 
     def _on_finished(self, result: BenchmarkResult) -> None:
         self._result = result
         self._teardown_controller()
-        self._start_btn.setEnabled(True)
-        self._stop_btn.setEnabled(False)
+        self._controls.set_running(False)
         self._chart.set_steps(list(result.steps) or self._chart._steps, result.floor_fps)
-        self._status_label.setText("AutoPTZ Mark complete.")
-        self._eta_label.setText("")
+        self._controls.set_verdict(
+            f"Done — sustained {result.sustained_cameras} cam(s) "
+            f"@ ≥{result.floor_fps:.0f} fps (score {result.score})."
+        )
         self._persist_result(result)
-        self._populate_results(result)
 
     def _on_error(self, message: str) -> None:
         self._teardown_controller()
-        self._start_btn.setEnabled(True)
-        self._stop_btn.setEnabled(False)
+        self._controls.set_running(False)
         if message.lower() == "cancelled":
-            self._status_label.setText("AutoPTZ Mark stopped.")
+            self._controls.set_verdict("Stopped.")
         else:
-            self._status_label.setText(f"AutoPTZ Mark error: {message}")
+            self._controls.set_verdict(f"Error: {message}")
 
     # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -377,9 +358,7 @@ class MarkWindow(QMainWindow):
         ``finished``/``error`` are emitted from inside the worker's ``_run`` (it
         calls ``thread.quit()`` in its ``finally`` *after* emitting), so when this
         slot fires the QThread may still be unwinding its event loop.  We wait for
-        it to truly finish before releasing the last strong ref — dropping it
-        mid-run would let the QThread be destroyed while running and abort.  The
-        controller self-deletes via ``thread.finished -> deleteLater``.
+        it to truly finish before releasing the last strong ref.
         """
         controller = self._controller
         self._controller = None
@@ -393,19 +372,10 @@ class MarkWindow(QMainWindow):
         from autoptz.benchmark.results import save_mark_result
 
         try:
-            path, _bundle = save_mark_result([result], store=self._store)
+            path, _bundle = save_mark_result([result], store=self._engine.store)
             self._benchmarks_dir = path.parent
         except Exception:  # noqa: BLE001
             log.exception("Failed to persist AutoPTZ Mark result")
-
-    def _populate_results(self, result: BenchmarkResult) -> None:
-        self._score_label.setText(f"Score: {result.score}")
-        self._results_label.setText(
-            f"Profile: {result.profile} · sustained {result.sustained_cameras} camera(s) "
-            f"@ ≥{result.floor_fps:.0f} fps (min {result.min_fps_at_sustained:.1f} fps "
-            f"at that count) · est. max {result.sustained_cameras} cameras."
-        )
-        self._results_panel.setVisible(True)
 
     def _open_results_folder(self) -> None:
         from PySide6.QtCore import QUrl
@@ -421,22 +391,58 @@ class MarkWindow(QMainWindow):
             log.debug("could not open results folder", exc_info=True)
 
     def _refresh_idle_status(self) -> None:
-        self._status_label.setText(
-            f"Ready — profile {self._session.profile}, up to {self._session.max_cameras} cameras."
+        self._controls.set_verdict(
+            f"Ready — profile {self._session.profile}, up to "
+            f"{self._controls.selected_max_cameras()} cameras."
         )
         self._chart.set_steps([], self._session.floor_fps)
+
+    # ── exit / lifecycle ─────────────────────────────────────────────────────────
+
+    def request_return(self) -> None:
+        """Deliberate Return-to-AutoPTZ: emit the resume signal (not a quit)."""
+        self._returning = True
+        self.returnToAppRequested.emit()
+
+    def request_quit(self) -> None:
+        """Deliberate Quit-AutoPTZ from the Mark window."""
+        self._returning = True
+        self.quitRequested.emit()
+
+    def closeEvent(self, event: Any) -> None:  # noqa: N802 — Qt override
+        """Stop the pump FIRST, then the controller, then the isolated engine.
+
+        Closing NEVER relaunches.  An OS-window close (no deliberate return/quit)
+        emits :attr:`closedUnexpectedly` so the owner can route it through the same
+        exit flow (default: Return) instead of silently killing the app.
+        """
+        try:
+            pump = getattr(self, "_pump", None)
+            if pump is not None:
+                pump.stop()
+        except Exception:  # noqa: BLE001
+            log.debug("mark pump stop failed", exc_info=True)
+        controller = self._controller
+        if controller is not None:
+            try:
+                controller.stop()
+                controller.wait(5000)
+            except Exception:  # noqa: BLE001
+                log.debug("controller stop/wait on close failed", exc_info=True)
+            self._controller = None
+        try:
+            self._engine.stop()
+        except Exception:  # noqa: BLE001
+            log.debug("mark engine stop failed", exc_info=True)
+        if not self._returning:
+            self.closedUnexpectedly.emit()
+        super().closeEvent(event)
 
     # ── test seams ───────────────────────────────────────────────────────────────
 
     @classmethod
     def _wall_type(cls) -> type:
         return CameraWall
-
-    def _status_text(self) -> str:
-        return self._status_label.text()
-
-    def _results_text(self) -> str:
-        return f"{self._score_label.text()} {self._results_label.text()}"
 
     def _score_value(self) -> float | None:
         return None if self._result is None else self._result.score
