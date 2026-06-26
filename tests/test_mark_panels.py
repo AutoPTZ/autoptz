@@ -1,4 +1,10 @@
-"""MarkControlPanel + MarkDetailsPanel (offscreen): signals, NDI gating, verdict, empty state."""
+"""MarkControlPanel + MarkDetailsPanel (offscreen): simplified controls + details.
+
+The control panel is trimmed to the demo essentials: a live verdict/progress
+line, a Stop button, and an "Exit Mark…" button.  The redundant Source/Cameras
+re-ask (set in the pre-flight) is gone — there is no Start button (the ramp
+auto-starts) and no source radios / camera spinbox.
+"""
 
 from __future__ import annotations
 
@@ -12,18 +18,12 @@ def qtapp():
     yield QApplication.instance() or QApplication([])
 
 
-def test_control_panel_emits_start_and_reports_verdict(qtapp) -> None:
+def test_control_panel_reports_verdict(qtapp) -> None:
     from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
 
     p = MarkControlPanel()
-    seen = []
-    p.startClicked.connect(lambda: seen.append("start"))
-    p._start_btn.click()
-    assert seen == ["start"]
     p.set_verdict("sustaining 4 cams @ 28.3 fps")
     assert "sustaining 4 cams" in p._verdict_label.text()
-    p.set_running(True)
-    assert not p._start_btn.isEnabled() and p._stop_btn.isEnabled()
     p.deleteLater()
 
 
@@ -36,6 +36,18 @@ def test_control_panel_emits_stop(qtapp) -> None:
     p.set_running(True)
     p._stop_btn.click()
     assert seen == ["stop"]
+    p.deleteLater()
+
+
+def test_control_panel_stop_enabled_only_while_running(qtapp) -> None:
+    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+
+    p = MarkControlPanel()
+    assert not p._stop_btn.isEnabled()  # idle
+    p.set_running(True)
+    assert p._stop_btn.isEnabled()
+    p.set_running(False)
+    assert not p._stop_btn.isEnabled()
     p.deleteLater()
 
 
@@ -53,36 +65,15 @@ def test_control_panel_exit_button_stays_enabled_while_running(qtapp) -> None:
     p.deleteLater()
 
 
-def test_control_panel_set_max_cameras_caps_spin(qtapp) -> None:
+def test_control_panel_has_no_source_or_camera_controls(qtapp) -> None:
+    from PySide6.QtWidgets import QRadioButton, QSpinBox
     from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
 
     p = MarkControlPanel()
-    p.set_max_cameras(4)
-    # Seeds the value AND caps the maximum so the ramp can't exceed the pre-added
-    # wall (one source of truth for the camera count).
-    assert p.selected_max_cameras() == 4
-    assert p._spin.maximum() == 4
-    p._spin.setValue(99)  # clamped to the new maximum
-    assert p.selected_max_cameras() == 4
-    p.deleteLater()
-
-
-def test_control_panel_reports_selected_source_and_count(qtapp) -> None:
-    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
-
-    p = MarkControlPanel()
-    assert p.selected_source() == "synthetic"
-    p._spin.setValue(5)
-    assert p.selected_max_cameras() == 5
-    p.deleteLater()
-
-
-def test_control_panel_gates_ndi_when_unavailable(qtapp, monkeypatch) -> None:
-    import autoptz.ui.widgets.mark_control_panel as mod
-
-    monkeypatch.setattr(mod, "ndi_sim_available", lambda: False)
-    p = mod.MarkControlPanel()
-    assert not p._ndi_radio.isEnabled()
+    # The redundant pre-flight re-ask (Synthetic/NDI radios + camera spinbox) is gone.
+    assert not p.findChildren(QSpinBox)
+    assert not p.findChildren(QRadioButton)
+    assert not hasattr(p, "_start_btn")
     p.deleteLater()
 
 

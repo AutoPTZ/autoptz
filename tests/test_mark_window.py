@@ -68,13 +68,47 @@ def test_wall_bound_to_isolated_client(qtapp) -> None:
     win.deleteLater()
 
 
-def test_menus_hidden_except_about(qtapp) -> None:
+def test_wall_binds_factory_frame_source_in_production(qtapp) -> None:
+    """The blank-tile fix: with no explicit frame_source (the production path),
+    the wall MUST bind to the Mark engine's own ShmFrameSource — not the main
+    app's (which is attached to the MAIN engine's shm, so tiles stayed blank)."""
+    from autoptz.ui.widgets.mark_window import MarkWindow
+
+    win = MarkWindow(session=MarkSession(max_cameras=3, dwell_s=0.0))  # frame_source=None
+    try:
+        assert win._frames is win._engine.frame_source
+        assert win._wall._frames is win._engine.frame_source
+    finally:
+        win.close()
+
+
+def test_camera_engine_menus_hidden_view_and_help_kept(qtapp) -> None:
     from PySide6.QtWidgets import QMenu
 
     win = _win(qtapp)
     titles = [m.title().replace("&", "") for m in win.menuBar().findChildren(QMenu)]
+    # Basic shell menus stay (View + Appearance/theme; Help with About).
     assert any("Help" in t for t in titles)
-    assert not any(t in ("Engine", "Cameras", "View") for t in titles)
+    assert any("View" in t for t in titles)
+    assert any("Appearance" in t for t in titles)
+    # Camera/engine management menus are gone in the demo.
+    assert not any(t in ("Engine", "Cameras") for t in titles)
+    win.deleteLater()
+
+
+def test_help_menu_has_about_mark(qtapp) -> None:
+    win = _win(qtapp)
+    labels = [a.text().replace("&", "") for a in win.menuBar().actions()]
+    # Collect leaf action texts across the whole menu bar.
+    from PySide6.QtWidgets import QMenu
+
+    leaf = [
+        a.text()
+        for m in win.menuBar().findChildren(QMenu)
+        for a in m.actions()
+        if a.text()
+    ]
+    assert any("About AutoPTZ Mark" in t for t in leaf)
     win.deleteLater()
 
 
@@ -91,6 +125,39 @@ def test_tile_context_menu_disabled_in_mark(qtapp) -> None:
     win = _win(qtapp)
     assert win._wall._context_menu_enabled is False
     win.deleteLater()
+
+
+def test_no_autostart_env_skips_ramp_on_show(qtapp) -> None:
+    # With AUTOPTZ_MARK_NO_AUTOSTART set (the autouse fixture), showing the window
+    # must NOT auto-start the ramp — the controller stays None.
+    win = _win(qtapp)
+    try:
+        win.show()
+        qtapp.processEvents()
+        assert win._controller is None
+    finally:
+        win.close()
+
+
+def test_show_autostarts_ramp(qtapp, monkeypatch) -> None:
+    # Showing the window auto-starts the ramp (start_run is invoked) — the user no
+    # longer clicks Start.  Built with the no-autostart fixture so the REAL engine
+    # never spins up; we then clear the flag and drive showEvent to exercise the
+    # auto-start path with start_run stubbed.
+    win = _win(qtapp)  # constructed under AUTOPTZ_MARK_NO_AUTOSTART → engine idle
+    started = {"n": 0}
+    monkeypatch.setattr(win, "start_run", lambda: started.__setitem__("n", started["n"] + 1))
+    monkeypatch.delenv("AUTOPTZ_MARK_NO_AUTOSTART", raising=False)
+    try:
+        win.show()
+        qtapp.processEvents()  # the auto-start is deferred one event-loop turn
+        assert started["n"] == 1
+        # One-shot: showing again does not re-trigger the ramp.
+        win.show()
+        qtapp.processEvents()
+        assert started["n"] == 1
+    finally:
+        win.close()
 
 
 def test_return_signal_and_no_relaunch_on_close(qtapp, monkeypatch) -> None:
@@ -221,12 +288,15 @@ def test_log_handler_detached_on_close(qtapp) -> None:
 # ── Finding #3: single engine stack + reconciled camera count ─────────────────
 
 
-def test_control_spin_seeded_from_session_max_cameras(qtapp) -> None:
-    """The control panel's camera count is seeded from session.max_cameras (was a
-    fixed default of 8), so the SAME number drives the pre-added wall and ramp."""
+def test_session_is_single_source_of_camera_count(qtapp) -> None:
+    """The session's max_cameras is the single source of truth for the ramp cap.
+
+    The control panel no longer re-asks the count (the pre-flight set it), so the
+    engine cap is read straight from the session — not a panel spinbox."""
     win = _win(qtapp)  # _win builds MarkSession(max_cameras=3)
     try:
-        assert win._controls.selected_max_cameras() == 3
+        assert win._session.max_cameras == 3
+        assert win._engine.max_cameras == 3
     finally:
         win.close()
 

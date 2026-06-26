@@ -33,7 +33,7 @@ import logging
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
     QDockWidget,
@@ -46,11 +46,28 @@ from autoptz.benchmark.runner import BenchmarkResult, StepResult
 from autoptz.ui import theme as T
 from autoptz.ui.mark_session import MarkSession
 from autoptz.ui.widgets.camera_wall import CameraWall
-from autoptz.ui.widgets.main_window import MainWindow, _action
+from autoptz.ui.widgets.main_window import MainWindow, _action, _safe
 from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
 from autoptz.ui.widgets.mark_details_panel import MarkDetailsPanel
 
 log = logging.getLogger(__name__)
+
+
+def _no_autostart() -> bool:
+    """True when ``AUTOPTZ_MARK_NO_AUTOSTART`` is set (offscreen tests).
+
+    Tests construct the window to poke private state / drive fake signals; this
+    flag keeps both the real Supervisor (model loading + staged camera open) AND
+    the auto-started ramp from spinning up.
+    """
+    import os
+
+    return os.environ.get("AUTOPTZ_MARK_NO_AUTOSTART", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 class _MarkRampChart(QWidget):
@@ -190,7 +207,10 @@ class MarkWindow(MainWindow):
             context_menu_enabled=False,
         )
         self.setWindowTitle("AutoPTZ Mark")  # NO version (lives in About)
-        self.resize(1200, 780)
+        # Auto-size so the whole wall + panels fit (was a fixed 1200×780 that
+        # cramped/scrolled the content); the showEvent maximizes once on first show.
+        self.resize(1280, 820)
+        self._autostarted_ramp = False
         self._inject_mark_ui()
         self._hide_nonessential_docks()
         self._start_pump()
@@ -201,14 +221,55 @@ class MarkWindow(MainWindow):
     def _should_poll_usb(self) -> bool:
         return False
 
-    def _build_menus(self) -> None:  # override: Help / About + Exit
+    def _build_menus(self) -> None:  # override: View (basics) + Help (About/Exit)
+        """A trimmed menu bar: basic View shell + Help.
+
+        Mark keeps the genuinely useful shell menus — View → Appearance (theme),
+        UI Scale, and the panel toggles — but HIDES the camera/engine-management
+        menus (Cameras, Engine, Overlays, Layouts) the inherited
+        :meth:`MainWindow._build_menus` builds, since the ramp owns the engine and
+        the demo viewer must not mutate it.  Help adds About AutoPTZ Mark + a
+        second path to the deliberate Return / Quit exit.
+        """
         bar = self.menuBar()
+
+        view = bar.addMenu("&View")
+        self._build_appearance_menu(view)
+        self._build_scale_menu(view)
+        view.addSeparator()
+        # Panel toggles (Properties is hidden in Mark, but Details + Logs are real).
+        panels = view.addMenu("Panels")
+        for key in ("camera_info", "logs"):
+            dock = self._docks.get(key)
+            if dock is not None:
+                panels.addAction(dock.toggleViewAction())
+
         helpm = bar.addMenu("&Help")
         helpm.addAction(_action(self, "About AutoPTZ Mark", self._show_about_mark))
         helpm.addSeparator()
         # A second, always-visible path to the deliberate Return / Quit choice
         # (the primary one is the control panel's "Exit Mark…" button).
         helpm.addAction(_action(self, "Exit AutoPTZ Mark…", self._request_exit))
+
+    def _build_appearance_menu(self, view: Any) -> None:
+        """View → Appearance: the light/dark/system theme picker (inherited concept)."""
+        appearance = view.addMenu("Appearance")
+        appearance.setToolTipsVisible(True)
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        current = _safe(lambda: str(self._client.themeMode), "dark")
+        tips = {
+            "system": "Follow the OS light/dark setting.",
+            "dark": "Dark broadcast palette (easiest on the eyes).",
+            "light": "Light palette for bright rooms.",
+        }
+        for mode, label in (("system", "System"), ("dark", "Dark"), ("light", "Light")):
+            act = QAction(label, self, checkable=True)
+            act.setChecked(mode == current)
+            act.setToolTip(tips[mode])
+            act.triggered.connect(lambda _c, m=mode: self._client.setTheme(m))
+            group.addAction(act)
+            appearance.addAction(act)
 
     def _refresh_engine_state(self) -> None:
         # The Mark window has no Engine menu (the ramp owns the engine), so the
@@ -239,11 +300,8 @@ class MarkWindow(MainWindow):
         """
         self._chart = _MarkRampChart()
         self._controls = MarkControlPanel()
-        # Keep the control-panel camera count in lockstep with the session so the
-        # SAME number drives the pre-added wall and the ramp (was: spin default 8
-        # vs session.max_cameras 16 → two different counts).
-        self._controls.set_max_cameras(self._session.max_cameras)
-        self._controls.startClicked.connect(self.start_run)
+        # The control panel no longer re-asks source/count (the pre-flight set them)
+        # and has no Start button — the ramp auto-starts.  Only Stop + Exit are wired.
         self._controls.stopClicked.connect(self.stop_run)
         self._controls.exitClicked.connect(self._request_exit)
 
@@ -272,27 +330,38 @@ class MarkWindow(MainWindow):
             details.set_camera(camera_id)
 
     def _start_pump(self) -> None:
-        import os
-
         from PySide6.QtCore import QTimer
 
         self._pump = QTimer(self)
         self._pump.setInterval(33)  # ~30 Hz
         self._pump.timeout.connect(self._engine.tick)
         self._pump.start()
-        # Offscreen lifecycle tests construct the window to poke private state /
-        # drive fake signals; they set this flag so the real Supervisor (model
-        # loading + staged camera open) never spins up.
-        if os.environ.get("AUTOPTZ_MARK_NO_AUTOSTART", "").strip().lower() not in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
+        if not _no_autostart():
             self._engine.start()
             # Auto-track a (seeded) target per camera so Center Stage visibly engages
             # on the full profile; a no-op for the streams (no-inference) profile.
             self._engine.auto_track_targets(seed=0xA17)
+
+    def showEvent(self, event: Any) -> None:  # noqa: N802
+        """Maximize the window and AUTO-START the ramp on first show.
+
+        The Mark window opens full-screen-sized so the whole wall + panels fit
+        (no cramped/scrolled content), and the benchmark ramp starts on its own —
+        the user no longer has to click Start.  The auto-start is one-shot
+        (``_autostarted_ramp``) and skipped under ``AUTOPTZ_MARK_NO_AUTOSTART`` so
+        offscreen tests can drive the run by hand.  ``MainWindow.showEvent`` (theme
+        tab restyle, geometry) still runs via ``super()``.
+        """
+        super().showEvent(event)
+        self.showMaximized()
+        if self._autostarted_ramp or _no_autostart():
+            return
+        self._autostarted_ramp = True
+        from PySide6.QtCore import QTimer
+
+        # Defer one turn so first paint (and the engine's staged camera open)
+        # isn't blocked by spinning up the ramp controller synchronously.
+        QTimer.singleShot(0, self.start_run)
 
     # ── run lifecycle ────────────────────────────────────────────────────────────
 
@@ -308,7 +377,7 @@ class MarkWindow(MainWindow):
         controller = MarkRampController(
             profile=self._session.profile,
             floor_fps=self._session.floor_fps,
-            max_cameras=self._controls.selected_max_cameras(),
+            max_cameras=self._session.max_cameras,
             dwell_s=self._session.dwell_s,
             sample_factory=self._build_sample_factory(),
             client=self._engine.client,  # ISOLATED client the wall is bound to
@@ -462,7 +531,7 @@ class MarkWindow(MainWindow):
     def _refresh_idle_status(self) -> None:
         self._controls.set_verdict(
             f"Ready — profile {self._session.profile}, up to "
-            f"{self._controls.selected_max_cameras()} cameras."
+            f"{self._session.max_cameras} cameras."
         )
         self._chart.set_steps([], self._session.floor_fps)
 
