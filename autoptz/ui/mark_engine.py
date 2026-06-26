@@ -135,9 +135,7 @@ class MarkEngineFactory:
                 self._ndi_fleet = MarkNDIFleet(n)
                 self._ndi_names = list(self._ndi_fleet.names())
                 if self._ndi_names:
-                    self._camera_ids.append(
-                        _add_ndi_camera(self._client, self._ndi_names[0], 0)
-                    )
+                    self._camera_ids.append(_add_ndi_camera(self._client, self._ndi_names[0], 0))
                 return
             log.warning("NDI requested but cyndilib unavailable; using synthetic cameras.")
         w, h = self._session.resolution_size()
