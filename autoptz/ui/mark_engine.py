@@ -48,6 +48,11 @@ class MarkEngineFactory:
         # Throwaway store on a temp FILE (never :memory:, never default_db_path()).
         self._tmpdir = Path(tempfile.mkdtemp(prefix="autoptz-mark-"))
         self._store = ConfigStore(db_path=self._tmpdir / "mark.db", debounce_s=0.0)
+        # Prime the chosen detector tier on the ISOLATED store BEFORE the client loads
+        # it (EngineClient reads "detector_model_tier" at construction).  The session
+        # maps the model choice → tier ("auto"/"nano"/"small" → auto/fast/balanced),
+        # so the supervisor picks it up at start without touching the main app's tier.
+        self._store.set_setting("detector_model_tier", session.detector_tier())
         self._client = EngineClient(store=self._store)
         factory = supervisor_factory or _default_supervisor_factory
         self._supervisor = factory(self._client, self._store)

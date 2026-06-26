@@ -99,6 +99,28 @@ def test_add_next_camera_grows_wall_and_caps_at_max():
         eng.stop()
 
 
+def test_model_choice_primes_detector_tier():
+    """The session model selects the isolated client's detector tier.
+
+    "auto" → "auto" (default), "nano" → "fast", "small" → "balanced".  The tier is
+    set on the isolated store BEFORE the client loads it, so the supervisor picks
+    it up at start without touching the main app's tier.
+    """
+    from autoptz.ui import mark_engine
+
+    for model, expected in (("auto", "auto"), ("nano", "fast"), ("small", "balanced")):
+        eng = mark_engine.MarkEngineFactory(
+            MarkSession(source="synthetic", max_cameras=2, model=model),
+            supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+        )
+        try:
+            assert eng.client.getDetectorModelTier() == expected
+            # Persisted on the ISOLATED store only.
+            assert eng.store.get_setting("detector_model_tier", "auto") == expected
+        finally:
+            eng.stop()
+
+
 def test_synthetic_cameras_use_session_resolution():
     """The pre-added + grown synthetic cameras carry the session's resolution size."""
     from autoptz.ui import mark_engine
