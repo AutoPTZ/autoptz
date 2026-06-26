@@ -979,7 +979,15 @@ class Supervisor:
         skipped here, keeping the default path free of any cross-thread supervisor
         -lock traffic.  Best-effort per sibling; one failing relay never blocks the
         others.
+
+        The early-return on the disabled path is intentionally lock-free: when
+        process-per-camera is off every worker shares the same in-process gallery
+        and no relay is necessary, so we avoid touching the supervisor RLock at all.
         """
+        from autoptz.engine.process_worker import process_per_camera_enabled
+
+        if not process_per_camera_enabled():
+            return
         with self._lock:
             siblings = [
                 (cid, w)

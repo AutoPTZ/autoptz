@@ -26,6 +26,13 @@ via a parent-side relay: a "Person N" harvested in one child is forwarded over i
 ``ingest_identity`` command so the same face becomes matchable on every camera.
 Residual gap: a record harvested while a sibling is still spawning is dropped (it
 re-harvests on that sibling's next clean frame).
+Template-accrual gap: the relay fires on initial harvest and enroll
+(``_push_identity``) but NOT on ``add_embedding`` — additional templates accrued
+for an already-harvested Person N are not forwarded to siblings.  Siblings
+therefore hold only the initial template until they re-harvest that face
+independently.  This is a completeness gap, not a correctness bug: labeled
+identities converge via the shared SQLite DB, and unlabeled ones still match on
+the initial template.
 
 **RAM trade-off:** an ORT ``InferenceSession`` is not picklable, so each child
 builds **its own** inference pool — roughly one model set per camera.  That extra

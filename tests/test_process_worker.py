@@ -74,6 +74,68 @@ class TestEnabledFlag:
             assert process_per_camera_enabled() is True
 
 
+class TestRelayIdentityLockFree:
+    """_relay_identity_to_siblings must be a lock-free no-op in threaded (default) mode."""
+
+    def _make_supervisor(self, qapp):  # noqa: ANN001
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        client = EngineClient()
+        sup = Supervisor(client, store=None)
+        sup._ensure_identity_service = lambda: None  # type: ignore[method-assign]
+        sup._ensure_inference_pool = lambda: None  # type: ignore[method-assign]
+        return sup
+
+    def test_relay_is_noop_when_disabled(self, qapp, monkeypatch) -> None:
+        """With AUTOPTZ_PROCESS_PER_CAMERA unset the relay returns immediately without
+        touching any worker, confirming the lock-free early-return path."""
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.delenv("AUTOPTZ_PROCESS_PER_CAMERA", raising=False)
+        sup = self._make_supervisor(qapp)
+
+        # Add a fake process worker so we can confirm it is never called.
+        fake_worker = MagicMock()
+        fake_worker._is_process_worker = True
+        sup._workers["cam-other"] = fake_worker
+
+        sentinel = object()
+        # Patch at the source module so the local import inside the method picks up the mock.
+        with patch(
+            "autoptz.engine.process_worker.process_per_camera_enabled",
+            return_value=False,
+        ) as mock_gate:
+            sup._relay_identity_to_siblings("cam-source", sentinel)
+            mock_gate.assert_called_once()
+
+        # The fake worker must never have been touched.
+        fake_worker.ingest_identity.assert_not_called()
+
+    def test_relay_skips_threaded_workers(self, qapp, monkeypatch) -> None:
+        """Even if process-per-camera is enabled, threaded CameraWorkers are skipped
+        (they have no ``_is_process_worker`` flag) — relay is a structural no-op for them."""
+        monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+        sup = self._make_supervisor(qapp)
+
+        # Install a fake threaded worker (no _is_process_worker attr).
+        class _FakeThreadedWorker:
+            ingest_calls: list = []
+
+            def ingest_identity(self, record):  # noqa: ANN001
+                self.ingest_calls.append(record)
+
+        fake = _FakeThreadedWorker()
+        sup._workers["cam-other"] = fake
+
+        sentinel = object()
+        sup._relay_identity_to_siblings("cam-source", sentinel)
+        # Threaded worker must NOT have received the relay.
+        assert fake.ingest_calls == [], (
+            "relay incorrectly forwarded identity to a threaded CameraWorker"
+        )
+
+
 class TestHandleProxy:
     """The handle must serialize each supervisor method call onto the command queue
     (post-start), and buffer pre-start feature/defer config into the spec."""
@@ -319,10 +381,13 @@ def test_child_drain_routes_ingest_identity() -> None:
 
 
 class TestIdentityRelay:
-    def test_harvested_identity_relays_to_sibling_not_source(self, qapp) -> None:  # noqa: ANN001
+    def test_harvested_identity_relays_to_sibling_not_source(self, qapp, monkeypatch) -> None:  # noqa: ANN001
         from autoptz.config.models import IdentityRecord
         from autoptz.engine.supervisor import Supervisor
         from autoptz.ui.engine_client import EngineClient
+
+        # Process-per-camera must be enabled so the relay's early-return guard passes.
+        monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
 
         ingested: dict[str, list[str]] = {}
 
