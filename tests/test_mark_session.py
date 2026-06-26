@@ -44,6 +44,37 @@ class TestRoundTrip:
     def test_from_dict_defaults(self) -> None:
         s = MarkSession.from_dict({})
         assert s.profile == "full" and s.source == "synthetic"
+        # Resolution + model have sane defaults (auto model, 720p).
+        assert s.resolution == "720p" and s.model == "auto"
+
+
+class TestResolutionAndModel:
+    def test_resolution_and_model_round_trip(self) -> None:
+        store = _Store()
+        s = MarkSession(resolution="1080p", model="nano")
+        store_mark_session(store, s)
+        # The dict carries the new fields...
+        assert store.kv[MARK_SESSION_KEY]["resolution"] == "1080p"
+        assert store.kv[MARK_SESSION_KEY]["model"] == "nano"
+        # ...and they survive a load round-trip.
+        loaded = load_mark_session(store)
+        assert loaded == s
+        assert loaded.resolution == "1080p" and loaded.model == "nano"
+
+    def test_resolution_size_maps_to_wh(self) -> None:
+        assert MarkSession(resolution="720p").resolution_size() == (1280, 720)
+        assert MarkSession(resolution="1080p").resolution_size() == (1920, 1080)
+        assert MarkSession(resolution="4k").resolution_size() == (3840, 2160)
+        # Unknown / malformed falls back to 720p so the engine never gets a bad size.
+        assert MarkSession(resolution="garbage").resolution_size() == (1280, 720)
+
+    def test_detector_tier_maps_model(self) -> None:
+        # "auto" → default tier; "nano"/"small" → the engine's fast/balanced tiers.
+        assert MarkSession(model="auto").detector_tier() == "auto"
+        assert MarkSession(model="nano").detector_tier() == "fast"
+        assert MarkSession(model="small").detector_tier() == "balanced"
+        # Unknown falls back to auto.
+        assert MarkSession(model="weird").detector_tier() == "auto"
 
 
 class TestGeometryClear:

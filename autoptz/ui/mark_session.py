@@ -16,6 +16,22 @@ from dataclasses import dataclass
 MARK_SESSION_KEY = "mark_session"
 _GEOMETRY_KEYS = ("win_geometry", "win_state")
 
+# Resolution presets → synthetic frame size (w, h).  720p is the default/fallback.
+_RESOLUTION_SIZES: dict[str, tuple[int, int]] = {
+    "720p": (1280, 720),
+    "1080p": (1920, 1080),
+    "4k": (3840, 2160),
+}
+# Model choice → the engine's detector-tier vocabulary.  "auto" keeps the default
+# tier; "nano"/"small" map to the fast/balanced tiers the engine_client already
+# understands (it aliases nano→fast, small→balanced itself, but we normalise here
+# so the Mark engine can prime the tier directly without a round-trip).
+_MODEL_TIERS: dict[str, str] = {
+    "auto": "auto",
+    "nano": "fast",
+    "small": "balanced",
+}
+
 
 @dataclass(frozen=True)
 class MarkSession:
@@ -24,6 +40,8 @@ class MarkSession:
     floor_fps: float = 24.0
     max_cameras: int = 16
     dwell_s: float = 15.0
+    resolution: str = "720p"  # "720p" | "1080p" | "4k"
+    model: str = "auto"  # "auto" | "nano" | "small"
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -32,6 +50,8 @@ class MarkSession:
             "floor_fps": self.floor_fps,
             "max_cameras": self.max_cameras,
             "dwell_s": self.dwell_s,
+            "resolution": self.resolution,
+            "model": self.model,
         }
 
     @classmethod
@@ -42,7 +62,17 @@ class MarkSession:
             floor_fps=float(d.get("floor_fps", 24.0)),  # type: ignore[arg-type]
             max_cameras=int(d.get("max_cameras", 16)),  # type: ignore[arg-type]
             dwell_s=float(d.get("dwell_s", 15.0)),  # type: ignore[arg-type]
+            resolution=str(d.get("resolution", "720p")),
+            model=str(d.get("model", "auto")),
         )
+
+    def resolution_size(self) -> tuple[int, int]:
+        """The (width, height) for this session's resolution; 720p on any miss."""
+        return _RESOLUTION_SIZES.get(str(self.resolution).strip().lower(), (1280, 720))
+
+    def detector_tier(self) -> str:
+        """The engine detector tier for this session's model; "auto" on any miss."""
+        return _MODEL_TIERS.get(str(self.model).strip().lower(), "auto")
 
 
 def load_mark_session(store: object) -> MarkSession | None:
