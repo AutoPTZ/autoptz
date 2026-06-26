@@ -958,14 +958,17 @@ class Supervisor:
         """Publish the user's experimental-flag selections into ``os.environ``.
 
         Read once at engine start (from inside :meth:`_apply_hardware_env`, before
-        any worker spawns) so the flags take effect on the next engine run.  For
-        each known flag: set the env var when the saved value differs from the
-        flag's engine default, else pop it so the in-code fallback runs.  Keys in
-        the saved dict that are not env flags (the per-camera ``TrackingConfig``
+        any worker spawns) so the flags take effect on the next engine run.  Only
+        keys the user has actually persisted in the ``experimental_features`` dict
+        are managed: for each such env-flag key, set the env var when the saved
+        value differs from the flag's engine default, or pop it (clearing a stale
+        value from a prior selection) when it equals the default.  Keys in the
+        saved dict that are not env flags (the per-camera ``TrackingConfig``
         defaults) are ignored here — they are consumed when a NEW camera is added.
 
-        Absent / unreadable settings are the feature-inactive baseline: every
-        managed key is popped, leaving today's behaviour unchanged.
+        A key the user never persisted is left UNTOUCHED: an absent / empty /
+        unreadable dict is the feature-inactive baseline, and any env var set
+        directly (e.g. exported by the operator, or by a test) survives unchanged.
         """
         from autoptz.engine.runtime.experimental_flags import EXPERIMENTAL_FLAGS
 
@@ -977,7 +980,10 @@ class Supervisor:
             saved = {}
 
         for flag in EXPERIMENTAL_FLAGS:
-            value = saved.get(flag.env_key, flag.default)
+            if flag.env_key not in saved:
+                # Not persisted by the user → don't clobber a directly-set env var.
+                continue
+            value = saved[flag.env_key]
             if value != flag.default and value not in (None, ""):
                 os.environ[flag.env_key] = str(value)
             else:

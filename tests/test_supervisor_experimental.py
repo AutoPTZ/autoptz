@@ -55,9 +55,22 @@ def test_default_value_pops_existing_env(tmp_path: Any, monkeypatch: Any) -> Non
     assert "AUTOPTZ_PTZ_PUMP" not in os.environ
 
 
-def test_absent_dict_pops_all_managed_keys(tmp_path: Any, monkeypatch: Any) -> None:
+def test_absent_dict_leaves_unmanaged_env_untouched(tmp_path: Any, monkeypatch: Any) -> None:
+    # Feature-inactive baseline: with nothing persisted, a directly-set env var
+    # (exported by the operator, or by another test) is NOT clobbered.  Only keys
+    # the user actually persists in experimental_features are managed.
     monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
     sup, _store = _sup(tmp_path)  # nothing persisted
+    sup._apply_experimental_env()
+    assert os.environ.get("AUTOPTZ_PROCESS_PER_CAMERA") == "1"
+
+
+def test_persisted_default_pops_stale_managed_key(tmp_path: Any, monkeypatch: Any) -> None:
+    # When the user HAS persisted a key at its engine default, a stale env var
+    # from a prior selection is cleared so the in-code fallback runs.
+    monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+    sup, store = _sup(tmp_path)
+    store.set_setting("experimental_features", {"AUTOPTZ_PROCESS_PER_CAMERA": "0"})
     sup._apply_experimental_env()
     assert "AUTOPTZ_PROCESS_PER_CAMERA" not in os.environ
 
