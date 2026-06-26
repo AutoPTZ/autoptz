@@ -97,6 +97,10 @@ class HealthState(str, Enum):
 class HealthInfo(BaseModel):
     state: HealthState = HealthState.OK
     last_error: str | None = None
+    # Observability: seconds since the last completed inference tick while
+    # tracking is active (0.0 when not applicable).  Additive — older UIs ignore
+    # it; diagnostics surface it next to the inference-stall watchdog state.
+    inference_stall_age_s: float = 0.0
 
 
 class RuntimeServiceInfo(BaseModel):

@@ -33,6 +33,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from autoptz.engine.camera_worker import _PREVIEW_H, _PREVIEW_W, CameraWorker
@@ -71,6 +72,16 @@ _HEALTH_SCAN_INTERVAL_S = 2.0  # how often tick() runs the health scan
 _BASE_BACKOFF_S = 1.0  # initial restart back-off
 _MAX_BACKOFF_S = 30.0  # maximum restart back-off (exponential cap)
 _MAX_RESTART_ATTEMPTS = 5  # give up after this many consecutive failures
+# A worker can be ALIVE yet HUNG (capture/inference threads stuck, no telemetry).
+# Treat it as unhealthy and respawn it through the same backoff path once its
+# telemetry is older than this.  Deliberately above the 2.0 s inference-stall
+# threshold so a transient stall (which the worker itself recovers from) does not
+# trigger a process-level restart.
+_WORKER_HANG_S = 5.0
+# Grace window after (re)spawn during which hang detection is suppressed: a fresh
+# worker is opening the camera + building models and legitimately emits no
+# telemetry for a few seconds.  Must exceed worst-case warmup-before-first-frame.
+_WORKER_WARMUP_GRACE_S = 8.0
 
 
 def _log_macos_capture_path() -> None:
@@ -153,12 +164,20 @@ class Supervisor:
         self._last_pump_warn_t = 0.0
 
         # ── worker health monitoring + auto-restart ──────────────────────────────
-        # Per-camera backoff state: cid → (attempts, next_allowed_t).
-        # Cleared when a worker is healthy again or the camera is removed.
-        self._restart_state: dict[str, tuple[int, float]] = {}
+        # Per-camera restart state: cid → (attempts, next_allowed_t, failed).
+        # ``failed`` latches True when attempts hit _MAX_RESTART_ATTEMPTS so the
+        # UI can show a permanent-failure badge.  Cleared on recovery or removal.
+        self._restart_state: dict[str, tuple[int, float, bool]] = {}
         # Monotonic timestamp of the last health scan (throttled to
         # _HEALTH_SCAN_INTERVAL_S so tick() doesn't scan every 50 ms).
         self._last_health_scan_t: float = 0.0
+        # Per-camera monotonic timestamp of the most recent telemetry message,
+        # stamped by the wrapped on_telemetry callback (_make_telemetry_callback).
+        # Used by the health scan to detect a HUNG worker (alive but silent).
+        self._last_telemetry_t: dict[str, float] = {}
+        # Per-camera monotonic spawn timestamp, used to grant a warmup grace
+        # window before hang detection arms (model build emits no telemetry).
+        self._spawn_t: dict[str, float] = {}
 
     # ── lifecycle ───────────────────────────────────────────────────────────────
 
@@ -241,6 +260,9 @@ class Supervisor:
 
             workers = list(self._workers.items())
             self._workers.clear()
+            self._restart_state.clear()
+            self._last_telemetry_t.clear()
+            self._spawn_t.clear()
 
         # Join the pump outside the lock (it may call tick→lock).
         if pump is not None and pump is not threading.current_thread():
@@ -461,6 +483,22 @@ class Supervisor:
 
     # ── worker health monitoring ─────────────────────────────────────────────────
 
+    def _worker_hung(self, cid: str, now: float) -> bool:
+        """True iff an alive worker has gone silent past the warmup grace window.
+
+        Pure predicate (no side effects).  A worker spawned less than
+        ``_WORKER_WARMUP_GRACE_S`` ago is never hung (it is still opening the
+        camera / building models).  Past warmup, the worker is hung iff its most
+        recent telemetry is older than ``_WORKER_HANG_S`` — and a worker that has
+        never reported telemetry at all is anchored to its spawn time, so a
+        worker that never starts streaming is eventually flagged.
+        """
+        spawn_t = self._spawn_t.get(cid)
+        if spawn_t is None or (now - spawn_t) < _WORKER_WARMUP_GRACE_S:
+            return False
+        last_seen = self._last_telemetry_t.get(cid, spawn_t)
+        return (now - last_seen) > _WORKER_HANG_S
+
     def _scan_worker_health(self, now: float) -> None:
         """Check every worker's liveness and restart any that have died.
 
@@ -481,18 +519,25 @@ class Supervisor:
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s is_alive() raised", cid, exc_info=True)
 
-            if alive:
+            hung = alive and self._worker_hung(cid, now)
+            if alive and not hung:
                 # Worker is healthy — clear any stale restart state.
                 self._restart_state.pop(cid, None)
                 continue
+            if hung:
+                log.warning(
+                    "camera_id=%s alive but telemetry stale (>%.1fs) — treating as hung",
+                    cid,
+                    _WORKER_HANG_S,
+                )
 
-            # Worker appears dead.  Check back-off state.
-            attempts, next_allowed_t = self._restart_state.get(cid, (0, 0.0))
+            # Worker appears dead (or hung).  Check back-off state.
+            attempts, next_allowed_t, _failed = self._restart_state.get(cid, (0, 0.0, False))
 
             if attempts >= _MAX_RESTART_ATTEMPTS:
-                # Already gave up — log once (when attempts first hits the cap
-                # the counter was bumped; subsequent scans see == cap, skip).
-                # The "log once" is enforced by the sentinel value stored below.
+                # Already gave up — the permanent-failure ERROR was logged once
+                # when attempts first hit the cap (see the cap branch below); the
+                # latched ``failed`` flag keeps subsequent scans silent.
                 continue
 
             if now < next_allowed_t:
@@ -525,16 +570,23 @@ class Supervisor:
 
             new_attempts = attempts + 1
             backoff = min(_MAX_BACKOFF_S, _BASE_BACKOFF_S * (2 ** (new_attempts - 1)))
-            self._restart_state[cid] = (new_attempts, now + backoff)
 
             if new_attempts >= _MAX_RESTART_ATTEMPTS:
-                log.warning(
-                    "camera_id=%s worker failed %d times — giving up on auto-restart",
+                # Latch the permanent-failure flag so is_camera_failed()/the UI can
+                # surface it, and log a single clear ERROR (future scans hit the
+                # "already gave up" guard above and stay silent).
+                self._restart_state[cid] = (new_attempts, now + backoff, True)
+                log.error(
+                    "camera_id=%s permanently failed: %d auto-restart attempts "
+                    "exhausted — giving up (camera will not be relaunched until "
+                    "removed/re-added)",
                     cid,
                     new_attempts,
                 )
                 # Don't respawn; keep the sentinel so future scans skip this camera.
                 continue
+
+            self._restart_state[cid] = (new_attempts, now + backoff, False)
 
             try:
                 self._spawn_worker(cid)
@@ -589,6 +641,8 @@ class Supervisor:
             worker = self._workers.pop(cid, None)
         # Clear any pending restart state so a removed camera isn't resurrected.
         self._restart_state.pop(cid, None)
+        self._last_telemetry_t.pop(cid, None)
+        self._spawn_t.pop(cid, None)
         if worker is not None:
             try:
                 worker.stop()
@@ -898,6 +952,22 @@ class Supervisor:
             camera_count,
         )
 
+    def _make_telemetry_callback(self, camera_id: str) -> Callable[[Any], None]:
+        """Wrap push_telemetry so the supervisor records a per-camera last-seen time.
+
+        The wrapper stamps a monotonic timestamp into ``_last_telemetry_t`` on
+        every message, then forwards to the UI-facing ``push_telemetry`` unchanged.
+        This keeps the 3-arg worker_factory contract and ``push_telemetry`` itself
+        untouched while giving the health scan a hang signal for BOTH worker types.
+        """
+        push = self._client.push_telemetry
+
+        def _cb(msg: Any) -> None:
+            self._last_telemetry_t[camera_id] = time.monotonic()
+            push(msg)
+
+        return _cb
+
     def _make_worker(self, camera_id: str, config: CameraConfig) -> Any:
         """Build a camera worker — a thread-based one, or (opt-in) a child process.
 
@@ -905,7 +975,7 @@ class Supervisor:
         AND no test/custom worker factory was injected, so the default and all
         tests keep the in-process threaded worker.
         """
-        on_telemetry = self._client.push_telemetry
+        on_telemetry = self._make_telemetry_callback(camera_id)
         from autoptz.engine.process_worker import (
             ProcessWorkerHandle,
             process_per_camera_enabled,
@@ -951,6 +1021,8 @@ class Supervisor:
             if not self._running or camera_id in self._workers:
                 return
             self._workers[camera_id] = worker
+            self._spawn_t[camera_id] = time.monotonic()
+            self._last_telemetry_t.pop(camera_id, None)
             worker_count = len(self._workers)
         log.info(
             "spawned worker camera_id=%s name=%s (workers=%d)",
@@ -1022,6 +1094,15 @@ class Supervisor:
             return None
         with self._lock:
             return self._workers.get(camera_id)
+
+    def is_camera_failed(self, camera_id: str) -> bool:
+        """True iff auto-restart has permanently given up on this camera."""
+        state = self._restart_state.get(camera_id)
+        return bool(state is not None and state[2])
+
+    def failed_cameras(self) -> list[str]:
+        """Camera ids that auto-restart has permanently given up on."""
+        return [cid for cid, st in self._restart_state.items() if st[2]]
 
     def _default_worker_factory(
         self,

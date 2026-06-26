@@ -147,6 +147,48 @@ class TestInferenceStalled:
         assert w._inference_stalled(now=now) is False
 
 
+class TestInferenceStallAge:
+    def _worker(self, **kw: Any):
+        return _make_worker(**kw)
+
+    def test_zero_when_no_inferred_frames(self) -> None:
+        w = self._worker()
+        w._frames_inferred = 0
+        w._last_infer_t = 0.0
+        assert w._inference_stall_age(now=100.0) == 0.0
+
+    def test_zero_when_tracking_disabled(self) -> None:
+        w = self._worker(tracking_on=False)
+        w._frames_inferred = 10
+        w._last_infer_t = 0.0
+        assert w._inference_stall_age(now=100.0) == 0.0
+
+    def test_reports_age_when_running(self) -> None:
+        w = self._worker()
+        w._frames_inferred = 5
+        w._last_infer_t = 90.0
+        assert abs(w._inference_stall_age(now=100.0) - 10.0) < 1e-6
+
+    def test_never_negative(self) -> None:
+        w = self._worker()
+        w._frames_inferred = 5
+        w._last_infer_t = 105.0  # clock skew / future heartbeat
+        assert w._inference_stall_age(now=100.0) == 0.0
+
+
+def test_healthinfo_field_defaults_and_round_trips() -> None:
+    from autoptz.engine.runtime.messages import HealthInfo, TelemetryMsg
+
+    assert HealthInfo().inference_stall_age_s == 0.0
+    msg = TelemetryMsg(
+        camera_id="c1",
+        seq=0,
+        health=HealthInfo(inference_stall_age_s=3.5),
+    )
+    restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+    assert restored.health.inference_stall_age_s == 3.5
+
+
 # ── _apply_inference_watchdog action tests ────────────────────────────────────
 
 

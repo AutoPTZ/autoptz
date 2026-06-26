@@ -12,6 +12,8 @@ from autoptz.engine.supervisor import (
     _BASE_BACKOFF_S,
     _MAX_BACKOFF_S,
     _MAX_RESTART_ATTEMPTS,
+    _WORKER_HANG_S,
+    _WORKER_WARMUP_GRACE_S,
 )
 
 # ── helpers / fakes ──────────────────────────────────────────────────────────
@@ -195,7 +197,7 @@ class TestScanWorkerHealth:
         sup, client, factory_log, cid = _build(qapp)
         try:
             # Seed some restart state.
-            sup._restart_state[cid] = (2, 9999.0)
+            sup._restart_state[cid] = (2, 9999.0, False)
             # Route a RemoveCamera command.
             sup._on_remove_camera(RemoveCameraCmd(camera_id=cid))
             assert cid not in sup._restart_state
@@ -213,7 +215,7 @@ class TestScanWorkerHealth:
                 # Advance well past previous back-off so this attempt always fires.
                 now += _MAX_BACKOFF_S + 1.0
                 sup._scan_worker_health(now)
-                attempts, next_t = sup._restart_state.get(cid, (0, now))
+                attempts, next_t, _f = sup._restart_state.get(cid, (0, now, False))
                 expected_backoff = min(_MAX_BACKOFF_S, _BASE_BACKOFF_S * (2**i))
                 assert abs((next_t - now) - expected_backoff) < 0.01, (
                     f"attempt {i + 1}: expected backoff {expected_backoff}, got {next_t - now}"
@@ -257,12 +259,174 @@ class TestScanWorkerHealth:
             sup._workers[cid]._alive = False
             t_crash = now + 2.0
             sup._scan_worker_health(t_crash)  # attempt 1 fresh start
-            attempts, next_allowed_t = sup._restart_state[cid]
+            attempts, next_allowed_t, _failed = sup._restart_state[cid]
             assert attempts == 1
             # next_allowed_t should reflect _BASE_BACKOFF_S (1 s), not a 2^2 delay.
             assert abs((next_allowed_t - t_crash) - _BASE_BACKOFF_S) < 0.01, (
                 f"expected base backoff {_BASE_BACKOFF_S} s after recovery, "
                 f"got {next_allowed_t - t_crash:.3f} s"
             )
+        finally:
+            sup.stop()
+
+
+class TestWorkerTelemetryTracking:
+    def test_telemetry_callback_stamps_last_seen_and_forwards(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            # The wrapped callback the factory received is the supervisor's wrapper,
+            # not push_telemetry directly.
+            wrapped = factory_log[0].on_telemetry
+            before = sup._last_telemetry_t.get(cid)
+            # push_telemetry needs a real TelemetryMsg; build a minimal one.
+            from autoptz.engine.runtime.messages import TelemetryMsg
+
+            wrapped(TelemetryMsg(camera_id=cid, seq=0))
+            after = sup._last_telemetry_t.get(cid)
+            assert before is None
+            assert after is not None and after > 0.0
+        finally:
+            sup.stop()
+
+    def test_spawn_records_spawn_time(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            assert cid in sup._spawn_t
+            assert sup._spawn_t[cid] > 0.0
+        finally:
+            sup.stop()
+
+    def test_remove_camera_clears_telemetry_and_spawn_state(self, qapp) -> None:
+        from autoptz.engine.runtime.messages import RemoveCameraCmd
+
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            sup._last_telemetry_t[cid] = 123.0
+            sup._on_remove_camera(RemoveCameraCmd(camera_id=cid))
+            assert cid not in sup._last_telemetry_t
+            assert cid not in sup._spawn_t
+        finally:
+            sup.stop()
+
+
+class TestHangDetection:
+    def test_no_hang_within_warmup_grace(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            # Spawn just happened; telemetry never arrived. Within warmup → not hung.
+            spawn_t = sup._spawn_t[cid]
+            assert sup._worker_hung(cid, spawn_t + _WORKER_WARMUP_GRACE_S - 0.1) is False
+        finally:
+            sup.stop()
+
+    def test_hung_when_no_telemetry_past_warmup(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            spawn_t = sup._spawn_t[cid]
+            # Past warmup, still no telemetry → hung.
+            now = spawn_t + _WORKER_WARMUP_GRACE_S + _WORKER_HANG_S + 0.1
+            assert sup._worker_hung(cid, now) is True
+        finally:
+            sup.stop()
+
+    def test_hung_when_telemetry_goes_stale(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            spawn_t = sup._spawn_t[cid]
+            past_warmup = spawn_t + _WORKER_WARMUP_GRACE_S + 1.0
+            sup._last_telemetry_t[cid] = past_warmup  # fresh telemetry arrives
+            assert sup._worker_hung(cid, past_warmup + _WORKER_HANG_S - 0.1) is False
+            assert sup._worker_hung(cid, past_warmup + _WORKER_HANG_S + 0.1) is True
+        finally:
+            sup.stop()
+
+    def test_alive_but_hung_worker_is_respawned(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            original = factory_log[0]
+            assert original._alive is True  # alive, not dead
+            # Force "past warmup, telemetry stale".
+            sup._spawn_t[cid] = 0.0
+            sup._last_telemetry_t[cid] = 0.0
+            now = _WORKER_WARMUP_GRACE_S + _WORKER_HANG_S + 100.0
+            sup._scan_worker_health(now)
+            assert len(factory_log) == 2  # respawned despite being alive
+            assert original.stop_calls == 1  # old (hung) worker was stopped
+            assert sup._workers[cid] is factory_log[1]
+
+            # Guard: a freshly-respawned worker must NOT be immediately re-hung.
+            # Simulate the new worker emitting telemetry so it looks healthy, then
+            # run one more scan a small delta later (still within the warmup grace
+            # window) — no third spawn should occur.
+            sup._last_telemetry_t[cid] = now  # fresh telemetry from the new worker
+            sup._scan_worker_health(now + 0.5)
+            assert len(factory_log) == 2, (
+                "New worker was immediately re-respawned — hang-detection thrash detected"
+            )
+        finally:
+            sup.stop()
+
+    def test_healthy_streaming_worker_not_respawned(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            sup._spawn_t[cid] = 0.0
+            now = _WORKER_WARMUP_GRACE_S + 100.0
+            sup._last_telemetry_t[cid] = now - 0.05  # fresh telemetry
+            sup._scan_worker_health(now)
+            assert len(factory_log) == 1  # untouched
+        finally:
+            sup.stop()
+
+
+class TestPermanentFailed:
+    def test_failed_flag_and_accessor_set_at_cap(self, qapp, caplog) -> None:
+        import logging
+
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            now = 1000.0
+            with caplog.at_level(logging.ERROR):
+                for _ in range(_MAX_RESTART_ATTEMPTS):
+                    sup._workers[cid]._alive = False
+                    now += _MAX_BACKOFF_S + 1.0
+                    sup._scan_worker_health(now)
+            assert sup.is_camera_failed(cid) is True
+            assert cid in sup.failed_cameras()
+            # Exactly one clear permanent-failure ERROR log (not per-scan spam).
+            errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+            assert any("permanently failed" in r.getMessage().lower() for r in errors)
+            # Run additional scans (still dead, past backoff) — the ERROR must NOT
+            # fire again; exactly one "permanently failed" record across all scans.
+            now += _MAX_BACKOFF_S + 1.0
+            sup._scan_worker_health(now)
+            now += _MAX_BACKOFF_S + 1.0
+            sup._scan_worker_health(now)
+            perm_logs = [
+                r for r in caplog.records if "permanently failed" in r.getMessage().lower()
+            ]
+            assert len(perm_logs) == 1, (
+                f"Expected exactly 1 'permanently failed' log, got {len(perm_logs)}"
+            )
+        finally:
+            sup.stop()
+
+    def test_not_failed_before_cap(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            sup._workers[cid]._alive = False
+            sup._scan_worker_health(1000.0)  # attempt 1 only
+            assert sup.is_camera_failed(cid) is False
+            assert sup.failed_cameras() == []
+        finally:
+            sup.stop()
+
+    def test_remove_clears_failed_state(self, qapp) -> None:
+        from autoptz.engine.runtime.messages import RemoveCameraCmd
+
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            sup._restart_state[cid] = (_MAX_RESTART_ATTEMPTS, 9999.0, True)
+            sup._on_remove_camera(RemoveCameraCmd(camera_id=cid))
+            assert sup.is_camera_failed(cid) is False
         finally:
             sup.stop()

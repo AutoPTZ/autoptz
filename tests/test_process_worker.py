@@ -127,6 +127,46 @@ class TestHandleProxy:
         assert h.shm_name == f"cam_{cid[:8]}_preview"
 
 
+class TestHandleIsAlive:
+    """is_alive() must mirror the child process's liveness for the health scan."""
+
+    def _handle(self) -> ProcessWorkerHandle:
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        return ProcessWorkerHandle(cid, _config(cid), on_telemetry=lambda _m: None, db_path="")
+
+    def test_false_before_start(self) -> None:
+        h = self._handle()
+        assert h._proc is None
+        assert h.is_alive() is False
+
+    def test_true_when_proc_alive(self) -> None:
+        class _FakeProc:
+            def is_alive(self) -> bool:
+                return True
+
+        h = self._handle()
+        h._proc = _FakeProc()
+        assert h.is_alive() is True
+
+    def test_false_when_proc_dead(self) -> None:
+        class _FakeProc:
+            def is_alive(self) -> bool:
+                return False
+
+        h = self._handle()
+        h._proc = _FakeProc()
+        assert h.is_alive() is False
+
+    def test_is_running_mirrors_is_alive(self) -> None:
+        class _FakeProc:
+            def is_alive(self) -> bool:
+                return True
+
+        h = self._handle()
+        h._proc = _FakeProc()
+        assert h.is_running is True
+
+
 class TestEndToEndSpawn:
     """Spawn a real child process with a synthetic source (no camera, no models):
     frames must reach shared memory and telemetry must flow back, then stop cleanly."""
