@@ -59,6 +59,7 @@ class TestPreflight:
 
     def test_controls_are_dropdowns_not_spinboxes(self, qtapp) -> None:
         from PySide6.QtWidgets import QComboBox, QSpinBox
+
         from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 
         dlg = MarkPreflightDialog(defaults=MarkSession())
@@ -70,6 +71,7 @@ class TestPreflight:
 
     def test_no_jargon_in_text(self, qtapp) -> None:
         from PySide6.QtWidgets import QLabel
+
         from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 
         dlg = MarkPreflightDialog(defaults=MarkSession())
@@ -121,23 +123,20 @@ class TestPreflight:
 
     def test_start_confirms_before_accept(self, qtapp, monkeypatch) -> None:
         from PySide6.QtWidgets import QDialog, QMessageBox
+
         from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 
         dlg = MarkPreflightDialog(defaults=MarkSession())
 
         # Declining the confirm keeps the dialog open (no accept).
-        monkeypatch.setattr(
-            QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No
-        )
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
         accepted: list[str] = []
         monkeypatch.setattr(QDialog, "accept", lambda self: accepted.append("accept"))
         dlg._on_start()
         assert accepted == []  # declined → no accept
 
         # Confirming accepts.
-        monkeypatch.setattr(
-            QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
-        )
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
         dlg._on_start()
         assert accepted == ["accept"]
         dlg.deleteLater()

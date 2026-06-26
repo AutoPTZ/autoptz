@@ -97,17 +97,11 @@ def test_camera_engine_menus_hidden_view_and_help_kept(qtapp) -> None:
 
 
 def test_help_menu_has_about_mark(qtapp) -> None:
-    win = _win(qtapp)
-    labels = [a.text().replace("&", "") for a in win.menuBar().actions()]
-    # Collect leaf action texts across the whole menu bar.
     from PySide6.QtWidgets import QMenu
 
-    leaf = [
-        a.text()
-        for m in win.menuBar().findChildren(QMenu)
-        for a in m.actions()
-        if a.text()
-    ]
+    win = _win(qtapp)
+    # Collect leaf action texts across the whole menu bar.
+    leaf = [a.text() for m in win.menuBar().findChildren(QMenu) for a in m.actions() if a.text()]
     assert any("About AutoPTZ Mark" in t for t in leaf)
     win.deleteLater()
 

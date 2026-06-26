@@ -530,8 +530,7 @@ class MarkWindow(MainWindow):
 
     def _refresh_idle_status(self) -> None:
         self._controls.set_verdict(
-            f"Ready — profile {self._session.profile}, up to "
-            f"{self._session.max_cameras} cameras."
+            f"Ready — profile {self._session.profile}, up to {self._session.max_cameras} cameras."
         )
         self._chart.set_steps([], self._session.floor_fps)
 

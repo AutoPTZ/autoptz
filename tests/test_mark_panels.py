@@ -67,6 +67,7 @@ def test_control_panel_exit_button_stays_enabled_while_running(qtapp) -> None:
 
 def test_control_panel_has_no_source_or_camera_controls(qtapp) -> None:
     from PySide6.QtWidgets import QRadioButton, QSpinBox
+
     from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
 
     p = MarkControlPanel()

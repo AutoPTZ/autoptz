@@ -345,6 +345,15 @@ def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
 
     log.info("AutoPTZ UI started")
 
+    # ── dev hook: open AutoPTZ Mark on startup ─────────────────────────────────
+    # The macOS menu bar is intercepted by some menu-bar managers, so the Help →
+    # Run AutoPTZ Mark… item can be unreachable to automated UI drivers. When
+    # AUTOPTZ_START_MARK is set (or /tmp/autoptz_start_mark exists) open the Mark
+    # pre-flight automatically so the demo can be launched headlessly/scripted.
+    # Inert in normal use.
+    if os.environ.get("AUTOPTZ_START_MARK") or os.path.exists("/tmp/autoptz_start_mark"):
+        QTimer.singleShot(1200, window._start_mark)
+
     # ── engine auto-start ──────────────────────────────────────────────────────
     # Restore the last on/off state (default ON) and start after the window is
     # shown and exposed so the first paint happens before heavy ingest/ML work.

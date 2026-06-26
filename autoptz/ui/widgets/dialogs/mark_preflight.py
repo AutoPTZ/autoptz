@@ -226,6 +226,5 @@ class MarkPreflightDialog(QDialog):
         mins, rem = divmod(int(round(secs)), 60)
         human = f"{mins} min {rem} s" if mins else f"{rem} s"
         self._eta_label.setText(
-            f"Estimated time: up to {human} (it stops early once your computer "
-            "can't keep up)."
+            f"Estimated time: up to {human} (it stops early once your computer can't keep up)."
         )
