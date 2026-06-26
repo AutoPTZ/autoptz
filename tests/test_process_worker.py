@@ -167,6 +167,69 @@ class TestHandleIsAlive:
         assert h.is_running is True
 
 
+class TestHandleStop:
+    """stop() must escalate join -> terminate -> join and log an unclean exit."""
+
+    def _handle(self):  # noqa: ANN202
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        return ProcessWorkerHandle(cid, _config(cid), on_telemetry=lambda _m: None, db_path="")
+
+    def test_stop_terminates_when_join_times_out(self) -> None:
+        h = self._handle()
+
+        class _StuckProc:
+            """Joins never finish; terminate() makes it die."""
+
+            def __init__(self) -> None:
+                self.alive = True
+                self.terminated = False
+
+            def is_alive(self) -> bool:
+                return self.alive
+
+            def join(self, timeout=None) -> None:  # noqa: ANN001
+                return None  # never transitions on its own
+
+            def terminate(self) -> None:
+                self.terminated = True
+                self.alive = False
+
+        proc = _StuckProc()
+        h._proc = proc  # type: ignore[assignment]
+        h._cmd_q = None  # exercise the no-queue branch
+        h._started = True
+
+        h.stop(timeout=0.01)
+
+        assert proc.terminated, "a child that won't join must be terminated"
+        assert h._proc is None
+        assert h._started is False
+
+    def test_stop_warns_when_child_survives_terminate(self, caplog) -> None:  # noqa: ANN001
+        h = self._handle()
+
+        class _ZombieProc:
+            def is_alive(self) -> bool:
+                return True  # never dies, even after terminate
+
+            def join(self, timeout=None) -> None:  # noqa: ANN001
+                return None
+
+            def terminate(self) -> None:
+                return None
+
+        h._proc = _ZombieProc()  # type: ignore[assignment]
+        h._started = True
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            h.stop(timeout=0.01)
+        assert any("did not exit" in r.message.lower() for r in caplog.records), (
+            "an unclean child exit must surface as a WARNING"
+        )
+        assert h._proc is None
+
+
 class TestEndToEndSpawn:
     """Spawn a real child process with a synthetic source (no camera, no models):
     frames must reach shared memory and telemetry must flow back, then stop cleanly."""

@@ -345,12 +345,31 @@ class ProcessWorkerHandle:
         proc = self._proc
         if proc is not None:
             try:
+                # 1) Bounded graceful join: the child should exit on the _STOP sentinel.
                 proc.join(timeout=timeout)
+                # 2) Escalate to terminate() if it's still alive past the deadline.
                 if proc.is_alive():
+                    log.debug(
+                        "camera process %s did not stop on sentinel — terminating",
+                        self.camera_id,
+                    )
                     proc.terminate()
                     proc.join(timeout=2.0)
+                # 3) Truly unclean: survived terminate(). Surface it.
+                if proc.is_alive():
+                    log.warning(
+                        "camera process %s did not exit after terminate()", self.camera_id
+                    )
             except Exception:  # noqa: BLE001
                 log.debug("camera process %s join/terminate failed", self.camera_id, exc_info=True)
+        # Join the event-drain thread so it doesn't outlive the handle (best-effort).
+        drain = self._drain_thread
+        if drain is not None and drain is not threading.current_thread():
+            try:
+                drain.join(timeout=1.0)
+            except Exception:  # noqa: BLE001
+                pass
+        self._drain_thread = None
         self._proc = None
         self._started = False
 
