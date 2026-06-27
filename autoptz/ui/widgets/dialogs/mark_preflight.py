@@ -1,8 +1,8 @@
 """MarkPreflightDialog — the friendly pre-flight notice for AutoPTZ Mark.
 
 A plain, jargon-free setup screen: a one-line intro, the source + profile, and
-five dropdowns (Max cameras, Target FPS, Time per step, Resolution, Model) with a
-live run-time estimate.  Its Start button asks a confirm ("This suspends AutoPTZ
+six dropdowns (Max cameras, Target FPS, Time per step, Resolution, Model, Scene)
+with a live run-time estimate.  Its Start button asks a confirm ("This suspends AutoPTZ
 and runs the simulation. Continue?") before accepting, since entering Mark
 suspends the live app.  On accept it yields a :class:`MarkSession`.
 
@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from autoptz.benchmark.ndi_sim import ndi_sim_available
 from autoptz.ui import theme as T
-from autoptz.ui.mark_session import MarkSession
+from autoptz.ui.mark_session import CLIP_LIBRARY, DEFAULT_CLIP_ID, MarkSession
 
 _INTRO = (
     "AutoPTZ Mark is a quick simulation: it adds fake cameras one at a time and "
@@ -76,6 +76,9 @@ _MODEL_OPTS: list[tuple[str, str]] = [
     ("Small (recommended)", "small"),
     ("Medium (most accurate)", "medium"),
 ]
+# Scene options (label, clip id) built from the bundled clip library.  The clips
+# play at their own native fps; Target FPS above stays the pass-floor concept.
+_CLIP_OPTS: list[tuple[str, str]] = [(meta.label, meta.id) for meta in CLIP_LIBRARY.values()]
 
 # Run-time estimate fudge factor: spin-up / tear-down / discovery overhead on top
 # of the measured ramp.
@@ -187,6 +190,12 @@ class MarkPreflightDialog(QDialog):
         self._model_combo = QComboBox()
         _add_options(self._model_combo, _MODEL_OPTS, str(d.model).strip().lower())
         params.addRow("Model", self._model_combo)
+
+        # Scene: which bundled clip to play.  An empty default → the library default.
+        self._clip_combo = QComboBox()
+        clip_default = str(d.clip_id).strip() or DEFAULT_CLIP_ID
+        _add_options(self._clip_combo, _CLIP_OPTS, clip_default)
+        params.addRow("Scene", self._clip_combo)
         col.addLayout(params)
 
         self._eta_label = QLabel("")
@@ -239,6 +248,7 @@ class MarkPreflightDialog(QDialog):
             dwell_s=float(self._step_combo.currentData()),
             resolution=str(self._res_combo.currentData()),
             model=str(self._model_combo.currentData()),
+            clip_id=str(self._clip_combo.currentData()),
         )
 
     @staticmethod

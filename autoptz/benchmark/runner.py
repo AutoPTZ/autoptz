@@ -178,12 +178,13 @@ def _add_synthetic_camera(
     width: int = 0,
     height: int = 0,
     address: str = "anim",
+    native_fps: float | None = None,
 ) -> str:
     """Register one self-paced synthetic camera on the client's model.
 
     Done directly via a ``CameraRecord`` (not ``client.addCamera``, which infers a
-    USB source from the URI scheme).  The 30 fps cap means the real worker paces
-    the synthetic source so it never free-spins (~16000 fps would tear the shm
+    USB source from the URI scheme).  The fps cap means the real worker paces the
+    synthetic source so it never free-spins (~16000 fps would tear the shm
     triple-buffer).  A non-zero ``width``/``height`` (AutoPTZ Mark's resolution
     control) sizes the composed synthetic scene; 0 keeps the source default.
 
@@ -191,6 +192,11 @@ def _add_synthetic_camera(
     synthetic people; a path to a video file (AutoPTZ Mark's bundled clip) makes
     the ``SyntheticAdapter`` loop that real clip instead (real decode, real people,
     no drawn overlay).
+
+    ``native_fps`` (AutoPTZ Mark's selected clip cadence) sets the source fps so a
+    24/30/60 clip paces at its true rate; ``None`` / non-positive falls back to 30,
+    and any value is clamped to ``(0, 240]`` so a bad metadata value can't tear the
+    triple-buffer.
     """
     from autoptz.config.models import CameraConfig, SourceConfig
     from autoptz.ui.list_models import CameraRecord
@@ -198,13 +204,15 @@ def _add_synthetic_camera(
     camera_id = str(uuid.uuid4())
     name = f"AutoPTZ Mark {index + 1}"
     addr = (address or "anim").strip() or "anim"
+    fps = native_fps if (native_fps and native_fps > 0) else 30.0
+    fps = min(240.0, max(1.0, float(fps)))
     cfg = CameraConfig(
         id=camera_id,
         name=name,
         source=SourceConfig(
             type="synthetic",
             address=addr,
-            fps=30.0,
+            fps=fps,
             width=int(width),
             height=int(height),
         ),

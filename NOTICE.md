@@ -27,3 +27,21 @@ Models and optional features:
 Missing models or optional dependencies should never prevent AutoPTZ from
 launching. The app disables unavailable feature controls and keeps live preview
 available where possible.
+
+AutoPTZ Mark benchmark video clips:
+
+The bundled demo clips under `autoptz/assets/` are used only by the "AutoPTZ
+Mark" benchmark to drive synthetic cameras. Each was trimmed/transcoded
+(re-scaled, re-timed, audio removed) from a permissively-licensed source:
+
+- `mark_people_1080p.mp4` — derived from the OpenCV sample `vtest.avi`
+  (pedestrians). OpenCV samples are BSD-3-Clause.
+- `mark_crowd_30.mp4` — derived from "Shibuya Scramble Crossing" by Gst,
+  via Wikimedia Commons, licensed CC BY-SA 3.0. The AutoPTZ-derived clip is
+  likewise made available under CC BY-SA 3.0 (ShareAlike).
+- `mark_people_24.mp4` and `mark_people_60.mp4` — derived from "Tears of Steel"
+  (CC) Blender Foundation | mango.blender.org, licensed CC BY 3.0. The
+  `mark_people_60.mp4` variant was frame-interpolated to 60 fps.
+
+These clips are demo assets only and are independent of the AGPL-3.0 license
+that covers AutoPTZ's own source code.

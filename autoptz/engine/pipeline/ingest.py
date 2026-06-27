@@ -1209,6 +1209,19 @@ class SyntheticAdapter(SourceAdapter):
                 if ok and count and count > 1.5:  # a real (multi-frame) video
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     self._video = cap
+                    # Surface the clip's native cadence as the source fps cap (info
+                    # only — pacing still uses self._target_fps).  AutoPTZ Mark feeds
+                    # a 24/30/60 clip and this makes its true rate observable.
+                    src_fps = cap.get(cv2.CAP_PROP_FPS)
+                    if src_fps and 0.0 < src_fps < 240.0:
+                        self._set_source_fps_cap(float(src_fps))
+                        log.info(
+                            "camera_id=%s SyntheticAdapter clip native fps=%.1f "
+                            "(pacing target=%.0f)",
+                            self.camera_id,
+                            src_fps,
+                            self._target_fps,
+                        )
                     log.info("camera_id=%s SyntheticAdapter looping video %s", self.camera_id, path)
                     return True
                 cap.release()

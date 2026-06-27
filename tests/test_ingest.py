@@ -118,6 +118,101 @@ class TestUSBAdapterOpen:
         assert adapter._target_fps == 60.0
 
 
+# ── SyntheticAdapter clip source fps (info-only; pacing unchanged) ──────────────
+
+
+class TestSyntheticAdapterClipSourceFps:
+    def test_clip_source_fps_recorded_on_open(self, tmp_path) -> None:
+        """Opening a (video) clip records the clip's CAP_PROP_FPS as source_fps_cap.
+
+        Info-only — pacing still uses the configured target fps; this just surfaces
+        the clip's true cadence so a 24/60 clip is observable in telemetry.
+        """
+        import os
+
+        import autoptz.engine.pipeline.ingest as ing
+        from autoptz.engine.pipeline.ingest import SyntheticAdapter
+
+        clip = tmp_path / "clip.mp4"
+        clip.write_bytes(b"\x00")  # presence only; cv2 is mocked
+
+        cap = _make_cap([_FRAME, _FRAME])
+
+        def fake_get(prop):
+            if prop == ing.cv2.CAP_PROP_FRAME_COUNT:
+                return 90.0
+            if prop == ing.cv2.CAP_PROP_FPS:
+                return 60.0
+            return 0.0
+
+        cap.get.side_effect = fake_get
+        a = SyntheticAdapter("cam-clip", address=str(clip), width=160, height=120, target_fps=30.0)
+        with (
+            patch.object(ing.cv2, "VideoCapture", return_value=cap),
+            patch.object(os.path, "exists", return_value=True),
+        ):
+            assert a._open() is True
+        # The clip's native fps is recorded; pacing target is left at the configured 30.
+        assert a.status.source_fps_cap == 60.0
+        assert a._target_fps == 30.0
+        a._close()
+
+    def test_clip_source_fps_ignored_when_absurd(self, tmp_path) -> None:
+        """An out-of-range CAP_PROP_FPS (0 or >=240) leaves source_fps_cap unset."""
+        import os
+
+        import autoptz.engine.pipeline.ingest as ing
+        from autoptz.engine.pipeline.ingest import SyntheticAdapter
+
+        clip = tmp_path / "clip.mp4"
+        clip.write_bytes(b"\x00")
+
+        cap = _make_cap([_FRAME, _FRAME])
+
+        def fake_get(prop):
+            if prop == ing.cv2.CAP_PROP_FRAME_COUNT:
+                return 90.0
+            if prop == ing.cv2.CAP_PROP_FPS:
+                return 0.0  # bogus
+            return 0.0
+
+        cap.get.side_effect = fake_get
+        a = SyntheticAdapter("cam-clip2", address=str(clip), width=160, height=120, target_fps=30.0)
+        with (
+            patch.object(ing.cv2, "VideoCapture", return_value=cap),
+            patch.object(os.path, "exists", return_value=True),
+        ):
+            assert a._open() is True
+        assert a.status.source_fps_cap is None
+        a._close()
+
+    def test_bundled_fast_clip_reports_native_fps_if_present(self) -> None:
+        """Light real-decode check on a bundled clip; skips gracefully if absent/flaky.
+
+        The bundled clips are produced in parallel and may be absent in a fresh
+        checkout, so this skips rather than fails when the asset is missing or cv2
+        can't decode it offscreen.
+        """
+        import pytest
+
+        from autoptz.engine.pipeline.ingest import SyntheticAdapter
+        from autoptz.ui.mark_session import CLIP_LIBRARY, _clip_path
+
+        meta = CLIP_LIBRARY["cinematic_60"]
+        path = _clip_path(meta.filename)
+        if not path.is_file():
+            pytest.skip(f"bundled clip {meta.filename} not installed")
+        a = SyntheticAdapter("cam-real", address=str(path), width=160, height=120, target_fps=30.0)
+        try:
+            if not a._open() or a._video is None:
+                pytest.skip("cv2 could not decode the bundled clip offscreen")
+            # source_fps_cap is populated from the clip's real cadence.
+            assert a.status.source_fps_cap is not None
+            assert 0.0 < a.status.source_fps_cap < 240.0
+        finally:
+            a._close()
+
+
 class TestUSBAdapterReconnect:
     """Verify the reconnect loop by running the adapter in a thread."""
 

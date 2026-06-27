@@ -3,7 +3,10 @@ from __future__ import annotations
 import sys
 
 from autoptz.ui.mark_session import (
+    CLIP_LIBRARY,
+    DEFAULT_CLIP_ID,
     MARK_SESSION_KEY,
+    ClipMetadata,
     MarkSession,
     clear_mark_session,
     clear_window_geometry,
@@ -103,7 +106,8 @@ class TestClipSource:
         assert isinstance(path, str)
         p = Path(path)
         assert p.is_absolute()
-        assert p.name == "mark_people_1080p.mp4"
+        # The default clip is the HD crowd-crossing clip (DEFAULT_CLIP_ID == "crowd").
+        assert p.name == CLIP_LIBRARY[DEFAULT_CLIP_ID].filename == "mark_crowd_30.mp4"
         # NOTE: we intentionally do NOT assert ``p.is_file()`` here — the clip is a
         # bundled asset that may be absent in a fresh clone / CI checkout.  The path
         # must still resolve correctly; presence is covered by clip_available().
@@ -113,8 +117,11 @@ class TestClipSource:
 
         import autoptz.ui.mark_session as ms
 
-        # Unpatched: clip_available() reflects the real resolved path's state.
-        assert MarkSession().clip_available() == ms._clip_path().is_file()
+        # Unpatched: clip_available() reflects the real resolved path's state.  The
+        # default session resolves to the default clip (crowd), so compare against
+        # that clip's path — NOT the bare _clip_path() (which is the original asset).
+        default_path = ms._clip_path(ms.CLIP_LIBRARY[ms.DEFAULT_CLIP_ID].filename)
+        assert MarkSession().clip_available() == default_path.is_file()
         # Present on disk → available.
         monkeypatch.setattr(Path, "is_file", lambda self: True)
         assert MarkSession().clip_available() is True
@@ -130,6 +137,95 @@ class TestClipSource:
         loaded = load_mark_session(store)
         assert loaded == s
         assert loaded.source == "clip"
+
+
+class TestClipLibrary:
+    def test_clip_library_registry(self) -> None:
+        # Every registry entry is a ClipMetadata with all five fields populated.
+        assert isinstance(CLIP_LIBRARY, dict)
+        assert CLIP_LIBRARY  # non-empty
+        for clip_id, meta in CLIP_LIBRARY.items():
+            assert isinstance(meta, ClipMetadata)
+            assert meta.id == clip_id
+            assert isinstance(meta.id, str) and meta.id
+            assert isinstance(meta.filename, str) and meta.filename
+            assert isinstance(meta.label, str) and meta.label
+            assert isinstance(meta.native_fps, float) and meta.native_fps > 0
+            assert isinstance(meta.purpose, str) and meta.purpose
+        # The default clip id is present and is the HD crowd clip.
+        assert DEFAULT_CLIP_ID == "crowd"
+        assert DEFAULT_CLIP_ID in CLIP_LIBRARY
+        # The four bundled clips (24/30/60fps + scenarios) are all registered.
+        assert {
+            "crowd",
+            "pedestrians",
+            "cinematic_24",
+            "cinematic_60",
+        } == set(CLIP_LIBRARY)
+        # The library spans the three requested native cadences.
+        assert {m.native_fps for m in CLIP_LIBRARY.values()} == {24.0, 30.0, 60.0}
+
+    def test_clip_id_round_trip(self) -> None:
+        store = _Store()
+        s = MarkSession(source="clip", clip_id="cinematic_60")
+        store_mark_session(store, s)
+        # The dict carries clip_id...
+        assert store.kv[MARK_SESSION_KEY]["clip_id"] == "cinematic_60"
+        # ...and it survives a load round-trip.
+        loaded = load_mark_session(store)
+        assert loaded == s
+        assert loaded.clip_id == "cinematic_60"
+        # A back-compat dict missing clip_id defaults to "".
+        assert MarkSession.from_dict({}).clip_id == ""
+
+    def test_clip_info_lookup(self, caplog) -> None:
+        import logging
+
+        # A known id resolves to its registry metadata.
+        meta = MarkSession(clip_id="cinematic_60").clip_info()
+        assert meta is CLIP_LIBRARY["cinematic_60"]
+        assert meta.native_fps == 60.0
+        # Empty id falls back to the default clip (no warning).
+        empty = MarkSession(clip_id="").clip_info()
+        assert empty is CLIP_LIBRARY[DEFAULT_CLIP_ID]
+        # An unknown id falls back to the default AND logs a warning.
+        with caplog.at_level(logging.WARNING):
+            unknown = MarkSession(clip_id="does_not_exist").clip_info()
+        assert unknown is CLIP_LIBRARY[DEFAULT_CLIP_ID]
+        assert any("does_not_exist" in r.getMessage() for r in caplog.records)
+
+    def test_clip_path_from_id(self) -> None:
+        from pathlib import Path
+
+        path = MarkSession(clip_id="cinematic_60").clip_path()
+        assert isinstance(path, str)
+        p = Path(path)
+        assert p.is_absolute()
+        assert p.name == CLIP_LIBRARY["cinematic_60"].filename
+        # An empty id resolves to the default clip's filename.
+        dflt = Path(MarkSession(clip_id="").clip_path())
+        assert dflt.name == CLIP_LIBRARY[DEFAULT_CLIP_ID].filename
+        # NOTE: we intentionally do NOT assert ``p.is_file()`` here — the new clips
+        # are bundled assets produced in parallel that may be absent in a fresh
+        # clone / CI checkout.  Presence is covered by clip_available().
+
+    def test_target_fps_follows_clip_native_cadence(self) -> None:
+        # For a CLIP source the benchmark target is the clip's native fps (a 24fps
+        # clip can't sustain 30; a 60fps clip is graded against 60) — NOT floor_fps.
+        assert (
+            MarkSession(source="clip", clip_id="cinematic_24", floor_fps=30.0).target_fps() == 24.0
+        )
+        assert (
+            MarkSession(source="clip", clip_id="cinematic_60", floor_fps=30.0).target_fps() == 60.0
+        )
+        assert MarkSession(source="clip", clip_id="pedestrians").target_fps() == 30.0
+        # Empty id → default clip's native fps.
+        assert MarkSession(source="clip", clip_id="").target_fps() == float(
+            CLIP_LIBRARY[DEFAULT_CLIP_ID].native_fps
+        )
+        # For synthetic / NDI (render-any-rate) sources the user's floor_fps wins.
+        assert MarkSession(source="synthetic", floor_fps=45.0).target_fps() == 45.0
+        assert MarkSession(source="ndi", floor_fps=24.0).target_fps() == 24.0
 
 
 class TestGeometryClear:

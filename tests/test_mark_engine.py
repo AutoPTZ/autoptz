@@ -225,6 +225,35 @@ def test_model_choice_primes_detector_tier():
             eng.stop()
 
 
+def test_native_fps_to_synthetic_camera(monkeypatch):
+    """The selected clip's native fps flows to the synthetic cameras' source.
+
+    A "cinematic_60" clip session sets source.fps == 60.0 on the registered cameras.
+    This verifies the registry-metadata path (native_fps from clip_info()) drives
+    the source fps regardless of whether the asset is on disk, so we force the clip
+    "present" rather than depending on the (parallel-produced) file existing.
+    """
+    from autoptz.ui import mark_engine
+
+    monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
+    eng = mark_engine.MarkEngineFactory(
+        MarkSession(source="clip", clip_id="cinematic_60", max_cameras=3),
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    eng.start()
+    try:
+        ids = eng.client.cameraModel.camera_ids()
+        assert len(ids) == 1
+        rec = eng.client.cameraModel.get_record(ids[0])
+        assert rec.camera_config.source.fps == 60.0
+        # Grown cameras keep the native fps too.
+        cid2 = eng.add_next_camera()
+        assert cid2 is not None
+        assert eng.client.cameraModel.get_record(cid2).camera_config.source.fps == 60.0
+    finally:
+        eng.stop()
+
+
 def test_synthetic_cameras_use_session_resolution():
     """The pre-added + grown synthetic cameras carry the session's resolution size."""
     from autoptz.ui import mark_engine

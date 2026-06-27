@@ -144,11 +144,34 @@ class MarkEngineFactory:
                 return
             log.warning("NDI requested but cyndilib unavailable; using synthetic cameras.")
         w, h = self._session.resolution_size()
+        native_fps = self._synthetic_native_fps()
+        if native_fps is not None:
+            log.info(
+                "Mark clip %r → synthetic source @ %.0f fps",
+                self._session.clip_info().id,
+                native_fps,
+            )
         self._camera_ids.append(
             _add_synthetic_camera(
-                self._client, 0, width=w, height=h, address=self._synthetic_address()
+                self._client,
+                0,
+                width=w,
+                height=h,
+                address=self._synthetic_address(),
+                native_fps=native_fps,
             )
         )
+
+    def _synthetic_native_fps(self) -> float | None:
+        """The selected clip's native fps for the synthetic source (None otherwise).
+
+        Only meaningful for a clip source whose asset is actually present; the drawn
+        ("anim") scene keeps the default 30 fps pacing, so this returns ``None`` for
+        synthetic / NDI sources and for a clip session falling back to drawn people.
+        """
+        if self._session.is_clip() and self._session.clip_available():
+            return self._session.clip_info().native_fps
+        return None
 
     def _synthetic_address(self) -> str:
         """The SyntheticAdapter address for this session's source.
@@ -190,7 +213,12 @@ class MarkEngineFactory:
         else:
             w, h = self._session.resolution_size()
             cid = _add_synthetic_camera(
-                self._client, index, width=w, height=h, address=self._synthetic_address()
+                self._client,
+                index,
+                width=w,
+                height=h,
+                address=self._synthetic_address(),
+                native_fps=self._synthetic_native_fps(),
             )
         self._camera_ids.append(cid)
         # Bring up just the new worker if the engine is already running.

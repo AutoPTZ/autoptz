@@ -200,6 +200,36 @@ class TestPreflight:
             assert dlg.session().source == "clip"
         dlg.deleteLater()
 
+    def test_clip_dropdown_populated(self, qtapp) -> None:
+        from autoptz.ui.mark_session import CLIP_LIBRARY, DEFAULT_CLIP_ID
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+        keys = {dlg._clip_combo.itemData(i) for i in range(dlg._clip_combo.count())}
+        # Every library clip is offered.
+        assert set(CLIP_LIBRARY) <= keys
+        # The library labels are used (not the raw ids).
+        labels = {dlg._clip_combo.itemText(i) for i in range(dlg._clip_combo.count())}
+        assert CLIP_LIBRARY[DEFAULT_CLIP_ID].label in labels
+        # An empty (default) session selects the default clip id.
+        assert dlg._clip_combo.currentData() == DEFAULT_CLIP_ID
+        dlg.deleteLater()
+
+    def test_session_captures_clip_id(self, qtapp) -> None:
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession(clip_id="cinematic_60"))
+        # A non-default default flows through to the selected combo entry...
+        assert dlg._clip_combo.currentData() == "cinematic_60"
+        # ...and session() reads it back.
+        assert dlg.session().clip_id == "cinematic_60"
+        # Pick another clip → session() reflects the new selection.
+        idx = dlg._clip_combo.findData("crowd")
+        assert idx >= 0
+        dlg._clip_combo.setCurrentIndex(idx)
+        assert dlg.session().clip_id == "crowd"
+        dlg.deleteLater()
+
     def test_start_confirms_before_accept(self, qtapp, monkeypatch) -> None:
         from PySide6.QtWidgets import QDialog, QMessageBox
 
