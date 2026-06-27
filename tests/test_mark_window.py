@@ -179,6 +179,82 @@ def test_request_return_emits_and_suppresses_unexpected(qtapp) -> None:
     assert seen == ["return"]  # a deliberate return must NOT also fire closedUnexpectedly
 
 
+def test_chart_object_name_and_card_ancestor(qtapp) -> None:
+    from PySide6.QtWidgets import QFrame
+
+    win = _win(qtapp)
+    try:
+        assert win._chart.objectName() == "markChart"
+        # The chart is wrapped in a #chartCard QFrame (titled "PERFORMANCE RAMP").
+        card = win._chart.parent()
+        assert isinstance(card, QFrame)
+        assert card.objectName() == "chartCard"
+    finally:
+        win.deleteLater()
+
+
+def test_central_layout_spacing(qtapp) -> None:
+    from PySide6.QtWidgets import QVBoxLayout
+
+    win = _win(qtapp)
+    try:
+        layout = win.centralWidget().layout()
+        assert isinstance(layout, QVBoxLayout)
+        assert layout.spacing() == 12
+    finally:
+        win.deleteLater()
+
+
+def test_theme_toggle_repaints_hud(qtapp) -> None:
+    """Area 1: a Light/Dark flip on the isolated client repaints the HUD widgets.
+
+    The chart/control/details bake T.CURRENT colors at paint time; without a
+    listener a View→Appearance flip left them stale.  A ThemeController bound to
+    the SAME isolated client flips T.CURRENT, and the wired _restyle slots refresh
+    the control verdict + details idle colors.
+    """
+    from autoptz.ui import theme as T
+    from autoptz.ui.theme import ThemeController
+
+    win = _win(qtapp)
+    # Bind a controller to the ISOLATED client so setTheme actually flips T.CURRENT.
+    ThemeController(qtapp, win._engine.client)
+    try:
+        win._engine.client.setTheme("dark")
+        qtapp.processEvents()
+        dark_text = T.CURRENT.text
+        dark_subtext = T.CURRENT.subtext
+
+        win._engine.client.setTheme("light")
+        qtapp.processEvents()
+        assert T.CURRENT.text != dark_text  # T.CURRENT actually flipped
+        light_text = T.CURRENT.text
+        light_subtext = T.CURRENT.subtext
+        assert light_text.lower() in win._controls._verdict_label.styleSheet().lower()
+        assert light_subtext.lower() in win._details._empty.styleSheet().lower()
+
+        # Toggle back to dark and re-assert the literals followed.
+        win._engine.client.setTheme("dark")
+        qtapp.processEvents()
+        assert T.CURRENT.text == dark_text
+        assert dark_text.lower() in win._controls._verdict_label.styleSheet().lower()
+        assert dark_subtext.lower() in win._details._empty.styleSheet().lower()
+    finally:
+        win.deleteLater()
+
+
+def test_panel_restyle_idempotent(qtapp) -> None:
+    win = _win(qtapp)
+    try:
+        # Calling _restyle repeatedly must not raise.
+        win._controls._restyle()
+        win._controls._restyle()
+        win._details._restyle()
+        win._details._restyle()
+    finally:
+        win.deleteLater()
+
+
 def test_step_updates_chart_and_verdict(qtapp) -> None:
     win = _win(qtapp)
     win._on_step(
@@ -193,6 +269,7 @@ def test_step_updates_chart_and_verdict(qtapp) -> None:
 
 def test_finish_sets_verdict(qtapp) -> None:
     win = _win(qtapp)
+    win._prompt_on_completion = False  # no modal: persist directly
     result = BenchmarkResult(
         profile="full",
         weight=1.0,
@@ -213,6 +290,7 @@ def test_finish_verdict_shows_user_target_not_discounted_floor(qtapp) -> None:
     not the runner's DISCOUNTED pass floor (which result.floor_fps now carries and is
     confusing to surface)."""
     win = _win(qtapp, floor_fps=30.0)
+    win._prompt_on_completion = False  # no modal: persist directly
     # result.floor_fps is the discounted pass floor (30 × 0.85 = 25.5) the runner ran
     # with — the verdict must NOT print that; it must print the 30 the user chose.
     result = BenchmarkResult(
@@ -239,6 +317,7 @@ def test_chart_floor_matches_discounted_pass_threshold(qtapp) -> None:
     from autoptz.ui.mark_runner import MarkRampController
 
     win = _win(qtapp, floor_fps=30.0)
+    win._prompt_on_completion = False  # no modal: persist directly
     expected = 30.0 * MarkRampController._MARK_SUSTAIN_RATIO
     # Idle floor (set at construction / _refresh_idle_status).
     assert win._chart._floor == expected
@@ -265,6 +344,110 @@ def test_chart_floor_matches_discounted_pass_threshold(qtapp) -> None:
     win._on_finished(result)
     assert win._chart._floor == expected
     win.deleteLater()
+
+
+def _finish_result(**kw) -> BenchmarkResult:
+    base = {
+        "profile": "full",
+        "weight": 1.0,
+        "floor_fps": 24.0,
+        "max_cameras": 3,
+        "sustained_cameras": 2,
+        "min_fps_at_sustained": 28.0,
+        "score": 2.0,
+        "steps": [],
+    }
+    base.update(kw)
+    return BenchmarkResult(**base)
+
+
+def test_on_finished_shows_save_dialog(qtapp, monkeypatch, tmp_path) -> None:
+    """On completion the window prompts a Save dialog; a chosen path is written via
+    save_mark_result_to_path (NEVER the real modal — getSaveFileName is patched)."""
+    from PySide6.QtWidgets import QFileDialog
+
+    win = _win(qtapp)
+    target = tmp_path / "chosen-mark.json"
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(target), ""))
+    )
+    try:
+        win._on_finished(_finish_result())
+        assert target.exists()
+        import json as _json
+
+        data = _json.loads(target.read_text())
+        assert data["results"][0]["profile"] == "full"
+    finally:
+        win.deleteLater()
+
+
+def test_on_finished_dialog_cancelled_keeps_result(qtapp, monkeypatch, tmp_path) -> None:
+    """Cancelling the Save dialog ("",  "") writes NO file but keeps the result on the
+    window for save-on-exit — it must NOT auto-persist."""
+    from PySide6.QtWidgets import QFileDialog
+
+    win = _win(qtapp)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("", "")))
+    persisted: list[object] = []
+    monkeypatch.setattr(win, "_persist_result", lambda r: persisted.append(r))
+    try:
+        result = _finish_result()
+        win._on_finished(result)
+        assert win._result is result  # kept for save-on-exit
+        assert persisted == []  # cancel must NOT auto-persist
+        assert not list(tmp_path.glob("*.json"))
+    finally:
+        win.deleteLater()
+
+
+def test_on_finished_prompt_disabled_no_dialog(qtapp, monkeypatch) -> None:
+    """With _prompt_on_completion False the window does NOT open the dialog — it
+    persists the result directly (the headless / test path)."""
+    from PySide6.QtWidgets import QFileDialog
+
+    win = _win(qtapp)
+    win._prompt_on_completion = False
+    dialog_calls = {"n": 0}
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        staticmethod(
+            lambda *a, **k: dialog_calls.__setitem__("n", dialog_calls["n"] + 1) or ("", "")
+        ),
+    )
+    persisted: list[object] = []
+    monkeypatch.setattr(win, "_persist_result", lambda r: persisted.append(r))
+    try:
+        result = _finish_result()
+        win._on_finished(result)
+        assert dialog_calls["n"] == 0  # no dialog
+        assert persisted == [result]  # persisted directly
+    finally:
+        win.deleteLater()
+
+
+def test_reentrant_finished_single_dialog(qtapp, monkeypatch, tmp_path) -> None:
+    """A re-entrant _show_completion_dialog (e.g. a second finish while the modal is
+    up) must open the Save dialog only once."""
+    from PySide6.QtWidgets import QFileDialog
+
+    win = _win(qtapp)
+    target = tmp_path / "reentrant.json"
+    calls = {"n": 0}
+
+    def _fake_save(*a, **k):
+        calls["n"] += 1
+        # Re-enter while "inside" the dialog — the guard must swallow it.
+        win._show_completion_dialog(_finish_result())
+        return (str(target), "")
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(_fake_save))
+    try:
+        win._on_finished(_finish_result())
+        assert calls["n"] == 1  # the nested call was guarded out
+    finally:
+        win.deleteLater()
 
 
 def test_error_cancelled_reads_as_stopped(qtapp) -> None:

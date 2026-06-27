@@ -401,6 +401,18 @@ def build_stylesheet(pal: Palette, accent: QColor, selection: QColor) -> str:
         border: 1px solid {pal.border}; border-radius: {fs(8)}px;
         font-size: {fs(10)}px; font-weight: 700; }}
     QLabel#helpBadge:hover {{ color: {ACCENT_TEXT}; background: {a}; border-color: {a}; }}
+
+    /* AutoPTZ Mark HUD — chart card, control bar, details panel (mark_window.py) */
+    QWidget#markChart {{ background: {pal.surface}; border: 1px solid {pal.border};
+        border-radius: {r}px; }}
+    QFrame#chartCard {{ background: {pal.surface}; border: 1px solid {pal.border};
+        border-radius: {r}px; }}
+    QWidget#markControlPanel {{ background: {pal.surface_alt};
+        border-top: 1px solid {pal.border}; }}
+    QLabel#markVerdict {{ color: {pal.text}; font-size: {fs(14)}px; font-weight: 600; }}
+    QLabel#detailsHeader, QLabel#chartTitle {{ background: {pal.sidebar_bg};
+        color: {pal.subtext}; padding: {fs(6)}px {fs(10)}px; font-size: {fs(10)}px;
+        font-weight: 700; letter-spacing: 1px; }}
     """
 
 

@@ -7,6 +7,7 @@ from autoptz.benchmark.results import (
     MarkResultBundle,
     collect_machine_info,
     save_mark_result,
+    save_mark_result_to_path,
 )
 from autoptz.benchmark.runner import BenchmarkRunner
 
@@ -64,3 +65,24 @@ class TestSave:
         assert "last_mark_result" in store.kv
         assert store.kv["last_mark_result"]["results"][0]["sustained_cameras"] == 2
         assert isinstance(bundle, MarkResultBundle)
+
+
+class TestSaveToPath:
+    def test_save_mark_result_to_path_writes_json(self, tmp_path) -> None:
+        target = tmp_path / "nested" / "my-mark.json"
+        path, bundle = save_mark_result_to_path([_result("full")], target)
+        # Writes to the EXACT path requested (parents created).
+        assert path == target
+        assert path.exists()
+        data = json.loads(path.read_text())
+        assert data["app_version"]
+        assert len(data["results"]) == 1
+        assert data["results"][0]["profile"] == "full"
+        assert isinstance(bundle, MarkResultBundle)
+
+    def test_save_mark_result_to_path_updates_store(self, tmp_path) -> None:
+        store = _FakeStore()
+        target = tmp_path / "my-mark.json"
+        save_mark_result_to_path([_result("full")], target, store=store)
+        assert "last_mark_result" in store.kv
+        assert store.kv["last_mark_result"]["results"][0]["sustained_cameras"] == 2

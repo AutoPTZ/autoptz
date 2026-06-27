@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QFormLayout, QLabel, QWidget
+from PySide6.QtWidgets import QFormLayout, QLabel, QVBoxLayout, QWidget
 
 from autoptz.ui import theme as T
 from autoptz.ui.widgets.camera_info_panel import _stage_text
@@ -22,7 +22,7 @@ from autoptz.ui.widgets.camera_info_panel import _stage_text
 class MarkDetailsPanel(QWidget):
     """Per-stream stats for the selected Mark tile."""
 
-    _EMPTY = "Select a camera tile to view details."
+    _EMPTY = "No camera selected — click a tile to view live stats."
     _STAGES = (
         ("ingest", "Ingest", "ingest_ms"),
         ("detect", "Detect", "detect_ms"),
@@ -32,11 +32,20 @@ class MarkDetailsPanel(QWidget):
 
     def __init__(self, client: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("markDetailsPanel")
         self._client = client
         self._camera_id: str = ""
-        form = QFormLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        # An always-visible section header (global #detailsHeader rule styles it).
+        self._header = QLabel("CAMERA DETAILS")
+        self._header.setObjectName("detailsHeader")
+        outer.addWidget(self._header)
+        form = QFormLayout()
+        outer.addLayout(form)
         self._empty = QLabel(self._EMPTY)
-        self._empty.setStyleSheet(f"color: {T.CURRENT.subtext};")
+        self._empty.setWordWrap(True)
         form.addRow(self._empty)
         self._vals: dict[str, QLabel] = {}
         rows: list[tuple[str, str]] = [
@@ -62,6 +71,13 @@ class MarkDetailsPanel(QWidget):
                 client.telemetryUpdated.connect(self._on_telemetry)
             except Exception:  # noqa: BLE001
                 pass
+        # Per-widget restyle fallback so a Light/Dark flip repaints the idle hint
+        # (re-run on theme change via common.on_theme_changed in MarkWindow).
+        self._restyle()
+
+    def _restyle(self) -> None:
+        """Refresh the idle hint color from the active palette (re-run on theme flip)."""
+        self._empty.setStyleSheet(f"color: {T.CURRENT.subtext};")
 
     def _set_rows_visible(self, visible: bool) -> None:
         self._empty.setVisible(not visible)

@@ -65,6 +65,25 @@ class MarkResultBundle:
         }
 
 
+def _build_bundle(results: list[BenchmarkResult]) -> MarkResultBundle:
+    """Assemble the serializable bundle (machine info + results) for a save."""
+    return MarkResultBundle(
+        created_at=datetime.now(UTC).isoformat(),
+        app_version=__version__,
+        machine=collect_machine_info(),
+        results=[r.to_dict() for r in results],
+    )
+
+
+def _mirror_to_store(store: object | None, bundle: MarkResultBundle) -> None:
+    """Mirror the bundle under ``last_mark_result`` when a store is supplied."""
+    if store is None:
+        return
+    set_setting = getattr(store, "set_setting", None)
+    if callable(set_setting):
+        set_setting("last_mark_result", bundle.to_dict())
+
+
 def save_mark_result(
     results: list[BenchmarkResult],
     *,
@@ -77,16 +96,28 @@ def save_mark_result(
     out_dir = Path(base) / "benchmarks"
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    bundle = MarkResultBundle(
-        created_at=datetime.now(UTC).isoformat(),
-        app_version=__version__,
-        machine=collect_machine_info(),
-        results=[r.to_dict() for r in results],
-    )
+    bundle = _build_bundle(results)
     path = out_dir / f"autoptz-mark-{stamp}.json"
     path.write_text(json.dumps(bundle.to_dict(), indent=2))
-    if store is not None:
-        set_setting = getattr(store, "set_setting", None)
-        if callable(set_setting):
-            set_setting("last_mark_result", bundle.to_dict())
+    _mirror_to_store(store, bundle)
+    return path, bundle
+
+
+def save_mark_result_to_path(
+    results: list[BenchmarkResult],
+    path: Path,
+    *,
+    store: object | None = None,
+) -> tuple[Path, MarkResultBundle]:
+    """Write the result bundle to an EXPLICIT path (the Save-As completion dialog).
+
+    Unlike :func:`save_mark_result` (which auto-names a file under the benchmarks
+    dir), this honors the user-chosen ``path`` verbatim — creating parent dirs —
+    and still mirrors the bundle under ``last_mark_result`` when a store is given.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bundle = _build_bundle(results)
+    path.write_text(json.dumps(bundle.to_dict(), indent=2))
+    _mirror_to_store(store, bundle)
     return path, bundle

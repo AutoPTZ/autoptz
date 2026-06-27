@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QMetaObject, Qt, Signal, Slot
@@ -38,6 +39,9 @@ from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QPain
 from PySide6.QtWidgets import (
     QDialog,
     QDockWidget,
+    QFileDialog,
+    QFrame,
+    QLabel,
     QVBoxLayout,
     QWidget,
 )
@@ -47,6 +51,7 @@ from autoptz.benchmark.runner import BenchmarkResult, StepResult
 from autoptz.ui import theme as T
 from autoptz.ui.mark_session import MarkSession
 from autoptz.ui.widgets.camera_wall import CameraWall
+from autoptz.ui.widgets.common import on_theme_changed
 from autoptz.ui.widgets.main_window import MainWindow, _action, _safe
 from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
 from autoptz.ui.widgets.mark_details_panel import MarkDetailsPanel
@@ -81,9 +86,10 @@ class _MarkRampChart(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("markChart")
         self._steps: list[StepResult] = []
         self._floor: float = 24.0
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(140)
 
     def set_steps(self, steps: list[StepResult], floor: float) -> None:
         self._steps = list(steps)
@@ -178,6 +184,11 @@ class MarkWindow(MainWindow):
         self._result: BenchmarkResult | None = None
         self._benchmarks_dir: Any | None = None
         self._returning = False
+        # Completion (Area 2): on a finished ramp, prompt a Save-As dialog.  Tests
+        # flip ``_prompt_on_completion`` off to persist directly (no modal); the
+        # re-entrancy guard keeps a second finish from stacking a second dialog.
+        self._prompt_on_completion = True
+        self._showing_completion_dialog = False
         # A dedicated log model + handler so the inherited LogsPanel streams the
         # ISOLATED Mark session's logs (was: log_model=None → the dock showed a
         # static "Logs unavailable" label).  The handler is attached to the root
@@ -316,12 +327,25 @@ class MarkWindow(MainWindow):
         self._controls.stopClicked.connect(self.stop_run)
         self._controls.exitClicked.connect(self._request_exit)
 
-        # Insert chart + controls at the TOP of the inherited central column,
-        # above the CameraWall (index 0/1 keep the startup banner first).
+        # Wrap the chart in a titled card so it reads as a panel (the global
+        # #chartCard rule paints the surface + border; #chartTitle the caption).
+        chart_card = QFrame()
+        chart_card.setObjectName("chartCard")
+        card_col = QVBoxLayout(chart_card)
+        card_col.setContentsMargins(0, 0, 0, 0)
+        card_col.setSpacing(0)
+        chart_title = QLabel("PERFORMANCE RAMP")
+        chart_title.setObjectName("chartTitle")
+        card_col.addWidget(chart_title)
+        card_col.addWidget(self._chart)
+
+        # Insert the chart card + controls at the TOP of the inherited central
+        # column, above the CameraWall (index 0/1 keep the startup banner first).
         central = self.centralWidget()
         layout = central.layout() if central is not None else None
         if isinstance(layout, QVBoxLayout):
-            layout.insertWidget(1, self._chart)
+            layout.setSpacing(12)
+            layout.insertWidget(1, chart_card)
             layout.insertWidget(2, self._controls)
 
         # Replace the right "Camera Info" dock content with the Mark details panel.
@@ -332,6 +356,26 @@ class MarkWindow(MainWindow):
             info_dock.setWindowTitle("Details")
             info_dock.setVisible(True)
             info_dock.raise_()
+
+        # Theme reactivity (Area 1): the chart/control/details bake T.CURRENT
+        # colors at paint time but have no listener, so a View→Appearance flip
+        # never repaints them.  Wire each to the ISOLATED client's themeChanged so
+        # toggling the theme re-runs their restyle/repaint.  Each restyle is
+        # DEFERRED one event-loop turn so it reads T.CURRENT *after* the
+        # ThemeController's apply() has flipped it — the themeChanged slots fire in
+        # connection order, which can put the panels before the controller and
+        # otherwise leave them one appearance behind.
+        client = self._engine.client
+        on_theme_changed(client, self._chart.update)
+        on_theme_changed(client, lambda: self._defer(self._controls._restyle))
+        on_theme_changed(client, lambda: self._defer(self._details._restyle))
+
+    @staticmethod
+    def _defer(fn: Any) -> None:
+        """Run ``fn`` next event-loop turn (after the theme apply flips T.CURRENT)."""
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(0, fn)
 
     def _on_camera_selected(self, camera_id: str) -> None:
         # Drive the Mark details panel from the inherited tile-selection slot.
@@ -387,7 +431,7 @@ class MarkWindow(MainWindow):
         self._controls.set_verdict("Starting…")
         controller = MarkRampController(
             profile=self._session.profile,
-            floor_fps=self._session.floor_fps,
+            floor_fps=self._session.target_fps(),
             max_cameras=self._session.max_cameras,
             dwell_s=self._session.dwell_s,
             sample_factory=self._build_sample_factory(),
@@ -528,9 +572,54 @@ class MarkWindow(MainWindow):
         # the runner ran with (result.floor_fps) — that internal threshold is confusing.
         self._controls.set_verdict(
             f"Done — {result.sustained_cameras} camera(s) kept up with "
-            f"{self._session.floor_fps:.0f} fps (score {result.score})."
+            f"{self._session.target_fps():.0f} fps (score {result.score})."
         )
-        self._persist_result(result)
+        # Offer to save the result (Save-As).  When prompting is off (tests /
+        # headless) this persists directly under the benchmarks dir instead.
+        self._show_completion_dialog(result)
+
+    def _show_completion_dialog(self, result: BenchmarkResult) -> None:
+        """Prompt a Save-As for the finished result (or persist directly when off).
+
+        With ``_prompt_on_completion`` off this just calls :meth:`_persist_result`
+        (the headless path).  Otherwise it opens a single ``QFileDialog`` (guarded
+        against re-entry): a chosen path is written via
+        :func:`save_mark_result_to_path` and its directory remembered; Cancel
+        leaves the result in :attr:`_result` for save-on-exit and does NOT
+        auto-persist.
+        """
+        if not self._prompt_on_completion:
+            self._persist_result(result)
+            return
+        if self._showing_completion_dialog:
+            return
+        self._showing_completion_dialog = True
+        try:
+            from datetime import UTC, datetime
+
+            from autoptz.benchmark.results import save_mark_result_to_path
+            from autoptz.config.store import default_config_dir
+
+            base = self._benchmarks_dir or (default_config_dir() / "benchmarks")
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            default_path = str(Path(base) / f"autoptz-mark-{stamp}.json")
+            path, _filter = QFileDialog.getSaveFileName(
+                self,
+                "Save AutoPTZ Mark results",
+                default_path,
+                "JSON (*.json);;All Files (*)",
+            )
+            if not path:
+                return  # Cancel → keep self._result for save-on-exit; no auto-persist
+            try:
+                saved, _bundle = save_mark_result_to_path(
+                    [result], Path(path), store=self._engine.store
+                )
+                self._benchmarks_dir = saved.parent
+            except Exception:  # noqa: BLE001
+                log.exception("Failed to save AutoPTZ Mark result")
+        finally:
+            self._showing_completion_dialog = False
 
     def _on_error(self, message: str) -> None:
         self._teardown_controller()
@@ -591,7 +680,7 @@ class MarkWindow(MainWindow):
         """
         from autoptz.ui.mark_runner import MarkRampController
 
-        return float(self._session.floor_fps) * MarkRampController._MARK_SUSTAIN_RATIO
+        return float(self._session.target_fps()) * MarkRampController._MARK_SUSTAIN_RATIO
 
     def _refresh_idle_status(self) -> None:
         self._controls.set_verdict(

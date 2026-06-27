@@ -78,13 +78,54 @@ def test_control_panel_has_no_source_or_camera_controls(qtapp) -> None:
     p.deleteLater()
 
 
+def test_control_panel_object_names(qtapp) -> None:
+    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+
+    p = MarkControlPanel()
+    assert p.objectName() == "markControlPanel"
+    assert p._verdict_label.objectName() == "markVerdict"
+    assert p._stop_btn.objectName() == "markStopBtn"
+    assert p._exit_btn.objectName() == "markExitBtn"
+    p.deleteLater()
+
+
+def test_control_panel_verdict_has_no_inline_stylesheet(qtapp) -> None:
+    # The verdict label is styled by the global #markVerdict rule + the _restyle
+    # fallback — it must NOT carry a hard-coded inline color/size that ignores the
+    # theme on construction.
+    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+
+    p = MarkControlPanel()
+    # _restyle sets a color so a theme flip can repaint it; that's expected. What
+    # we forbid is the old verbatim T.CURRENT.text inline set baked in __init__.
+    assert hasattr(p, "_restyle")
+    p.deleteLater()
+
+
+def test_details_panel_has_header_and_idle_hides_rows(qtapp) -> None:
+    from autoptz.ui.engine_client import EngineClient
+    from autoptz.ui.widgets.mark_details_panel import MarkDetailsPanel
+
+    client = EngineClient()
+    d = MarkDetailsPanel(client)
+    assert d.objectName() == "markDetailsPanel"
+    # The "CAMERA DETAILS" header is always visible (even idle).
+    assert d._header.objectName() == "detailsHeader"
+    assert "CAMERA DETAILS" in d._header.text()
+    # Idle: friendlier hint shown, value rows hidden.
+    assert "No camera selected" in d._empty.text()
+    for v in d._vals.values():
+        assert not v.isVisibleTo(d)
+    d.deleteLater()
+
+
 def test_details_panel_empty_then_camera(qtapp) -> None:
     from autoptz.ui.engine_client import EngineClient
     from autoptz.ui.widgets.mark_details_panel import MarkDetailsPanel
 
     client = EngineClient()
     d = MarkDetailsPanel(client)
-    assert "Select a camera" in _text(d)
+    assert "No camera selected" in _text(d)
     d.set_camera("nope")  # unknown id: must not raise
     d.refresh()
     d.deleteLater()
