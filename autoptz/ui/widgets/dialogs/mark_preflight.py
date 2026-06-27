@@ -37,7 +37,13 @@ from autoptz.ui.mark_session import MarkSession
 _INTRO = (
     "AutoPTZ Mark is a quick simulation: it adds fake cameras one at a time and "
     "measures how many your computer can run smoothly. Each camera runs the real "
-    "AutoPTZ pipeline on real people from a built-in video clip."
+    "AutoPTZ pipeline on a built-in scene."
+)
+# Appended to the intro only when the bundled clip is present, so the copy never
+# promises "real people from a video clip" in a build that lacks the asset.
+_INTRO_CLIP = (
+    " By default it plays real people from a built-in video clip; if that clip "
+    "isn't installed it falls back to drawn people automatically."
 )
 
 # Dropdown options as (label, value).  The value is what lands in MarkSession.
@@ -103,7 +109,10 @@ class MarkPreflightDialog(QDialog):
         col.setContentsMargins(18, 18, 18, 18)
         col.setSpacing(12)
 
-        intro = QLabel(_INTRO)
+        # Honest about the source: only promise "real people from a clip" when the
+        # bundled clip is actually present; otherwise say it falls back to drawn people.
+        clip_ok = MarkSession().clip_available()
+        intro = QLabel(_INTRO + (_INTRO_CLIP if clip_ok else ""))
         intro.setWordWrap(True)
         intro.setStyleSheet(f"color: {T.CURRENT.subtext};")
         col.addWidget(intro)
@@ -125,7 +134,12 @@ class MarkPreflightDialog(QDialog):
         source_box = QGroupBox("Camera source")
         source_col = QVBoxLayout(source_box)
         self._source_group = QButtonGroup(self)
-        self._clip_radio = QRadioButton("Bundled clip — real people (real decode)")
+        clip_label = (
+            "Bundled clip — real people (real decode)"
+            if clip_ok
+            else "Bundled clip — not installed (uses drawn people)"
+        )
+        self._clip_radio = QRadioButton(clip_label)
         self._synthetic_radio = QRadioButton("Synthetic — drawn people (light)")
         ndi_ok = ndi_sim_available()
         ndi_text = "Real NDI sources" if ndi_ok else "Real NDI sources  (requires cyndilib)"

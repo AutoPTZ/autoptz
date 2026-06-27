@@ -100,6 +100,16 @@ class MarkSession:
         """Absolute path (str) to the bundled demo clip, for the SyntheticAdapter."""
         return str(_clip_path())
 
+    def clip_available(self) -> bool:
+        """True when the bundled demo clip actually exists on disk.
+
+        The clip ships with frozen bundles (packaging trees ``autoptz/assets``),
+        but it isn't guaranteed present in a fresh clone / CI checkout.  Callers
+        use this to fall back to the drawn-people scene *transparently* (with a log
+        line) instead of silently degrading the advertised "real people" demo.
+        """
+        return _clip_path().is_file()
+
 
 def load_mark_session(store: object) -> MarkSession | None:
     raw = store.get_setting(MARK_SESSION_KEY, None)  # type: ignore[attr-defined]

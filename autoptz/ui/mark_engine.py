@@ -150,9 +150,20 @@ class MarkEngineFactory:
 
         ``clip`` → the bundled real-people clip path (the adapter loops the real
         decode); any other (synthetic) source → ``"anim"`` (drawn synthetic people).
+
+        When ``clip`` is requested but the bundled clip is missing (e.g. a fresh
+        clone / CI checkout where the asset isn't present), fall back to the drawn
+        scene *with a warning* rather than letting the SyntheticAdapter silently
+        degrade — the advertised "real people" demo shouldn't fail quietly.
         """
         if self._session.is_clip():
-            return self._session.clip_path()
+            if self._session.clip_available():
+                return self._session.clip_path()
+            log.warning(
+                "Mark clip source requested but bundled clip is missing (%s); "
+                "falling back to drawn synthetic people.",
+                self._session.clip_path(),
+            )
         return "anim"
 
     def add_next_camera(self) -> str | None:

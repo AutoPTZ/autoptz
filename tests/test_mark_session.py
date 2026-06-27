@@ -104,7 +104,23 @@ class TestClipSource:
         p = Path(path)
         assert p.is_absolute()
         assert p.name == "mark_people_1080p.mp4"
-        assert p.is_file()
+        # NOTE: we intentionally do NOT assert ``p.is_file()`` here — the clip is a
+        # bundled asset that may be absent in a fresh clone / CI checkout.  The path
+        # must still resolve correctly; presence is covered by clip_available().
+
+    def test_clip_available_reflects_disk_state(self, monkeypatch) -> None:
+        from pathlib import Path
+
+        import autoptz.ui.mark_session as ms
+
+        # Unpatched: clip_available() reflects the real resolved path's state.
+        assert MarkSession().clip_available() == ms._clip_path().is_file()
+        # Present on disk → available.
+        monkeypatch.setattr(Path, "is_file", lambda self: True)
+        assert MarkSession().clip_available() is True
+        # Absent on disk → not available (no exception, just False).
+        monkeypatch.setattr(Path, "is_file", lambda self: False)
+        assert MarkSession().clip_available() is False
 
     def test_clip_source_round_trips(self) -> None:
         store = _Store()

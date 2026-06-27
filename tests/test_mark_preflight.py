@@ -141,6 +141,28 @@ class TestPreflight:
         assert dlg._ndi_radio.isEnabled() == ndi_sim_available()
         dlg.deleteLater()
 
+    def test_clip_copy_warns_when_clip_missing(self, qtapp, monkeypatch) -> None:
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        # Simulate a checkout without the bundled clip → copy must be honest about
+        # the drawn-people fallback rather than promising "real people".
+        monkeypatch.setattr(MarkSession, "clip_available", lambda self: False)
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+        clip_text = dlg._clip_radio.text().lower()
+        assert "not installed" in clip_text
+        assert "drawn people" in clip_text
+        dlg.deleteLater()
+
+    def test_clip_copy_promises_real_people_when_present(self, qtapp, monkeypatch) -> None:
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+        clip_text = dlg._clip_radio.text().lower()
+        assert "real people" in clip_text
+        assert "not installed" not in clip_text
+        dlg.deleteLater()
+
     def test_synthetic_source_selectable(self, qtapp) -> None:
         from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 

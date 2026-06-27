@@ -241,11 +241,15 @@ def test_synthetic_cameras_use_session_resolution():
         eng.stop()
 
 
-def test_clip_source_registers_cameras_with_clip_path():
+def test_clip_source_registers_cameras_with_clip_path(monkeypatch):
     """A clip-source factory registers synthetic cameras whose address is the
     bundled clip path, so the SyntheticAdapter loops the real clip (real decode,
     real people) instead of drawing synthetic people."""
     from autoptz.ui import mark_engine
+
+    # Force the bundled clip "present" so this asserts the clip-path wiring even on a
+    # checkout where the asset isn't installed (it's an untracked bundled asset).
+    monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
 
     session = MarkSession(source="clip", max_cameras=3, resolution="1080p")
     clip = session.clip_path()
@@ -267,6 +271,30 @@ def test_clip_source_registers_cameras_with_clip_path():
         assert cid2 is not None
         rec2 = eng.client.cameraModel.get_record(cid2)
         assert rec2.camera_config.source.address == clip
+    finally:
+        eng.stop()
+
+
+def test_clip_source_falls_back_to_anim_when_clip_missing(monkeypatch):
+    """When the bundled clip is absent, a clip-source session degrades to the drawn
+    ("anim") scene instead of silently feeding the SyntheticAdapter a dead path."""
+    from autoptz.ui import mark_engine
+
+    # Simulate a checkout without the bundled clip.
+    monkeypatch.setattr(MarkSession, "clip_available", lambda self: False)
+
+    session = MarkSession(source="clip", max_cameras=2, resolution="1080p")
+    eng = mark_engine.MarkEngineFactory(
+        session,
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    eng.start()
+    try:
+        ids = eng.client.cameraModel.camera_ids()
+        rec = eng.client.cameraModel.get_record(ids[0])
+        assert rec.camera_config.source.type == "synthetic"
+        # Falls back to the drawn scene, NOT the (missing) clip path.
+        assert rec.camera_config.source.address == "anim"
     finally:
         eng.stop()
 
