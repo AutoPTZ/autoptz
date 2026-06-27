@@ -353,11 +353,24 @@ def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
     # Inert in normal use.
     if os.path.exists("/tmp/autoptz_start_mark_now"):
         # Skip the pre-flight and enter Mark directly with a small fast session
-        # (for scripted/visual validation of the Mark window itself).
+        # (for scripted/visual validation of the Mark window itself).  The marker
+        # file's first line picks the source ("clip"|"synthetic"|"ndi"; blank →
+        # the MarkSession default) so a script can validate each source variant.
         from autoptz.ui.mark_session import MarkSession
 
+        def _marker_source() -> str:
+            valid = {"clip", "synthetic", "ndi"}
+            try:
+                with open("/tmp/autoptz_start_mark_now", encoding="utf-8") as fh:
+                    first = fh.readline().strip().lower()
+            except OSError:
+                first = ""
+            return first if first in valid else MarkSession().source
+
+        _src = _marker_source()
         QTimer.singleShot(
-            1200, lambda: window._enter_mark_mode(MarkSession(max_cameras=4, dwell_s=5.0))
+            1200,
+            lambda: window._enter_mark_mode(MarkSession(source=_src, max_cameras=4, dwell_s=6.0)),
         )
     elif os.environ.get("AUTOPTZ_START_MARK") or os.path.exists("/tmp/autoptz_start_mark"):
         QTimer.singleShot(1200, window._start_mark)
