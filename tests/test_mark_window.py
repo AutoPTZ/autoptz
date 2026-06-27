@@ -208,6 +208,65 @@ def test_finish_sets_verdict(qtapp) -> None:
     win.deleteLater()
 
 
+def test_finish_verdict_shows_user_target_not_discounted_floor(qtapp) -> None:
+    """Change C: the finished verdict shows the user's TARGET fps (session.floor_fps),
+    not the runner's DISCOUNTED pass floor (which result.floor_fps now carries and is
+    confusing to surface)."""
+    win = _win(qtapp, floor_fps=30.0)
+    # result.floor_fps is the discounted pass floor (30 × 0.85 = 25.5) the runner ran
+    # with — the verdict must NOT print that; it must print the 30 the user chose.
+    result = BenchmarkResult(
+        profile="full",
+        weight=1.0,
+        floor_fps=25.5,
+        max_cameras=3,
+        sustained_cameras=2,
+        min_fps_at_sustained=28.0,
+        score=2.0,
+        steps=[],
+    )
+    win._on_finished(result)
+    text = win._controls._verdict_label.text()
+    assert "30" in text  # the user's target
+    assert "25" not in text  # NOT the discounted pass floor
+    win.deleteLater()
+
+
+def test_chart_floor_matches_discounted_pass_threshold(qtapp) -> None:
+    """Change C: the chart's pass line is the SAME discounted floor used to color the
+    steps (session target × ratio), so green dots sit above the line and red below —
+    not the raw target (which would put passing-but-capped steps below the line)."""
+    from autoptz.ui.mark_runner import MarkRampController
+
+    win = _win(qtapp, floor_fps=30.0)
+    expected = 30.0 * MarkRampController._MARK_SUSTAIN_RATIO
+    # Idle floor (set at construction / _refresh_idle_status).
+    assert win._chart._floor == expected
+    # After a step.
+    win._on_step(
+        StepResult(cameras=1, min_fps=26.0, mean_fps=26.0, per_camera_fps=[26.0], sustained=True)
+    )
+    assert win._chart._floor == expected
+    # After finish.
+    result = BenchmarkResult(
+        profile="full",
+        weight=1.0,
+        floor_fps=expected,
+        max_cameras=3,
+        sustained_cameras=1,
+        min_fps_at_sustained=26.0,
+        score=1.0,
+        steps=[
+            StepResult(
+                cameras=1, min_fps=26.0, mean_fps=26.0, per_camera_fps=[26.0], sustained=True
+            )
+        ],
+    )
+    win._on_finished(result)
+    assert win._chart._floor == expected
+    win.deleteLater()
+
+
 def test_error_cancelled_reads_as_stopped(qtapp) -> None:
     win = _win(qtapp)
     win._on_error("cancelled")

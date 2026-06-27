@@ -382,7 +382,7 @@ class MarkWindow(MainWindow):
         from autoptz.ui.mark_runner import MarkRampController
 
         self._result = None
-        self._chart.set_steps([], self._session.floor_fps)
+        self._chart.set_steps([], self._effective_floor())
         self._controls.set_running(True)
         self._controls.set_verdict("Starting…")
         controller = MarkRampController(
@@ -508,7 +508,7 @@ class MarkWindow(MainWindow):
 
     def _on_step(self, step: StepResult) -> None:
         self._chart._steps.append(step)
-        self._chart.set_steps(self._chart._steps, self._session.floor_fps)
+        self._chart.set_steps(self._chart._steps, self._effective_floor())
         # The ramp grew the wall this step; re-target so any newly added camera also
         # locks on (idempotent — same seed re-commits the same per-position targets).
         self._engine.auto_track_targets(seed=0xA17)
@@ -520,10 +520,15 @@ class MarkWindow(MainWindow):
         self._result = result
         self._teardown_controller()
         self._controls.set_running(False)
-        self._chart.set_steps(list(result.steps) or self._chart._steps, result.floor_fps)
+        # Color steps against the SAME discounted floor the ramp graded with (the
+        # chart's pass line), not result.floor_fps mixed with the raw target — so
+        # green dots sit above the line and red below.
+        self._chart.set_steps(list(result.steps) or self._chart._steps, self._effective_floor())
+        # Show the user's TARGET fps (what they chose), not the discounted pass floor
+        # the runner ran with (result.floor_fps) — that internal threshold is confusing.
         self._controls.set_verdict(
-            f"Done — sustained {result.sustained_cameras} cam(s) "
-            f"@ ≥{result.floor_fps:.0f} fps (score {result.score})."
+            f"Done — {result.sustained_cameras} camera(s) kept up with "
+            f"{self._session.floor_fps:.0f} fps (score {result.score})."
         )
         self._persist_result(result)
 
@@ -575,11 +580,24 @@ class MarkWindow(MainWindow):
         except Exception:  # noqa: BLE001
             log.debug("could not open results folder", exc_info=True)
 
+    def _effective_floor(self) -> float:
+        """The DISCOUNTED pass floor the ramp actually grades against.
+
+        Mark grades a camera as sustaining at ``target × _MARK_SUSTAIN_RATIO`` (the
+        capped sources can't hit the raw target exactly — see
+        :class:`MarkRampController`).  The chart's pass line must use THIS threshold
+        so green (sustained) dots sit above the line and red (fail) below; using the
+        raw target would put passing-but-capped steps below the line.
+        """
+        from autoptz.ui.mark_runner import MarkRampController
+
+        return float(self._session.floor_fps) * MarkRampController._MARK_SUSTAIN_RATIO
+
     def _refresh_idle_status(self) -> None:
         self._controls.set_verdict(
             f"Ready — profile {self._session.profile}, up to {self._session.max_cameras} cameras."
         )
-        self._chart.set_steps([], self._session.floor_fps)
+        self._chart.set_steps([], self._effective_floor())
 
     # ── exit / lifecycle ─────────────────────────────────────────────────────────
 
