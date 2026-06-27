@@ -97,6 +97,20 @@ class MarkNDISender:
             pass
 
 
+def _resolve_full_name(short: str, discovered: list[str]) -> str | None:
+    """Match a sender's short NDI name to its full discovered name.
+
+    NDI advertises ``"HOSTNAME (short name)"``, so ``"AutoPTZ Mark Cam 1"`` appears
+    as ``"PRINCES-MBP (AutoPTZ Mark Cam 1)"``.  Match exact, suffix ``"(short)"``,
+    or ``"(short)"`` contained — returns the full name, or None if not yet seen.
+    """
+    token = f"({short})"
+    for full in discovered:
+        if full == short or full.endswith(token) or token in full:
+            return full
+    return None
+
+
 class MarkNDIFleet:
     def __init__(self, n: int, *, width: int = 1280, height: int = 720, fps: float = 30.0) -> None:
         if not _CYNDILIB_OK:
@@ -107,6 +121,49 @@ class MarkNDIFleet:
 
     def names(self) -> list[str]:
         return [s.ndi_name for s in self._senders]
+
+    def full_names(self, *, timeout_s: float = 5.0) -> list[str]:
+        """Discover each sender's FULL hostname-prefixed NDI name.
+
+        NDI advertises a source as ``"HOSTNAME (short name)"``, so a sender created
+        as ``"AutoPTZ Mark Cam 1"`` appears on the network as e.g.
+        ``"PRINCES-MBP (AutoPTZ Mark Cam 1)"``.  The ingest (``NDIAdapter``) matches
+        the FULL name exactly, so cameras MUST be registered with these — using the
+        short name is why NDI mode produced no streams.  Opens + pumps the senders
+        while a Finder resolves them; falls back to the short name on any miss.
+        """
+        short = self.names()
+        if not short:
+            return []
+        self.open()
+        from cyndilib.finder import Finder  # noqa: PLC0415
+
+        finder = Finder()
+        finder.open()
+        resolved: dict[str, str] = {}
+        deadline = time.monotonic() + max(0.5, float(timeout_s))
+        try:
+            while time.monotonic() < deadline and len(resolved) < len(short):
+                self.pump_once()  # keep broadcasting so discovery sees them
+                try:
+                    finder.wait_for_sources(0.3)
+                except Exception:  # noqa: BLE001
+                    pass
+                discovered = [str(s) for s in finder.iter_sources()]
+                for s in short:
+                    if s not in resolved:
+                        full = _resolve_full_name(s, discovered)
+                        if full is not None:
+                            resolved[s] = full
+                time.sleep(0.05)
+        finally:
+            try:
+                finder.close()
+            except Exception:  # noqa: BLE001
+                log.debug("ndi finder close failed", exc_info=True)
+        out = [resolved.get(s, s) for s in short]
+        log.info("MarkNDIFleet resolved full NDI names: %s", out)
+        return out
 
     def open(self) -> None:
         for s in self._senders:

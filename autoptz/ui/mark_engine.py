@@ -132,8 +132,13 @@ class MarkEngineFactory:
             )
 
             if ndi_sim_available():
-                self._ndi_fleet = MarkNDIFleet(n)
-                self._ndi_names = list(self._ndi_fleet.names())
+                w, h = self._session.resolution_size()
+                self._ndi_fleet = MarkNDIFleet(n, width=w, height=h)
+                # Register the FULL hostname-prefixed names ("HOST (AutoPTZ Mark Cam
+                # N)") the network advertises — the NDIAdapter matches the full name,
+                # so the short names left every NDI tile blank.  full_names() opens +
+                # discovers the senders (falls back to short names on timeout).
+                self._ndi_names = self._ndi_fleet.full_names()
                 if self._ndi_names:
                     self._camera_ids.append(_add_ndi_camera(self._client, self._ndi_names[0], 0))
                 return

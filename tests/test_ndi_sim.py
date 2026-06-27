@@ -32,3 +32,21 @@ def test_open_push_close_cycle() -> None:
             fleet.pump_once()  # composes + write_video on each sender; must not raise
     finally:
         fleet.close()
+
+
+def test_resolve_full_name_matches_hostname_prefixed() -> None:
+    """NDI advertises 'HOST (short)' and the ingest matches the FULL name, so the
+    Mark fleet maps each short sender name to its discovered full name (the fix for
+    'NDI makes no real streams'). Pure helper — runs without cyndilib."""
+    from autoptz.benchmark.ndi_sim import _resolve_full_name
+
+    discovered = ["PRINCES-MBP (AutoPTZ Mark Cam 1)", "PRINCES-MBP (AutoPTZ Mark Cam 2)"]
+    assert (
+        _resolve_full_name("AutoPTZ Mark Cam 1", discovered) == "PRINCES-MBP (AutoPTZ Mark Cam 1)"
+    )
+    assert (
+        _resolve_full_name("AutoPTZ Mark Cam 2", discovered) == "PRINCES-MBP (AutoPTZ Mark Cam 2)"
+    )
+    assert _resolve_full_name("X", ["X"]) == "X"  # exact (no prefix) still matches
+    # Not yet discovered → None (caller falls back to the short name).
+    assert _resolve_full_name("AutoPTZ Mark Cam 3", discovered) is None
