@@ -120,6 +120,13 @@ class TestScanWorkerHealth:
         try:
             original = factory_log[0]
             assert original._alive is True
+            # A healthy worker emits telemetry; record a fresh timestamp on the
+            # SAME (injected) clock as the scan.  Without this the hang check
+            # compares the injected ``now`` against the worker's real-monotonic
+            # spawn_t — fine on a high-uptime dev box, but on a low-uptime CI
+            # runner (monotonic < 1000) the worker looks "stale" and is wrongly
+            # respawned (production uses one real clock, so it's unaffected).
+            sup._last_telemetry_t[cid] = 1000.0
             sup._scan_worker_health(1000.0)
             assert len(factory_log) == 1  # no new worker built
             assert original.stop_calls == 0
@@ -251,7 +258,10 @@ class TestScanWorkerHealth:
             assert sup._restart_state[cid][0] == 2  # two attempts recorded
 
             # --- Phase 2: new worker is healthy → state cleared ---
-            # factory_log[2] starts alive (default); a scan sees it healthy.
+            # factory_log[2] starts alive (default); record fresh telemetry on the
+            # injected clock so the hang check doesn't false-positive on a
+            # low-uptime CI runner (see test_healthy_worker_is_not_touched).
+            sup._last_telemetry_t[cid] = now + 1.0
             sup._scan_worker_health(now + 1.0)
             assert cid not in sup._restart_state  # recovery cleared the slate
 
