@@ -177,6 +177,7 @@ def _add_synthetic_camera(
     *,
     width: int = 0,
     height: int = 0,
+    address: str = "anim",
 ) -> str:
     """Register one self-paced synthetic camera on the client's model.
 
@@ -185,18 +186,24 @@ def _add_synthetic_camera(
     the synthetic source so it never free-spins (~16000 fps would tear the shm
     triple-buffer).  A non-zero ``width``/``height`` (AutoPTZ Mark's resolution
     control) sizes the composed synthetic scene; 0 keeps the source default.
+
+    ``address`` selects the synthetic content: the default ``"anim"`` draws moving
+    synthetic people; a path to a video file (AutoPTZ Mark's bundled clip) makes
+    the ``SyntheticAdapter`` loop that real clip instead (real decode, real people,
+    no drawn overlay).
     """
     from autoptz.config.models import CameraConfig, SourceConfig
     from autoptz.ui.list_models import CameraRecord
 
     camera_id = str(uuid.uuid4())
     name = f"AutoPTZ Mark {index + 1}"
+    addr = (address or "anim").strip() or "anim"
     cfg = CameraConfig(
         id=camera_id,
         name=name,
         source=SourceConfig(
             type="synthetic",
-            address="anim",
+            address=addr,
             fps=30.0,
             width=int(width),
             height=int(height),
@@ -204,7 +211,7 @@ def _add_synthetic_camera(
     )
     rec = CameraRecord(
         camera_id=camera_id,
-        source_uri="synthetic://anim",
+        source_uri=f"synthetic://{addr}",
         display_name=name,
         camera_config=cfg,
     )

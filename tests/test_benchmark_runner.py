@@ -181,6 +181,18 @@ class TestAddSyntheticCamera:
         assert rec.camera_config.source.address == "anim"
         assert rec.camera_config.source.fps == 30.0
 
+    def test_address_override_flows_to_source(self, qapp) -> None:
+        # A non-default address (e.g. the bundled clip path) lands on the source so
+        # the SyntheticAdapter loops the real clip instead of drawing synthetic people.
+        from autoptz.ui.engine_client import EngineClient
+
+        client = EngineClient()
+        cid = _add_synthetic_camera(client, 0, address="/some/clip.mp4")
+        rec = client.cameraModel.get_record(cid)
+        assert rec is not None and rec.camera_config is not None
+        assert rec.camera_config.source.type == "synthetic"
+        assert rec.camera_config.source.address == "/some/clip.mp4"
+
 
 class TestSupervisorSampler:
     def test_sampler_reports_fps_per_camera(self, qapp) -> None:
