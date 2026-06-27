@@ -322,6 +322,83 @@ class TestSupervisorSampler:
             sup.stop()
 
 
+class TestSamplerWarmup:
+    """Change A: the adopted sampler waits out the one-time engine warmup before it
+    measures, so step 1 reflects steady state (model loaded + frames flowing) rather
+    than the ~8s model-load window that reads ~0 fps and stops the ramp instantly."""
+
+    def _adopted_sampler(self, qapp):
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        injected = EngineClient()
+        sup = Supervisor(injected, store=None, worker_factory=_FakeSamplerWorker)
+        sup.prime_features(dict(get_profile("full").features))
+        cams = [_add_synthetic_camera(injected, 0)]
+        sup.start(run_pump=False)
+        sampler = _SupervisorSampler(
+            get_profile("full"),
+            client=injected,
+            supervisor=sup,
+            cameras=cams,
+            adopted_started=True,
+        )
+        return sampler, sup
+
+    def test_warmup_waits_until_fps_rises(self, qapp) -> None:
+        sampler, sup = self._adopted_sampler(qapp)
+        try:
+            # fps reads 0 for the first few polls (model still loading), then rises
+            # above the warmup floor (10) — the sampler must keep polling until then.
+            polls = {"n": 0}
+
+            def rising_reader(_client, _cid) -> float:
+                polls["n"] += 1
+                return 0.0 if polls["n"] < 4 else 30.0
+
+            # Tight warmup knobs so the test is fast and offscreen-safe.
+            sampler._warmup(rising_reader, min_fps=10.0, timeout_s=5.0, settle_s=0.0, poll_s=0.0)
+            # It polled past the cold reads until fps cleared the floor, then warmed.
+            assert polls["n"] >= 4
+            assert sampler._warmed is True
+        finally:
+            sup.stop()
+
+    def test_warmup_is_one_shot(self, qapp) -> None:
+        sampler, sup = self._adopted_sampler(qapp)
+        try:
+            calls = {"n": 0}
+
+            def reader(_client, _cid) -> float:
+                calls["n"] += 1
+                return 30.0
+
+            sampler._warmup(reader, min_fps=10.0, timeout_s=1.0, settle_s=0.0, poll_s=0.0)
+            first = calls["n"]
+            assert first >= 1
+            # Second warmup is a no-op (already warmed) — no further reads.
+            sampler._warmup(reader, min_fps=10.0, timeout_s=1.0, settle_s=0.0, poll_s=0.0)
+            assert calls["n"] == first
+        finally:
+            sup.stop()
+
+    def test_warmup_times_out_when_fps_never_rises(self, qapp) -> None:
+        sampler, sup = self._adopted_sampler(qapp)
+        try:
+            import time as _time
+
+            t0 = _time.monotonic()
+            # fps stuck at 0 → warmup must give up at the (small) timeout, not hang.
+            sampler._warmup(
+                lambda _c, _i: 0.0, min_fps=10.0, timeout_s=0.2, settle_s=0.0, poll_s=0.02
+            )
+            elapsed = _time.monotonic() - t0
+            assert sampler._warmed is True
+            assert elapsed < 2.0  # bounded by the timeout, didn't hang
+        finally:
+            sup.stop()
+
+
 class TestRunBenchmarkWiring:
     def test_run_benchmark_with_injected_supervisor(self, qapp, capsys) -> None:
         from autoptz.engine.supervisor import Supervisor

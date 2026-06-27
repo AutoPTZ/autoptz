@@ -247,6 +247,11 @@ class MarkNDIFleetSampler:
         self._sup = supervisor
         self._cameras = list(cameras) if cameras else []
         self._started = bool(adopted_started)
+        # One-time warmup gate (adopted path): the detector model loads (~8s) during
+        # the first dwell, so without this the first measured step reads ~0 fps and
+        # the ramp stops immediately.  Flipped True after the first sample waits for
+        # frames to flow + the model to finish loading (see ``_warmup``).
+        self._warmed = False
         # Progressive ramp (adopted path): grow the registered NDI cameras one at a
         # time as the ramp steps up.  ``on_grow`` registers the next ndi:// camera on
         # the client + spawns its worker (the Mark factory's add_next_camera).  The
@@ -267,6 +272,37 @@ class MarkNDIFleetSampler:
             self._fleet.open()
             for i, name in enumerate(self._fleet.names()):
                 self._cameras.append(_add_ndi_camera(self._client, name, i))
+
+    def _warmup(
+        self,
+        reader: Callable[[Any, str], float],
+        *,
+        min_fps: float = 10.0,
+        timeout_s: float = 25.0,
+        settle_s: float = 1.0,
+        poll_s: float = 0.2,
+    ) -> None:
+        """Block until the current NDI cameras are warmed up (frames + model loaded).
+
+        Mirrors ``runner._SupervisorSampler._warmup``: the detector model loads
+        (~8s) during the first dwell, so without this gate the first measured step
+        reads ~0 fps and the ramp stops immediately.  Polls the current cameras'
+        telemetry fps until the slowest clears ``min_fps`` or a ~``timeout_s`` budget
+        elapses, then settles ``settle_s`` so the rolling average reflects steady
+        state.  One-shot (``_warmed``).
+        """
+        if self._warmed:
+            return
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while time.monotonic() < deadline:
+            cams = self._cameras
+            if cams:
+                fps = [reader(self._client, cid) for cid in cams]
+                if fps and min(fps) >= min_fps:
+                    break
+            time.sleep(max(0.0, poll_s))
+        time.sleep(max(0.0, settle_s))
+        self._warmed = True
 
     def sample(
         self,
@@ -290,9 +326,12 @@ class MarkNDIFleetSampler:
                         break
                     self._cameras.append(cid)
             # The Mark window's GUI pump drives the adopted supervisor AND pumps the
-            # adopted fleet — ticking/pumping here would race two threads.  Just wait
-            # the dwell, then read the first ``n`` pre-added NDI cameras' fps.
+            # adopted fleet — ticking/pumping here would race two threads.  Before the
+            # FIRST dwell, wait out the one-time engine warmup (model load + frames
+            # flowing) so step 1 measures steady state, not the ~8s model load.  Then
+            # wait the dwell and read the first ``n`` pre-added NDI cameras' fps.
             assert self._fleet is not None
+            self._warmup(reader)
             time.sleep(max(0.0, dwell_s) if dwell_s > 0.0 else 0.01)
             self._drain_events()
             return [reader(self._client, cid) for cid in self._cameras[:n]]

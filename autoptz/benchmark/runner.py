@@ -271,6 +271,12 @@ class _SupervisorSampler:
         # Pre-seed with adopted camera ids so _ensure_cameras never re-adds them.
         self._cameras: list[str] = list(cameras) if cameras else []
         self._started = bool(adopted_started)
+        # One-time warmup gate (adopted path): the detector model loads (~8s) during
+        # the first dwell, so the first measured step would otherwise read ~0 fps →
+        # "0 sustained" and the ramp stops immediately.  ``_warmed`` is flipped True
+        # after the first sample waits for frames to flow + the model to finish
+        # loading, so step 1 measures STEADY STATE, not model-load warmup.
+        self._warmed = False
         # 3DMark-style progressive ramp (adopted path only): when the ramp steps to
         # N and the wall holds fewer, call ``on_grow`` to add the next camera ONE AT
         # A TIME on the SAME client + supervisor.  ``on_grow`` returns the new id and
@@ -309,6 +315,41 @@ class _SupervisorSampler:
         """
         time.sleep(max(0.0, dwell_s) if dwell_s > 0.0 else 0.01)
 
+    def _warmup(
+        self,
+        reader: Callable[[Any, str], float],
+        *,
+        min_fps: float = 10.0,
+        timeout_s: float = 25.0,
+        settle_s: float = 1.0,
+        poll_s: float = 0.2,
+    ) -> None:
+        """Block until the current cameras are warmed up (frames + model loaded).
+
+        The detector model loads (~8s) during the FIRST measured dwell, so without
+        this gate step 1 reads ~0 fps and the ramp stops immediately.  This polls
+        the current cameras' telemetry fps (the GUI pump updates the model on the
+        GUI thread; this runs on a worker thread, so we just poll + sleep) until the
+        slowest camera clears ``min_fps`` (frames flowing AND the model loaded) or a
+        ~``timeout_s`` budget elapses, then settles ``settle_s`` so the rolling
+        average reflects steady state before the first dwell measures it.  One-shot
+        (``_warmed``); ``dwell_s == 0`` tests never enter the adopted-warmup path
+        with real cameras so this stays fast.
+        """
+        if self._warmed:
+            return
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while time.monotonic() < deadline:
+            cams = self._cameras
+            if cams:
+                fps = [reader(self._client, cid) for cid in cams]
+                if fps and min(fps) >= min_fps:
+                    break
+            time.sleep(max(0.0, poll_s))
+        # Let the rolling fps average settle to steady state before the first dwell.
+        time.sleep(max(0.0, settle_s))
+        self._warmed = True
+
     def sample(
         self,
         n: int,
@@ -331,8 +372,11 @@ class _SupervisorSampler:
                     self._cameras.append(cid)
             # The Mark window's GUI pump (33 ms QTimer) is the SOLE driver of the
             # adopted supervisor — ticking it here too would race two threads on one
-            # supervisor.  Just observe the pre-added cameras over the dwell, then
+            # supervisor.  Before the FIRST dwell, wait out the one-time engine warmup
+            # (model load + frames flowing) so step 1 measures steady state, not the
+            # ~8s model load.  Then observe the pre-added cameras over the dwell and
             # read the first ``n`` cameras' fps (the ramp is a measurement window).
+            self._warmup(reader)
             self._dwell_observe(dwell_s)
             return [reader(self._client, cid) for cid in self._cameras[:n]]
         had = len(self._cameras)
