@@ -66,6 +66,16 @@ class MarkRampController(QObject):
     finished = Signal(object)  # BenchmarkResult
     error = Signal(str)
 
+    # The Mark realistic sources (bundled clip / synthetic / NDI) are CAPPED at the
+    # target fps in the adapter, so with any per-frame overhead a camera that's fully
+    # keeping up still lands a hair BELOW the target — a strict ``min_fps >= target``
+    # floor is then unachievable and no camera ever "sustains".  Mark therefore passes
+    # BenchmarkRunner a DISCOUNTED floor (target × this ratio): a Target of 30 → a
+    # camera sustains if it holds ≥ ~25.5 fps, i.e. it's keeping up with the 30fps
+    # source within realistic overhead.  Applied in the Mark path ONLY — BenchmarkRunner
+    # itself stays strict so the headless CLI / tests are unaffected.
+    _MARK_SUSTAIN_RATIO = 0.85
+
     def __init__(
         self,
         *,
@@ -150,7 +160,11 @@ class MarkRampController(QObject):
 
             runner = BenchmarkRunner(
                 prof,
-                floor_fps=self._floor,
+                # Discounted pass floor (target × ratio): the capped sources can't hit
+                # the raw target exactly, so a camera "sustains" if it's keeping up
+                # within real-world overhead.  ``self._floor`` keeps the user's target
+                # for display (the window shows it in the verdict + chart).
+                floor_fps=self._floor * self._MARK_SUSTAIN_RATIO,
                 max_cameras=self._max,
                 dwell_s=self._dwell,
                 sample_fn=wrapped,

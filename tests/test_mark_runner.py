@@ -90,6 +90,45 @@ class TestRampController:
         # Cameras registered on the SAME client the window's wall is bound to.
         assert len(injected.cameraModel.camera_ids()) == 2
 
+    def test_discounts_floor_for_sustain_tolerance(self, qapp) -> None:
+        """Change B: the MARK path builds its BenchmarkRunner with a DISCOUNTED floor
+        (target × 0.85) so a camera keeping up with a fps-capped 30fps source still
+        "sustains" despite real-world per-frame overhead (it lands just under 30).
+
+        Asserted via the result's ``floor_fps`` (BenchmarkRunner records the floor it
+        ran with) and the sustain decision: at a Target of 30, a camera holding 26fps
+        must count as sustained (26 ≥ 30×0.85 = 25.5) even though 26 < 30.
+        """
+        from autoptz.ui.mark_runner import MarkRampController
+
+        # Every camera holds 26 fps: above the discounted floor (25.5), below 30.
+        def factory():
+            return lambda n: [26.0] * n
+
+        c = MarkRampController(
+            profile="full",
+            floor_fps=30.0,  # the user's Target FPS
+            max_cameras=2,
+            dwell_s=0.0,
+            sample_factory=factory,
+        )
+        done, steps, progress = _drive(c, qapp)
+        assert "error" not in done, done.get("error")
+        res = done["result"]
+        # The runner ran with the DISCOUNTED floor (30 × 0.85 = 25.5), not 30.
+        assert res.floor_fps == 30.0 * MarkRampController._MARK_SUSTAIN_RATIO
+        # 26 fps clears the discounted floor → both cameras sustain (would FAIL at 30).
+        assert res.sustained_cameras == 2
+        assert all(s.sustained for s in steps)
+
+    def test_user_target_preserved_for_display(self, qapp) -> None:
+        """The discount applies only to the runner's pass floor — the user's Target
+        stays available unchanged for display."""
+        from autoptz.ui.mark_runner import MarkRampController
+
+        c = MarkRampController(profile="full", floor_fps=30.0, dwell_s=0.0)
+        assert c._floor == 30.0  # the user's target, undiscounted
+
     def test_thread_is_joinable_after_run(self, qapp) -> None:
         """The worker QThread is joinable via wait() so the controller drops its
         ref only after the thread has truly finished.
