@@ -12,9 +12,15 @@ from __future__ import annotations
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 MARK_SESSION_KEY = "mark_session"
 _GEOMETRY_KEYS = ("win_geometry", "win_state")
+
+# The bundled demo clip (1080p H.264, real pedestrians).  Resolved the same way
+# branding.logo_path() resolves the logo asset: ``sys._MEIPASS`` in a frozen
+# bundle, else ``autoptz/assets/<file>`` relative to this package.
+_CLIP_FILENAME = "mark_people_1080p.mp4"
 
 # Resolution presets → synthetic frame size (w, h).  720p is the default/fallback.
 _RESOLUTION_SIZES: dict[str, tuple[int, int]] = {
@@ -30,18 +36,30 @@ _MODEL_TIERS: dict[str, str] = {
     "auto": "auto",
     "nano": "fast",
     "small": "balanced",
+    "medium": "medium",
 }
+
+
+def _clip_path() -> Path:
+    """Absolute path to the bundled demo clip (source and frozen runs)."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bundled = Path(meipass) / "autoptz" / "assets" / _CLIP_FILENAME
+        if bundled.is_file():
+            return bundled
+    # Source / editable: this module is autoptz/ui/mark_session.py → ../assets/<file>.
+    return Path(__file__).resolve().parent.parent / "assets" / _CLIP_FILENAME
 
 
 @dataclass(frozen=True)
 class MarkSession:
     profile: str = "full"
-    source: str = "synthetic"  # "synthetic" | "ndi"
-    floor_fps: float = 24.0
-    max_cameras: int = 16
-    dwell_s: float = 15.0
-    resolution: str = "720p"  # "720p" | "1080p" | "4k"
-    model: str = "auto"  # "auto" | "nano" | "small"
+    source: str = "clip"  # "clip" | "synthetic" | "ndi"
+    floor_fps: float = 30.0
+    max_cameras: int = 4
+    dwell_s: float = 10.0
+    resolution: str = "1080p"  # "720p" | "1080p" | "4k"
+    model: str = "small"  # "auto" | "nano" | "small" | "medium"
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -58,12 +76,12 @@ class MarkSession:
     def from_dict(cls, d: dict[str, object]) -> MarkSession:
         return cls(
             profile=str(d.get("profile", "full")),
-            source=str(d.get("source", "synthetic")),
-            floor_fps=float(d.get("floor_fps", 24.0)),  # type: ignore[arg-type]
-            max_cameras=int(d.get("max_cameras", 16)),  # type: ignore[arg-type]
-            dwell_s=float(d.get("dwell_s", 15.0)),  # type: ignore[arg-type]
-            resolution=str(d.get("resolution", "720p")),
-            model=str(d.get("model", "auto")),
+            source=str(d.get("source", "clip")),
+            floor_fps=float(d.get("floor_fps", 30.0)),  # type: ignore[arg-type]
+            max_cameras=int(d.get("max_cameras", 4)),  # type: ignore[arg-type]
+            dwell_s=float(d.get("dwell_s", 10.0)),  # type: ignore[arg-type]
+            resolution=str(d.get("resolution", "1080p")),
+            model=str(d.get("model", "small")),
         )
 
     def resolution_size(self) -> tuple[int, int]:
@@ -73,6 +91,14 @@ class MarkSession:
     def detector_tier(self) -> str:
         """The engine detector tier for this session's model; "auto" on any miss."""
         return _MODEL_TIERS.get(str(self.model).strip().lower(), "auto")
+
+    def is_clip(self) -> bool:
+        """True when this session's source is the bundled real-people clip."""
+        return str(self.source).strip().lower() == "clip"
+
+    def clip_path(self) -> str:
+        """Absolute path (str) to the bundled demo clip, for the SyntheticAdapter."""
+        return str(_clip_path())
 
 
 def load_mark_session(store: object) -> MarkSession | None:

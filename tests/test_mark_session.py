@@ -43,9 +43,20 @@ class TestRoundTrip:
 
     def test_from_dict_defaults(self) -> None:
         s = MarkSession.from_dict({})
-        assert s.profile == "full" and s.source == "synthetic"
-        # Resolution + model have sane defaults (auto model, 720p).
-        assert s.resolution == "720p" and s.model == "auto"
+        assert s.profile == "full" and s.source == "clip"
+        # Resolution + model + ramp defaults favour a realistic-looking run.
+        assert s.resolution == "1080p" and s.model == "small"
+        assert s.floor_fps == 30.0 and s.max_cameras == 4 and s.dwell_s == 10.0
+
+    def test_dataclass_defaults(self) -> None:
+        s = MarkSession()
+        assert s.profile == "full"
+        assert s.source == "clip"
+        assert s.floor_fps == 30.0
+        assert s.max_cameras == 4
+        assert s.dwell_s == 10.0
+        assert s.resolution == "1080p"
+        assert s.model == "small"
 
 
 class TestResolutionAndModel:
@@ -69,12 +80,40 @@ class TestResolutionAndModel:
         assert MarkSession(resolution="garbage").resolution_size() == (1280, 720)
 
     def test_detector_tier_maps_model(self) -> None:
-        # "auto" → default tier; "nano"/"small" → the engine's fast/balanced tiers.
+        # "auto" → default tier; "nano"/"small"/"medium" → the engine's tiers.
         assert MarkSession(model="auto").detector_tier() == "auto"
         assert MarkSession(model="nano").detector_tier() == "fast"
         assert MarkSession(model="small").detector_tier() == "balanced"
+        assert MarkSession(model="medium").detector_tier() == "medium"
         # Unknown falls back to auto.
         assert MarkSession(model="weird").detector_tier() == "auto"
+
+
+class TestClipSource:
+    def test_default_source_is_clip(self) -> None:
+        assert MarkSession().source == "clip"
+        assert MarkSession().is_clip() is True
+        assert MarkSession(source="synthetic").is_clip() is False
+        assert MarkSession(source="ndi").is_clip() is False
+
+    def test_clip_path_points_at_bundled_mp4(self) -> None:
+        from pathlib import Path
+
+        path = MarkSession().clip_path()
+        assert isinstance(path, str)
+        p = Path(path)
+        assert p.is_absolute()
+        assert p.name == "mark_people_1080p.mp4"
+        assert p.is_file()
+
+    def test_clip_source_round_trips(self) -> None:
+        store = _Store()
+        s = MarkSession(source="clip")
+        store_mark_session(store, s)
+        assert store.kv[MARK_SESSION_KEY]["source"] == "clip"
+        loaded = load_mark_session(store)
+        assert loaded == s
+        assert loaded.source == "clip"
 
 
 class TestGeometryClear:
