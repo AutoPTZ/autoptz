@@ -139,7 +139,21 @@ class MarkEngineFactory:
                 return
             log.warning("NDI requested but cyndilib unavailable; using synthetic cameras.")
         w, h = self._session.resolution_size()
-        self._camera_ids.append(_add_synthetic_camera(self._client, 0, width=w, height=h))
+        self._camera_ids.append(
+            _add_synthetic_camera(
+                self._client, 0, width=w, height=h, address=self._synthetic_address()
+            )
+        )
+
+    def _synthetic_address(self) -> str:
+        """The SyntheticAdapter address for this session's source.
+
+        ``clip`` → the bundled real-people clip path (the adapter loops the real
+        decode); any other (synthetic) source → ``"anim"`` (drawn synthetic people).
+        """
+        if self._session.is_clip():
+            return self._session.clip_path()
+        return "anim"
 
     def add_next_camera(self) -> str | None:
         """Add the next fake camera to the wall (progressive ramp).  None at the cap.
@@ -159,7 +173,9 @@ class MarkEngineFactory:
             cid = _add_ndi_camera(self._client, self._ndi_names[index], index)
         else:
             w, h = self._session.resolution_size()
-            cid = _add_synthetic_camera(self._client, index, width=w, height=h)
+            cid = _add_synthetic_camera(
+                self._client, index, width=w, height=h, address=self._synthetic_address()
+            )
         self._camera_ids.append(cid)
         # Bring up just the new worker if the engine is already running.
         if self._started:

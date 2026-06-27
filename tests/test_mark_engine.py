@@ -241,6 +241,36 @@ def test_synthetic_cameras_use_session_resolution():
         eng.stop()
 
 
+def test_clip_source_registers_cameras_with_clip_path():
+    """A clip-source factory registers synthetic cameras whose address is the
+    bundled clip path, so the SyntheticAdapter loops the real clip (real decode,
+    real people) instead of drawing synthetic people."""
+    from autoptz.ui import mark_engine
+
+    session = MarkSession(source="clip", max_cameras=3, resolution="1080p")
+    clip = session.clip_path()
+    eng = mark_engine.MarkEngineFactory(
+        session,
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    eng.start()
+    try:
+        # Pre-added first camera carries the clip path + session resolution.
+        ids = eng.client.cameraModel.camera_ids()
+        assert len(ids) == 1
+        rec = eng.client.cameraModel.get_record(ids[0])
+        assert rec.camera_config.source.type == "synthetic"
+        assert rec.camera_config.source.address == clip
+        assert (rec.camera_config.source.width, rec.camera_config.source.height) == (1920, 1080)
+        # Grown cameras keep the clip path too.
+        cid2 = eng.add_next_camera()
+        assert cid2 is not None
+        rec2 = eng.client.cameraModel.get_record(cid2)
+        assert rec2.camera_config.source.address == clip
+    finally:
+        eng.stop()
+
+
 def test_start_then_stop_is_clean():
     eng, made = _factory()
     eng.start()
