@@ -358,19 +358,25 @@ def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
         # the MarkSession default) so a script can validate each source variant.
         from autoptz.ui.mark_session import MarkSession
 
-        def _marker_source() -> str:
-            valid = {"clip", "synthetic", "ndi"}
+        def _marker_lines() -> tuple[str, str]:
+            # Line 1 → source ("clip"|"synthetic"|"ndi"; blank → default).
+            # Line 2 (optional) → a CLIP_LIBRARY clip id (for clip source) so a
+            # script can validate a specific bundled scene directly.
             try:
                 with open("/tmp/autoptz_start_mark_now", encoding="utf-8") as fh:
                     first = fh.readline().strip().lower()
+                    second = fh.readline().strip()
             except OSError:
-                first = ""
-            return first if first in valid else MarkSession().source
+                first, second = "", ""
+            src = first if first in {"clip", "synthetic", "ndi"} else MarkSession().source
+            return src, second
 
-        _src = _marker_source()
+        _src, _clip = _marker_lines()
         QTimer.singleShot(
             1200,
-            lambda: window._enter_mark_mode(MarkSession(source=_src, max_cameras=4, dwell_s=6.0)),
+            lambda: window._enter_mark_mode(
+                MarkSession(source=_src, clip_id=_clip, max_cameras=4, dwell_s=6.0)
+            ),
         )
     elif os.environ.get("AUTOPTZ_START_MARK") or os.path.exists("/tmp/autoptz_start_mark"):
         QTimer.singleShot(1200, window._start_mark)
