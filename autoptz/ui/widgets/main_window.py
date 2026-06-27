@@ -929,6 +929,14 @@ class MainWindow(QMainWindow):
             log.debug("refresh services after model dialog failed", exc_info=True)
 
     def _maybe_show_model_setup_on_startup(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        # Purely interactive startup UX: never open a modal under headless/offscreen
+        # (e.g. CI), where a nested modal loop lets other windows' pending startup
+        # timers re-enter and cascade dialogs.
+        app = QApplication.instance()
+        if app is not None and app.platformName() == "offscreen":
+            return
         if self._shown_optional_setup_prompt:
             return
         if model_setup_reminder_suppressed(self._client):
