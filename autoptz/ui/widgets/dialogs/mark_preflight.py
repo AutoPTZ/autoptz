@@ -37,11 +37,13 @@ from autoptz.ui.mark_session import MarkSession
 _INTRO = (
     "AutoPTZ Mark is a quick simulation: it adds fake cameras one at a time and "
     "measures how many your computer can run smoothly. Each camera runs the real "
-    "AutoPTZ pipeline on moving synthetic people."
+    "AutoPTZ pipeline on real people from a built-in video clip."
 )
 
 # Dropdown options as (label, value).  The value is what lands in MarkSession.
 _MAX_CAMERA_OPTS: list[tuple[str, int]] = [
+    ("1 camera", 1),
+    ("2 cameras", 2),
     ("4 cameras", 4),
     ("8 cameras", 8),
     ("12 cameras", 12),
@@ -50,11 +52,10 @@ _MAX_CAMERA_OPTS: list[tuple[str, int]] = [
 _FPS_OPTS: list[tuple[str, float]] = [
     ("24 fps", 24.0),
     ("30 fps", 30.0),
-    ("60 fps", 60.0),
 ]
 _STEP_OPTS: list[tuple[str, float]] = [
+    ("Recommended (10 s)", 10.0),
     ("5 seconds", 5.0),
-    ("10 seconds", 10.0),
     ("15 seconds", 15.0),
     ("20 seconds", 20.0),
 ]
@@ -64,9 +65,10 @@ _RES_OPTS: list[tuple[str, str]] = [
     ("4K (Ultra HD)", "4k"),
 ]
 _MODEL_OPTS: list[tuple[str, str]] = [
-    ("Auto (recommended)", "auto"),
+    ("Auto", "auto"),
     ("Nano (fastest)", "nano"),
-    ("Small (most accurate)", "small"),
+    ("Small (recommended)", "small"),
+    ("Medium (most accurate)", "medium"),
 ]
 
 # Run-time estimate fudge factor: spin-up / tear-down / discovery overhead on top
@@ -123,19 +125,25 @@ class MarkPreflightDialog(QDialog):
         source_box = QGroupBox("Camera source")
         source_col = QVBoxLayout(source_box)
         self._source_group = QButtonGroup(self)
-        self._synthetic_radio = QRadioButton("Built-in (no setup needed)")
+        self._clip_radio = QRadioButton("Bundled clip — real people (real decode)")
+        self._synthetic_radio = QRadioButton("Synthetic — drawn people (light)")
         ndi_ok = ndi_sim_available()
-        ndi_text = "Real NDI cameras" if ndi_ok else "Real NDI cameras  (requires cyndilib)"
+        ndi_text = "Real NDI sources" if ndi_ok else "Real NDI sources  (requires cyndilib)"
         self._ndi_radio = QRadioButton(ndi_text)
         self._ndi_radio.setEnabled(ndi_ok)
+        self._source_group.addButton(self._clip_radio)
         self._source_group.addButton(self._synthetic_radio)
         self._source_group.addButton(self._ndi_radio)
+        source_col.addWidget(self._clip_radio)
         source_col.addWidget(self._synthetic_radio)
         source_col.addWidget(self._ndi_radio)
         if d.source == "ndi" and ndi_ok:
             self._ndi_radio.setChecked(True)
-        else:
+        elif d.source == "synthetic":
             self._synthetic_radio.setChecked(True)
+        else:
+            # Default (and any clip / unknown / NDI-without-cyndilib) → bundled clip.
+            self._clip_radio.setChecked(True)
         col.addWidget(source_box)
 
         # ── parameters (all dropdowns) ──────────────────────────────────────────
@@ -202,9 +210,12 @@ class MarkPreflightDialog(QDialog):
 
     def session(self) -> MarkSession:
         """Read the current control values into a :class:`MarkSession`."""
-        source = (
-            "ndi" if (self._ndi_radio.isEnabled() and self._ndi_radio.isChecked()) else "synthetic"
-        )
+        if self._ndi_radio.isEnabled() and self._ndi_radio.isChecked():
+            source = "ndi"
+        elif self._synthetic_radio.isChecked():
+            source = "synthetic"
+        else:
+            source = "clip"
         profile = "streams" if self._streams_radio.isChecked() else "full"
         return MarkSession(
             profile=profile,

@@ -22,17 +22,27 @@ def qtapp():
 
 class TestPreflight:
     def test_defaults_and_session(self, qtapp) -> None:
+        from autoptz.benchmark.ndi_sim import ndi_sim_available
         from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 
         dlg = MarkPreflightDialog(defaults=MarkSession())
         s = dlg.session()
         assert s.profile in ("full", "streams")
-        assert s.source == "synthetic"
-        assert s.floor_fps in (24.0, 30.0, 60.0)
-        assert s.max_cameras in (4, 8, 12, 16)
+        # Default source is the bundled clip (real people) unless NDI was chosen.
+        assert s.source == "clip"
+        assert s.floor_fps in (24.0, 30.0)
+        assert s.max_cameras in (1, 2, 4, 8, 12, 16)
         assert s.dwell_s in (5.0, 10.0, 15.0, 20.0)
         assert s.resolution in ("720p", "1080p", "4k")
-        assert s.model in ("auto", "nano", "small")
+        assert s.model in ("auto", "nano", "small", "medium")
+        # The MarkSession() defaults flow straight through the dialog.
+        assert s.source == "clip"
+        assert s.floor_fps == 30.0
+        assert s.max_cameras == 4
+        assert s.dwell_s == 10.0
+        assert s.resolution == "1080p"
+        assert s.model == "small"
+        assert ndi_sim_available() or s.source != "ndi"
         dlg.deleteLater()
 
     def test_defaults_round_trip_non_default(self, qtapp) -> None:
@@ -90,7 +100,53 @@ class TestPreflight:
         res_keys = {dlg._res_combo.itemData(i) for i in range(dlg._res_combo.count())}
         model_keys = {dlg._model_combo.itemData(i) for i in range(dlg._model_combo.count())}
         assert {"720p", "1080p", "4k"} <= res_keys
-        assert {"auto", "nano", "small"} <= model_keys
+        # All four model tiers are offered, default Small.
+        assert {"auto", "nano", "small", "medium"} <= model_keys
+        assert dlg._model_combo.currentData() == "small"
+        dlg.deleteLater()
+
+    def test_max_and_fps_and_step_options(self, qtapp) -> None:
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+        max_keys = {dlg._max_combo.itemData(i) for i in range(dlg._max_combo.count())}
+        fps_keys = {dlg._fps_combo.itemData(i) for i in range(dlg._fps_combo.count())}
+        step_keys = {dlg._step_combo.itemData(i) for i in range(dlg._step_combo.count())}
+        # Max cameras offers 1/2/4/8/12/16, default 4.
+        assert {1, 2, 4, 8, 12, 16} <= max_keys
+        assert dlg._max_combo.currentData() == 4
+        # Target FPS offers 24/30, default 30.
+        assert {24.0, 30.0} <= fps_keys
+        assert dlg._fps_combo.currentData() == 30.0
+        # Time per step offers 5/10/15/20 s, default the recommended 10 s.
+        assert {5.0, 10.0, 15.0, 20.0} <= step_keys
+        assert dlg._step_combo.currentData() == 10.0
+        # The recommended entry is labelled so the user knows which is recommended.
+        assert any(
+            "recommend" in dlg._step_combo.itemText(i).lower()
+            for i in range(dlg._step_combo.count())
+        )
+        dlg.deleteLater()
+
+    def test_clip_is_default_source_option(self, qtapp) -> None:
+        from autoptz.benchmark.ndi_sim import ndi_sim_available
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+        # Three source radios: clip / synthetic / ndi; clip selected by default.
+        assert dlg._clip_radio.isChecked()
+        assert not dlg._synthetic_radio.isChecked()
+        assert dlg.session().source == "clip"
+        # NDI radio gating mirrors cyndilib availability.
+        assert dlg._ndi_radio.isEnabled() == ndi_sim_available()
+        dlg.deleteLater()
+
+    def test_synthetic_source_selectable(self, qtapp) -> None:
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession(source="synthetic"))
+        assert dlg._synthetic_radio.isChecked()
+        assert dlg.session().source == "synthetic"
         dlg.deleteLater()
 
     def test_eta_formula(self, qtapp) -> None:
@@ -118,7 +174,8 @@ class TestPreflight:
         dlg = MarkPreflightDialog(defaults=MarkSession())
         assert dlg._ndi_radio.isEnabled() == ndi_sim_available()
         if not ndi_sim_available():
-            assert dlg.session().source == "synthetic"
+            # NDI off → the default (clip) source stays selected, never NDI.
+            assert dlg.session().source == "clip"
         dlg.deleteLater()
 
     def test_start_confirms_before_accept(self, qtapp, monkeypatch) -> None:
