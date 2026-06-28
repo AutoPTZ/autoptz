@@ -698,3 +698,271 @@ def test_request_exit_save_persists_result(qtapp, monkeypatch) -> None:
     win._request_exit()
     assert saved == [win._result]  # save box checked → result persisted on exit
     win.close()
+
+
+# ── Slice 5: feed quality metrics from live telemetry ─────────────────────────
+
+
+def _telemetry(camera_id: str, *, fps: float = 30.0, target: bool = True):
+    """A minimal TelemetryMsg carrying one (optionally target) track for a camera."""
+    from autoptz.engine.runtime.messages import BBox, TelemetryMsg, TrackInfo
+
+    return TelemetryMsg(
+        camera_id=camera_id,
+        seq=1,
+        fps=fps,
+        tracks=[
+            TrackInfo(
+                track_id=7,
+                bbox=BBox(x1=0.0, y1=0.0, x2=10.0, y2=10.0),
+                is_target=target,
+                confidence=0.9,
+            )
+        ],
+    )
+
+
+def test_registers_a_telemetry_observer_on_the_client(qtapp) -> None:
+    """The Mark window registers exactly one telemetry observer on its isolated
+    client so live telemetry feeds the quality accumulators."""
+    win = _win(qtapp)
+    try:
+        assert callable(win._engine.client.add_telemetry_observer)
+        # An observer is registered (the list is non-empty after construction).
+        assert len(win._engine.client._telemetry_observers) >= 1
+    finally:
+        win.deleteLater()
+
+
+def test_telemetry_then_step_carries_per_camera_quality(qtapp) -> None:
+    """Feeding telemetry through the client, then completing a ramp step, enriches
+    the StepResult with per_camera_quality before it reaches the chart."""
+    win = _win(qtapp)
+    try:
+        cid = win._engine.client.cameraModel.camera_ids()[0]
+        for _ in range(5):
+            win._engine.client.push_telemetry(_telemetry(cid))
+        step = StepResult(
+            cameras=1, min_fps=30.0, mean_fps=30.0, per_camera_fps=[30.0], sustained=True
+        )
+        win._on_step(step)
+        charted = win._chart._steps[-1]
+        assert charted.per_camera_quality  # non-empty
+        assert cid in charted.per_camera_quality
+        assert charted.per_camera_quality[cid]["target_hold_pct"] == 100.0
+    finally:
+        win.deleteLater()
+
+
+def test_accumulators_reset_between_steps_no_carryover(qtapp) -> None:
+    """Each step's quality reflects only that step's telemetry — the accumulators
+    are reset after every _on_step so frames don't carry over."""
+    win = _win(qtapp)
+    try:
+        cid = win._engine.client.cameraModel.camera_ids()[0]
+        # Step 1: two held frames.
+        win._engine.client.push_telemetry(_telemetry(cid))
+        win._engine.client.push_telemetry(_telemetry(cid))
+        win._on_step(
+            StepResult(
+                cameras=1, min_fps=30.0, mean_fps=30.0, per_camera_fps=[30.0], sustained=True
+            )
+        )
+        q1 = win._chart._steps[-1].per_camera_quality[cid]
+        # Step 2: a single NON-target frame → hold pct must be 0 (no carryover from
+        # step 1's 100%).
+        win._engine.client.push_telemetry(_telemetry(cid, target=False))
+        win._on_step(
+            StepResult(
+                cameras=1, min_fps=29.0, mean_fps=29.0, per_camera_fps=[29.0], sustained=True
+            )
+        )
+        q2 = win._chart._steps[-1].per_camera_quality[cid]
+        assert q1["target_hold_pct"] == 100.0
+        assert q2["target_hold_pct"] == 0.0  # fresh accumulator, no carryover
+    finally:
+        win.deleteLater()
+
+
+def test_bad_observer_never_breaks_telemetry(qtapp) -> None:
+    """A raising observer is swallowed so telemetry delivery never breaks."""
+    win = _win(qtapp)
+    try:
+        boom = {"n": 0}
+
+        def _bad(_msg):
+            boom["n"] += 1
+            raise RuntimeError("observer boom")
+
+        win._engine.client.add_telemetry_observer(_bad)
+        cid = win._engine.client.cameraModel.camera_ids()[0]
+        # Must not raise despite the bad observer.
+        win._engine.client.push_telemetry(_telemetry(cid))
+        assert boom["n"] == 1
+    finally:
+        win.deleteLater()
+
+
+# ── Slice 7b: CSV option in the completion Save dialog ────────────────────────
+
+
+def test_completion_dialog_csv_filter_writes_csv(qtapp, monkeypatch, tmp_path) -> None:
+    """Choosing the CSV filter routes the save through save_mark_result_csv and
+    writes a .csv file."""
+    from PySide6.QtWidgets import QFileDialog
+
+    win = _win(qtapp)
+    target = tmp_path / "chosen-mark.csv"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(target), "CSV (*.csv)")),
+    )
+    import autoptz.benchmark.results as results_mod
+
+    calls: list[object] = []
+    real_csv = results_mod.save_mark_result_csv
+
+    def _spy_csv(results, path, **kw):
+        calls.append(results)
+        return real_csv(results, path, **kw)
+
+    monkeypatch.setattr(results_mod, "save_mark_result_csv", _spy_csv)
+    try:
+        win._on_finished(
+            _finish_result(
+                steps=[
+                    StepResult(
+                        cameras=1,
+                        min_fps=30.0,
+                        mean_fps=30.0,
+                        per_camera_fps=[30.0],
+                        sustained=True,
+                    )
+                ]
+            )
+        )
+        assert len(calls) == 1  # routed through the CSV writer
+        assert target.exists()
+        text = target.read_text()
+        assert "profile" in text  # the CSV header
+    finally:
+        win.deleteLater()
+
+
+def test_completion_dialog_json_filter_writes_json(qtapp, monkeypatch, tmp_path) -> None:
+    """Choosing the JSON filter routes the save through the JSON writer."""
+    from PySide6.QtWidgets import QFileDialog
+
+    win = _win(qtapp)
+    target = tmp_path / "chosen-mark.json"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(target), "JSON (*.json)")),
+    )
+    try:
+        win._on_finished(_finish_result())
+        assert target.exists()
+        import json as _json
+
+        data = _json.loads(target.read_text())
+        assert data["results"][0]["profile"] == "full"
+    finally:
+        win.deleteLater()
+
+
+def test_completion_dialog_csv_by_suffix(qtapp, monkeypatch, tmp_path) -> None:
+    """A .csv path suffix selects the CSV writer even under the All-Files filter."""
+    from PySide6.QtWidgets import QFileDialog
+
+    win = _win(qtapp)
+    target = tmp_path / "by-suffix.csv"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(target), "All Files (*)")),
+    )
+    try:
+        win._on_finished(
+            _finish_result(
+                steps=[
+                    StepResult(
+                        cameras=1,
+                        min_fps=30.0,
+                        mean_fps=30.0,
+                        per_camera_fps=[30.0],
+                        sustained=True,
+                    )
+                ]
+            )
+        )
+        assert target.exists()
+        text = target.read_text()
+        assert text.splitlines()[0].startswith("created_at")  # CSV header
+    finally:
+        win.deleteLater()
+
+
+# ── Slice 5: ground-truth comparison (env-gated + drawn-scene only) ───────────
+
+
+def _win_source(qtapp, source: str, **kw):
+    from autoptz.ui.frames import ShmFrameSource
+    from autoptz.ui.widgets.mark_window import MarkWindow
+
+    return MarkWindow(
+        session=MarkSession(source=source, max_cameras=3, dwell_s=0.0, **kw),
+        frame_source=ShmFrameSource(),
+    )
+
+
+def test_gt_inactive_without_env(qtapp, monkeypatch) -> None:
+    """Without AUTOPTZ_MARK_GT the comparator map is None even on the drawn scene."""
+    monkeypatch.delenv("AUTOPTZ_MARK_GT", raising=False)
+    win = _win_source(qtapp, "synthetic")
+    try:
+        assert win._gt is None
+    finally:
+        win.deleteLater()
+
+
+def test_gt_active_on_drawn_scene_with_env(qtapp, monkeypatch) -> None:
+    """AUTOPTZ_MARK_GT + a synthetic (drawn) scene activates the comparator map."""
+    monkeypatch.setenv("AUTOPTZ_MARK_GT", "1")
+    win = _win_source(qtapp, "synthetic")
+    try:
+        assert win._gt is not None
+    finally:
+        win.deleteLater()
+
+
+def test_gt_finalized_on_finish(qtapp, monkeypatch) -> None:
+    """With GT active, telemetry feeds the comparator and _on_finished aggregates a
+    per-camera CLEAR-MOT summary onto the window."""
+    from autoptz.engine.runtime.messages import BBox, GroundTruthPerson, TelemetryMsg, TrackInfo
+
+    monkeypatch.setenv("AUTOPTZ_MARK_GT", "1")
+    win = _win_source(qtapp, "synthetic")
+    # No modal save dialog on finish: persist directly (stubbed) so the test never
+    # blocks on the real QFileDialog and never writes to the config dir.
+    win._prompt_on_completion = False
+    monkeypatch.setattr(win, "_persist_result", lambda r: None)
+    try:
+        cid = win._engine.client.cameraModel.camera_ids()[0]
+        # A track that overlaps the ground-truth person exactly → a clean match.
+        box = BBox(x1=0.0, y1=0.0, x2=10.0, y2=10.0)
+        msg = TelemetryMsg(
+            camera_id=cid,
+            seq=1,
+            tracks=[TrackInfo(track_id=1, bbox=box, is_target=True)],
+            ground_truth=[GroundTruthPerson(person_id=1, bbox=box)],
+        )
+        win._engine.client.push_telemetry(msg)
+        win._on_finished(_finish_result())
+        assert cid in win._gt_summary
+        summary = win._gt_summary[cid]
+        assert summary["miss_rate"] == 0.0  # the gt person was matched
+        assert summary["mota"] == 1.0
+    finally:
+        win.deleteLater()

@@ -29,7 +29,9 @@ read off ``self._controls``.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -184,6 +186,15 @@ class MarkWindow(MainWindow):
         self._result: BenchmarkResult | None = None
         self._benchmarks_dir: Any | None = None
         self._returning = False
+        # Slice 5: fold the live telemetry stream into per-camera tracking quality.
+        # ``_quality`` maps camera id -> PerCameraQualityAccumulator for the CURRENT
+        # ramp step; ``_on_step`` finalizes + resets it.  When AUTOPTZ_MARK_GT is set
+        # AND the scene is a synthetic/drawn capability scene, ``_gt`` additionally
+        # maps camera id -> GroundTruthComparator (accumulated across the whole run
+        # and finalized on _on_finished).  ``_gt`` is None when GT is inactive.
+        self._quality: dict[str, Any] = {}
+        self._gt: dict[str, Any] | None = {} if self._gt_active() else None
+        self._gt_summary: dict[str, dict] = {}
         # Completion (Area 2): on a finished ramp, prompt a Save-As dialog.  Tests
         # flip ``_prompt_on_completion`` off to persist directly (no modal); the
         # re-entrancy guard keeps a second finish from stacking a second dialog.
@@ -370,6 +381,58 @@ class MarkWindow(MainWindow):
         on_theme_changed(client, lambda: self._defer(self._controls._restyle))
         on_theme_changed(client, lambda: self._defer(self._details._restyle))
 
+        # Slice 5: register ONE telemetry observer so the live stream feeds the
+        # per-camera quality accumulators (and, when GT is active, the comparators).
+        client.add_telemetry_observer(self._on_telemetry)
+
+    def _gt_active(self) -> bool:
+        """True when ground-truth comparison should run for this Mark session.
+
+        Requires both the ``AUTOPTZ_MARK_GT`` env flag AND a synthetic/drawn
+        capability scene — the engine only populates ``TelemetryMsg.ground_truth``
+        for the drawn (``"anim"``) scene, which is what a synthetic session (or a
+        clip session falling back to drawn people) renders.
+        """
+        if os.environ.get("AUTOPTZ_MARK_GT", "").strip().lower() not in ("1", "true", "yes", "on"):
+            return False
+        session = self._session
+        # The drawn scene is rendered for any non-clip source, or a clip session
+        # whose bundled asset is missing (falls back to drawn people).
+        try:
+            return (not session.is_clip()) or (not session.clip_available())
+        except Exception:  # noqa: BLE001 — a probe must never block Mark startup
+            return False
+
+    def _on_telemetry(self, msg: Any) -> None:
+        """Fold one live ``TelemetryMsg`` into the current step's accumulators.
+
+        Looks up (or creates) the per-camera quality accumulator and feeds it; when
+        GT is active, also feeds the per-camera ground-truth comparator.  Runs on
+        the GUI thread (the EngineClient marshals telemetry there before fanning out
+        to observers), so no extra locking is needed.
+        """
+        from autoptz.benchmark.runner import PerCameraQualityAccumulator
+
+        cid = getattr(msg, "camera_id", None)
+        if cid is None:
+            return
+        acc = self._quality.get(cid)
+        if acc is None:
+            acc = PerCameraQualityAccumulator(self._session.target_fps())
+            self._quality[cid] = acc
+        acc.on_telemetry(msg)
+
+        if self._gt is not None:
+            from autoptz.benchmark.ground_truth import GroundTruthComparator
+
+            comparator = self._gt.get(cid)
+            if comparator is None:
+                comparator = GroundTruthComparator()
+                self._gt[cid] = comparator
+            comparator.on_frame(
+                getattr(msg, "tracks", None) or [], getattr(msg, "ground_truth", None) or []
+            )
+
     @staticmethod
     def _defer(fn: Any) -> None:
         """Run ``fn`` next event-loop turn (after the theme apply flips T.CURRENT)."""
@@ -551,6 +614,14 @@ class MarkWindow(MainWindow):
         )
 
     def _on_step(self, step: StepResult) -> None:
+        # Slice 5: snapshot the live quality accumulators for THIS step, enrich the
+        # StepResult with {cid: QualityMetrics dict} BEFORE forwarding to the chart /
+        # persistence, then RESET the accumulators so the next step starts clean (no
+        # double-feeding / carryover between steps).
+        quality = {cid: acc.finalize().to_dict() for cid, acc in self._quality.items()}
+        if quality:
+            step = dataclasses.replace(step, per_camera_quality=quality)
+        self._quality = {}
         self._chart._steps.append(step)
         self._chart.set_steps(self._chart._steps, self._effective_floor())
         # The ramp grew the wall this step; re-target so any newly added camera also
@@ -562,6 +633,11 @@ class MarkWindow(MainWindow):
 
     def _on_finished(self, result: BenchmarkResult) -> None:
         self._result = result
+        # Slice 5: when GT is active, finalize each camera's comparator into an
+        # aggregate {cid: gt.finalize()} stashed for persistence (the Save path
+        # passes it to the writer so the CSV/JSON carry the CLEAR-MOT accuracy).
+        if self._gt is not None:
+            self._gt_summary = {cid: cmp.finalize() for cid, cmp in self._gt.items()}
         self._teardown_controller()
         self._controls.set_running(False)
         # Color steps against the SAME discounted floor the ramp graded with (the
@@ -583,9 +659,10 @@ class MarkWindow(MainWindow):
 
         With ``_prompt_on_completion`` off this just calls :meth:`_persist_result`
         (the headless path).  Otherwise it opens a single ``QFileDialog`` (guarded
-        against re-entry): a chosen path is written via
-        :func:`save_mark_result_to_path` and its directory remembered; Cancel
-        leaves the result in :attr:`_result` for save-on-exit and does NOT
+        against re-entry) offering JSON or CSV: the chosen filter / path suffix
+        selects the writer (:func:`save_mark_result_csv` for ``.csv``, else
+        :func:`save_mark_result_to_path` for JSON) and the directory is remembered;
+        Cancel leaves the result in :attr:`_result` for save-on-exit and does NOT
         auto-persist.
         """
         if not self._prompt_on_completion:
@@ -597,29 +674,41 @@ class MarkWindow(MainWindow):
         try:
             from datetime import UTC, datetime
 
-            from autoptz.benchmark.results import save_mark_result_to_path
             from autoptz.config.store import default_config_dir
 
             base = self._benchmarks_dir or (default_config_dir() / "benchmarks")
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             default_path = str(Path(base) / f"autoptz-mark-{stamp}.json")
-            path, _filter = QFileDialog.getSaveFileName(
+            path, chosen_filter = QFileDialog.getSaveFileName(
                 self,
                 "Save AutoPTZ Mark results",
                 default_path,
-                "JSON (*.json);;All Files (*)",
+                "JSON (*.json);;CSV (*.csv);;All Files (*)",
             )
             if not path:
                 return  # Cancel → keep self._result for save-on-exit; no auto-persist
             try:
-                saved, _bundle = save_mark_result_to_path(
-                    [result], Path(path), store=self._engine.store
-                )
+                saved = self._write_result(result, Path(path), chosen_filter)
                 self._benchmarks_dir = saved.parent
             except Exception:  # noqa: BLE001
                 log.exception("Failed to save AutoPTZ Mark result")
         finally:
             self._showing_completion_dialog = False
+
+    def _write_result(self, result: BenchmarkResult, path: Path, chosen_filter: str) -> Path:
+        """Write *result* to *path* as CSV or JSON per the chosen filter / suffix.
+
+        CSV is selected when the path suffix is ``.csv`` OR the chosen filter names
+        CSV; everything else writes the JSON bundle.  Both remember the directory
+        via the returned path.
+        """
+        from autoptz.benchmark.results import save_mark_result_csv, save_mark_result_to_path
+
+        wants_csv = path.suffix.lower() == ".csv" or "csv" in (chosen_filter or "").lower()
+        if wants_csv:
+            return save_mark_result_csv([result], path, store=self._engine.store)
+        saved, _bundle = save_mark_result_to_path([result], path, store=self._engine.store)
+        return saved
 
     def _on_error(self, message: str) -> None:
         self._teardown_controller()

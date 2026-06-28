@@ -176,6 +176,11 @@ class EngineClient(QObject):
         self._layout_model = LayoutListModel(self)
         self._cmd_queue: deque[BaseCommand] = deque()
         self._lock = threading.Lock()
+        # Additive telemetry observers (callables fed every TelemetryMsg on the GUI
+        # thread inside _on_telemetry_main).  Used by AutoPTZ Mark to fold the live
+        # stream into per-camera quality / ground-truth accumulators without
+        # touching the existing telemetry→model path.
+        self._telemetry_observers: list[Callable[[TelemetryMsg], None]] = []
         self._theme_mode: str = "dark"
         # uri → stable device unique_id, populated by scanUSBCameras() so
         # addCamera() can persist a stable id for USB sources.
@@ -2113,6 +2118,16 @@ class EngineClient(QObject):
 
     # ── telemetry ingest (called from engine thread) ──────────────────────────
 
+    def add_telemetry_observer(self, fn: Callable[[TelemetryMsg], None]) -> None:
+        """Register a callable fed every ``TelemetryMsg`` on the GUI thread.
+
+        Additive: each observer runs inside :meth:`_on_telemetry_main` (after the
+        model update), guarded so a raising observer never breaks telemetry.  Used
+        by AutoPTZ Mark to fold the live stream into per-camera quality / ground-
+        truth accumulators without changing the existing telemetry→model path.
+        """
+        self._telemetry_observers.append(fn)
+
     def push_telemetry(self, msg: TelemetryMsg) -> None:
         """Deliver a telemetry snapshot.  Thread-safe.
 
@@ -2141,6 +2156,13 @@ class EngineClient(QObject):
         if ep and ep != self._engine_ep:
             self._engine_ep = ep
             self.engineStateChanged.emit()
+        # Fan out to additive observers (Mark quality / ground-truth accumulators).
+        # Guarded so a bad observer never breaks telemetry delivery.
+        for observer in self._telemetry_observers:
+            try:
+                observer(msg)
+            except Exception:  # noqa: BLE001
+                log.debug("telemetry observer failed", exc_info=True)
         self.telemetryUpdated.emit(msg.camera_id)
 
     # ── identity ingest (called from engine/worker thread) ─────────────────────
