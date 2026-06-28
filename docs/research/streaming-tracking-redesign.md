@@ -382,6 +382,67 @@ without any architectural rewrite.
 
 ---
 
+## 7.5 Measured benchmark findings (2026‑06‑28, Apple Silicon, 1080p30)
+
+A two‑process NDI benchmark (separate sender fleet → the real `NDIAdapter` +
+`Supervisor`, i.e. Mark's `source="ndi"` path) and a raw inference benchmark
+**measured** the following on the user's Mac. These supersede the earlier
+*assumptions* where they differ.
+
+**1. The NDI receive path is not the bottleneck.** Capture‑only holds 30 fps with
+~0 drops to 16×1080p30 at ~14% CPU.
+
+**2. The bottleneck is the GIL, then the accelerator.**
+
+| N | mode | App CPU | fps/cam | drops/s | e2e |
+|---|------|---------|---------|---------|-----|
+| 8 | threaded | 13% | 16.9 | 105 | 780 ms |
+| 8 | per‑process | 48% | 26.7 | 27 | 42 ms |
+| 16 | threaded | 18% | ~30* | 233 | 1746 ms |
+| 16 | per‑process | 69% | 11.8 | 360 | 15 GB RAM, CPU pegged |
+
+Per‑process gives big GIL relief at 8 cams but **collapses at 16** — model‑per‑child
+doesn't scale (RAM + ANE thrash). **Don't make it default; gate it by cores/RAM.**
+
+**3. ⭐ The Neural Engine is a fixed ~20 detections/sec shared resource.** Raw
+yolo11s on CoreML/ANE: ~54 ms/frame at batch 1, and **batching barely helps** —
+batch‑8 is only 1.19× the per‑frame rate (the ANE processes the batch ~serially).
+
+| batch | ms/call | frames/s | speedup |
+|-------|---------|----------|---------|
+| 1 | 54 | 18.4 | 1.00× |
+| 8 | 363 | 22.0 | 1.19× |
+| 16 | 755 | 21.2 | 1.15× |
+
+**Consequence — the §5.2 architecture is corrected:** the scalable design is **not
+"batch for speed"** (the ANE won't batch) — it is a **single accelerator
+*scheduler*** that owns the ANE and fairly budgets the fixed ~20 infer/sec across
+(a) cameras and (b) model types (detector/face/pose), while capture + tracking +
+control run in parallel on the GIL‑light threads. One model set (no RAM cliff), the
+scarce accelerator at 100% with fair scheduling (no thrash cliff), GIL free for the
+rest. It degrades *smoothly* as cameras are added (each gets a smaller detection
+slice) instead of hitting a cliff.
+
+**4. The hidden second ANE consumer.** `AUTOPTZ_ASYNC_APPEARANCE=0` **doubled**
+throughput at 8 cams (16.9→30 fps, 105→0 drops/s) because face‑SCRFD runs a full
+inference pass that contends for the same ANE budget as the detector. The scheduler
+must budget face/pose against the detector; until then, the async appearance default
+deserves a re‑think. *(Caveat: benchmark frames have no faces, but SCRFD scans the
+whole frame regardless, so the cost is real; validate with people‑content.)*
+
+**5. CoreML‑units / unified‑pose / NDI‑color flags made no throughput difference**
+when GIL‑bound — confirming the GIL (not inference speed or color format) is the cap
+until the architecture changes.
+
+**Orthogonal lever (raise the ~20/sec ceiling, independent of architecture):** a
+faster/quantized detector (`yolo11n`, INT8 — the code already has `quantize_dynamic`)
+buys more detections/sec directly. This is also the honest answer to "rewrite in
+another stack": **the ceiling is the accelerator, not the language** — a Rust core
+would hit the same ~20/sec on the same ANE. Language buys deterministic tail latency,
+not detection throughput.
+
+---
+
 ## 8. Appendix — cross‑platform decode + inference matrix
 
 | Platform | Real‑codec decode (RTSP/USB) | Inference EP | Notes |
