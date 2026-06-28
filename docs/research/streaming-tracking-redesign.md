@@ -434,12 +434,45 @@ whole frame regardless, so the cost is real; validate with people‑content.)*
 when GIL‑bound — confirming the GIL (not inference speed or color format) is the cap
 until the architecture changes.
 
-**Orthogonal lever (raise the ~20/sec ceiling, independent of architecture):** a
+**Orthogonal lever (raise the ceiling, independent of architecture):** a
 faster/quantized detector (`yolo11n`, INT8 — the code already has `quantize_dynamic`)
 buys more detections/sec directly. This is also the honest answer to "rewrite in
 another stack": **the ceiling is the accelerator, not the language** — a Rust core
-would hit the same ~20/sec on the same ANE. Language buys deterministic tail latency,
+would hit the same ANE ceiling. Language buys deterministic tail latency + lower RAM,
 not detection throughput.
+
+**Correction on the ceiling:** the *production* cached yolo11s does **~56–62
+detections/sec** on this ANE (measured in the prototype below), not ~20 — the earlier
+figure used a freshly‑exported dynamic model that was slower. 3× more budget.
+
+### 7.6 ⭐ Validated: in‑process scheduler FAILS, multi‑process model‑server SCALES
+
+Two architectures were built behind flags and **measured** end‑to‑end on real NDI +
+the real detector:
+
+**(a) In‑process inference scheduler (`AUTOPTZ_INFERENCE_SCHEDULER`) — NEGATIVE.**
+One scheduler thread owns detection for all cameras. A/B (engagement confirmed): no
+change at all — N=8 16.9→16.6 fps, N=16 29.8→29.8, drops/CPU/e2e identical. **It stays
+single‑process, so the GIL still caps throughput** regardless of how the work is
+reorganized. (Kept flag‑gated + tested; the scheduling logic is reusable in (b)/native.)
+
+**(b) Multi‑process model‑server (N camera processes + 1 shared model‑server) —
+SCALES.** Prototype measured at 1080p30:
+
+| N=16 | Total CPU | Capture fps | Detect/s | **RAM** | Outcome |
+|------|-----------|-------------|----------|---------|---------|
+| threaded | 18% | 29.8 (decimated) | — | 5.4 GB | GIL‑bound, 232 drops/s |
+| per‑process | 69% (pegged) | 11.8 | — | **15 GB** | collapsed |
+| **mp model‑server** | **26%** | **30+ (all 16)** | 56/s shared | **6.3 GB** | **scales** |
+
+One model set in the server → **no RAM cliff** (6.3 GB vs 15 GB); capture parallel
+across processes (GIL escaped) → all 16 cameras alive at 30 fps; CPU efficient.
+Detection is the fixed ANE resource, fairly shared (~3.5/s/camera at N=16 → smoothness
+must come from **predictive tracking**, Phase 3). **Conclusion: the GIL is escaped by
+*process* parallelism, and the RAM cliff by a *shared* model‑server. This is the
+scalable architecture; a native rewrite is now an optional optimization (≈5 GB less
+RAM + deterministic latency from removing the per‑process Python interpreter overhead),
+not a requirement.**
 
 ---
 
