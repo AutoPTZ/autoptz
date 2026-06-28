@@ -54,6 +54,29 @@ class TestSyntheticAdapter:
         assert frame is not None and frame.ndim == 3
         fs.close()
 
+    def test_factory_honors_source_resolution(self) -> None:
+        """A synthetic SourceConfig width/height drives the composed frame size.
+
+        AutoPTZ Mark's resolution control sets width/height on the synthetic
+        SourceConfig; the composed frame (no shm writer in the headless factory
+        path) must come out at exactly that size.
+        """
+        from autoptz.config.models import CameraConfig, SourceConfig
+        from autoptz.engine.worker.frame_source import build_frame_source
+
+        cfg = CameraConfig(
+            name="Synthetic HD",
+            source=SourceConfig(
+                type="synthetic", address="anim", fps=30.0, width=1920, height=1080
+            ),
+        )
+        fs = build_frame_source("cam-hd", cfg)
+        assert fs.open() is True
+        frame = fs.read()
+        assert frame is not None
+        assert frame.shape == (1080, 1920, 3)
+        fs.close()
+
 
 class TestDbPathOverride:
     def test_env_override(self, monkeypatch, tmp_path) -> None:

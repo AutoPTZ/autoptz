@@ -107,12 +107,22 @@ class CameraWall(QWidget):
     cameraInfoRequested = Signal(str)  # camera_id — open Camera Info for it
     addCameraRequested = Signal()  # empty fixed-grid slot clicked
 
-    def __init__(self, client: Any, frame_source: Any, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        client: Any,
+        frame_source: Any,
+        parent: QWidget | None = None,
+        *,
+        context_menu_enabled: bool = True,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("cameraWall")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._client = client
         self._frames = frame_source
+        # Threaded through to every tile.  AutoPTZ Mark passes False to disable the
+        # right-click tile menu; the normal app keeps it (the default).
+        self._context_menu_enabled = bool(context_menu_enabled)
         self._tiles: dict[str, CameraTile] = {}
         self._empty_slots: list[_EmptyCameraSlot] = []
         self._selected: str = ""
@@ -265,7 +275,13 @@ class CameraWall(QWidget):
     def _add_tile(self, camera_id: str) -> None:
         if camera_id in self._tiles:
             return
-        tile = CameraTile(camera_id, self._client, self._frames, self._grid_host)
+        tile = CameraTile(
+            camera_id,
+            self._client,
+            self._frames,
+            self._grid_host,
+            context_menu_enabled=self._context_menu_enabled,
+        )
         tile.selectedRequested.connect(self.select_camera)
         tile.selectExclusiveRequested.connect(self.select_camera_exclusive)
         tile.infoRequested.connect(self.cameraInfoRequested)

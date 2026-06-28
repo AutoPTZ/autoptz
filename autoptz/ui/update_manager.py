@@ -50,7 +50,12 @@ class _CheckTask(QRunnable):
             result = CheckResult(
                 status="failed", error_kind="network", error=str(exc) or "Update check failed."
             )
-        self._signals.finished.emit(result, self._manual)
+        try:
+            self._signals.finished.emit(result, self._manual)
+        except RuntimeError:
+            # The owner window was torn down while this pooled check was in flight,
+            # so the signals C++ object is gone — drop the result, nothing to deliver.
+            log.debug("update check finished after teardown; dropping result", exc_info=True)
 
 
 class _DownloadTask(QRunnable):
@@ -69,9 +74,15 @@ class _DownloadTask(QRunnable):
             )
         except Exception as exc:  # noqa: BLE001
             log.debug("update download failed", exc_info=True)
-            self._signals.failed.emit(str(exc) or "Update download failed.")
+            try:
+                self._signals.failed.emit(str(exc) or "Update download failed.")
+            except RuntimeError:
+                log.debug("update download failed after teardown; dropping", exc_info=True)
             return
-        self._signals.finished.emit(result)
+        try:
+            self._signals.finished.emit(result)
+        except RuntimeError:
+            log.debug("update download finished after teardown; dropping", exc_info=True)
 
 
 class UpdateManager(QObject):
@@ -133,6 +144,14 @@ class UpdateManager(QObject):
     # ── checks ──────────────────────────────────────────────────────────────────
     def maybe_check_on_startup(self) -> None:
         """Auto-check if enabled and not checked within the throttle window."""
+        # Never auto-check in headless/offscreen mode (tests, CI): it would hit the
+        # network AND spawn a pooled worker whose finished-emit can race a
+        # torn-down window (the _CheckSignals C++ object is deleted on teardown).
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None and app.platformName() == "offscreen":
+            return
         if not self.auto_check_enabled:
             return
         last = float(self._get("update_last_check", 0) or 0)

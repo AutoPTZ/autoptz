@@ -40,6 +40,7 @@ from autoptz.config.models import AIM_REGION_FRACTION
 from autoptz.engine.runtime.messages import (
     BBox,
     FaceBox,
+    GroundTruthPerson,
     HealthInfo,
     HealthState,
     PoseKeypoint,
@@ -624,6 +625,11 @@ class CameraWorker:
         # keeps the prior height-only sizing). Read by the Center Stage crop path.
         self._digital_target_is_group: bool = False
         self._cs_diag_t: float = 0.0  # throttle for the Center Stage diagnostic log
+        # The active Center-Stage digital crop (x, y, w, h) in full-frame pixels
+        # for the most recently framed output, or None when Center Stage is not
+        # driving the painted frame. Stamped onto each TelemetryMsg so the UI can
+        # re-normalize overlay boxes/aim into the cropped preview.
+        self._last_digital_crop_rect: tuple[int, int, int, int] | None = None
         self._detect: _DetectStack | None = None
         self._pooled_detector = False
         # True when the detector is the unified YOLO11-pose model (boxes+keypoints
@@ -3508,6 +3514,7 @@ class CameraWorker:
 
         backend = self._ptz_backend
         if not isinstance(backend, DigitalPTZBackend) or frame is None:
+            self._last_digital_crop_rect = None
             return frame
         import cv2
 
@@ -3552,13 +3559,19 @@ class CameraWorker:
             )
         crop = frame[y : y + ch, x : x + cw]
         if crop.size == 0:
+            self._last_digital_crop_rect = None
             return frame
         from autoptz.engine.pipeline.vcam import pick_interpolation
 
         # The crop is almost always UPSCALED to the output → INTER_LINEAR looks
         # soft. Pick by scale factor: cubic up, area down, linear ~1:1.
         interp = pick_interpolation((int(crop.shape[1]), int(crop.shape[0])), (ow, oh))
-        return cv2.resize(crop, (ow, oh), interpolation=interp)
+        out = cv2.resize(crop, (ow, oh), interpolation=interp)
+        # Record the crop active for THIS frame — only AFTER a successful resize, so
+        # a resize exception leaves the rect at the last actually-painted frame. The
+        # UI re-normalizes overlays into the cropped preview using this rect.
+        self._last_digital_crop_rect = (int(x), int(y), int(cw), int(ch))
+        return out
 
     def _current_digital_target(self) -> tuple[float, float, float, float] | None:
         """The bbox (x1,y1,x2,y2) Center Stage should frame this tick, or None.
@@ -4992,6 +5005,7 @@ class CameraWorker:
             ep=self._ep,
             width=self._frame_w,
             height=self._frame_h,
+            digital_crop_rect=self._last_digital_crop_rect,
             dropped_frames=self._dropped_frames,
             latency_ms=self._latency_ms,
             ingest_ms=self._ingest_ms,
@@ -5012,6 +5026,7 @@ class CameraWorker:
             tracks=tracks,
             faces=self._fresh_faces_for_telemetry(tracks),
             pose=self._pose_overlay(),
+            ground_truth=self._ground_truth(),
             ptz=self._ptz_state(),
             tracking_status=self._tracking_status_info(tracks, time.monotonic()),
             health=HealthInfo(
@@ -5043,6 +5058,34 @@ class CameraWorker:
         except Exception:  # noqa: BLE001
             return 0.0
         return float(cap) if cap else 0.0
+
+    def _ground_truth(self) -> list[GroundTruthPerson]:
+        """Synthetic-scene ground truth for the AutoPTZ Mark accuracy bench.
+
+        Empty unless ``AUTOPTZ_MARK_GT`` is on AND the running frame source's ingest
+        adapter is the drawn synthetic scene (which exposes
+        ``latest_ground_truth()``).  Cheap + fully guarded: a normal camera, a clip
+        source, or the flag being off all short-circuit to an empty list, so the
+        telemetry field carries no payload off the bench.
+        """
+        import os  # noqa: PLC0415
+
+        if os.environ.get("AUTOPTZ_MARK_GT", "").strip().lower() not in ("1", "true", "yes", "on"):
+            return []
+        src = self._source
+        if src is None:
+            return []
+        # The synthetic ingest adapter exposes the GT; reach it through the frame
+        # source wrapper (``_adapter``) or directly if a fake source provides it.
+        adapter = getattr(src, "_adapter", src)
+        fn = getattr(adapter, "latest_ground_truth", None)
+        if not callable(fn):
+            return []
+        try:
+            gt = fn()
+        except Exception:  # noqa: BLE001 — bench instrumentation must never break telemetry
+            return []
+        return list(gt) if gt else []
 
     def _ptz_state(self) -> PTZState:
         """Build the real PTZState for telemetry: position, motion, and state.

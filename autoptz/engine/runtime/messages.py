@@ -51,6 +51,22 @@ class TrackInfo(BaseModel):
     aim_source: str = ""  # "pose", "fused", "bbox", "silhouette", or ""
 
 
+class GroundTruthPerson(BaseModel):
+    """One synthetic-scene ground-truth person (AutoPTZ Mark accuracy bench).
+
+    Populated only for the drawn synthetic scene and only when
+    ``AUTOPTZ_MARK_GT=1`` — the field defaults to an empty list everywhere else,
+    so this is additive and msgpack-safe (zero payload/overhead off the bench).
+    ``visible`` mirrors the scene's off-frame clip (False when the silhouette has
+    glided off the frame this tick); ``path_type`` is the person's motion-path id.
+    """
+
+    person_id: int
+    bbox: BBox
+    visible: bool = True
+    path_type: str = ""
+
+
 class FaceBox(BaseModel):
     """A detected face for the optional face-recognition overlay (pixel-space)."""
 
@@ -183,6 +199,13 @@ class TelemetryMsg(BaseModel):
     # size) — fed to the UI's Camera Info panel.  0 until a frame is read.
     width: int = 0
     height: int = 0
+    # Active Center-Stage digital crop ``(x, y, w, h)`` in FULL-frame pixels, or
+    # None when Center Stage is not driving the painted preview this tick. The UI
+    # uses it to re-normalize overlay boxes/aim into the cropped+scaled preview
+    # so the detection/track/face/pose overlays follow the digital crop instead
+    # of floating over the full frame. None ⇒ overlays keep full-frame
+    # normalization (unchanged legacy behavior).
+    digital_crop_rect: tuple[int, int, int, int] | None = None
     # Cumulative count of frame read() misses / decode failures since start —
     # surfaced as "dropped frames" in Camera Info.
     dropped_frames: int = 0
@@ -231,6 +254,10 @@ class TelemetryMsg(BaseModel):
     # only when the operator enables the corresponding overlay toggle.
     faces: list[FaceBox] = Field(default_factory=list)
     pose: list[PoseKeypoint] = Field(default_factory=list)  # target subject only
+    # Synthetic-scene ground truth for the AutoPTZ Mark accuracy bench.  Empty
+    # everywhere except the drawn scene with ``AUTOPTZ_MARK_GT=1`` (additive +
+    # default → msgpack-safe, zero payload off the bench).
+    ground_truth: list[GroundTruthPerson] = Field(default_factory=list)
     ptz: PTZState = Field(default_factory=PTZState)
     tracking_status: TrackingStatusInfo = Field(default_factory=TrackingStatusInfo)
     health: HealthInfo = Field(default_factory=HealthInfo)

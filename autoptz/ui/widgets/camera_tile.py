@@ -158,12 +158,18 @@ class CameraTile(QWidget):
         client: Any,
         frame_source: Any,
         parent: QWidget | None = None,
+        *,
+        context_menu_enabled: bool = True,
     ) -> None:
         super().__init__(parent)
         self.camera_id = camera_id
         self._client = client
         self._model = client.cameraModel
         self._frames = frame_source
+        # Right-click context menu gate.  The normal app keeps it (set/clear
+        # target, rename, remove camera); AutoPTZ Mark disables it so the demo
+        # viewer can't mutate the throwaway engine via the menu.
+        self._context_menu_enabled = bool(context_menu_enabled)
         self._selected = False
         self._painted_rect = QRectF()  # where the video is drawn (overlay mapping)
         # Framing-box drag state: the handle being dragged ("nw".."e"/None) and a
@@ -1770,7 +1776,12 @@ class CameraTile(QWidget):
         return hit_other, False
 
     def contextMenuEvent(self, event: Any) -> None:  # noqa: N802
+        # Selecting on right-click is still useful (drives the details panel), but
+        # when the menu is disabled (AutoPTZ Mark) we never build/show it.
         self.selectExclusiveRequested.emit(self.camera_id)
+        if not self._context_menu_enabled:
+            event.accept()
+            return
         menu = QMenu(self)
         rec = self._record()
         tracking = _tracking_enabled(rec)

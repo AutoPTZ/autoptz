@@ -181,6 +181,34 @@ class TestAddSyntheticCamera:
         assert rec.camera_config.source.address == "anim"
         assert rec.camera_config.source.fps == 30.0
 
+    def test_add_synthetic_camera_native_fps(self, qapp) -> None:
+        # A clip's native fps flows to the synthetic source; sane values pass through,
+        # None falls back to 30, and out-of-range values clamp to (0, 240].
+        from autoptz.ui.engine_client import EngineClient
+
+        client = EngineClient()
+
+        def fps_for(native):
+            cid = _add_synthetic_camera(client, 0, native_fps=native)
+            return client.cameraModel.get_record(cid).camera_config.source.fps
+
+        assert fps_for(60.0) == 60.0
+        assert fps_for(None) == 30.0
+        assert fps_for(999.0) == 240.0
+        assert fps_for(0) == 30.0
+
+    def test_address_override_flows_to_source(self, qapp) -> None:
+        # A non-default address (e.g. the bundled clip path) lands on the source so
+        # the SyntheticAdapter loops the real clip instead of drawing synthetic people.
+        from autoptz.ui.engine_client import EngineClient
+
+        client = EngineClient()
+        cid = _add_synthetic_camera(client, 0, address="/some/clip.mp4")
+        rec = client.cameraModel.get_record(cid)
+        assert rec is not None and rec.camera_config is not None
+        assert rec.camera_config.source.type == "synthetic"
+        assert rec.camera_config.source.address == "/some/clip.mp4"
+
 
 class TestSupervisorSampler:
     def test_sampler_reports_fps_per_camera(self, qapp) -> None:
@@ -201,6 +229,190 @@ class TestSupervisorSampler:
             assert all(f == 30.0 for f in fps)
         finally:
             sampler.close()
+
+    def test_sampler_registers_cameras_on_injected_client(self, qapp) -> None:
+        """An injected client (the Mark window's) receives the synthetic cameras.
+
+        Without this the window's CameraWall — bound to that client — stays empty
+        during a run (the sampler would build a private client instead).
+        """
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        injected = EngineClient()
+
+        def factory(client, store):
+            return Supervisor(client, store=store, worker_factory=_FakeSamplerWorker)
+
+        sampler = _SupervisorSampler(
+            get_profile("full"), supervisor_factory=factory, client=injected
+        )
+        try:
+            assert sampler._client is injected
+            sampler.sample(2, dwell_s=0.0, max_ticks=3, tick_sleep_s=0.0)
+            # The synthetic cameras landed on the SAME client the wall observes.
+            assert len(injected.cameraModel.camera_ids()) == 2
+        finally:
+            sampler.close()
+
+    def test_adopted_sampler_grows_cameras_progressively(self, qapp) -> None:
+        """An ADOPTED sampler with an ``on_grow`` hook adds cameras ONE AT A TIME.
+
+        3DMark-style: the wall starts at 1 camera and grows as the ramp steps up.
+        The sampler calls ``on_grow`` (the Mark factory's add-next) to register the
+        next synthetic camera on the SAME client + supervisor, never building a
+        second supervisor.
+        """
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        injected = EngineClient()
+        sup = Supervisor(injected, store=None, worker_factory=_FakeSamplerWorker)
+        sup.prime_features(dict(get_profile("full").features))
+        # Pre-add only ONE camera (the idle wall starts at 1), start the supervisor.
+        cams = [_add_synthetic_camera(injected, 0)]
+        sup.start(run_pump=False)
+
+        def on_grow() -> str:
+            cid = _add_synthetic_camera(injected, len(cams))
+            cams.append(cid)
+            sup._spawn_worker(cid)  # bring up just the new worker (no full restart)
+            return cid
+
+        try:
+            sampler = _SupervisorSampler(
+                get_profile("full"),
+                client=injected,
+                supervisor=sup,
+                cameras=cams,
+                adopted_started=True,
+                on_grow=on_grow,
+            )
+            # Step 1: one camera, no growth.
+            fps1 = sampler.sample(1, dwell_s=0.0, max_ticks=3, tick_sleep_s=0.0)
+            assert len(fps1) == 1
+            assert len(injected.cameraModel.camera_ids()) == 1
+            # Step 2: the sampler grows the wall to 2.
+            fps2 = sampler.sample(2, dwell_s=0.0, max_ticks=3, tick_sleep_s=0.0)
+            assert len(fps2) == 2
+            assert len(injected.cameraModel.camera_ids()) == 2
+            # Step 3: grows to 3.
+            sampler.sample(3, dwell_s=0.0, max_ticks=3, tick_sleep_s=0.0)
+            assert len(injected.cameraModel.camera_ids()) == 3
+            sampler.close()
+            assert sup.is_running is True  # adopted supervisor left running
+        finally:
+            sup.stop()
+
+    def test_adopted_sampler_reuses_supervisor_and_cameras(self, qapp) -> None:
+        """An ADOPTED sampler reuses an external supervisor + pre-added cameras and
+        adds no new cameras (the Mark double-stack fix): it must not build a second
+        supervisor, must not register extra cameras, and close() must not stop the
+        adopted supervisor (the owner does)."""
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        injected = EngineClient()
+        sup = Supervisor(injected, store=None, worker_factory=_FakeSamplerWorker)
+        sup.prime_features(dict(get_profile("full").features))
+        # Pre-add 2 cameras and start the supervisor (mirrors the Mark factory).
+        cams = [_add_synthetic_camera(injected, i) for i in range(2)]
+        sup.start(run_pump=False)
+        try:
+            sampler = _SupervisorSampler(
+                get_profile("full"),
+                client=injected,
+                supervisor=sup,
+                cameras=cams,
+                adopted_started=True,
+            )
+            assert sampler._adopted is True
+            assert sampler._sup is sup  # no second supervisor built
+            # Sampling does NOT add cameras (the adopted set is reused).
+            sampler.sample(2, dwell_s=0.0, max_ticks=5, tick_sleep_s=0.0)
+            assert injected.cameraModel.camera_ids() == cams
+            # close() leaves the adopted supervisor running (owner stops it).
+            sampler.close()
+            assert sup.is_running is True
+        finally:
+            sup.stop()
+
+
+class TestSamplerWarmup:
+    """Change A: the adopted sampler waits out the one-time engine warmup before it
+    measures, so step 1 reflects steady state (model loaded + frames flowing) rather
+    than the ~8s model-load window that reads ~0 fps and stops the ramp instantly."""
+
+    def _adopted_sampler(self, qapp):
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        injected = EngineClient()
+        sup = Supervisor(injected, store=None, worker_factory=_FakeSamplerWorker)
+        sup.prime_features(dict(get_profile("full").features))
+        cams = [_add_synthetic_camera(injected, 0)]
+        sup.start(run_pump=False)
+        sampler = _SupervisorSampler(
+            get_profile("full"),
+            client=injected,
+            supervisor=sup,
+            cameras=cams,
+            adopted_started=True,
+        )
+        return sampler, sup
+
+    def test_warmup_waits_until_fps_rises(self, qapp) -> None:
+        sampler, sup = self._adopted_sampler(qapp)
+        try:
+            # fps reads 0 for the first few polls (model still loading), then rises
+            # above the warmup floor (10) — the sampler must keep polling until then.
+            polls = {"n": 0}
+
+            def rising_reader(_client, _cid) -> float:
+                polls["n"] += 1
+                return 0.0 if polls["n"] < 4 else 30.0
+
+            # Tight warmup knobs so the test is fast and offscreen-safe.
+            sampler._warmup(rising_reader, min_fps=10.0, timeout_s=5.0, settle_s=0.0, poll_s=0.0)
+            # It polled past the cold reads until fps cleared the floor, then warmed.
+            assert polls["n"] >= 4
+            assert sampler._warmed is True
+        finally:
+            sup.stop()
+
+    def test_warmup_is_one_shot(self, qapp) -> None:
+        sampler, sup = self._adopted_sampler(qapp)
+        try:
+            calls = {"n": 0}
+
+            def reader(_client, _cid) -> float:
+                calls["n"] += 1
+                return 30.0
+
+            sampler._warmup(reader, min_fps=10.0, timeout_s=1.0, settle_s=0.0, poll_s=0.0)
+            first = calls["n"]
+            assert first >= 1
+            # Second warmup is a no-op (already warmed) — no further reads.
+            sampler._warmup(reader, min_fps=10.0, timeout_s=1.0, settle_s=0.0, poll_s=0.0)
+            assert calls["n"] == first
+        finally:
+            sup.stop()
+
+    def test_warmup_times_out_when_fps_never_rises(self, qapp) -> None:
+        sampler, sup = self._adopted_sampler(qapp)
+        try:
+            import time as _time
+
+            t0 = _time.monotonic()
+            # fps stuck at 0 → warmup must give up at the (small) timeout, not hang.
+            sampler._warmup(
+                lambda _c, _i: 0.0, min_fps=10.0, timeout_s=0.2, settle_s=0.0, poll_s=0.02
+            )
+            elapsed = _time.monotonic() - t0
+            assert sampler._warmed is True
+            assert elapsed < 2.0  # bounded by the timeout, didn't hang
+        finally:
+            sup.stop()
 
 
 class TestRunBenchmarkWiring:
@@ -272,3 +484,137 @@ class TestJsonOutput:
         assert isinstance(data["steps"], list) and len(data["steps"]) == 2
         assert data["steps"][0]["cameras"] == 1
         assert "min_fps" in data["steps"][0]
+        # Slice 3: quality rides in each StepResult (empty per-camera dicts here —
+        # the fake worker emits a target-less frame so each camera has metrics but
+        # never-acquired).
+        assert "per_camera_quality" in data["steps"][0]
+
+
+# ── Slice 3: engine-reported quality wiring (headless sampler) ────────────────
+
+
+class _TargetSamplerWorker(_FakeSamplerWorker):
+    """Fake worker that emits a HELD-target telemetry frame at start().
+
+    Lets the headless sampler's quality tap observe a real ``TrackInfo`` stream so
+    target_hold_pct / mean_target_confidence are exercised end-to-end (still no
+    inference, still synchronous).
+    """
+
+    def start(self) -> None:
+        from autoptz.engine.runtime.messages import BBox, TelemetryMsg, TrackInfo
+
+        track = TrackInfo(
+            track_id=1,
+            bbox=BBox(x1=0.0, y1=0.0, x2=10.0, y2=10.0),
+            confidence=0.8,
+            is_target=True,
+            lost=False,
+        )
+        self.on_telemetry(
+            TelemetryMsg(
+                camera_id=self.camera_id,
+                seq=1,
+                fps=30.0,
+                target_fps=30.0,
+                tracks=[track],
+            )
+        )
+
+
+class TestSamplerQualityTap:
+    def test_last_quality_populated_for_each_camera(self, qapp) -> None:
+        from autoptz.engine.supervisor import Supervisor
+
+        def factory(client, store):
+            return Supervisor(client, store=store, worker_factory=_TargetSamplerWorker)
+
+        sampler = _SupervisorSampler(get_profile("full"), supervisor_factory=factory)
+        try:
+            sampler.sample(2, dwell_s=0.0, max_ticks=3, tick_sleep_s=0.0)
+            assert len(sampler.last_quality) == 2
+            for cid, q in sampler.last_quality.items():
+                assert isinstance(cid, str)
+                # The held-target frame -> acquired, 100% hold, confidence 0.8.
+                assert q["time_to_first_acquire_s"] == 0.0
+                assert q["target_hold_pct"] == 100.0
+                assert q["mean_target_confidence"] == 0.8
+                assert q["fps"] == 30.0
+        finally:
+            sampler.close()
+
+    def test_last_quality_never_acquired_for_target_less_stream(self, qapp) -> None:
+        from autoptz.engine.supervisor import Supervisor
+
+        def factory(client, store):
+            # The base fake emits a target-LESS frame -> never acquired.
+            return Supervisor(client, store=store, worker_factory=_FakeSamplerWorker)
+
+        sampler = _SupervisorSampler(get_profile("full"), supervisor_factory=factory)
+        try:
+            sampler.sample(1, dwell_s=0.0, max_ticks=3, tick_sleep_s=0.0)
+            assert len(sampler.last_quality) == 1
+            q = next(iter(sampler.last_quality.values()))
+            assert q["time_to_first_acquire_s"] is None
+            assert q["target_hold_pct"] == 0.0
+        finally:
+            sampler.close()
+
+    def test_tap_restores_passthrough_between_windows(self, qapp) -> None:
+        """Outside a sample window the wrapped push_telemetry is transparent: a
+        direct push must reach the model without being folded into stale metrics."""
+        from autoptz.engine.runtime.messages import TelemetryMsg
+        from autoptz.engine.supervisor import Supervisor
+
+        def factory(client, store):
+            return Supervisor(client, store=store, worker_factory=_TargetSamplerWorker)
+
+        sampler = _SupervisorSampler(get_profile("full"), supervisor_factory=factory)
+        try:
+            sampler.sample(1, dwell_s=0.0, max_ticks=3, tick_sleep_s=0.0)
+            cid = sampler._cameras[0]
+            # Window is closed now; a manual push still updates the model fps.
+            sampler._client.push_telemetry(
+                TelemetryMsg(camera_id=cid, seq=99, fps=12.0, target_fps=12.0)
+            )
+            sampler._drain_events()
+            rec = sampler._client.cameraModel.get_record(cid)
+            assert float(getattr(rec, "fps", 0.0) or 0.0) == 12.0
+        finally:
+            sampler.close()
+
+
+class TestRunBenchmarkQualityJson:
+    def test_run_benchmark_json_carries_quality(self, qapp, tmp_path) -> None:
+        from autoptz.engine.supervisor import Supervisor
+
+        def factory(client, store):
+            return Supervisor(client, store=store, worker_factory=_TargetSamplerWorker)
+
+        def reader(client, cid) -> float:
+            rec = client.cameraModel.get_record(cid)
+            return float(getattr(rec, "fps", 0.0) or 0.0)
+
+        out = tmp_path / "mark.json"
+        code = run_benchmark(
+            profile="full",
+            floor_fps=24.0,
+            max_cameras=2,
+            dwell_s=0.0,
+            json_path=str(out),
+            supervisor_factory=factory,
+            fps_reader=reader,
+            max_ticks=3,
+            tick_sleep_s=0.0,
+        )
+        assert code == 0
+
+        import json
+
+        data = json.loads(out.read_text())
+        # The default quality_reader pulled the sampler's last_quality into each step.
+        step0 = data["steps"][0]
+        assert step0["per_camera_quality"]  # non-empty
+        any_q = next(iter(step0["per_camera_quality"].values()))
+        assert any_q["target_hold_pct"] == 100.0
+        assert any_q["mean_target_confidence"] == 0.8
