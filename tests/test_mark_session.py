@@ -141,7 +141,7 @@ class TestClipSource:
 
 class TestClipLibrary:
     def test_clip_library_registry(self) -> None:
-        # Every registry entry is a ClipMetadata with all five fields populated.
+        # Every registry entry is a ClipMetadata with all fields populated.
         assert isinstance(CLIP_LIBRARY, dict)
         assert CLIP_LIBRARY  # non-empty
         for clip_id, meta in CLIP_LIBRARY.items():
@@ -152,18 +152,33 @@ class TestClipLibrary:
             assert isinstance(meta.label, str) and meta.label
             assert isinstance(meta.native_fps, float) and meta.native_fps > 0
             assert isinstance(meta.purpose, str) and meta.purpose
+            # v3: every entry carries a native resolution (w, h both > 0) and a
+            # non-empty tuple of capability tags.
+            assert isinstance(meta.native_resolution, tuple)
+            assert len(meta.native_resolution) == 2
+            w, h = meta.native_resolution
+            assert isinstance(w, int) and isinstance(h, int)
+            assert w > 0 and h > 0
+            assert isinstance(meta.capability_tags, tuple)
+            assert meta.capability_tags  # non-empty
+            assert all(isinstance(t, str) and t for t in meta.capability_tags)
         # The default clip id is present and is the HD crowd clip.
         assert DEFAULT_CLIP_ID == "crowd"
         assert DEFAULT_CLIP_ID in CLIP_LIBRARY
-        # The four bundled clips (24/30/60fps + scenarios) are all registered.
+        # The bundled capability scenes (24/30/60fps + a dedicated faces scene)
+        # are all registered.
         assert {
             "crowd",
             "pedestrians",
             "cinematic_24",
             "cinematic_60",
+            "faces",
         } == set(CLIP_LIBRARY)
         # The library spans the three requested native cadences.
         assert {m.native_fps for m in CLIP_LIBRARY.values()} == {24.0, 30.0, 60.0}
+        # Every requested capability is covered by at least one scene.
+        all_tags = {t for m in CLIP_LIBRARY.values() for t in m.capability_tags}
+        assert {"tracking", "reid", "center-stage", "face"} <= all_tags
 
     def test_clip_id_round_trip(self) -> None:
         store = _Store()
@@ -226,6 +241,71 @@ class TestClipLibrary:
         # For synthetic / NDI (render-any-rate) sources the user's floor_fps wins.
         assert MarkSession(source="synthetic", floor_fps=45.0).target_fps() == 45.0
         assert MarkSession(source="ndi", floor_fps=24.0).target_fps() == 24.0
+
+
+class TestClipCapabilitiesV3:
+    """Slice 1 of Mark v3: capability tags + native resolution + variants table."""
+
+    def test_native_resolutions_match_spec(self) -> None:
+        assert CLIP_LIBRARY["crowd"].native_resolution == (1280, 720)
+        assert CLIP_LIBRARY["pedestrians"].native_resolution == (1920, 1080)
+        assert CLIP_LIBRARY["cinematic_24"].native_resolution == (1920, 1080)
+        assert CLIP_LIBRARY["cinematic_60"].native_resolution == (1920, 1080)
+
+    def test_capability_tags_match_spec(self) -> None:
+        assert CLIP_LIBRARY["crowd"].capability_tags == ("tracking", "reid")
+        assert CLIP_LIBRARY["pedestrians"].capability_tags == ("tracking",)
+        assert CLIP_LIBRARY["cinematic_24"].capability_tags == ("center-stage",)
+        assert CLIP_LIBRARY["cinematic_60"].capability_tags == ("center-stage",)
+        assert CLIP_LIBRARY["faces"].capability_tags == ("face",)
+
+    def test_capability_tags_method_returns_clip_tags(self) -> None:
+        assert MarkSession(clip_id="crowd").capability_tags() == ("tracking", "reid")
+        assert MarkSession(clip_id="faces").capability_tags() == ("face",)
+        # Empty id resolves to the default clip's tags.
+        assert (
+            MarkSession(clip_id="").capability_tags()
+            == CLIP_LIBRARY[DEFAULT_CLIP_ID].capability_tags
+        )
+
+    def test_available_variants_shape(self) -> None:
+        variants = MarkSession(clip_id="crowd").available_variants()
+        assert isinstance(variants, list)
+        assert variants
+        for v in variants:
+            assert {"res", "fps", "res_tag", "fps_tag", "synthetic"} <= set(v)
+
+    def test_available_variants_crowd_synthetic_tagging(self) -> None:
+        # crowd master is 720p30: 1080p/4k targets are upscaled-synthetic, 60fps
+        # targets are interpolated-synthetic, and 720p/30 is native (not synthetic).
+        variants = MarkSession(clip_id="crowd").available_variants()
+        by_key = {(v["res"], v["fps"]): v for v in variants}
+
+        native = by_key[((1280, 720), 30.0)]
+        assert native["res_tag"] == "native"
+        assert native["fps_tag"] == "native"
+        assert native["synthetic"] is False
+
+        upscaled_1080 = by_key[((1920, 1080), 30.0)]
+        assert upscaled_1080["res_tag"] == "upscaled"
+        assert upscaled_1080["synthetic"] is True
+
+        upscaled_4k = by_key[((3840, 2160), 30.0)]
+        assert upscaled_4k["res_tag"] == "upscaled"
+        assert upscaled_4k["synthetic"] is True
+
+        interpolated_60 = by_key[((1280, 720), 60.0)]
+        assert interpolated_60["fps_tag"] == "interpolated"
+        assert interpolated_60["synthetic"] is True
+
+    def test_available_variants_cinematic_60_has_native_60(self) -> None:
+        # cinematic_60 master is 1080p60: the 1080p/60 combo is fully native.
+        variants = MarkSession(clip_id="cinematic_60").available_variants()
+        by_key = {(v["res"], v["fps"]): v for v in variants}
+        native_60 = by_key[((1920, 1080), 60.0)]
+        assert native_60["res_tag"] == "native"
+        assert native_60["fps_tag"] == "native"
+        assert native_60["synthetic"] is False
 
 
 class TestGeometryClear:

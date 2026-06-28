@@ -42,6 +42,9 @@ Mark" benchmark to drive synthetic cameras. Each was trimmed/transcoded
 - `mark_people_24.mp4` and `mark_people_60.mp4` — derived from "Tears of Steel"
   (CC) Blender Foundation | mango.blender.org, licensed CC BY 3.0. The
   `mark_people_60.mp4` variant was frame-interpolated to 60 fps.
+- `mark_faces_30.mp4` — derived from a U.S. White House Daily Press Briefing
+  (April 11, 2016). A work of the U.S. federal government, in the Public Domain
+  (17 U.S.C. § 101). Used as the face-recognition benchmark scene.
 
 These clips are demo assets only and are independent of the AGPL-3.0 license
 that covers AutoPTZ's own source code.

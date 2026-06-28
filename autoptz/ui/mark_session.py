@@ -34,6 +34,12 @@ class ClipMetadata:
     engine feeds it to the synthetic camera so the source paces at the clip's true
     cadence rather than a fixed 30.  ``purpose`` is a free-form scenario tag
     ("tracking"/"crowd"/"framing"/"fast-motion") for grouping / UX copy.
+
+    ``native_resolution`` is the master clip's *own* recorded frame size (w, h);
+    the transcode cache tags every (res, fps) target relative to it as
+    native/upscaled/downscaled so the UI can flag synthetic (upscaled) variants.
+    ``capability_tags`` lists the AI features the scene meaningfully exercises
+    ("tracking"/"reid"/"center-stage"/"face") for capability-gated UX copy.
     """
 
     id: str
@@ -41,6 +47,8 @@ class ClipMetadata:
     label: str
     native_fps: float
     purpose: str
+    native_resolution: tuple[int, int]
+    capability_tags: tuple[str, ...]
 
 
 # The selectable clip library.  Keyed by stable id (what lands in MarkSession).
@@ -53,6 +61,8 @@ CLIP_LIBRARY: dict[str, ClipMetadata] = {
         label="Crowd Crossing — 30 fps (re-ID)",
         native_fps=30.0,
         purpose="crowd",
+        native_resolution=(1280, 720),
+        capability_tags=("tracking", "reid"),
     ),
     "pedestrians": ClipMetadata(
         id="pedestrians",
@@ -60,6 +70,8 @@ CLIP_LIBRARY: dict[str, ClipMetadata] = {
         label="Pedestrians — 30 fps",
         native_fps=30.0,
         purpose="tracking",
+        native_resolution=(1920, 1080),
+        capability_tags=("tracking",),
     ),
     "cinematic_24": ClipMetadata(
         id="cinematic_24",
@@ -67,6 +79,8 @@ CLIP_LIBRARY: dict[str, ClipMetadata] = {
         label="Cinematic People — 24 fps",
         native_fps=24.0,
         purpose="framing",
+        native_resolution=(1920, 1080),
+        capability_tags=("center-stage",),
     ),
     "cinematic_60": ClipMetadata(
         id="cinematic_60",
@@ -74,6 +88,17 @@ CLIP_LIBRARY: dict[str, ClipMetadata] = {
         label="Cinematic People — 60 fps",
         native_fps=60.0,
         purpose="high-fps",
+        native_resolution=(1920, 1080),
+        capability_tags=("center-stage",),
+    ),
+    "faces": ClipMetadata(
+        id="faces",
+        filename="mark_faces_30.mp4",
+        label="Faces — 30 fps (recognition)",
+        native_fps=30.0,
+        purpose="face",
+        native_resolution=(1280, 720),
+        capability_tags=("face",),
     ),
 }
 
@@ -97,6 +122,24 @@ _MODEL_TIERS: dict[str, str] = {
     "small": "balanced",
     "medium": "medium",
 }
+
+
+_TRANSCODE_CACHE: object | None = None
+
+
+def _transcode_cache() -> object:
+    """Lazily build (once) a shared TranscodeCache for the availability table.
+
+    Imported lazily — the engine pulls in cv2 — and reused across calls because
+    constructing one only mkdirs a cache dir.  ``valid_combos`` is a pure
+    instance method (no I/O), so a single shared instance is safe.
+    """
+    global _TRANSCODE_CACHE
+    if _TRANSCODE_CACHE is None:
+        from autoptz.engine.pipeline.transcode_cache import TranscodeCache  # noqa: PLC0415
+
+        _TRANSCODE_CACHE = TranscodeCache()
+    return _TRANSCODE_CACHE
 
 
 def _clip_path(filename: str = _CLIP_FILENAME) -> Path:
@@ -189,6 +232,28 @@ class MarkSession:
             )
             return CLIP_LIBRARY[DEFAULT_CLIP_ID]
         return meta
+
+    def capability_tags(self) -> tuple[str, ...]:
+        """The AI features this session's clip meaningfully exercises.
+
+        Resolves the clip id against :data:`CLIP_LIBRARY` (default on miss) and
+        returns its :attr:`ClipMetadata.capability_tags` so the UI can gate /
+        annotate capability-specific controls (re-ID, center-stage, face).
+        """
+        return self.clip_info().capability_tags
+
+    def available_variants(self) -> list[dict]:
+        """The (res, fps) availability table for this session's clip.
+
+        Resolves the clip metadata, then asks the transcode cache to tag every
+        target combo relative to the master's native (resolution, fps).  Each
+        dict carries ``res``/``fps``/``res_tag``/``fps_tag``/``synthetic`` — the
+        UI renders these so the user sees which variants are real captured
+        fidelity vs. upscaled / frame-interpolated (synthetic).
+        """
+        meta = self.clip_info()
+        cache = _transcode_cache()
+        return cache.valid_combos(meta.native_resolution, meta.native_fps)  # type: ignore[attr-defined]
 
     def clip_path(self) -> str:
         """Absolute path (str) to the selected bundled clip, for the SyntheticAdapter."""
