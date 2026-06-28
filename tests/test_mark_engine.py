@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from autoptz.config.store import ConfigStore, default_db_path
 from autoptz.ui.mark_session import MarkSession
 
@@ -559,3 +561,73 @@ def test_stop_detaches_frame_source(qapp):
     eng.stop()
     # Teardown releases every reader/intent so the discarded session leaks nothing.
     assert not eng.frame_source.is_known("cam-9")
+
+
+# ── PHASE 1 (Step 1.5): leak-proof stop + started-last start ──────────────────
+
+
+def test_stop_continues_cleanup_when_supervisor_stop_raises():
+    """A failing supervisor.stop() must NOT block the rest of teardown: the frame
+    source is still detached and the temp dir is still removed."""
+    from autoptz.ui import mark_engine
+
+    class _BoomStopSup(_FakeSupervisor):
+        def stop(self):
+            raise RuntimeError("supervisor stop boom")
+
+    eng = mark_engine.MarkEngineFactory(
+        MarkSession(source="synthetic", max_cameras=2),
+        supervisor_factory=lambda c, s: _BoomStopSup(c, s),
+    )
+    tmpdir = eng._tmpdir
+    detached = {"n": 0}
+    real_detach = eng.frame_source.detach_all
+
+    def _spy_detach():
+        detached["n"] += 1
+        return real_detach()
+
+    eng._frame_source.detach_all = _spy_detach  # type: ignore[method-assign]
+    eng.stop()  # must not raise despite the supervisor blowing up
+    assert detached["n"] == 1  # frame source still detached
+    assert eng.store._conn is None  # store still closed
+    assert not tmpdir.exists()  # temp dir still removed
+
+
+def test_stop_removes_tmpdir_even_if_store_close_raises():
+    """A failing store.close() must NOT block the temp-dir removal."""
+    from autoptz.ui import mark_engine
+
+    eng = mark_engine.MarkEngineFactory(
+        MarkSession(source="synthetic", max_cameras=2),
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    tmpdir = eng._tmpdir
+
+    def _boom_close():
+        raise RuntimeError("store close boom")
+
+    eng._store.close = _boom_close  # type: ignore[method-assign]
+    eng.stop()  # must not raise
+    assert not tmpdir.exists()  # temp dir gone despite the store close failing
+
+
+def test_start_does_not_set_started_if_supervisor_start_raises():
+    """If supervisor.start() raises, is_started must stay False (a half-started
+    engine must not advertise itself as running)."""
+    from autoptz.ui import mark_engine
+
+    class _BoomStartSup(_FakeSupervisor):
+        def start(self, *, run_pump=False, staged=False, progress=None):
+            raise RuntimeError("supervisor start boom")
+
+    eng = mark_engine.MarkEngineFactory(
+        MarkSession(source="synthetic", max_cameras=2),
+        supervisor_factory=lambda c, s: _BoomStartSup(c, s),
+    )
+    try:
+        with pytest.raises(RuntimeError):
+            eng.start()
+        assert eng.is_started is False
+    finally:
+        eng.stop()

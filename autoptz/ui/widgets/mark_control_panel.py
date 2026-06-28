@@ -46,6 +46,10 @@ class MarkControlPanel(QWidget):
         self._verdict_label.setObjectName("markVerdict")
         self._verdict_label.setWordWrap(True)
         col.addWidget(self._verdict_label)
+        # Whether the verdict currently holds the FINAL score (highlighted) vs an
+        # in-flight progress line (plain) — tracked so a theme flip re-applies the
+        # right styling instead of reverting a finished score to the live look.
+        self._verdict_final = False
 
         btn_row = QHBoxLayout()
         self._stop_btn = QPushButton("Stop")
@@ -69,13 +73,31 @@ class MarkControlPanel(QWidget):
         self._restyle()
 
     def _restyle(self) -> None:
-        """Refresh the verdict color from the active palette (re-run on theme flip)."""
-        self._verdict_label.setStyleSheet(
-            f"color: {T.CURRENT.text}; font-size: {T.fs(14)}px; font-weight: 600;"
-        )
+        """Refresh the verdict styling from the active palette (re-run on theme flip).
 
-    def set_verdict(self, text: str) -> None:
+        Honors the current final/in-flight state so a Light/Dark flip keeps a finished
+        score highlighted (accent + bold) and a live progress line plain.
+        """
+        if self._verdict_final:
+            self._verdict_label.setStyleSheet(
+                f"color: {T.TRACKING}; font-size: {T.fs(14)}px; font-weight: 700;"
+            )
+        else:
+            self._verdict_label.setStyleSheet(
+                f"color: {T.CURRENT.text}; font-size: {T.fs(14)}px; font-weight: 600;"
+            )
+
+    def set_verdict(self, text: str, *, final: bool = False) -> None:
+        """Set the verdict line.
+
+        ``final=True`` highlights the finished score (accent color + bold) so it
+        stands out from the in-flight ``Ramping…`` progress; the default keeps the
+        plain live styling.  The final state is remembered so a later theme flip
+        (:meth:`_restyle`) re-applies the right look.
+        """
+        self._verdict_final = bool(final)
         self._verdict_label.setText(text)
+        self._restyle()
 
     def set_running(self, running: bool) -> None:
         """Stop is usable only while the ramp runs; Exit is always usable."""

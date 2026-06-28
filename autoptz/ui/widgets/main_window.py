@@ -88,6 +88,10 @@ class MainWindow(QMainWindow):
         # into Mark (so Return-to-AutoPTZ can restore that exact state).
         self._mark_window: Any | None = None
         self._engine_was_running = False
+        # Set if this (suspended) main window is itself closed while a Mark swap is
+        # active — a later Mark Return then has no live window to resume, so it quits
+        # the app instead of re-showing a dead window (routing bug (h)).
+        self._main_closed_during_swap = False
         # Discovery state: a running modal scan (USB rescan / NDI rescan), plus
         # USB and NDI source lists kept populated in the background so opening
         # the Cameras menu never probes devices on the GUI thread.
@@ -896,7 +900,10 @@ class MainWindow(QMainWindow):
                 win.close()
             except Exception:  # noqa: BLE001
                 log.debug("closing mark window failed", exc_info=True)
-        if quit_app:
+        if quit_app or self._main_closed_during_swap:
+            # Either a deliberate Quit, OR this main window was itself closed during
+            # the swap — there is no live window to return to, so quit rather than
+            # re-show a dead one (routing bug (h)).
             from PySide6.QtWidgets import QApplication
 
             QApplication.quit()
@@ -1385,6 +1392,10 @@ class MainWindow(QMainWindow):
         return True
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        # A close arriving while a Mark swap is active means this suspended window is
+        # gone; record it so a later Mark Return quits instead of resuming a dead one.
+        if self._mark_window is not None:
+            self._main_closed_during_swap = True
         if self._should_persist_geometry():
             try:
                 self._client.setSetting(

@@ -50,6 +50,15 @@ def test_save_box_disabled_without_result(qtapp) -> None:
     dlg.deleteLater()
 
 
+def test_save_box_enabled_set_before_checked(qtapp) -> None:
+    """Without a result the save box must be both unchecked AND disabled — never the
+    checked-but-disabled state a setChecked-before-setEnabled ordering can leave."""
+    dlg = _dlg(qtapp, has_result=False)
+    assert dlg._save_box.isChecked() is False
+    assert dlg._save_box.isEnabled() is False
+    dlg.deleteLater()
+
+
 def test_save_box_enabled_and_checked_with_result(qtapp) -> None:
     dlg = _dlg(qtapp, has_result=True)
     assert dlg._save_box.isEnabled() is True

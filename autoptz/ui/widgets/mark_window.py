@@ -186,6 +186,11 @@ class MarkWindow(MainWindow):
         self._result: BenchmarkResult | None = None
         self._benchmarks_dir: Any | None = None
         self._returning = False
+        # Single-source teardown guard: closeEvent / the aboutToQuit hook both route
+        # through ONE idempotent teardown.  The first pass flips this True so any
+        # subsequent close / quit is a no-op (no double engine.stop, no second
+        # closedUnexpectedly emit).
+        self._torn_down = False
         # Slice 5: fold the live telemetry stream into per-camera tracking quality.
         # ``_quality`` maps camera id -> PerCameraQualityAccumulator for the CURRENT
         # ramp step; ``_on_step`` finalizes + resets it.  When AUTOPTZ_MARK_GT is set
@@ -243,6 +248,15 @@ class MarkWindow(MainWindow):
         self._hide_nonessential_docks()
         self._start_pump()
         self._refresh_idle_status()
+        # Cmd+Q / macOS dock-Quit / programmatic QApplication.quit() bypass
+        # closeEvent entirely — without this hook the pump/controller/engine never
+        # stop and the root-logger handler leaks.  Route the app's aboutToQuit
+        # through the SAME idempotent teardown so every quit path is clean.
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._on_app_about_to_quit)
 
     # ── overrides ────────────────────────────────────────────────────────────────
 
@@ -659,26 +673,26 @@ class MarkWindow(MainWindow):
         # chart's pass line), not result.floor_fps mixed with the raw target — so
         # green dots sit above the line and red below.
         self._chart.set_steps(list(result.steps) or self._chart._steps, self._effective_floor())
-        # Show the user's TARGET fps (what they chose), not the discounted pass floor
-        # the runner ran with (result.floor_fps) — that internal threshold is confusing.
-        self._controls.set_verdict(
-            f"Done — {result.sustained_cameras} camera(s) kept up with "
-            f"{self._session.target_fps():.0f} fps (score {result.score})."
-        )
-        # Offer to save the result (Save-As).  When prompting is off (tests /
-        # headless) this persists directly under the benchmarks dir instead.
-        self._show_completion_dialog(result)
+        # The finished verdict: the human rating word + the transparent score math
+        # (e.g. "Good — 2 cam × 28/30 fps × 1.0 weight = 1.87").  final=True highlights
+        # it (accent + bold) so the result stands out from the in-flight progress line.
+        self._controls.set_verdict(self._verdict_text(result), final=True)
+        # Show the unified completion modal (Return / Quit / Open / Save).  When
+        # prompting is off (tests / headless) this persists directly instead.
+        self._show_completion_modal(result)
 
-    def _show_completion_dialog(self, result: BenchmarkResult) -> None:
-        """Prompt a Save-As for the finished result (or persist directly when off).
+    def _show_completion_modal(self, result: BenchmarkResult) -> None:
+        """Show the unified completion modal (or persist directly when off).
 
         With ``_prompt_on_completion`` off this just calls :meth:`_persist_result`
-        (the headless path).  Otherwise it opens a single ``QFileDialog`` (guarded
-        against re-entry) offering JSON or CSV: the chosen filter / path suffix
-        selects the writer (:func:`save_mark_result_csv` for ``.csv``, else
-        :func:`save_mark_result_to_path` for JSON) and the directory is remembered;
-        Cancel leaves the result in :attr:`_result` for save-on-exit and does NOT
-        auto-persist.
+        (the headless path).  Otherwise it builds ONE :class:`MarkCompletionDialog`
+        (guarded against re-entry) offering **Return / Quit / Open / Save**: the
+        dialog stays pure UI and the window owns the file I/O — ``saveRequested``
+        routes to :meth:`_save_via_dialog` (Save-As + writer), ``openRequested`` to
+        :meth:`_open_results_folder`.  After it closes, the choice routes through
+        :meth:`request_return` / :meth:`request_quit`; dismissing it with no choice
+        leaves the window open (the Exit button still works) and keeps
+        :attr:`_result` for save-on-exit (no auto-persist, no auto-quit).
         """
         if not self._prompt_on_completion:
             self._persist_result(result)
@@ -687,28 +701,88 @@ class MarkWindow(MainWindow):
             return
         self._showing_completion_dialog = True
         try:
-            from datetime import UTC, datetime
-
-            from autoptz.config.store import default_config_dir
-
-            base = self._benchmarks_dir or (default_config_dir() / "benchmarks")
-            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-            default_path = str(Path(base) / f"autoptz-mark-{stamp}.json")
-            path, chosen_filter = QFileDialog.getSaveFileName(
-                self,
-                "Save AutoPTZ Mark results",
-                default_path,
-                "JSON (*.json);;CSV (*.csv);;All Files (*)",
+            from autoptz.benchmark.rating import score_rating, score_reason_full
+            from autoptz.ui.widgets.dialogs.mark_completion import (
+                QUIT,
+                RETURN,
+                MarkCompletionDialog,
             )
-            if not path:
-                return  # Cancel → keep self._result for save-on-exit; no auto-persist
-            try:
-                saved = self._write_result(result, Path(path), chosen_filter)
-                self._benchmarks_dir = saved.parent
-            except Exception:  # noqa: BLE001
-                log.exception("Failed to save AutoPTZ Mark result")
+
+            dlg = MarkCompletionDialog(
+                verdict=self._verdict_text(result),
+                rating=score_rating(result.score),
+                reason=score_reason_full(result),
+                has_saved=self._benchmarks_dir is not None,
+                parent=self,
+            )
+            dlg.saveRequested.connect(lambda: self._on_completion_save(result, dlg))
+            dlg.openRequested.connect(self._open_results_folder)
+            dlg.exec()
+            choice = dlg.choice()
+            if choice == QUIT:
+                self.request_quit()
+            elif choice == RETURN:
+                self.request_return()
+            # No choice (OS-dismiss) → stay in Mark; keep _result for save-on-exit.
         finally:
             self._showing_completion_dialog = False
+
+    def _verdict_text(self, result: BenchmarkResult) -> str:
+        """The score/verdict line shown in the verdict label AND the completion modal.
+
+        The compact rating reason: the human rating word (Needs work / Fair / Good /
+        Great / Excellent) followed by the transparent score math whose numbers add up
+        to the displayed score — e.g. ``Good — 2 cam × 28/30 fps × 1.0 weight = 1.87``.
+        """
+        from autoptz.benchmark.rating import score_reason
+
+        return score_reason(result)
+
+    def _on_completion_save(self, result: BenchmarkResult, dialog: Any) -> None:
+        """Run the Save-As for the modal's *Save results…* and re-enable its Open button.
+
+        Saving from the modal does NOT close it (the user can save and *then* choose
+        Return / Quit), so on a successful save we tell the dialog a path now exists
+        via :meth:`MarkCompletionDialog.set_saved` to light up *Open results*.
+        """
+        saved = self._save_via_dialog(result)
+        if saved is not None:
+            try:
+                dialog.set_saved(True)
+            except Exception:  # noqa: BLE001 — a dismissed dialog ref is harmless
+                log.debug("completion dialog set_saved failed", exc_info=True)
+
+    def _save_via_dialog(self, result: BenchmarkResult) -> Path | None:
+        """Save-As + writer for *result* — the pure save seam the modal drives.
+
+        Opens a single ``QFileDialog`` offering JSON or CSV: the chosen filter / path
+        suffix selects the writer (:func:`save_mark_result_csv` for ``.csv``, else
+        :func:`save_mark_result_to_path` for JSON) and the directory is remembered on
+        :attr:`_benchmarks_dir`.  Returns the saved path, or ``None`` on Cancel /
+        error (Cancel leaves :attr:`_result` for save-on-exit — no auto-persist).
+        """
+        from datetime import UTC, datetime
+
+        from autoptz.config.store import default_config_dir
+
+        base = self._benchmarks_dir or (default_config_dir() / "benchmarks")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        default_path = str(Path(base) / f"autoptz-mark-{stamp}.json")
+        path, chosen_filter = QFileDialog.getSaveFileName(
+            self,
+            "Save AutoPTZ Mark results",
+            default_path,
+            "JSON (*.json);;CSV (*.csv);;All Files (*)",
+        )
+        if not path:
+            return None  # Cancel → keep self._result for save-on-exit; no auto-persist
+        try:
+            saved = self._write_result(result, Path(path), chosen_filter)
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to save AutoPTZ Mark result")
+            return None
+        self._benchmarks_dir = saved.parent
+        return saved
 
     def _write_result(self, result: BenchmarkResult, path: Path, chosen_filter: str) -> Path:
         """Write *result* to *path* as CSV or JSON per the chosen filter / suffix.
@@ -735,21 +809,33 @@ class MarkWindow(MainWindow):
 
     # ── helpers ──────────────────────────────────────────────────────────────────
 
-    def _teardown_controller(self) -> None:
-        """Drop our ref to the controller, but only after its thread has finished.
+    def _teardown_controller(self) -> bool:
+        """Idempotently stop + join the ramp controller, dropping our ref.
 
-        ``finished``/``error`` are emitted from inside the worker's ``_run`` (it
-        calls ``thread.quit()`` in its ``finally`` *after* emitting), so when this
-        slot fires the QThread may still be unwinding its event loop.  We wait for
-        it to truly finish before releasing the last strong ref.
+        The SINGLE source of controller teardown — every exit path (finish, error,
+        close, quit) calls this.  It cooperatively cancels (``stop``) THEN joins
+        (``wait``) the worker before releasing the last strong ref: ``finished`` /
+        ``error`` are emitted from inside the worker's ``_run`` (which calls
+        ``thread.quit()`` in its ``finally`` *after* emitting), so the QThread may
+        still be unwinding its event loop when this fires.  Returns the join result
+        (True when finished within the timeout, or when there was no controller);
+        logs a WARNING on a timeout so a hung worker is never swallowed silently.
+        An early-return keeps a second call a clean no-op (the ref is already gone).
         """
         controller = self._controller
+        if controller is None:
+            return True
         self._controller = None
-        if controller is not None:
-            try:
-                controller.wait(5000)
-            except Exception:  # noqa: BLE001
-                log.debug("controller wait failed", exc_info=True)
+        ok = True
+        try:
+            controller.stop()
+            ok = bool(controller.wait(5000))
+        except Exception:  # noqa: BLE001
+            log.debug("controller stop/wait failed", exc_info=True)
+            return False
+        if not ok:
+            log.warning("Mark controller did not finish within 5s on teardown")
+        return ok
 
     def _persist_result(self, result: BenchmarkResult) -> None:
         from autoptz.benchmark.results import save_mark_result
@@ -827,11 +913,33 @@ class MarkWindow(MainWindow):
             self.request_return()
 
     def closeEvent(self, event: Any) -> None:  # noqa: N802 — Qt override
-        """Stop the pump FIRST, then the controller, then the isolated engine.
+        """Tear down ONCE in strict order: pump → controller → engine → log handler.
 
-        Closing NEVER relaunches.  An OS-window close (no deliberate return/quit)
-        emits :attr:`closedUnexpectedly` so the owner can route it through the same
-        exit flow (default: Return) instead of silently killing the app.
+        Closing NEVER relaunches.  A re-entrancy guard (:attr:`_torn_down`) makes a
+        second close a no-op so the engine is stopped exactly once and
+        :attr:`closedUnexpectedly` is emitted at most once.  The pump is stopped
+        FIRST (so ``engine.tick()`` cannot fire mid-wait), then the controller is
+        joined, then the isolated engine is stopped, then the log handler detached.
+        An OS-window close (no deliberate return/quit) emits ``closedUnexpectedly``
+        so the owner can route it through the same exit flow (default: Return)
+        instead of silently killing the app.
+        """
+        if self._torn_down:
+            super().closeEvent(event)
+            return
+        self._torn_down = True
+        self._teardown(emit_unexpected=not self._returning)
+        super().closeEvent(event)
+
+    def _teardown(self, *, emit_unexpected: bool) -> None:
+        """The single ordered teardown shared by closeEvent and the quit hook.
+
+        Order is load-bearing: stop the pump first so ``engine.tick()`` cannot fire
+        while the controller is being joined; join the controller; stop the engine;
+        detach the log handler last.  Callers set :attr:`_torn_down` before calling
+        so this runs exactly once.  ``emit_unexpected`` gates ``closedUnexpectedly``
+        (an OS-close routes through Return; a deliberate return/quit or an app quit
+        suppresses it).
         """
         try:
             pump = getattr(self, "_pump", None)
@@ -839,22 +947,43 @@ class MarkWindow(MainWindow):
                 pump.stop()
         except Exception:  # noqa: BLE001
             log.debug("mark pump stop failed", exc_info=True)
-        controller = self._controller
-        if controller is not None:
-            try:
-                controller.stop()
-                controller.wait(5000)
-            except Exception:  # noqa: BLE001
-                log.debug("controller stop/wait on close failed", exc_info=True)
-            self._controller = None
+        self._teardown_controller()
         try:
             self._engine.stop()
         except Exception:  # noqa: BLE001
             log.debug("mark engine stop failed", exc_info=True)
         self._detach_log_handler()
-        if not self._returning:
+        self._disconnect_about_to_quit()
+        if emit_unexpected:
             self.closedUnexpectedly.emit()
-        super().closeEvent(event)
+
+    def _on_app_about_to_quit(self) -> None:
+        """QApplication.aboutToQuit hook: tear down cleanly on Cmd+Q / dock-Quit.
+
+        Cmd+Q (and a programmatic ``QApplication.quit()``) bypass ``closeEvent``
+        entirely, so without this the pump/controller/engine never stop and the
+        root-logger handler leaks.  Reuses the SAME idempotent teardown (guarded by
+        :attr:`_torn_down`) but never emits ``closedUnexpectedly`` — the app is
+        already quitting, so there is no owner left to route a return to.
+        """
+        if self._torn_down:
+            return
+        self._torn_down = True
+        self._teardown(emit_unexpected=False)
+
+    def _disconnect_about_to_quit(self) -> None:
+        """Drop the aboutToQuit connection so a returned-then-quit app never calls
+        back into this discarded window (idempotent)."""
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
+            return
+        try:
+            app.aboutToQuit.disconnect(self._on_app_about_to_quit)
+        except (RuntimeError, TypeError):
+            # Not connected (e.g. constructed with no QApplication) — harmless.
+            pass
 
     def _detach_log_handler(self) -> None:
         """Remove the Mark session's root-logger handler (idempotent).

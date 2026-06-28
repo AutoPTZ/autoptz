@@ -198,6 +198,35 @@ def test_main_close_during_mark_swap_does_not_quit(qtapp, monkeypatch) -> None:
     win._mark_window.close()
 
 
+def test_main_close_during_swap_then_mark_exit_does_not_resume_dead_window(
+    qtapp, monkeypatch
+) -> None:
+    """If the main window is itself closed mid-swap, a later Mark Return must NOT try
+    to re-show the dead main window — it quits the app instead (nothing to return to).
+    """
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QApplication
+
+    import autoptz.ui.widgets.main_window as mw
+
+    win = _main(qtapp)
+    monkeypatch.setattr(mw, "MarkPreflightDialog", _FakeDlg, raising=False)
+    win._start_mark()
+    mark = win._mark_window
+    assert mark is not None
+    # The main window receives a close WHILE the Mark swap is active.
+    win.closeEvent(QCloseEvent())
+    # Now the user chooses Return from Mark.  There is no live main window to resume,
+    # so it must quit rather than re-show the closed one.
+    shown = {"n": 0}
+    quit_called = {"n": 0}
+    monkeypatch.setattr(win, "show", lambda: shown.__setitem__("n", shown["n"] + 1))
+    monkeypatch.setattr(QApplication, "quit", lambda *a: quit_called.__setitem__("n", 1))
+    mark.request_return()
+    assert shown["n"] == 0  # the dead window is never re-shown
+    assert quit_called["n"] == 1  # quit instead of orphaning
+
+
 def test_app_run_sets_no_quit_on_last_window_closed(qtapp, monkeypatch) -> None:
     from PySide6.QtWidgets import QApplication
 

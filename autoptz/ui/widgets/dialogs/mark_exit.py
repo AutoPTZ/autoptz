@@ -55,8 +55,10 @@ class MarkExitDialog(QDialog):
         col.addWidget(blurb)
 
         self._save_box = QCheckBox("Save results before exiting")
-        self._save_box.setChecked(has_result)
+        # Enable BEFORE checking so the box never lands in a checked-but-disabled
+        # state (a setChecked-before-setEnabled ordering can leave that flicker).
         self._save_box.setEnabled(has_result)
+        self._save_box.setChecked(has_result)
         if not has_result:
             self._save_box.setToolTip("Run a benchmark first to have results to save.")
         col.addWidget(self._save_box)

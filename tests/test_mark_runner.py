@@ -129,6 +129,61 @@ class TestRampController:
         c = MarkRampController(profile="full", floor_fps=30.0, dwell_s=0.0)
         assert c._floor == 30.0  # the user's target, undiscounted
 
+    def test_run_emits_finished_before_thread_quit(self, qapp) -> None:
+        """The worker must emit ``finished`` BEFORE it quits the thread, so the
+        queued result is enqueued ahead of the thread tearing down its event loop."""
+        order: list[str] = []
+
+        c = MarkRampController(
+            profile="full",
+            floor_fps=24.0,
+            max_cameras=1,
+            dwell_s=0.0,
+            sample_factory=lambda: (lambda n: [40.0] * n),
+        )
+        # Record finished-emission order via a DIRECT connection (runs inline in the
+        # worker's _run, before the finally's thread.quit()).
+        from PySide6.QtCore import Qt
+
+        c.finished.connect(lambda _r: order.append("finished"), Qt.ConnectionType.DirectConnection)
+
+        class _FakeThread:
+            def quit(self_inner) -> None:
+                order.append("quit")
+
+            def wait(self_inner, _ms: int = 5000) -> bool:
+                return True
+
+        c._thread = _FakeThread()  # type: ignore[assignment]
+        c._run()  # drive the worker body synchronously
+        assert order == ["finished", "quit"]
+
+    def test_run_error_emitted_before_thread_quit(self, qapp) -> None:
+        """On a sample exception the worker emits ``error`` BEFORE thread.quit()."""
+        order: list[str] = []
+
+        def factory():
+            def boom(n):
+                raise RuntimeError("kaboom")
+
+            return boom
+
+        c = MarkRampController(profile="full", dwell_s=0.0, sample_factory=factory)
+        from PySide6.QtCore import Qt
+
+        c.error.connect(lambda _m: order.append("error"), Qt.ConnectionType.DirectConnection)
+
+        class _FakeThread:
+            def quit(self_inner) -> None:
+                order.append("quit")
+
+            def wait(self_inner, _ms: int = 5000) -> bool:
+                return True
+
+        c._thread = _FakeThread()  # type: ignore[assignment]
+        c._run()
+        assert order == ["error", "quit"]
+
     def test_thread_is_joinable_after_run(self, qapp) -> None:
         """The worker QThread is joinable via wait() so the controller drops its
         ref only after the thread has truly finished.

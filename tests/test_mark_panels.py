@@ -27,6 +27,50 @@ def test_control_panel_reports_verdict(qtapp) -> None:
     p.deleteLater()
 
 
+def test_verdict_default_is_not_final(qtapp) -> None:
+    """The live verdict (default final=False) keeps the plain theme color/weight —
+    no accent highlight until the run actually finishes."""
+    from autoptz.ui import theme as T
+    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+
+    p = MarkControlPanel()
+    p.set_verdict("Ramping… step 1 of 3")
+    sheet = p._verdict_label.styleSheet()
+    assert T.TRACKING not in sheet  # no accent while ramping
+    assert "font-weight: 700" not in sheet  # not bolded to the final weight
+    p.deleteLater()
+
+
+def test_verdict_final_uses_accent_styling(qtapp) -> None:
+    """The final verdict (final=True) is highlighted with the accent color + bold so
+    the finished score stands out from the in-flight progress line."""
+    from autoptz.ui import theme as T
+    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+
+    p = MarkControlPanel()
+    p.set_verdict("Good — 2 cam × 28/30 fps × 1.0 weight = 1.87", final=True)
+    sheet = p._verdict_label.styleSheet()
+    assert T.TRACKING in sheet  # accent color
+    assert "font-weight: 700" in sheet  # bold
+    assert "Good" in p._verdict_label.text()
+    p.deleteLater()
+
+
+def test_verdict_final_survives_restyle(qtapp) -> None:
+    """A theme flip (re-running _restyle) must re-apply the final accent — not revert
+    the finished verdict back to the plain in-flight styling."""
+    from autoptz.ui import theme as T
+    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+
+    p = MarkControlPanel()
+    p.set_verdict("Great — 4 cam × 30/30 fps × 0.8 weight = 3.20", final=True)
+    p._restyle()  # simulate a Light/Dark flip
+    sheet = p._verdict_label.styleSheet()
+    assert T.TRACKING in sheet
+    assert "font-weight: 700" in sheet
+    p.deleteLater()
+
+
 def test_control_panel_emits_stop(qtapp) -> None:
     from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
 
