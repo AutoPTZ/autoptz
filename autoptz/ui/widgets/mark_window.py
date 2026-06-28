@@ -641,11 +641,15 @@ class MarkWindow(MainWindow):
             gt_summary = {cid: cmp.finalize() for cid, cmp in self._gt.items()}
             self._gt_summary = gt_summary
         enriched = list(self._chart._steps)
-        steps = enriched if (enriched and len(enriched) == len(result.steps)) else list(result.steps)
+        steps = (
+            enriched if (enriched and len(enriched) == len(result.steps)) else list(result.steps)
+        )
         result = dataclasses.replace(
             result,
             steps=steps,
-            scene_clip_id=(self._session.clip_info().id if self._session.is_clip() else self._session.source),
+            scene_clip_id=(
+                self._session.clip_info().id if self._session.is_clip() else self._session.source
+            ),
             ground_truth=gt_summary,
         )
         self._result = result
