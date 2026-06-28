@@ -6,18 +6,50 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.0-rc7] — 2026-06-28
+
+> Pre-release for testing. Headline: the new **AutoPTZ Mark** visual benchmark
+> graduates from a synthetic toy into a realistic, scene-driven demo — a bundled
+> clip library (24/30/60 fps × 720p/1080p/4K) tagged by the AI it exercises,
+> per-camera quality metrics with JSON/CSV export, a plain-language score rating,
+> and a polished lifecycle (theme toggle, completion dialog, clean exit on every
+> path). Also: an **Experimental Features** window for the `AUTOPTZ_*` flags, and
+> a **sharded CI** that finally runs the native suite green on all three OSes.
+> **Please validate on your machine** before this becomes stable 2.2.0.
+
 ### Added
 
+- **AutoPTZ Mark — selectable scene library + capability scenes.** A pre-flight
+  "Scene" picker over bundled real-people clips at 24/30/60 fps × 720p/1080p/4K;
+  an on-demand transcode cache builds the native variant and the FPS/Resolution
+  menus show only the combos a scene supports (tagging synthetic upscaled /
+  interpolated ones). Scenes are tagged by the AI they exercise — Pedestrians /
+  Crowd (tracking, re-ID), Cinematic People (Center-Stage), and a dedicated Faces
+  scene (face recognition). Bundled clips are license-safe (OpenCV pedestrians
+  BSD, Shibuya crossing CC-BY-SA, Tears of Steel CC-BY, Public-Domain White House
+  faces; attributed in `NOTICE.md`).
+- **AutoPTZ Mark — realistic quality metrics + CSV export.** Each run records
+  per-camera time-to-acquire, total / longest lost duration, lost-event &
+  re-acquire counts, ID-switch count, target-hold %, mean confidence, fps and
+  dropped frames (engine-reported), plus ground-truth accuracy (miss-rate /
+  ID-switch-rate / MOTP) on synthetic scenes. Results export to JSON **or CSV**.
+- **AutoPTZ Mark — score rating + completion dialog.** The verdict shows a human
+  rating — Needs work / Fair / Good / Great / Excellent — with a transparent
+  reason (`score = cameras × (fps ÷ 30 target) × profile weight`). On finish a
+  dialog offers **Return to AutoPTZ / Quit AutoPTZ / Open results / Save results**.
+- **Experimental Features window (Help → "Experimental Features…").** A curated,
+  persisted UI for the `AUTOPTZ_*` engine flags and new-camera tracking defaults
+  (e.g. process-per-camera Path A), applied at startup. (#132)
 - **AutoPTZ Mark 1.0.0 — polished, self-contained GUI benchmark (Help → "Run
   AutoPTZ Mark…").** A 3DMark-style mode rebuilt around an **in-process swap**: a
   confirm dialog explains it will suspend AutoPTZ, then the main window hides and a
   dedicated **AutoPTZ Mark** window takes over — no subprocess relaunch. The Mark
   window subclasses the main shell (reusing the camera wall, tiles, theme, and
   docks) but drives a **fully isolated** engine stack (its own temp-file
-  `ConfigStore` + `EngineClient` + `Supervisor`, populated with ONLY fake synthetic
-  / NDI cameras), so real cameras never appear and closing Mark never kills the app.
-  It visibly ramps simulated cameras at 30 fps running the real detection →
-  tracking → Center-Stage pipeline on lively, deterministic synthetic people, with
+  `ConfigStore` + `EngineClient` + `Supervisor`, populated with ONLY fake
+  clip / NDI cameras), so real cameras never appear and closing Mark never kills the
+  app. It visibly ramps simulated cameras running the real detection →
+  tracking → Center-Stage pipeline on the selected bundled clip, with
   a live ramp chart, a `MarkControlPanel` (live "sustaining N cams @ X fps" verdict
   + Stop + Exit Mark), a per-tile `MarkDetailsPanel` (resolution /
   fps / source / people / stage-ms), and an embedded logs panel. On exit you choose
@@ -30,6 +62,17 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **AutoPTZ Mark theme toggle re-themes the whole window.** A `ThemeController` now
+  runs on Mark's *isolated* client, so **View → Appearance** flips the entire shell
+  (wall, tiles, docks, menus) during a run — not just the HUD widgets.
+- **AutoPTZ Mark lifecycle / exit routing.** One idempotent, correctly-ordered
+  teardown (pump → controller-wait → engine → logs) plus a `QApplication`
+  `aboutToQuit` hook, so every exit path (red-X, Exit Mark, ⌘Q, Return, Quit)
+  tears down cleanly and routes correctly; "closed unexpectedly" fires at most once.
+- **Headless update-check / model-setup crashes + stray network call.** The startup
+  auto-update check and model-setup prompt no longer run in offscreen/headless mode,
+  and the update worker guards its result-emit against a torn-down window — fixing
+  an intermittent CI crash and an unwanted network request.
 - **AutoPTZ Mark blank tiles — the isolated engine now renders.** The Mark engine
   factory owned no frame source and the window bound its wall to the *main* app's
   `ShmFrameSource` (attached to the main engine's shared memory), so the Mark
@@ -40,6 +83,16 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **AutoPTZ Mark sources are now the bundled clip + real NDI** (the synthetic
+  "drawn people" source is **removed**; a legacy "synthetic" session normalises to
+  clip). **NDI mode broadcasts the selected clip** at the chosen resolution/fps over
+  real NDI, and the full profile **activates tracking + Center-Stage on every
+  camera** — including newly-grown tiles. The benchmark target follows the clip's
+  native fps.
+- **CI runs the unit suite sharded per file, with crashed/failed files retried up to
+  3×.** A single-process `pytest tests/` accumulated native state (Qt offscreen +
+  torch + cv2 + AVFoundation + cyndilib) and crashed late on **every** OS; per-file
+  isolation + retry makes the native suite reliably green on macOS / Windows / Linux.
 - **AutoPTZ Mark ramps cameras one at a time (3DMark-style) instead of showing all
   N blank up front.** The wall starts at a single camera and grows as each ramp
   step sustains, via `MarkEngineFactory.add_next_camera()` (which spawns just the
