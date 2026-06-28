@@ -169,6 +169,8 @@ def run_camera_process(
     cmd_q: Any,
     telemetry_q: Any,
     identity_q: Any,
+    infer_req_q: Any = None,
+    infer_resp_q: Any = None,
 ) -> None:
     """Child-process entrypoint: build + run a CameraWorker, driven by ``cmd_q``.
 
@@ -208,7 +210,26 @@ def run_camera_process(
             on_identity=_emit_identity,
         )
 
-        if not spec.synthetic:
+        # Model-server mode: this child does NOT load the detector — it delegates
+        # detection to the ONE shared model-server process via the IPC client, so
+        # there's a single model set across all cameras (no per-process RAM cliff).
+        # The tracker is still built locally per camera (it holds per-camera state).
+        _infer_writer = None
+        if infer_req_q is not None and infer_resp_q is not None:
+            from autoptz.engine.pipeline.inference_server import (
+                SERVER_FRAME_H,
+                SERVER_FRAME_W,
+                InferenceClient,
+                RemotePool,
+                shm_name_for,
+            )
+            from autoptz.engine.runtime.shm import ShmWriter
+
+            _infer_writer = ShmWriter(shm_name_for(spec.camera_id), SERVER_FRAME_H, SERVER_FRAME_W)
+            client = InferenceClient(spec.camera_id, infer_req_q, infer_resp_q, _infer_writer)
+            worker.set_inference_pool(RemotePool(client))
+            worker._infer_shm_writer = _infer_writer  # keep the shm alive for the worker's life
+        elif not spec.synthetic:
             _wire_models_and_identity(worker, spec)
 
         if spec.features:
@@ -316,9 +337,15 @@ class ProcessWorkerHandle:
         db_path: str,
         detector_tier: str = "auto",
         unified_pose: bool = False,
+        infer_req_q: Any = None,
+        infer_resp_q: Any = None,
     ) -> None:
         self.camera_id = camera_id
         self.config = config
+        # Model-server IPC handles (model-server mode): the shared request queue and
+        # this camera's response queue. None → the child builds its own detector.
+        self._infer_req_q = infer_req_q
+        self._infer_resp_q = infer_resp_q
         self.shm_name = f"cam_{camera_id[:8]}_preview"  # must match CameraWorker's
         self._on_telemetry = on_telemetry
         self._on_identity: Any | None = None
@@ -385,7 +412,14 @@ class ProcessWorkerHandle:
         self._identity_q = ctx.Queue()
         self._proc = ctx.Process(
             target=run_camera_process,
-            args=(spec, self._cmd_q, self._telemetry_q, self._identity_q),
+            args=(
+                spec,
+                self._cmd_q,
+                self._telemetry_q,
+                self._identity_q,
+                self._infer_req_q,
+                self._infer_resp_q,
+            ),
             name=f"camproc-{self.camera_id[:8]}",
             daemon=True,
         )
@@ -563,10 +597,8 @@ class ProcessWorkerHandle:
 
 
 def process_per_camera_enabled() -> bool:
-    """True when the experimental process-per-camera mode is switched on."""
-    return os.environ.get("AUTOPTZ_PROCESS_PER_CAMERA", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    """True when per-camera processes are wanted — the experimental
+    process-per-camera mode OR the model-server mode (which also runs per-camera)."""
+    from autoptz.engine.runtime.flags import env_process_per_camera
+
+    return env_process_per_camera()

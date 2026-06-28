@@ -59,6 +59,14 @@ class InferenceClient:
 
     def detect(self, frame: Any) -> Any:
         try:
+            h, w = int(self._shm.height), int(self._shm.width)
+            if frame.shape[:2] != (h, w):
+                import cv2  # noqa: PLC0415
+
+                # The shm slot is a fixed size; resize to fit it. (Detections then
+                # come back in slot coords — fine when source==slot size; full
+                # per-source resolution is a v2 refinement.)
+                frame = cv2.resize(frame, (w, h))
             self._shm.push(frame)
             self._req_q.put((self._cam,))
         except Exception:  # noqa: BLE001 — IPC hiccup must not kill the camera loop

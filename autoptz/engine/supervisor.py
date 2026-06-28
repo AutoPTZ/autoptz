@@ -150,6 +150,14 @@ class Supervisor:
         # per-camera.  Each worker keeps its own (stateful) tracker.  Built lazily
         # and gracefully; workers fall back to per-worker models if it's None.
         self._inference_pool: Any | None = None
+        # Model-server mode (AUTOPTZ_MODEL_SERVER): ONE shared model-server process
+        # serves detection to N camera processes (one model set → no per-process RAM
+        # cliff). The shared request queue, per-camera response queues, the server
+        # process + its stop event. All None/empty when the flag is off.
+        self._model_server_proc: Any | None = None
+        self._model_server_stop: Any | None = None
+        self._infer_req_q: Any | None = None
+        self._infer_resp_qs: dict[str, Any] = {}
 
         # Global ML-subsystem switches (detection / tracking / face_recognition /
         # pose), broadcast via SetFeaturesCmd and applied to every worker.
@@ -224,6 +232,9 @@ class Supervisor:
         # stall any GUI-thread call that routes through the command pump.
         # _spawn_worker takes the lock only to register the worker.
         self._apply_hardware_env(len(camera_ids))
+        # Spawn the shared model-server (model-server mode) BEFORE any camera, so the
+        # camera children can delegate detection to it as soon as they start.
+        self._ensure_model_server(camera_ids)
         if staged:
             log.info("supervisor starting — %d camera(s)", len(camera_ids))
             self._start_pump_if_needed(run_pump)
@@ -281,6 +292,24 @@ class Supervisor:
                 self._client.request_provider_detach(_cid)
             except Exception:  # noqa: BLE001
                 log.debug("provider detach request failed for %s", _cid, exc_info=True)
+
+        # Tear down the shared model-server (model-server mode) now that no camera
+        # delegates to it.
+        proc = self._model_server_proc
+        stop_ev = self._model_server_stop
+        self._model_server_proc = None
+        self._model_server_stop = None
+        self._infer_req_q = None
+        self._infer_resp_qs = {}
+        if proc is not None:
+            try:
+                if stop_ev is not None:
+                    stop_ev.set()
+                proc.join(timeout=3.0)
+                if proc.is_alive():
+                    proc.terminate()
+            except Exception:  # noqa: BLE001
+                log.debug("model-server stop failed", exc_info=True)
 
     def _start_pump_if_needed(self, run_pump: bool) -> None:
         if run_pump and self._pump_thread is None:
@@ -890,6 +919,57 @@ class Supervisor:
             self._inference_pool = None
         return self._inference_pool
 
+    def _ensure_model_server(self, camera_ids: list[str]) -> None:
+        """Spawn the ONE shared model-server process (model-server mode only).
+
+        Creates the shared request queue + a response queue per camera, then spawns
+        the server holding the single detector. Camera children get these handles via
+        :meth:`_make_worker` and delegate detection to it (one model set, no RAM
+        cliff). Best-effort: a failure leaves it off and children fall back to their
+        own detector. No-op when the flag is off or already started.
+        """
+        from autoptz.engine.runtime.flags import env_model_server
+
+        if not env_model_server() or self._model_server_proc is not None:
+            return
+        try:
+            import multiprocessing as mp
+
+            from autoptz.engine.pipeline.inference_server import run_inference_server
+
+            ctx = mp.get_context("spawn")
+            self._infer_req_q = ctx.Queue()
+            self._infer_resp_qs = {cid: ctx.Queue() for cid in camera_ids}
+            self._model_server_stop = ctx.Event()
+            ready = ctx.Event()
+            tier = "auto"
+            try:
+                getter = getattr(self._client, "getDetectorModelTier", None)
+                if callable(getter):
+                    tier = str(getter() or "auto")
+            except Exception:  # noqa: BLE001
+                tier = "auto"
+            self._model_server_proc = ctx.Process(
+                target=run_inference_server,
+                args=(
+                    self._infer_req_q,
+                    self._infer_resp_qs,
+                    list(camera_ids),
+                    tier,
+                    self._any_unified_pose(),
+                    ready,
+                    self._model_server_stop,
+                ),
+                name="model-server",
+                daemon=True,
+            )
+            self._model_server_proc.start()
+            ready.wait(timeout=60.0)  # let the detector load before cameras delegate
+            log.info("model-server ON — 1 shared detector serving %d camera(s)", len(camera_ids))
+        except Exception:  # noqa: BLE001 — never load-bearing; children fall back
+            log.warning("model-server init failed; cameras build their own detector.", exc_info=True)
+            self._model_server_proc = None
+
     def _apply_hardware_env(self, camera_count: int) -> None:
         """Publish global hardware prefs into the environment before workers start.
 
@@ -1093,6 +1173,10 @@ class Supervisor:
             db_path=db_path,
             detector_tier=tier,
             unified_pose=self._any_unified_pose(),
+            # Model-server mode: hand the child the shared request queue + its own
+            # response queue so it delegates detection instead of loading a detector.
+            infer_req_q=self._infer_req_q,
+            infer_resp_q=self._infer_resp_qs.get(camera_id),
         )
 
     def _spawn_worker(self, camera_id: str, *, defer_inference: bool = False) -> None:

@@ -22,8 +22,20 @@ def env_process_per_camera() -> bool:
 
     Lives here (not just in ``process_worker``) so lightweight callers like the
     inference layer can branch on it without importing the heavy worker module.
+    The model-server mode (below) also runs per-camera processes, so it implies this.
     """
-    return _env_true("AUTOPTZ_PROCESS_PER_CAMERA")
+    return _env_true("AUTOPTZ_PROCESS_PER_CAMERA") or env_model_server()
+
+
+def env_model_server() -> bool:
+    """Opt-in for the multi-process model-server architecture (the scalable one).
+
+    Each camera runs in its own process (escaping the GIL) and delegates detection
+    to ONE shared model-server process (one model set → no per-process RAM cliff).
+    Validated to scale to 16 NDI cams without the RAM cliff the plain model-per-child
+    process mode hits.
+    """
+    return _env_true("AUTOPTZ_MODEL_SERVER")
 
 
 def env_unified_pose() -> bool:
