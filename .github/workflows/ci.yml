@@ -71,8 +71,29 @@ jobs:
         # mid typing-migration and excluded in pyproject; expand this as they land.
         run: mypy autoptz/engine/runtime/ autoptz/config/
 
-      - name: Run unit tests
-        run: pytest tests/ -v --timeout=60
+      - name: Run unit tests (sharded per file)
+        # The native stack (Qt offscreen + torch + cv2 + AVFoundation + cyndilib)
+        # accumulates state across a single-process run and segfaults late in the
+        # full suite on EVERY OS (Linux/macOS SIGSEGV, Windows abort). Every test
+        # file passes in isolation, so run each file in its own process — a heavy
+        # file's teardown can't then corrupt later files. ``shell: bash`` works on
+        # the Windows runner via git-bash; ``set +e`` lets the loop run all files
+        # and still fail the job (with the offending file named) if any file fails.
+        shell: bash
+        run: |
+          set +e
+          failed=0
+          for f in tests/test_*.py; do
+            echo "::group::$f"
+            pytest "$f" -q -p no:cacheprovider --timeout=60
+            rc=$?
+            echo "::endgroup::"
+            if [ "$rc" -ne 0 ]; then
+              echo "::error file=$f::pytest failed for $f (exit $rc)"
+              failed=1
+            fi
+          done
+          exit "$failed"
 
       - name: Selftest
         # Run with spawn-safe multiprocessing; timeout guard
