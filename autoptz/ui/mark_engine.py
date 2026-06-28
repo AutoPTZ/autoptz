@@ -36,6 +36,17 @@ def _default_supervisor_factory(client: Any, store: Any) -> Any:
     return Supervisor(client, store=store)
 
 
+def _make_transcode_cache() -> Any:
+    """Build the per-scene transcode cache (lazy import — it pulls in cv2).
+
+    A module-level seam so tests can inject a stub cache before the factory's
+    ``_setup_fake_cameras`` resolves the first camera's address.
+    """
+    from autoptz.engine.pipeline.transcode_cache import TranscodeCache
+
+    return TranscodeCache()
+
+
 class MarkEngineFactory:
     """Own a throwaway store + client + supervisor populated with fake cameras only."""
 
@@ -60,6 +71,11 @@ class MarkEngineFactory:
         self._supervisor.prime_features(dict(get_profile(session.profile).features))
         self._ndi_fleet: Any | None = None
         self._started = False
+        # Per-scene transcode cache: the picked resolution/fps drives a native
+        # cached variant of the master clip (built once, reused after).  Resolved
+        # variant address is memoised so growing the wall never rebuilds.
+        self._cache = _make_transcode_cache()
+        self._resolved_clip_address: str | None = None
         # The Mark wall binds to THIS frame source (NOT the main app's).  Wiring the
         # isolated client's provider attach/detach to it is what makes the synthetic
         # workers' shm actually render — without it every tile stayed blank.  Mirrors
@@ -176,8 +192,10 @@ class MarkEngineFactory:
     def _synthetic_address(self) -> str:
         """The SyntheticAdapter address for this session's source.
 
-        ``clip`` → the bundled real-people clip path (the adapter loops the real
-        decode); any other (synthetic) source → ``"anim"`` (drawn synthetic people).
+        ``clip`` → a transcode-cached variant of the bundled real-people clip at
+        the picked (resolution, fps), built once and reused (the adapter loops the
+        real decode); any other (synthetic) source → ``"anim"`` (drawn synthetic
+        people).
 
         When ``clip`` is requested but the bundled clip is missing (e.g. a fresh
         clone / CI checkout where the asset isn't present), fall back to the drawn
@@ -186,13 +204,57 @@ class MarkEngineFactory:
         """
         if self._session.is_clip():
             if self._session.clip_available():
-                return self._session.clip_path()
+                return self._resolve_clip_variant_address()
             log.warning(
                 "Mark clip source requested but bundled clip is missing (%s); "
                 "falling back to drawn synthetic people.",
                 self._session.clip_path(),
             )
         return "anim"
+
+    def _resolve_clip_variant_address(self) -> str:
+        """The path to feed the synthetic camera for the selected clip.
+
+        Consults the transcode cache for a variant at the session's
+        (resolution, fps); on a miss it builds that variant ONCE (slow — seconds
+        — but cached after, and it happens once at Mark setup), then reuses the
+        resolved path for every camera on the wall.  A build failure falls back
+        to the raw master clip path so the demo never crashes on a transcode
+        error (worst case: the master plays at its native res/fps).
+        """
+        # Memoised: growing the wall must reuse the resolved variant, never rebuild.
+        if self._resolved_clip_address is not None:
+            return self._resolved_clip_address
+
+        meta = self._session.clip_info()
+        target_res = self._session.resolution_size()
+        target_fps = self._session.target_fps()
+        master_path = self._session.clip_path()
+
+        cached = self._cache.get_cached_variant(meta.id, target_res, target_fps)
+        if cached is not None:
+            self._resolved_clip_address = str(cached)
+            return self._resolved_clip_address
+
+        log.info("preparing scene variant…")
+        try:
+            built = self._cache.build_cached_variant(
+                meta.id,
+                master_path=master_path,
+                master_res=meta.native_resolution,
+                master_fps=meta.native_fps,
+                target_res=target_res,
+                target_fps=target_fps,
+            )
+            self._resolved_clip_address = str(built)
+        except Exception:  # noqa: BLE001 — a transcode failure must never crash the demo
+            log.warning(
+                "Mark scene variant build failed for clip %r; falling back to the raw master clip.",
+                meta.id,
+                exc_info=True,
+            )
+            self._resolved_clip_address = master_path
+        return self._resolved_clip_address
 
     def add_next_camera(self) -> str | None:
         """Add the next fake camera to the wall (progressive ramp).  None at the cap.

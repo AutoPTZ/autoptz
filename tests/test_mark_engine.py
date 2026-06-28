@@ -279,6 +279,10 @@ def test_clip_source_registers_cameras_with_clip_path(monkeypatch):
     # Force the bundled clip "present" so this asserts the clip-path wiring even on a
     # checkout where the asset isn't installed (it's an untracked bundled asset).
     monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
+    # Stub the transcode cache so it deterministically falls back to the raw master
+    # (cache miss + build raises) regardless of any real on-disk cached variant —
+    # this test asserts the master clip path reaches the camera, not the variant.
+    _stub_cache_factory(monkeypatch, _StubCache(cached=None, build_raises=True))
 
     session = MarkSession(source="clip", max_cameras=3, resolution="1080p")
     clip = session.clip_path()
@@ -324,6 +328,147 @@ def test_clip_source_falls_back_to_anim_when_clip_missing(monkeypatch):
         assert rec.camera_config.source.type == "synthetic"
         # Falls back to the drawn scene, NOT the (missing) clip path.
         assert rec.camera_config.source.address == "anim"
+    finally:
+        eng.stop()
+
+
+class _StubCache:
+    """A stand-in TranscodeCache recording calls for the cache-wiring tests."""
+
+    def __init__(self, *, cached=None, built=None, build_raises=False):
+        self._cached = cached
+        self._built = built
+        self._build_raises = build_raises
+        self.get_calls: list[tuple] = []
+        self.build_calls: list[dict] = []
+
+    def get_cached_variant(self, clip_id, target_res, target_fps):
+        self.get_calls.append((clip_id, target_res, target_fps))
+        return self._cached
+
+    def build_cached_variant(
+        self, clip_id, master_path, master_res, master_fps, target_res, target_fps
+    ):
+        self.build_calls.append(
+            {
+                "clip_id": clip_id,
+                "master_path": master_path,
+                "master_res": master_res,
+                "master_fps": master_fps,
+                "target_res": target_res,
+                "target_fps": target_fps,
+            }
+        )
+        if self._build_raises:
+            raise RuntimeError("transcode boom")
+        return self._built
+
+
+def _stub_cache_factory(monkeypatch, cache):
+    """Make ``MarkEngineFactory.__init__`` build ``cache`` instead of a real one.
+
+    The factory builds its cache via the module-level ``_make_transcode_cache``
+    helper, so patching it injects the stub BEFORE ``_setup_fake_cameras`` runs
+    (the cache must be in place when the first camera's address is resolved).
+    """
+    from autoptz.ui import mark_engine
+
+    monkeypatch.setattr(mark_engine, "_make_transcode_cache", lambda: cache)
+
+
+def test_clip_uses_cached_variant_as_camera_address(monkeypatch):
+    """A cache HIT feeds the cached variant path to the synthetic camera (not the
+    raw master): the picked resolution/fps drives a native cached variant."""
+    from autoptz.ui import mark_engine
+
+    monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
+    cached = "/tmp/mark-cache/crowd/1920x1080_30fps.mp4"
+    cache = _StubCache(cached=cached)
+    _stub_cache_factory(monkeypatch, cache)
+
+    session = MarkSession(source="clip", max_cameras=3, resolution="1080p")
+    eng = mark_engine.MarkEngineFactory(
+        session,
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    try:
+        ids = eng.client.cameraModel.camera_ids()
+        assert len(ids) == 1
+        rec = eng.client.cameraModel.get_record(ids[0])
+        assert rec.camera_config.source.address == cached
+        # The cache was consulted with the session's resolution + target fps.
+        assert cache.get_calls
+        clip_id, res, fps = cache.get_calls[-1]
+        assert clip_id == session.clip_info().id
+        assert res == session.resolution_size()
+        assert fps == session.target_fps()
+        # A cache hit must NOT trigger a (slow) build.
+        assert cache.build_calls == []
+    finally:
+        eng.stop()
+
+
+def test_clip_cache_miss_builds_variant_once_then_uses_it(monkeypatch):
+    """On a cache MISS the engine builds the variant exactly once and feeds the
+    built path; subsequent cameras reuse it without rebuilding."""
+    from autoptz.ui import mark_engine
+
+    monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
+    built = "/tmp/mark-cache/crowd/built_variant.mp4"
+    cache = _StubCache(cached=None, built=built)
+    _stub_cache_factory(monkeypatch, cache)
+
+    session = MarkSession(source="clip", max_cameras=3, resolution="1080p")
+    eng = mark_engine.MarkEngineFactory(
+        session,
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    eng.start()
+    try:
+        ids = eng.client.cameraModel.camera_ids()
+        assert len(ids) == 1
+        rec = eng.client.cameraModel.get_record(ids[0])
+        assert rec.camera_config.source.address == built
+        # Built exactly once with the master metadata + session targets.
+        assert len(cache.build_calls) == 1
+        call = cache.build_calls[0]
+        assert call["clip_id"] == session.clip_info().id
+        assert str(call["master_path"]) == session.clip_path()
+        assert call["master_res"] == session.clip_info().native_resolution
+        assert call["master_fps"] == session.clip_info().native_fps
+        assert call["target_res"] == session.resolution_size()
+        assert call["target_fps"] == session.target_fps()
+        # Growing the wall reuses the built path WITHOUT a second build.
+        cid2 = eng.add_next_camera()
+        assert cid2 is not None
+        rec2 = eng.client.cameraModel.get_record(cid2)
+        assert rec2.camera_config.source.address == built
+        assert len(cache.build_calls) == 1
+    finally:
+        eng.stop()
+
+
+def test_clip_build_failure_falls_back_to_master(monkeypatch):
+    """If building the variant raises, the engine falls back to the raw master
+    clip path (the demo must never crash on a transcode failure)."""
+    from autoptz.ui import mark_engine
+
+    monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
+    cache = _StubCache(cached=None, build_raises=True)
+    _stub_cache_factory(monkeypatch, cache)
+
+    session = MarkSession(source="clip", max_cameras=2, resolution="1080p")
+    clip = session.clip_path()
+    eng = mark_engine.MarkEngineFactory(
+        session,
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    try:
+        ids = eng.client.cameraModel.camera_ids()
+        rec = eng.client.cameraModel.get_record(ids[0])
+        # No exception bubbled; address is the raw master clip path.
+        assert rec.camera_config.source.address == clip
+        assert len(cache.build_calls) == 1
     finally:
         eng.stop()
 
