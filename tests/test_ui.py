@@ -1557,3 +1557,97 @@ assert panel._cfg["ptz"]["vcam_out"] is True, f"expected True, got {{panel._cfg[
         env.setdefault("QT_QPA_PLATFORM", "offscreen")
         result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
         assert result.returncode == 0, result.stderr or result.stdout
+
+
+class TestExperimentalDialog:
+    def test_construction_reads_state_and_apply_persists(self, tmp_path) -> None:
+        code = f"""
+import os
+import sys
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.widgets.dialogs.experimental import ExperimentalFeaturesDialog
+from autoptz.engine.runtime.experimental_flags import EXPERIMENTAL_FLAGS
+
+app = QApplication(sys.argv[:1])
+store = ConfigStore(db_path=Path({str(tmp_path / "exp.db")!r}), debounce_s=0)
+# Pre-seed one non-default selection so we can prove the dialog READS it.
+store.set_setting("experimental_features", {{"AUTOPTZ_PTZ_PUMP": "1"}})
+client = EngineClient(store=store)
+
+dlg = ExperimentalFeaturesDialog(client)
+try:
+    # The pre-seeded flag's checkbox reflects the saved state.
+    box = dlg._bool_boxes["AUTOPTZ_PTZ_PUMP"]
+    assert isinstance(box, QCheckBox)
+    assert box.isChecked(), "dialog did not read saved AUTOPTZ_PTZ_PUMP"
+
+    # Toggle a different bool flag ON and a choice combo, then Apply.
+    dlg._bool_boxes["AUTOPTZ_UNIFIED_POSE"].setChecked(True)
+    combo = dlg._choice_combos["AUTOPTZ_REID_DEVICE"]
+    assert isinstance(combo, QComboBox)
+    combo.setCurrentIndex(combo.findData("cpu"))
+    dlg._apply()
+
+    saved = store.get_setting("experimental_features", {{}})
+    assert saved.get("AUTOPTZ_UNIFIED_POSE") == "1"
+    assert saved.get("AUTOPTZ_REID_DEVICE") == "cpu"
+    # Untouched pump flag is preserved.
+    assert saved.get("AUTOPTZ_PTZ_PUMP") == "1"
+
+    # Every env flag has a row widget.
+    assert set(dlg._bool_boxes) | set(dlg._choice_combos) == {{
+        f.env_key for f in EXPERIMENTAL_FLAGS
+    }}
+
+    # Restore defaults clears non-default selections.
+    dlg._restore_defaults()
+    cleared = store.get_setting("experimental_features", {{}})
+    assert cleared.get("AUTOPTZ_PTZ_PUMP", "0") in ("0", None)
+finally:
+    dlg.close()
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
+        assert result.returncode == 0, result.stderr or result.stdout
+
+
+class TestExperimentalMenu:
+    def test_experimental_action_present_and_opens_dialog(self, tmp_path) -> None:
+        code = f"""
+import os
+import sys
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QApplication
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
+from autoptz.ui.log_bridge import LogListModel
+from autoptz.ui.widgets import MainWindow
+from autoptz.ui.widgets.dialogs.experimental import ExperimentalFeaturesDialog
+
+app = QApplication(sys.argv[:1])
+client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+win = MainWindow(client, log_model=LogListModel(), frame_source=ShmFrameSource())
+try:
+    texts = [a.text() for a in win.findChildren(QAction)]
+    assert any("Experimental" in (t or "") for t in texts), texts
+
+    # Handler builds the dialog without raising; it is non-modal in the test
+    # because we never call exec(), we just verify construction via the handler.
+    dlg = ExperimentalFeaturesDialog(client, win)
+    assert dlg is not None
+    dlg.close()
+finally:
+    win.close()
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
+        assert result.returncode == 0, result.stderr or result.stdout

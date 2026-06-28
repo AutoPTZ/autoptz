@@ -952,6 +952,43 @@ class Supervisor:
             camera_count,
         )
 
+        self._apply_experimental_env()
+
+    def _apply_experimental_env(self) -> None:
+        """Publish the user's experimental-flag selections into ``os.environ``.
+
+        Read once at engine start (from inside :meth:`_apply_hardware_env`, before
+        any worker spawns) so the flags take effect on the next engine run.  Only
+        keys the user has actually persisted in the ``experimental_features`` dict
+        are managed: for each such env-flag key, set the env var when the saved
+        value differs from the flag's engine default, or pop it (clearing a stale
+        value from a prior selection) when it equals the default.  Keys in the
+        saved dict that are not env flags (the per-camera ``TrackingConfig``
+        defaults) are ignored here — they are consumed when a NEW camera is added.
+
+        A key the user never persisted is left UNTOUCHED: an absent / empty /
+        unreadable dict is the feature-inactive baseline, and any env var set
+        directly (e.g. exported by the operator, or by a test) survives unchanged.
+        """
+        from autoptz.engine.runtime.experimental_flags import EXPERIMENTAL_FLAGS
+
+        try:
+            saved = self._store.get_setting("experimental_features", {}) if self._store else {}
+        except Exception:  # noqa: BLE001 — bad/absent settings fall back to defaults
+            saved = {}
+        if not isinstance(saved, dict):
+            saved = {}
+
+        for flag in EXPERIMENTAL_FLAGS:
+            if flag.env_key not in saved:
+                # Not persisted by the user → don't clobber a directly-set env var.
+                continue
+            value = saved[flag.env_key]
+            if value != flag.default and value not in (None, ""):
+                os.environ[flag.env_key] = str(value)
+            else:
+                os.environ.pop(flag.env_key, None)
+
     def _make_telemetry_callback(self, camera_id: str) -> Callable[[Any], None]:
         """Wrap push_telemetry so the supervisor records a per-camera last-seen time.
 
