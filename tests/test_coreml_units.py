@@ -6,7 +6,27 @@ uses the discrete GPU or silently falls back to the CPU.
 
 from __future__ import annotations
 
-from autoptz.engine.runtime.inference import _coreml_compute_units
+from autoptz.engine.runtime.inference import EP, _coreml_compute_units, _provider_options
+
+
+class TestCoreMLCacheUnderProcessPerCamera:
+    """The CoreML on-disk MLProgram cache (ModelCacheDirectory) makes the CoreML EP
+    fail in a SPAWNED child ("Failed to create model URL from path"), which forced a
+    fallback/recompile and was a major reason process-per-camera underperformed. It
+    must be omitted in that mode (the ANE/GPU path is kept) and present otherwise."""
+
+    def test_cache_dir_present_for_shared_in_process(self, monkeypatch):
+        monkeypatch.delenv("AUTOPTZ_PROCESS_PER_CAMERA", raising=False)
+        opts = _provider_options(EP.COREML, None)
+        assert "ModelCacheDirectory" in opts
+        assert opts["ModelFormat"] == "MLProgram"
+
+    def test_cache_dir_omitted_under_process_per_camera(self, monkeypatch):
+        monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+        opts = _provider_options(EP.COREML, None)
+        assert "ModelCacheDirectory" not in opts
+        # Still routes to the Neural Engine / GPU — only the on-disk cache is dropped.
+        assert opts["ModelFormat"] == "MLProgram"
 
 
 class TestCoreMLComputeUnits:
