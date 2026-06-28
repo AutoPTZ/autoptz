@@ -170,8 +170,33 @@ def _start_engine_after_macos_camera_preflight(client: object, bridge: object | 
         _report_blocked("unavailable")
 
 
-def run(argv: list[str] | None = None) -> int:
-    """Launch the AutoPTZ UI.  Returns the process exit code."""
+def _build_main_window(
+    client: Any,
+    *,
+    log_model: Any,
+    frames: Any,
+    theme: Any,
+) -> Any:
+    """Construct the normal :class:`MainWindow` (extracted for mode routing)."""
+    from autoptz.ui.widgets import MainWindow
+
+    return MainWindow(
+        client,
+        log_model=log_model,
+        frame_source=frames,
+        theme=theme,
+    )
+
+
+def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
+    """Launch the AutoPTZ UI.  Returns the process exit code.
+
+    Always builds the normal :class:`MainWindow`.  AutoPTZ Mark is reached
+    **in-process** from Help → Run AutoPTZ Mark… (the MainWindow suspends and shows
+    an isolated :class:`MarkWindow`), so there is no longer a subprocess relaunch.
+    ``mode="mark"`` is accepted as a deprecated no-op (so a stale ``--mark`` flag
+    doesn't crash) and simply builds the normal window.
+    """
     from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, Signal, Slot
     from PySide6.QtWidgets import QApplication
 
@@ -180,7 +205,9 @@ def run(argv: list[str] | None = None) -> int:
     from autoptz.ui.frames import ShmFrameSource
     from autoptz.ui.log_bridge import LogListModel, QtLogHandler
     from autoptz.ui.theme import ThemeController
-    from autoptz.ui.widgets import MainWindow
+
+    if mode == "mark":
+        log.info("`--mark` is deprecated; use Help → Run AutoPTZ Mark… (in-process).")
 
     # Preserve fractional display scaling so our UI-scale font sizes stay crisp on
     # high-DPI screens (must be set before the QApplication is constructed).
@@ -194,13 +221,22 @@ def run(argv: list[str] | None = None) -> int:
     from autoptz import version as _app_version
     from autoptz.ui.branding import app_icon
 
-    app = QApplication(argv if argv is not None else sys.argv)
+    # Reuse an existing QApplication when one is already live (e.g. a relaunch
+    # within the same process, or tests that route through run() repeatedly);
+    # constructing a second QApplication in one process aborts.
+    app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("AutoPTZ")
     app.setOrganizationName("AutoPTZ")
     app.setApplicationVersion(_app_version())
     app.setApplicationDisplayName("AutoPTZ")
     app.setWindowIcon(app_icon())
     _set_macos_app_name("AutoPTZ")
+
+    # In-process Mark swap (Help → Run AutoPTZ Mark…): hiding MainWindow or closing
+    # MarkWindow must NOT quit the app.  Only an explicit quit (the visible
+    # MainWindow closed, or Mark's Quit choice) calls app.quit().  This single line
+    # is the linchpin of the suspend/resume lifecycle.
+    app.setQuitOnLastWindowClosed(False)
 
     # Persistent config store — creates the DB on first run.
     store = ConfigStore()
@@ -289,12 +325,7 @@ def run(argv: list[str] | None = None) -> int:
 
     # ── theme + window ─────────────────────────────────────────────────────────
     theme = ThemeController(app, client)
-    window = MainWindow(
-        client,
-        log_model=log_model,
-        frame_source=frames,
-        theme=theme,
-    )
+    window = _build_main_window(client, log_model=log_model, frames=frames, theme=theme)
     window.show()
 
     def _present_window() -> None:
@@ -313,6 +344,42 @@ def run(argv: list[str] | None = None) -> int:
     app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 100)
 
     log.info("AutoPTZ UI started")
+
+    # ── dev hook: open AutoPTZ Mark on startup ─────────────────────────────────
+    # The macOS menu bar is intercepted by some menu-bar managers, so the Help →
+    # Run AutoPTZ Mark… item can be unreachable to automated UI drivers. When
+    # AUTOPTZ_START_MARK is set (or /tmp/autoptz_start_mark exists) open the Mark
+    # pre-flight automatically so the demo can be launched headlessly/scripted.
+    # Inert in normal use.
+    if os.path.exists("/tmp/autoptz_start_mark_now"):
+        # Skip the pre-flight and enter Mark directly with a small fast session
+        # (for scripted/visual validation of the Mark window itself).  The marker
+        # file's first line picks the source ("clip"|"synthetic"|"ndi"; blank →
+        # the MarkSession default) so a script can validate each source variant.
+        from autoptz.ui.mark_session import MarkSession
+
+        def _marker_lines() -> tuple[str, str]:
+            # Line 1 → source ("clip"|"synthetic"|"ndi"; blank → default).
+            # Line 2 (optional) → a CLIP_LIBRARY clip id (for clip source) so a
+            # script can validate a specific bundled scene directly.
+            try:
+                with open("/tmp/autoptz_start_mark_now", encoding="utf-8") as fh:
+                    first = fh.readline().strip().lower()
+                    second = fh.readline().strip()
+            except OSError:
+                first, second = "", ""
+            src = first if first in {"clip", "synthetic", "ndi"} else MarkSession().source
+            return src, second
+
+        _src, _clip = _marker_lines()
+        QTimer.singleShot(
+            1200,
+            lambda: window._enter_mark_mode(
+                MarkSession(source=_src, clip_id=_clip, max_cameras=4, dwell_s=6.0)
+            ),
+        )
+    elif os.environ.get("AUTOPTZ_START_MARK") or os.path.exists("/tmp/autoptz_start_mark"):
+        QTimer.singleShot(1200, window._start_mark)
 
     # ── engine auto-start ──────────────────────────────────────────────────────
     # Restore the last on/off state (default ON) and start after the window is

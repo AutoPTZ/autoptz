@@ -40,6 +40,7 @@ from autoptz.config.models import AIM_REGION_FRACTION
 from autoptz.engine.runtime.messages import (
     BBox,
     FaceBox,
+    GroundTruthPerson,
     HealthInfo,
     HealthState,
     PoseKeypoint,
@@ -5025,6 +5026,7 @@ class CameraWorker:
             tracks=tracks,
             faces=self._fresh_faces_for_telemetry(tracks),
             pose=self._pose_overlay(),
+            ground_truth=self._ground_truth(),
             ptz=self._ptz_state(),
             tracking_status=self._tracking_status_info(tracks, time.monotonic()),
             health=HealthInfo(
@@ -5056,6 +5058,34 @@ class CameraWorker:
         except Exception:  # noqa: BLE001
             return 0.0
         return float(cap) if cap else 0.0
+
+    def _ground_truth(self) -> list[GroundTruthPerson]:
+        """Synthetic-scene ground truth for the AutoPTZ Mark accuracy bench.
+
+        Empty unless ``AUTOPTZ_MARK_GT`` is on AND the running frame source's ingest
+        adapter is the drawn synthetic scene (which exposes
+        ``latest_ground_truth()``).  Cheap + fully guarded: a normal camera, a clip
+        source, or the flag being off all short-circuit to an empty list, so the
+        telemetry field carries no payload off the bench.
+        """
+        import os  # noqa: PLC0415
+
+        if os.environ.get("AUTOPTZ_MARK_GT", "").strip().lower() not in ("1", "true", "yes", "on"):
+            return []
+        src = self._source
+        if src is None:
+            return []
+        # The synthetic ingest adapter exposes the GT; reach it through the frame
+        # source wrapper (``_adapter``) or directly if a fake source provides it.
+        adapter = getattr(src, "_adapter", src)
+        fn = getattr(adapter, "latest_ground_truth", None)
+        if not callable(fn):
+            return []
+        try:
+            gt = fn()
+        except Exception:  # noqa: BLE001 — bench instrumentation must never break telemetry
+            return []
+        return list(gt) if gt else []
 
     def _ptz_state(self) -> PTZState:
         """Build the real PTZState for telemetry: position, motion, and state.

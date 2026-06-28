@@ -182,6 +182,11 @@ def main() -> None:
         default=None,
         help="Write the AutoPTZ Mark report as JSON to this path.",
     )
+    parser.add_argument(
+        "--mark",
+        action="store_true",
+        help="Deprecated: AutoPTZ Mark now opens in-process from Help → Run AutoPTZ Mark….",
+    )
     args = parser.parse_args()
 
     install_console_logging(level=getattr(logging, args.log_level))
@@ -207,6 +212,12 @@ def main() -> None:
                 json_path=args.benchmark_json,
             )
         )
+
+    if args.mark:
+        # Deprecated shim: AutoPTZ Mark is now an in-process swap reached from
+        # Help → Run AutoPTZ Mark…, so --mark just launches the normal app (no
+        # subprocess relaunch).
+        logger.warning("--mark is deprecated; use Help → Run AutoPTZ Mark… (in-process).")
 
     # Default: launch the UI
     from autoptz.ui.app import run

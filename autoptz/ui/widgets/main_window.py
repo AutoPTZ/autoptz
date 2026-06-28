@@ -39,6 +39,7 @@ from autoptz.ui.widgets.camera_info_panel import CameraInfoPanel
 from autoptz.ui.widgets.camera_wall import CameraWall
 from autoptz.ui.widgets.common import on_theme_changed
 from autoptz.ui.widgets.dialogs import AboutDialog, ModelManagerDialog, NetworkCameraDialog
+from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 from autoptz.ui.widgets.dialogs.model_manager import (
     model_setup_reminder_suppressed,
     startup_missing_model_keys,
@@ -68,15 +69,29 @@ class MainWindow(QMainWindow):
         frame_source: Any | None = None,
         theme: Any | None = None,
         parent: QWidget | None = None,
+        *,
+        context_menu_enabled: bool = True,
     ) -> None:
         super().__init__(parent)
         self._client = client
         self._log_model = log_model
         self._frames = frame_source
         self._theme = theme
+        # Right-click tile context menu gate, threaded to the CameraWall.  AutoPTZ
+        # Mark passes False (no camera-mutation menu in the demo); the app keeps it.
+        self._context_menu_enabled = bool(context_menu_enabled)
         self._docks: dict[str, QDockWidget] = {}
         self._selected_camera: str = ""
         self._shown_optional_setup_prompt = False
+        # In-process AutoPTZ Mark swap (Help → Run AutoPTZ Mark…): the live Mark
+        # window (or None) and whether the main engine was running when we suspended
+        # into Mark (so Return-to-AutoPTZ can restore that exact state).
+        self._mark_window: Any | None = None
+        self._engine_was_running = False
+        # Set if this (suspended) main window is itself closed while a Mark swap is
+        # active — a later Mark Return then has no live window to resume, so it quits
+        # the app instead of re-showing a dead window (routing bug (h)).
+        self._main_closed_during_swap = False
         # Discovery state: a running modal scan (USB rescan / NDI rescan), plus
         # USB and NDI source lists kept populated in the background so opening
         # the Cameras menu never probes devices on the GUI thread.
@@ -144,11 +159,15 @@ class MainWindow(QMainWindow):
         # devices without opening them); the cross-platform fallback opens each device,
         # which is too costly to poll, so there we keep the on-open refresh.
         self._usb_poll_timer: QTimer | None = None
-        if _safe(lambda: self._client.usbEnumerationCheap(), False):
+        if self._should_poll_usb() and _safe(lambda: self._client.usbEnumerationCheap(), False):
             self._usb_poll_timer = QTimer(self)
             self._usb_poll_timer.setInterval(3000)
             self._usb_poll_timer.timeout.connect(self._refresh_usb_async)
             self._usb_poll_timer.start()
+
+    def _should_poll_usb(self) -> bool:
+        """Override point: Mark mode disables USB polling (its cameras are fake)."""
+        return True
 
     # ── section title bars ──────────────────────────────────────────────────────
 
@@ -204,7 +223,12 @@ class MainWindow(QMainWindow):
         bar_col.addWidget(self._startup_progress_bar)
         self._style_startup_banner()
         col.addWidget(self._startup_bar)
-        self._wall = CameraWall(self._client, self._frames, holder)
+        self._wall = CameraWall(
+            self._client,
+            self._frames,
+            holder,
+            context_menu_enabled=self._context_menu_enabled,
+        )
         self._wall.cameraSelected.connect(self._on_camera_selected)
         self._wall.cameraInfoRequested.connect(self._on_camera_info_requested)
         self._wall.addCameraRequested.connect(self._open_cameras_menu)
@@ -485,6 +509,14 @@ class MainWindow(QMainWindow):
         self._act_prereleases.toggled.connect(self._updates.set_include_prereleases)
         updates.addAction(self._act_prereleases)
         helpm.addSeparator()
+        helpm.addAction(
+            _action(
+                self,
+                "Run AutoPTZ Mark…",
+                self._start_mark,
+                tip="Benchmark this machine with simulated cameras (3DMark-style).",
+            )
+        )
         helpm.addAction(_action(self, "About AutoPTZ", self._show_about))
 
     def _build_scale_menu(self, view: QMenu) -> None:
@@ -820,6 +852,71 @@ class MainWindow(QMainWindow):
     def _show_about(self) -> None:
         AboutDialog(self._client, self).exec()
 
+    def _start_mark(self) -> None:
+        """Help → Run AutoPTZ Mark…: confirm (it will SUSPEND AutoPTZ), then swap.
+
+        The pre-flight dialog explains the run will suspend the live app and
+        collects the source / N-cameras / FPS guidance.  On confirm we suspend
+        (stop the engine if running + hide) and construct/show an isolated
+        :class:`MarkWindow` IN-PROCESS — there is no subprocess relaunch.  On exit
+        the user chooses Return (resume) or Quit; the OS close button routes
+        through Return.
+        """
+        from PySide6.QtWidgets import QDialog
+
+        dlg = MarkPreflightDialog(parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._enter_mark_mode(dlg.session())
+
+    def _enter_mark_mode(self, session: Any) -> None:
+        """Suspend the live app and swap in an isolated Mark window (in-process)."""
+        from autoptz.ui.widgets.mark_window import MarkWindow
+
+        self._engine_was_running = bool(_safe(lambda: self._client.engineRunning, False))
+        if self._engine_was_running:
+            try:
+                self._client.stopEngine()
+            except Exception:  # noqa: BLE001
+                log.debug("stop engine before mark failed", exc_info=True)
+        self.hide()
+        # Do NOT pass the main app's frame source: MarkWindow owns an ISOLATED one
+        # wired to its own engine's shm (passing self._frames here was the blank-tile
+        # bug — the main source is attached to the MAIN engine's shm, not Mark's).
+        win = MarkWindow(session=session, theme=self._theme)
+        win.returnToAppRequested.connect(lambda: self._exit_mark_mode(quit_app=False))
+        win.quitRequested.connect(lambda: self._exit_mark_mode(quit_app=True))
+        # OS-close (no deliberate return/quit) → treat as Return, never silent quit.
+        win.closedUnexpectedly.connect(lambda: self._exit_mark_mode(quit_app=False))
+        self._mark_window = win
+        win.show()
+
+    def _exit_mark_mode(self, *, quit_app: bool) -> None:
+        """Tear down the Mark window, then resume the app or quit per the choice."""
+        win = self._mark_window
+        self._mark_window = None
+        if win is not None:
+            try:
+                win.close()
+            except Exception:  # noqa: BLE001
+                log.debug("closing mark window failed", exc_info=True)
+        if quit_app or self._main_closed_during_swap:
+            # Either a deliberate Quit, OR this main window was itself closed during
+            # the swap — there is no live window to return to, so quit rather than
+            # re-show a dead one (routing bug (h)).
+            from PySide6.QtWidgets import QApplication
+
+            QApplication.quit()
+            return
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if self._engine_was_running:
+            try:
+                self._client.startEngine()
+            except Exception:  # noqa: BLE001
+                log.debug("resume engine after mark failed", exc_info=True)
+
     def _open_model_manager(
         self,
         *,
@@ -839,6 +936,14 @@ class MainWindow(QMainWindow):
             log.debug("refresh services after model dialog failed", exc_info=True)
 
     def _maybe_show_model_setup_on_startup(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        # Purely interactive startup UX: never open a modal under headless/offscreen
+        # (e.g. CI), where a nested modal loop lets other windows' pending startup
+        # timers re-enter and cascade dialogs.
+        app = QApplication.instance()
+        if app is not None and app.platformName() == "offscreen":
+            return
         if self._shown_optional_setup_prompt:
             return
         if model_setup_reminder_suppressed(self._client):
@@ -1277,16 +1382,50 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(900, self._maybe_show_model_setup_on_startup)
             QTimer.singleShot(2500, self._updates.maybe_check_on_startup)
 
+    def _should_persist_geometry(self) -> bool:
+        """Whether to save window geometry/state on close (Mark overrides → False).
+
+        The Mark window is a throwaway maximized window backed by a temp store that
+        ``engine.stop()`` closes on exit; persisting its geometry there both is
+        meaningless and triggers a debounced write against the closed store.
+        """
+        return True
+
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        try:
-            self._client.setSetting(
-                "win_geometry",
-                bytes(self.saveGeometry().toBase64()).decode("ascii"),
-            )
-            self._client.setSetting("win_state", self._encode_state())
-        except Exception:  # noqa: BLE001
-            log.debug("save geometry/state failed", exc_info=True)
+        # A close arriving while a Mark swap is active means this suspended window is
+        # gone; record it so a later Mark Return quits instead of resuming a dead one.
+        if self._mark_window is not None:
+            self._main_closed_during_swap = True
+        if self._should_persist_geometry():
+            try:
+                self._client.setSetting(
+                    "win_geometry",
+                    bytes(self.saveGeometry().toBase64()).decode("ascii"),
+                )
+                self._client.setSetting("win_state", self._encode_state())
+            except Exception:  # noqa: BLE001
+                log.debug("save geometry/state failed", exc_info=True)
         super().closeEvent(event)
+        # app.setQuitOnLastWindowClosed(False) (set in app.run() for the Mark
+        # in-process swap) means the event loop will NOT auto-quit when this window
+        # closes.  A genuine user close of the visible main window must therefore
+        # terminate the app explicitly, or app.exec() hangs with no visible window.
+        if self._close_should_quit_app(event):
+            from PySide6.QtWidgets import QApplication
+
+            QApplication.quit()
+
+    def _close_should_quit_app(self, event: QCloseEvent) -> bool:
+        """Whether closing this window should terminate the app (Mark overrides).
+
+        True only for a genuine, accepted close of the primary MainWindow that is
+        NOT mid-Mark-swap.  A close arriving while a Mark swap is active
+        (``_mark_window`` set) is the suspended main window — Mark owns the
+        lifecycle then, so it must not quit.  The :class:`MarkWindow` subclass
+        overrides this to always return False (its OS-close routes through
+        ``closedUnexpectedly`` → Return, never a silent app quit).
+        """
+        return self._mark_window is None and event.isAccepted()
 
     def _clear_minimized_state(self) -> None:
         state = self.windowState()

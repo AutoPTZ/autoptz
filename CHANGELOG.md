@@ -6,6 +6,60 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **AutoPTZ Mark 1.0.0 — polished, self-contained GUI benchmark (Help → "Run
+  AutoPTZ Mark…").** A 3DMark-style mode rebuilt around an **in-process swap**: a
+  confirm dialog explains it will suspend AutoPTZ, then the main window hides and a
+  dedicated **AutoPTZ Mark** window takes over — no subprocess relaunch. The Mark
+  window subclasses the main shell (reusing the camera wall, tiles, theme, and
+  docks) but drives a **fully isolated** engine stack (its own temp-file
+  `ConfigStore` + `EngineClient` + `Supervisor`, populated with ONLY fake synthetic
+  / NDI cameras), so real cameras never appear and closing Mark never kills the app.
+  It visibly ramps simulated cameras at 30 fps running the real detection →
+  tracking → Center-Stage pipeline on lively, deterministic synthetic people, with
+  a live ramp chart, a `MarkControlPanel` (live "sustaining N cams @ X fps" verdict
+  + Stop + Exit Mark), a per-tile `MarkDetailsPanel` (resolution /
+  fps / source / people / stage-ms), and an embedded logs panel. On exit you choose
+  **Return to AutoPTZ** (resumes the app and restores the prior engine state) or
+  **Quit**; the OS close button routes through Return and never silently quits.
+  Version lives in a new **About AutoPTZ Mark** dialog (with a guide, FPS targets,
+  and do/don't notes), not the title. Results are saved to `benchmarks/`. The
+  existing headless `--benchmark` is unchanged; the old `--mark` subprocess flag is
+  now a deprecated no-op.
+
+### Fixed
+
+- **AutoPTZ Mark blank tiles — the isolated engine now renders.** The Mark engine
+  factory owned no frame source and the window bound its wall to the *main* app's
+  `ShmFrameSource` (attached to the main engine's shared memory), so the Mark
+  synthetic workers wrote frames nothing read — every tile stayed blank at 0 fps.
+  `MarkEngineFactory` now owns its own `ShmFrameSource` and wires the isolated
+  client's provider attach/detach to it (mirroring `app.py`), and the window binds
+  its wall to that isolated source.
+
+### Changed
+
+- **AutoPTZ Mark ramps cameras one at a time (3DMark-style) instead of showing all
+  N blank up front.** The wall starts at a single camera and grows as each ramp
+  step sustains, via `MarkEngineFactory.add_next_camera()` (which spawns just the
+  new worker on the running supervisor). The pre-flight now carries **resolution**
+  (720p/1080p/4k → synthetic frame size) and **model** (auto/nano/small → detector
+  tier), and the full profile **auto-tracks a seeded target per camera** so Center
+  Stage visibly engages. The headless `--benchmark` path is unchanged.
+- **AutoPTZ Mark UX overhaul — auto-start, simpler controls, friendlier pre-flight.**
+  The Mark window now **auto-starts the ramp** on show (no Start button) and opens
+  maximized so the wall + panels fit. `MarkControlPanel` is trimmed to a verdict
+  line + **Stop** + **Exit Mark…** (the redundant Source/Cameras re-ask is gone —
+  the pre-flight is the single source of truth). The menu bar keeps **View →
+  Appearance** (theme) / UI Scale / Panels and **Help → About AutoPTZ Mark**, and
+  hides the camera/engine-management menus. The right-click **tile context menu is
+  disabled** in Mark so the demo viewer can't mutate the throwaway engine. The
+  **pre-flight** is rewritten in plain language with **dropdowns** (Max cameras,
+  Target FPS, Time per step, Resolution, Model) instead of spinboxes/jargon, and its
+  **Start asks a confirm** ("This suspends AutoPTZ and runs the simulation.
+  Continue?") before entering Mark.
+
 ## [2.2.0-rc6] — 2026-06-26
 
 > Pre-release for testing. Headline: a **major multi-camera CPU reduction**

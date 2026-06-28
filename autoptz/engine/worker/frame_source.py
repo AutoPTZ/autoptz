@@ -158,11 +158,18 @@ def build_frame_source(camera_id: str, config: CameraConfig) -> FrameSource:
     stall = config.reconnect.stall_timeout_s
 
     if source.type == "synthetic":
+        # A non-zero width/height on the SourceConfig (AutoPTZ Mark's resolution
+        # control) sizes the composed scene; 0 keeps the adapter's default.
+        syn_kwargs: dict[str, Any] = {}
+        if getattr(source, "width", 0) and getattr(source, "height", 0):
+            syn_kwargs["width"] = int(source.width)
+            syn_kwargs["height"] = int(source.height)
         adapter: Any = SyntheticAdapter(
             camera_id,
             address=source.address,
             target_fps=target_fps,
             stall_timeout=stall,
+            **syn_kwargs,
         )
     elif source.type == "usb":
         dev = _resolve_usb_device(source)
