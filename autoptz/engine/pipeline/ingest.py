@@ -37,9 +37,20 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
+from autoptz.engine.runtime.messages import BBox, GroundTruthPerson
 from autoptz.engine.runtime.shm import ShmWriter
 
 log = logging.getLogger(__name__)
+
+# AutoPTZ Mark accuracy bench: when set, the drawn synthetic scene also publishes
+# per-frame ground-truth person boxes (the painted silhouettes' true positions).
+# Off by default so the field stays empty (zero payload/overhead) for normal runs.
+_MARK_GT_ENV = "AUTOPTZ_MARK_GT"
+
+
+def _mark_gt_enabled() -> bool:
+    return os.environ.get(_MARK_GT_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
 
 # ── Optional-dependency probes (lazy, cached) ──────────────────────────────────
 
@@ -1170,6 +1181,10 @@ class SyntheticAdapter(SourceAdapter):
         if people is None:
             people = self._address in ("", "anim", "synthetic")
         self._people = bool(people)
+        # Latest synthetic ground truth (AutoPTZ Mark bench). Populated per-frame
+        # only for the drawn scene when ``AUTOPTZ_MARK_GT`` is on; otherwise stays
+        # empty so the telemetry field carries no payload.
+        self._latest_gt: list[GroundTruthPerson] = []
         # Stable per-camera count (2–4) + per-person phase so silhouettes drift apart.
         self._n_people = 2 + (abs(hash(camera_id)) % 3)  # 2..4
         # Per-person deterministic motion descriptors: varied speed, path shape, and an
@@ -1271,6 +1286,8 @@ class SyntheticAdapter(SourceAdapter):
             self._fps_t0, self._fps_n0 = now, self._idx
         cap = self._video
         if cap is not None:
+            # Clip / video source: real (not synthesised) people — no ground truth.
+            self._latest_gt = []
             ok, frm = cap.read()  # type: ignore[union-attr]
             if not ok:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # type: ignore[union-attr]
@@ -1280,6 +1297,14 @@ class SyntheticAdapter(SourceAdapter):
             if frm.shape[1] != self._w or frm.shape[0] != self._h:
                 frm = cv2.resize(frm, (self._w, self._h))
             return np.ascontiguousarray(frm)
+        # Drawn scene: optionally publish ground truth for the AutoPTZ Mark bench
+        # using the SAME frame clock (self._idx) the scene is painted from, so GT
+        # aligns to the delivered frame.  Gated by env so the default path is free.
+        if self._people and _mark_gt_enabled():
+            t = self._idx / max(1.0, self._target_fps)
+            self._latest_gt = self._compute_people_ground_truth(t)
+        else:
+            self._latest_gt = []
         return self._compose()
 
     def _compose(self) -> NDArray[np.uint8]:
@@ -1307,19 +1332,23 @@ class SyntheticAdapter(SourceAdapter):
             cv2.rectangle(frame, (bx - 60, by - 120), (bx + 60, by + 120), (30, 30, 220), -1)
         return np.ascontiguousarray(frame)
 
-    def _draw_people(self, frame: NDArray[np.uint8], t: float) -> None:
-        """Draw N moving silhouettes with varied, lively, but deterministic motion.
+    def _people_boxes(self, t: float) -> list[tuple[int, int, int, int, int, str]]:
+        """Pure silhouette geometry for the drawn scene at scene-time ``t``.
 
-        Motion is a function of ``(camera_id, person_index, frame_index)`` only — the
-        same camera replayed from frame 0 is byte-identical, so synthetic-camera tests
-        stay reproducible while the scene looks alive (varying speeds, multiple path
-        shapes, occasional smooth walk-off/return).  Silhouettes stay ≥ ``0.42*h`` tall
-        so the real detector still fires.
+        Returns one ``(person_id, cx, cy, person_h, half_w, path_type)`` row per
+        person (including momentarily off-frame ones — the off-frame clip is the
+        caller's ``-half_w <= cx <= w + half_w`` test).  Motion is a function of
+        ``(camera_id, person_index, frame_index)`` only, so the same camera
+        replayed from frame 0 is byte-identical.  This is the single source of
+        truth consumed by BOTH :meth:`_draw_people` (the painted pixels) and
+        :meth:`_compute_people_ground_truth` (the bench's true boxes), so the
+        ground truth always aligns with what the detector actually sees.
+        Silhouettes stay ≥ ``0.42*h`` tall so the real detector still fires.
         """
         h, w = self._h, self._w
         person_h = int(0.42 * h)  # detector-friendly height (>> noise floor)
         half_w = max(8, int(person_h * 0.16))
-        head_r = max(6, int(person_h * 0.13))
+        boxes: list[tuple[int, int, int, int, int, str]] = []
         for k in range(self._n_people):
             m = self._people_motion[k]
             tt = t * m["speed"] + m["phase"]
@@ -1338,6 +1367,18 @@ class SyntheticAdapter(SourceAdapter):
                 fx = fx + (cycle - 0.85) / 0.15 * 0.8
             cx = int(min(1.2, max(-0.2, fx)) * w)
             cy = int(min(0.95, max(0.20, fy)) * h)
+            boxes.append((k, cx, cy, person_h, half_w, str(int(m["path"]))))
+        return boxes
+
+    def _draw_people(self, frame: NDArray[np.uint8], t: float) -> None:
+        """Draw N moving silhouettes from the shared :meth:`_people_boxes` geometry.
+
+        Visuals are unchanged from before the refactor — the per-person motion now
+        lives in :meth:`_people_boxes` so the ground truth uses the very same boxes.
+        """
+        w = self._w
+        for _pid, cx, cy, person_h, half_w, _path in self._people_boxes(t):
+            head_r = max(6, int(person_h * 0.13))
             if cx < -half_w or cx > w + half_w:
                 continue  # fully off-frame this instant
             top = cy - person_h // 2
@@ -1350,6 +1391,40 @@ class SyntheticAdapter(SourceAdapter):
             )
             # head
             cv2.circle(frame, (cx, top + head_r), head_r, (170, 150, 130), -1)
+
+    def _compute_people_ground_truth(self, t: float) -> list[GroundTruthPerson]:
+        """Ground-truth person boxes for the drawn scene at scene-time ``t``.
+
+        Built from the SAME :meth:`_people_boxes` geometry the scene is painted
+        from, so each GT box matches a painted silhouette's outer extent.
+        ``visible`` mirrors the drawn off-frame clip (False once a silhouette has
+        glided off-frame this tick), and ``path_type`` is the person's motion-path
+        id.  One entry per person (visible or not).
+        """
+        w = self._w
+        out: list[GroundTruthPerson] = []
+        for pid, cx, cy, person_h, half_w, path_type in self._people_boxes(t):
+            top = cy - person_h // 2
+            bbox = BBox(
+                x1=float(cx - half_w),
+                y1=float(top),
+                x2=float(cx + half_w),
+                y2=float(top + person_h),
+            )
+            visible = -half_w <= cx <= w + half_w
+            out.append(
+                GroundTruthPerson(person_id=pid, bbox=bbox, visible=visible, path_type=path_type)
+            )
+        return out
+
+    def latest_ground_truth(self) -> list[GroundTruthPerson]:
+        """Most-recent synthetic ground truth for the current frame (bench only).
+
+        Empty unless this is the drawn scene AND ``AUTOPTZ_MARK_GT`` is on — clip /
+        video / image sources never publish ground truth.  The camera worker reads
+        this when stamping telemetry on the bench.
+        """
+        return list(self._latest_gt)
 
     def _close(self) -> None:
         cap = self._video
