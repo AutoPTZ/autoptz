@@ -39,6 +39,8 @@ class CameraInfoPanel(QWidget):
         self._camera_id = ""
         self._vals: dict[str, QLabel] = {}
         self._keys: list[QLabel] = []
+        # key → its caption QLabel, so conditional rows can be hidden as a pair.
+        self._key_labels: dict[str, QLabel] = {}
         # Remember the semantic color requested per value so a theme flip can
         # re-resolve palette-driven defaults without losing status colors.
         self._val_colors: dict[str, str | None] = {}
@@ -102,7 +104,18 @@ class CameraInfoPanel(QWidget):
     _GROUPS: list[tuple[str, list[str]]] = [
         ("Tracking", ["Following", "Match", "Lock", "People in view"]),
         ("Identity", ["Display name", "Source", "Address"]),
-        ("Stream", ["Resolution", "Live fps", "Health", "Dropped frames"]),
+        (
+            "Stream",
+            [
+                "Resolution",
+                "Live fps",
+                "Health",
+                "Dropped frames",
+                "Est. source drops",
+                "Delivered / source",
+                "NDI queue depth",
+            ],
+        ),
         (
             "Runtime",
             [
@@ -145,6 +158,7 @@ class CameraInfoPanel(QWidget):
                 "Face stage",
                 "Pose stage",
                 "Latency",
+                "End-to-end latency",
             ],
         ),
         ("PTZ", ["Backend"]),
@@ -200,6 +214,7 @@ class CameraInfoPanel(QWidget):
             for key in keys:
                 k = QLabel(key)
                 self._keys.append(k)
+                self._key_labels[key] = k
                 v = QLabel("—")
                 v.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 v.setWordWrap(True)
@@ -301,6 +316,27 @@ class CameraInfoPanel(QWidget):
         )
         self._set("Dropped frames", str(getattr(rec, "dropped_frames", 0)))
 
+        # Phase 0a per-source delivery telemetry.
+        drops_est = int(getattr(rec, "frames_dropped_est", 0) or 0)
+        self._set(
+            "Est. source drops",
+            str(drops_est),
+            color=T.WARNING if drops_est > 0 else None,
+        )
+        src_fps = float(getattr(rec, "source_fps", 0.0) or 0.0)
+        deliv_fps = float(getattr(rec, "delivered_fps", 0.0) or 0.0)
+        show_rates = src_fps > 0
+        self._set_row_visible("Delivered / source", show_rates)
+        if show_rates:
+            self._set("Delivered / source", f"{deliv_fps:.1f} / {src_fps:.1f} fps")
+        # -1 == the source exposes no queue; omit the row entirely so non-NDI /
+        # no-queue sources don't show a confusing "-1".
+        queue_depth = int(getattr(rec, "ndi_queue_depth", -1))
+        show_queue = queue_depth >= 0
+        self._set_row_visible("NDI queue depth", show_queue)
+        if show_queue:
+            self._set("NDI queue depth", str(queue_depth))
+
         target_fps = float(getattr(tel, "target_fps", 0.0) or src.get("fps", 30.0) or 30.0)
         budget_ms = float(getattr(tel, "frame_budget_ms", 0.0) or (1000.0 / max(1.0, target_fps)))
         self._set("Target fps", f"{target_fps:.0f} fps")
@@ -356,6 +392,13 @@ class CameraInfoPanel(QWidget):
         self._set("Pose stage", *_stage_text(tel, "pose", "pose_ms"))
         lat = int(getattr(rec, "latency_ms", 0) or 0)
         self._set("Latency", f"{lat} ms" if lat > 0 else "—")
+        # Phase 0b end-to-end control dead time — 0.0 until the probe runs, so
+        # hide the row entirely until there's a real measurement.
+        e2e = float(getattr(rec, "end_to_end_ms", 0.0) or 0.0)
+        show_e2e = e2e > 0
+        self._set_row_visible("End-to-end latency", show_e2e)
+        if show_e2e:
+            self._set("End-to-end latency", f"{e2e:.0f} ms")
 
         ep = (_safe(lambda: self._client.engineEp, "") or "—").replace("ExecutionProvider", "")
         self._set("Inference EP", ep)
@@ -367,6 +410,19 @@ class CameraInfoPanel(QWidget):
         lab.setText(str(value))
         self._val_colors[key] = color
         self._paint(lab, color)
+
+    def _set_row_visible(self, key: str, visible: bool) -> None:
+        """Show/hide a whole form row (its caption + value) as a pair.
+
+        Used for rows that would otherwise show a confusing sentinel (e.g. the
+        ``-1`` "no queue" NDI depth) or pure noise (zero/undriven values).
+        """
+        val = self._vals.get(key)
+        cap = self._key_labels.get(key)
+        if val is not None:
+            val.setVisible(visible)
+        if cap is not None:
+            cap.setVisible(visible)
 
     @staticmethod
     def _paint(lab: QLabel, color: str | None) -> None:
