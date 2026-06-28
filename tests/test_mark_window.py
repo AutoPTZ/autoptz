@@ -325,11 +325,18 @@ def test_theme_toggle_repaints_hud(qtapp) -> None:
 def test_panel_restyle_idempotent(qtapp) -> None:
     win = _win(qtapp)
     try:
-        # Calling _restyle repeatedly must not raise.
+        # Idempotent means *converges*, not merely "doesn't raise": _restyle sets
+        # child-widget stylesheets from the theme, so a second call with no theme
+        # change must reproduce the exact same stylesheet (no drift/accumulation).
         win._controls._restyle()
+        controls_ss = win._controls._verdict_label.styleSheet()
         win._controls._restyle()
+        assert win._controls._verdict_label.styleSheet() == controls_ss
+
         win._details._restyle()
+        details_ss = win._details._empty.styleSheet()
         win._details._restyle()
+        assert win._details._empty.styleSheet() == details_ss
     finally:
         win.deleteLater()
 

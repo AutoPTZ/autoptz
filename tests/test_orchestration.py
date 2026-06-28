@@ -387,6 +387,10 @@ class TestCameraWorker:
         worker.update_config(_camera_config("cmdcam01abcd"))
         worker.enroll_track(7, "id-1", "Alice")
 
+        # …and they must be true no-ops on lifecycle: none may start the worker or
+        # flip it to running before start() is actually called.
+        assert worker.is_running is False
+
     def test_enroll_track_sets_pending_and_immediate_label(self, qapp) -> None:
         """Click-to-assign queues a pending enrollment and labels the box at once."""
         from autoptz.engine.camera_worker import CameraWorker
