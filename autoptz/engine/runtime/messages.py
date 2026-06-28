@@ -227,6 +227,28 @@ class TelemetryMsg(BaseModel):
     # explains the fps cliff (e.g. capture 30 → +detection 23 → +face 19).
     face_ms: float = 0.0
     pose_ms: float = 0.0
+    # Phase 0b — true end-to-end latency decomposition (milliseconds).  Unlike
+    # ``latency_ms`` (ingest+detect+track only), these account for the WHOLE
+    # control dead time the PTZ loop actually fights: ``capture_age_ms`` is how old
+    # the driving frame is at the instant auto-control commands the camera (spans
+    # ingest read + handoff wait + detect + track), ``command_send_ms`` is the PTZ
+    # transport send wall time, ``actuation_estimate_ms`` is the configured
+    # camera‑motor lag (not directly observable), and ``end_to_end_ms`` is their
+    # sum.  Measured‑only by default; surfaced so the redesign can size the lead.
+    capture_age_ms: float = 0.0
+    command_send_ms: float = 0.0
+    actuation_estimate_ms: float = 0.0
+    end_to_end_ms: float = 0.0
+    # Phase 0a — per-source frame-delivery telemetry.  ``frames_dropped_est`` is an
+    # ESTIMATE of frames the source produced but the receiver did not deliver,
+    # computed from ``source_fps`` vs ``delivered_fps`` over a rolling window (NDI's
+    # FrameSync never signals "no new frame", so true drops can't be read directly).
+    # ``ndi_queue_depth`` is -1 when the SDK exposes no queue (the common case).
+    frames_delivered: int = 0
+    frames_dropped_est: int = 0
+    delivered_fps: float = 0.0
+    source_fps: float = 0.0
+    ndi_queue_depth: int = -1
     # True once at least one real frame has been read + pushed to the preview shm.
     # The UI gates its "No Signal" overlay on this (not on fps, which lags a full
     # second, nor on the preview Image load, which can latch on a placeholder).
