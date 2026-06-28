@@ -964,11 +964,21 @@ class Supervisor:
                 daemon=True,
             )
             self._model_server_proc.start()
-            ready.wait(timeout=60.0)  # let the detector load before cameras delegate
+            # The server signals ready as soon as it is ACCEPTING requests (it loads the
+            # detector in the background and serves [] until it is in), so this returns
+            # near-instantly — it does not block the caller for the whole model load.
+            if not ready.wait(timeout=30.0):
+                log.warning("model-server slow to accept requests; cameras get empty "
+                            "detections until it catches up.")
             log.info("model-server ON — 1 shared detector serving %d camera(s)", len(camera_ids))
         except Exception:  # noqa: BLE001 — never load-bearing; children fall back
             log.warning("model-server init failed; cameras build their own detector.", exc_info=True)
+            # Clear the half-built handles so children fall back to a LOCAL detector
+            # instead of delegating to a server that never came up.
             self._model_server_proc = None
+            self._model_server_stop = None
+            self._infer_req_q = None
+            self._infer_resp_qs = {}
 
     def _apply_hardware_env(self, camera_count: int) -> None:
         """Publish global hardware prefs into the environment before workers start.
@@ -1166,6 +1176,18 @@ class Supervisor:
                 "own model set (more RAM) in exchange for GIL relief across cores.",
                 camera_count,
             )
+        infer_resp_q = self._infer_resp_qs.get(camera_id)
+        if self._infer_req_q is not None and infer_resp_q is None:
+            # Model-server is on but this camera was added AFTER the server spawned with
+            # a fixed camera set, so it has no response queue: it falls back to its own
+            # local detector (an extra model set / RAM). Surface it — dynamic membership
+            # is a v2 refinement.
+            log.warning(
+                "camera %s added after the model-server started — it builds its OWN "
+                "detector (extra RAM); restart the engine to fold it into the shared "
+                "model-server.",
+                camera_id,
+            )
         return ProcessWorkerHandle(
             camera_id,
             config,
@@ -1176,7 +1198,7 @@ class Supervisor:
             # Model-server mode: hand the child the shared request queue + its own
             # response queue so it delegates detection instead of loading a detector.
             infer_req_q=self._infer_req_q,
-            infer_resp_q=self._infer_resp_qs.get(camera_id),
+            infer_resp_q=infer_resp_q,
         )
 
     def _spawn_worker(self, camera_id: str, *, defer_inference: bool = False) -> None:

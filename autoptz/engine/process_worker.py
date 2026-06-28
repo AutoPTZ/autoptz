@@ -247,6 +247,13 @@ def run_camera_process(
                 worker.stop()
             except Exception:  # noqa: BLE001
                 log.debug("camera process %s stop failed", spec.camera_id, exc_info=True)
+        if _infer_writer is not None:
+            # Explicitly close+unlink the detection shm slot — relying on GC misses the
+            # SIGTERM/terminate() teardown path and would leak the segment in /dev/shm.
+            try:
+                _infer_writer.close()
+            except Exception:  # noqa: BLE001
+                log.debug("camera process %s infer-shm close failed", spec.camera_id, exc_info=True)
 
 
 def _wire_models_and_identity(worker: Any, spec: WorkerSpec) -> None:

@@ -37,6 +37,40 @@ def test_enabled_nondefault_flag_is_set(tmp_path: Any, monkeypatch: Any) -> None
     assert os.environ.get("AUTOPTZ_PTZ_PUMP") == "1"
 
 
+def test_model_server_init_failure_clears_infer_queues(tmp_path: Any, monkeypatch: Any) -> None:
+    """If the model-server fails to spawn AFTER its queues were created, the supervisor
+    must clear the infer queues — otherwise camera children see non-None handles and
+    delegate detection to a server that doesn't exist (every detect times out) instead
+    of falling back to their own local detector.
+    """
+    import multiprocessing as mp
+
+    monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
+    sup, _store = _sup(tmp_path)
+    real_ctx = mp.get_context("spawn")
+
+    class _FakeProc:
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("cannot spawn")  # fail AFTER queues are built
+
+    class _FakeCtx:
+        Queue = staticmethod(real_ctx.Queue)
+        Event = staticmethod(real_ctx.Event)
+
+        def Process(self, *_a: Any, **_k: Any) -> _FakeProc:  # noqa: N802
+            return _FakeProc()
+
+    monkeypatch.setattr(mp, "get_context", lambda *_a, **_k: _FakeCtx())
+    sup._ensure_model_server(["camA", "camB"])
+
+    assert sup._model_server_proc is None
+    assert sup._infer_req_q is None  # cleared so children build a local detector
+    assert sup._infer_resp_qs == {}
+
+
 def test_choice_flag_value_is_set(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.delenv("AUTOPTZ_REID_DEVICE", raising=False)
     sup, store = _sup(tmp_path)
