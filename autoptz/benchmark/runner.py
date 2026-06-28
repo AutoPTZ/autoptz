@@ -247,6 +247,11 @@ class BenchmarkResult:
     min_fps_at_sustained: float
     score: float
     steps: list[StepResult] = field(default_factory=list)
+    # The Mark scene this ramp ran (CLIP_LIBRARY id), for the result/CSV context.
+    scene_clip_id: str = ""
+    # Ground-truth CLEAR-MOT accuracy per camera (only on synthetic scenes with
+    # AUTOPTZ_MARK_GT): {camera_id: {miss_rate, id_switch_rate, motp, mota}}.
+    ground_truth: dict[str, dict[str, float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -257,7 +262,9 @@ class BenchmarkResult:
             "sustained_cameras": self.sustained_cameras,
             "min_fps_at_sustained": round(self.min_fps_at_sustained, 2),
             "score": self.score,
+            "scene_clip_id": self.scene_clip_id,
             "steps": [s.to_dict() for s in self.steps],
+            "ground_truth": self.ground_truth,
         }
 
     def summary(self) -> str:

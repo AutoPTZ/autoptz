@@ -632,12 +632,23 @@ class MarkWindow(MainWindow):
             self._controls.set_verdict(f"{verb} {step.cameras} cam(s) @ {step.min_fps:.1f} fps")
 
     def _on_finished(self, result: BenchmarkResult) -> None:
-        self._result = result
-        # Slice 5: when GT is active, finalize each camera's comparator into an
-        # aggregate {cid: gt.finalize()} stashed for persistence (the Save path
-        # passes it to the writer so the CSV/JSON carry the CLEAR-MOT accuracy).
+        # Slice 5: the live per-step quality was folded into the chart's enriched
+        # StepResults in _on_step, but the controller's BenchmarkResult still holds
+        # the RAW (quality-less) steps.  Rebuild it with the enriched steps (and the
+        # scene id + GT summary) so the saved JSON/CSV actually carry the metrics.
+        gt_summary: dict[str, Any] = {}
         if self._gt is not None:
-            self._gt_summary = {cid: cmp.finalize() for cid, cmp in self._gt.items()}
+            gt_summary = {cid: cmp.finalize() for cid, cmp in self._gt.items()}
+            self._gt_summary = gt_summary
+        enriched = list(self._chart._steps)
+        steps = enriched if (enriched and len(enriched) == len(result.steps)) else list(result.steps)
+        result = dataclasses.replace(
+            result,
+            steps=steps,
+            scene_clip_id=(self._session.clip_info().id if self._session.is_clip() else self._session.source),
+            ground_truth=gt_summary,
+        )
+        self._result = result
         self._teardown_controller()
         self._controls.set_running(False)
         # Color steps against the SAME discounted floor the ramp graded with (the

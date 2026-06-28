@@ -394,7 +394,11 @@ def test_on_finished_dialog_cancelled_keeps_result(qtapp, monkeypatch, tmp_path)
     try:
         result = _finish_result()
         win._on_finished(result)
-        assert win._result is result  # kept for save-on-exit
+        # _on_finished rebuilds the result (enriched steps + scene id + GT), so it's
+        # a NEW object — but it must be kept on the window for save-on-exit.
+        assert win._result is not None
+        assert win._result.score == result.score
+        assert win._result.sustained_cameras == result.sustained_cameras
         assert persisted == []  # cancel must NOT auto-persist
         assert not list(tmp_path.glob("*.json"))
     finally:
@@ -422,7 +426,10 @@ def test_on_finished_prompt_disabled_no_dialog(qtapp, monkeypatch) -> None:
         result = _finish_result()
         win._on_finished(result)
         assert dialog_calls["n"] == 0  # no dialog
-        assert persisted == [result]  # persisted directly
+        # _on_finished rebuilds the result; it persists the enriched copy directly.
+        assert len(persisted) == 1
+        assert persisted[0].score == result.score
+        assert persisted[0].scene_clip_id  # the enriched copy carries the scene id
     finally:
         win.deleteLater()
 
