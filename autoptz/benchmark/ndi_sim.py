@@ -37,7 +37,13 @@ def ndi_sim_available() -> bool:
 
 class MarkNDISender:
     def __init__(
-        self, index: int, *, width: int = 1280, height: int = 720, fps: float = 30.0
+        self,
+        index: int,
+        *,
+        width: int = 1280,
+        height: int = 720,
+        fps: float = 30.0,
+        frame_source: str | None = None,
     ) -> None:
         if not _CYNDILIB_OK:
             raise RuntimeError("cyndilib not available; NDI sim disabled")
@@ -46,9 +52,14 @@ class MarkNDISender:
         self._index = index
         self._w, self._h = int(width), int(height)
         self._name = f"AutoPTZ Mark Cam {index + 1}"
-        # Reuse the real synthetic scene generator (person silhouettes).
+        # Broadcast the SELECTED clip (real footage at the chosen resolution/fps): the
+        # engine resolves the transcode-cached variant for (clip_id, resolution, fps)
+        # and threads its path in as ``frame_source`` so every NDI tile shows the SAME
+        # real video as clip mode.  Falls back to the drawn ("anim") scene only when no
+        # frame source is supplied (e.g. the clip is missing).
+        address = (frame_source or "").strip() or "anim"
         self._adapter = SyntheticAdapter(
-            f"ndi-sim-{index}", address="anim", width=width, height=height, target_fps=fps
+            f"ndi-sim-{index}", address=address, width=width, height=height, target_fps=fps
         )
         self._adapter._open()
         self._sender = _Sender(ndi_name=self._name, clock_video=True)
@@ -112,11 +123,22 @@ def _resolve_full_name(short: str, discovered: list[str]) -> str | None:
 
 
 class MarkNDIFleet:
-    def __init__(self, n: int, *, width: int = 1280, height: int = 720, fps: float = 30.0) -> None:
+    def __init__(
+        self,
+        n: int,
+        *,
+        width: int = 1280,
+        height: int = 720,
+        fps: float = 30.0,
+        frame_source: str | None = None,
+    ) -> None:
         if not _CYNDILIB_OK:
             raise RuntimeError("cyndilib not available; NDI sim disabled")
+        # Every sender broadcasts the SAME selected-clip frame source (the engine's
+        # resolved transcode variant), so the whole NDI wall shows the real footage.
         self._senders = [
-            MarkNDISender(i, width=width, height=height, fps=fps) for i in range(max(0, n))
+            MarkNDISender(i, width=width, height=height, fps=fps, frame_source=frame_source)
+            for i in range(max(0, n))
         ]
 
     def names(self) -> list[str]:

@@ -1245,17 +1245,15 @@ class SyntheticAdapter(SourceAdapter):
                 self._base = cv2.resize(img, (self._w, self._h))
                 log.info("camera_id=%s SyntheticAdapter animating image %s", self.camera_id, path)
                 return True
-        # Nothing usable supplied → fall back to a people sample (so detection-driven
-        # stages still fire) and finally to a pure procedural scene.
-        ps = _find_people_sample()
-        if ps:
-            img = cv2.imread(ps)
-            if img is not None:
-                self._base = cv2.resize(img, (self._w, self._h))
+        # Drawn ("anim") ground-truth scene: paint a plain/neutral procedural
+        # background (``_base`` stays None → the soft gradient in ``_compose``) with
+        # the moving people silhouettes on top.  We deliberately DO NOT load a bundled
+        # sample photo here anymore — that left a stray picture floating behind the
+        # drawn people (and AutoPTZ never redistributes those samples).  The GT
+        # geometry / silhouettes are unchanged, so the accuracy bench is unaffected.
         log.info(
-            "camera_id=%s SyntheticAdapter %s scene %dx%d@%.0ffps",
+            "camera_id=%s SyntheticAdapter procedural scene %dx%d@%.0ffps",
             self.camera_id,
-            "people-sample" if self._base is not None else "procedural",
             self._w,
             self._h,
             self._target_fps,
@@ -1316,12 +1314,14 @@ class SyntheticAdapter(SourceAdapter):
         if self._base is not None:
             frame = np.roll(self._base, (dy, dx), axis=(0, 1))
         else:
-            ramp = ((np.arange(w) + i * 2) % 256).astype(np.uint8)
-            grad = np.tile(ramp, (h, 1))
-            frame = np.empty((h, w, 3), dtype=np.uint8)
-            frame[..., 0] = grad
-            frame[..., 1] = np.uint8(80)
-            frame[..., 2] = 255 - grad
+            # Plain/neutral studio-grey background — a soft vertical gradient (top
+            # lighter, bottom darker) with a faint slowly-drifting horizontal sheen so
+            # the optical-flow / ego-motion stages still see texture, but no garish
+            # colours and (deliberately) no bundled photo behind the people.
+            col = np.linspace(70, 110, h, dtype=np.float32).reshape(h, 1)
+            sheen = 12.0 * np.cos((np.arange(w, dtype=np.float32) / max(1.0, w)) * 6.28 + t)
+            grey = np.clip(col + sheen.reshape(1, w), 0, 255).astype(np.uint8)
+            frame = np.repeat(grey[:, :, np.newaxis], 3, axis=2)
         # A moving foreground: person silhouettes (default) so detection→tracking→
         # center-stage engage, or the legacy plain block when people are disabled.
         if self._people:

@@ -12,6 +12,7 @@ that calls :meth:`tick`; on close the GUI stops that timer FIRST, then
 from __future__ import annotations
 
 import logging
+import os
 import random
 import shutil
 import tempfile
@@ -28,6 +29,17 @@ from autoptz.ui.frames import ShmFrameSource
 from autoptz.ui.mark_session import MarkSession
 
 log = logging.getLogger(__name__)
+
+# The drawn ("anim") synthetic-people scene is NO LONGER a user-selectable source —
+# Mark always shows the SELECTED clip (real footage).  The drawn scene survives ONLY
+# as the ground-truth scene for the accuracy bench, gated by this env (it pairs with
+# the ingest adapter's matching AUTOPTZ_MARK_GT gate that also publishes per-frame
+# ground-truth boxes).  Off by default, so cameras play the real clip.
+_MARK_GT_ENV = "AUTOPTZ_MARK_GT"
+
+
+def _mark_gt_enabled() -> bool:
+    return os.environ.get(_MARK_GT_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _default_supervisor_factory(client: Any, store: Any) -> Any:
@@ -149,14 +161,26 @@ class MarkEngineFactory:
 
             if ndi_sim_available():
                 w, h = self._session.resolution_size()
-                self._ndi_fleet = MarkNDIFleet(n, width=w, height=h)
+                # NDI broadcasts the SELECTED clip (real footage at the chosen
+                # resolution/fps) — the engine's resolved transcode variant — NOT the
+                # drawn scene.  ``frame_source`` is None only when the clip is missing,
+                # in which case each sender degrades to the drawn ("anim") scene.
+                self._ndi_fleet = MarkNDIFleet(
+                    n,
+                    width=w,
+                    height=h,
+                    fps=self._session.target_fps(),
+                    frame_source=self._ndi_frame_source(),
+                )
                 # Register the FULL hostname-prefixed names ("HOST (AutoPTZ Mark Cam
                 # N)") the network advertises — the NDIAdapter matches the full name,
                 # so the short names left every NDI tile blank.  full_names() opens +
                 # discovers the senders (falls back to short names on timeout).
                 self._ndi_names = self._ndi_fleet.full_names()
                 if self._ndi_names:
-                    self._camera_ids.append(_add_ndi_camera(self._client, self._ndi_names[0], 0))
+                    cid = _add_ndi_camera(self._client, self._ndi_names[0], 0)
+                    self._camera_ids.append(cid)
+                    self._activate_camera_ai(cid)
                 return
             log.warning("NDI requested but cyndilib unavailable; using synthetic cameras.")
         w, h = self._session.resolution_size()
@@ -167,50 +191,74 @@ class MarkEngineFactory:
                 self._session.clip_info().id,
                 native_fps,
             )
-        self._camera_ids.append(
-            _add_synthetic_camera(
-                self._client,
-                0,
-                width=w,
-                height=h,
-                address=self._synthetic_address(),
-                native_fps=native_fps,
-            )
+        cid = _add_synthetic_camera(
+            self._client,
+            0,
+            width=w,
+            height=h,
+            address=self._synthetic_address(),
+            native_fps=native_fps,
         )
+        self._camera_ids.append(cid)
+        # Bring the first tile up tracking + auto-framing (full profile only).
+        self._activate_camera_ai(cid)
 
     def _synthetic_native_fps(self) -> float | None:
-        """The selected clip's native fps for the synthetic source (None otherwise).
+        """The selected clip's native fps for the per-camera synthetic source.
 
-        Only meaningful for a clip source whose asset is actually present; the drawn
-        ("anim") scene keeps the default 30 fps pacing, so this returns ``None`` for
-        synthetic / NDI sources and for a clip session falling back to drawn people.
+        Mark always plays the selected clip (the drawn source is removed), so this
+        is the clip's own cadence whenever the asset is present.  Returns ``None``
+        (default 30 fps pacing) when the ground-truth drawn scene is in use
+        (``AUTOPTZ_MARK_GT``) or the bundled clip is missing — the drawn scene has
+        no native cadence of its own.
         """
-        if self._session.is_clip() and self._session.clip_available():
+        if _mark_gt_enabled():
+            return None
+        if self._session.clip_available():
             return self._session.clip_info().native_fps
         return None
 
     def _synthetic_address(self) -> str:
-        """The SyntheticAdapter address for this session's source.
+        """The SyntheticAdapter address fed to every per-camera (clip + NDI) source.
 
-        ``clip`` → a transcode-cached variant of the bundled real-people clip at
-        the picked (resolution, fps), built once and reused (the adapter loops the
-        real decode); any other (synthetic) source → ``"anim"`` (drawn synthetic
-        people).
+        Mark shows the SELECTED clip's real footage, so this returns a transcode-
+        cached variant of the bundled clip at the picked (resolution, fps), built
+        once and reused (the adapter loops the real decode).  The drawn ("anim")
+        scene is no longer a user source — it is returned ONLY when the accuracy
+        bench is on (``AUTOPTZ_MARK_GT``), as the ground-truth scene.
 
-        When ``clip`` is requested but the bundled clip is missing (e.g. a fresh
-        clone / CI checkout where the asset isn't present), fall back to the drawn
-        scene *with a warning* rather than letting the SyntheticAdapter silently
-        degrade — the advertised "real people" demo shouldn't fail quietly.
+        When the bundled clip is missing (a fresh clone / CI checkout without the
+        asset), fall back to the drawn scene *with a warning* rather than letting the
+        SyntheticAdapter silently degrade — the advertised "real people" demo
+        shouldn't fail quietly.
         """
-        if self._session.is_clip():
-            if self._session.clip_available():
-                return self._resolve_clip_variant_address()
-            log.warning(
-                "Mark clip source requested but bundled clip is missing (%s); "
-                "falling back to drawn synthetic people.",
-                self._session.clip_path(),
-            )
+        if _mark_gt_enabled():
+            return "anim"
+        if self._session.clip_available():
+            return self._resolve_clip_variant_address()
+        log.warning(
+            "Mark clip is missing (%s); falling back to the drawn synthetic scene.",
+            self._session.clip_path(),
+        )
         return "anim"
+
+    def _ndi_frame_source(self) -> str | None:
+        """The clip variant path each NDI sender broadcasts (None → drawn scene).
+
+        NDI mode shows the SELECTED clip's real footage at the chosen resolution/fps,
+        not the drawn ("anim") scene — so it reuses the same transcode-cached variant
+        clip mode resolves (built once, falling back to the raw master on a build
+        failure).  Returns None only when the bundled clip is absent, so each sender
+        degrades to the drawn scene transparently instead of broadcasting a dead path.
+        """
+        if self._session.clip_available():
+            return self._resolve_clip_variant_address()
+        log.warning(
+            "Mark NDI requested but bundled clip is missing (%s); broadcasting the "
+            "drawn synthetic scene instead.",
+            self._session.clip_path(),
+        )
+        return None
 
     def _resolve_clip_variant_address(self) -> str:
         """The path to feed the synthetic camera for the selected clip.
@@ -283,6 +331,9 @@ class MarkEngineFactory:
                 native_fps=self._synthetic_native_fps(),
             )
         self._camera_ids.append(cid)
+        # Re-apply tracking + Center Stage so a newly-grown tile comes up following
+        # and auto-framing immediately (full profile only; no-op for streams).
+        self._activate_camera_ai(cid)
         # Bring up just the new worker if the engine is already running.
         if self._started:
             spawn = getattr(self._supervisor, "_spawn_worker", None)
@@ -302,24 +353,56 @@ class MarkEngineFactory:
             log.debug("mark cameraAdded emit failed", exc_info=True)
         return cid
 
+    def _full_profile(self) -> bool:
+        """True when this session's profile runs detection + tracking (Center Stage)."""
+        return bool(get_profile(self._session.profile).features.get("tracking", False))
+
+    def _activate_camera_ai(self, cid: str) -> None:
+        """Turn ON tracking AND Center Stage for one camera (full profile only).
+
+        So every tile — including newly-grown ones — visibly tracks and auto-frames.
+        Tracking uses the engine's ``enableTracking`` path; "Center Stage" is the
+        engine's multi-person group-framing knob (``tracking.group_framing``), enabled
+        via ``updateCameraConfigPatch`` so the camera auto-widens to keep people in
+        shot.  No-op for the streams profile (tracking stays OFF there) and resilient:
+        a demo activation must never crash the engine.
+        """
+        if not self._full_profile():
+            return
+        enabler = getattr(self._client, "enableTracking", None)
+        if callable(enabler):
+            try:
+                enabler(cid, True)
+            except Exception:  # noqa: BLE001 — a demo activation must never crash
+                log.debug("mark enableTracking failed for %s", cid, exc_info=True)
+        patcher = getattr(self._client, "updateCameraConfigPatch", None)
+        if callable(patcher):
+            try:
+                patcher(cid, {"tracking": {"group_framing": True}})
+            except Exception:  # noqa: BLE001 — a demo activation must never crash
+                log.debug("mark Center Stage enable failed for %s", cid, exc_info=True)
+
     def auto_track_targets(self, *, seed: int = 0) -> None:
-        """Auto-track a seeded random target per camera so Center Stage engages.
+        """Auto-track a seeded target per camera + turn ON tracking and Center Stage.
 
         Only meaningful for the **full** profile (which runs detection + tracking);
-        the streams profile has no tracks to follow, so this is a no-op there.  Uses
-        the engine's existing target-set path (``client.setTarget``): a small seeded
-        track id (1..3) per camera position lands on one of the early synthetic
-        tracks so the demo visibly locks on rather than sitting idle.  Deterministic
-        for a given seed (keyed by camera position, not the random uuid).
+        the streams profile has no tracks to follow, so this is a no-op there.  For
+        each camera it (1) enables tracking + Center Stage via
+        :meth:`_activate_camera_ai` so the tile follows and auto-frames, and (2) sets
+        a seeded target via the engine's existing ``client.setTarget`` path: a small
+        seeded track id (1..3) per camera position lands on one of the early tracks so
+        the demo visibly locks on rather than sitting idle.  Deterministic for a given
+        seed (keyed by camera position, not the random uuid).
         """
-        if not get_profile(self._session.profile).features.get("tracking", False):
+        if not self._full_profile():
             return
         rng = random.Random(seed)
         setter = getattr(self._client, "setTarget", None)
-        if not callable(setter):
-            return
         for cid in self._camera_ids:
+            self._activate_camera_ai(cid)
             track_id = rng.randint(1, 3)
+            if not callable(setter):
+                continue
             try:
                 setter(cid, track_id)
             except Exception:  # noqa: BLE001 — a demo target must never crash the engine

@@ -778,3 +778,48 @@ class TestNDIReadFrame:
         assert out is None
         # Flipped so the next reconnect re-opens with the universal BGRA format.
         assert adapter._color_format_pref == "bgra"
+
+
+class TestSyntheticDrawnSceneCleanBackground:
+    """The drawn ('anim') ground-truth scene must NOT paint a bundled photo behind the
+    people (no zidane/bus 'picture floating around') — a plain/neutral procedural
+    background only, while the moving people-boxes + GT geometry stay intact."""
+
+    def test_drawn_scene_does_not_load_a_photo_background(self, monkeypatch) -> None:
+        from autoptz.engine.pipeline import ingest
+        from autoptz.engine.pipeline.ingest import SyntheticAdapter
+
+        # If the drawn scene tried to use the bundled sample photo, this would fire.
+        called = {"n": 0}
+
+        def _boom_sample() -> str | None:
+            called["n"] += 1
+            return "/fake/ultralytics/assets/zidane.jpg"
+
+        monkeypatch.setattr(ingest, "_find_people_sample", _boom_sample)
+        a = SyntheticAdapter("cam-anim", address="anim", width=160, height=120, target_fps=30.0)
+        assert a._open() is True
+        # No photo background was loaded — the scene paints a plain procedural bg.
+        assert a._base is None
+        assert called["n"] == 0
+
+    def test_drawn_scene_still_emits_ground_truth_people_boxes(self, monkeypatch) -> None:
+        from autoptz.engine.pipeline.ingest import SyntheticAdapter
+
+        monkeypatch.setenv("AUTOPTZ_MARK_GT", "1")
+        a = SyntheticAdapter("cam-anim2", address="anim", width=160, height=120, target_fps=30.0)
+        assert a._open() is True
+        frame = a._read_frame()
+        assert frame is not None and frame.shape == (120, 160, 3)
+        gt = a.latest_ground_truth()
+        assert gt, "the GT drawn scene must still publish people-boxes"
+        for person in gt:
+            assert person.bbox.x2 > person.bbox.x1
+            assert person.bbox.y2 > person.bbox.y1
+
+    def test_drawn_scene_geometry_is_deterministic(self) -> None:
+        from autoptz.engine.pipeline.ingest import SyntheticAdapter
+
+        a = SyntheticAdapter("cam-det", address="anim", width=160, height=120, target_fps=30.0)
+        # The shared geometry (consumed by both painter + GT) replays byte-identically.
+        assert a._people_boxes(1.5) == a._people_boxes(1.5)

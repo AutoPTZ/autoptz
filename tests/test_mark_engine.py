@@ -36,7 +36,20 @@ class _FakeSupervisor:
         return self.started and not self.stopped
 
 
+@pytest.fixture(autouse=True)
+def _no_clip_by_default(monkeypatch):
+    """Default the bundled clip to ABSENT so the generic lifecycle tests (``_factory``)
+    deterministically use the drawn scene and never depend on the developer's real
+    transcode cache or trigger a (slow) variant build.  Clip-specific tests override
+    this with their own ``monkeypatch.setattr(MarkSession, "clip_available", ...)``.
+    """
+    monkeypatch.setattr(MarkSession, "clip_available", lambda self: False)
+
+
 def _factory():
+    """A clip-source engine whose clip is absent (see ``_no_clip_by_default``), so it
+    deterministically falls back to the drawn scene — the right default now that the
+    user-facing 'synthetic' drawn source is removed (source is only 'clip' | 'ndi')."""
     from autoptz.ui import mark_engine
 
     made = {}
@@ -47,7 +60,7 @@ def _factory():
         return s
 
     eng = mark_engine.MarkEngineFactory(
-        MarkSession(source="synthetic", max_cameras=3),
+        MarkSession(source="clip", max_cameras=3),
         supervisor_factory=fake_sup,
     )
     return eng, made
@@ -144,7 +157,7 @@ def test_auto_track_sets_targets_full_profile(qapp):
         pass
 
     eng = mark_engine.MarkEngineFactory(
-        MarkSession(profile="full", source="synthetic", max_cameras=3),
+        MarkSession(profile="full", source="clip", max_cameras=3),
         supervisor_factory=lambda c, s: _RecSup(c, s),
     )
     eng.start()
@@ -164,7 +177,7 @@ def test_auto_track_sets_targets_full_profile(qapp):
         # Deterministic for the same seed (a fresh engine yields the same per-index
         # targets, keyed by position not id since ids are random uuids).
         eng2 = mark_engine.MarkEngineFactory(
-            MarkSession(profile="full", source="synthetic", max_cameras=3),
+            MarkSession(profile="full", source="clip", max_cameras=3),
             supervisor_factory=lambda c, s: _RecSup(c, s),
         )
         eng2.start()
@@ -192,7 +205,7 @@ def test_auto_track_noop_when_not_full_profile(qapp):
     from autoptz.ui import mark_engine
 
     eng = mark_engine.MarkEngineFactory(
-        MarkSession(profile="streams", source="synthetic", max_cameras=2),
+        MarkSession(profile="streams", source="clip", max_cameras=2),
         supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
     )
     eng.start()
@@ -201,6 +214,78 @@ def test_auto_track_noop_when_not_full_profile(qapp):
         for cid in eng.client.cameraModel.camera_ids():
             rec = eng.client.cameraModel.get_record(cid)
             assert rec.target_track_id is None
+    finally:
+        eng.stop()
+
+
+def _center_stage_on(eng, cid) -> bool:
+    """Center Stage = the engine's group_framing knob on the camera's tracking config."""
+    rec = eng.client.cameraModel.get_record(cid)
+    return bool(rec.camera_config.tracking.group_framing)
+
+
+def test_full_profile_enables_tracking_and_center_stage_per_camera(qapp):
+    """The full profile must turn ON tracking AND Center Stage (group_framing) on EVERY
+    camera, so each tile visibly tracks + auto-frames — not just set a target."""
+    from autoptz.ui import mark_engine
+
+    eng = mark_engine.MarkEngineFactory(
+        MarkSession(profile="full", source="clip", max_cameras=3),
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    eng.start()
+    try:
+        eng.add_next_camera()
+        eng.add_next_camera()
+        eng.auto_track_targets(seed=7)
+        ids = eng.client.cameraModel.camera_ids()
+        assert len(ids) == 3
+        for cid in ids:
+            rec = eng.client.cameraModel.get_record(cid)
+            assert rec.tracking_enabled is True, f"tracking not enabled for {cid}"
+            assert _center_stage_on(eng, cid), f"Center Stage not on for {cid}"
+    finally:
+        eng.stop()
+
+
+def test_grown_camera_gets_tracking_and_center_stage_full_profile(qapp):
+    """Newly-grown tiles must ALSO come up with tracking + Center Stage ON (re-applied
+    as the wall grows) — the dynamic activation, not only the initial cameras."""
+    from autoptz.ui import mark_engine
+
+    eng = mark_engine.MarkEngineFactory(
+        MarkSession(profile="full", source="clip", max_cameras=3),
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    eng.start()
+    try:
+        cid2 = eng.add_next_camera()
+        assert cid2 is not None
+        rec2 = eng.client.cameraModel.get_record(cid2)
+        # The grown camera came up tracking + auto-framing without an auto_track pass.
+        assert rec2.tracking_enabled is True
+        assert _center_stage_on(eng, cid2)
+    finally:
+        eng.stop()
+
+
+def test_streams_profile_keeps_tracking_and_center_stage_off(qapp):
+    """The streams profile keeps tracking OFF and never turns on Center Stage — even on
+    grown tiles and after an auto_track pass."""
+    from autoptz.ui import mark_engine
+
+    eng = mark_engine.MarkEngineFactory(
+        MarkSession(profile="streams", source="clip", max_cameras=3),
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    eng.start()
+    try:
+        eng.add_next_camera()
+        eng.auto_track_targets(seed=3)
+        for cid in eng.client.cameraModel.camera_ids():
+            rec = eng.client.cameraModel.get_record(cid)
+            assert rec.tracking_enabled is False
+            assert _center_stage_on(eng, cid) is False
     finally:
         eng.stop()
 
@@ -216,7 +301,7 @@ def test_model_choice_primes_detector_tier():
 
     for model, expected in (("auto", "auto"), ("nano", "fast"), ("small", "balanced")):
         eng = mark_engine.MarkEngineFactory(
-            MarkSession(source="synthetic", max_cameras=2, model=model),
+            MarkSession(source="clip", max_cameras=2, model=model),
             supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
         )
         try:
@@ -238,6 +323,9 @@ def test_native_fps_to_synthetic_camera(monkeypatch):
     from autoptz.ui import mark_engine
 
     monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
+    # Stub the cache so the (res, fps) variant resolves deterministically without
+    # depending on the developer's real transcode cache or triggering a slow build.
+    _stub_cache_factory(monkeypatch, _StubCache(cached="/tmp/mark-cache/cinematic_60/var.mp4"))
     eng = mark_engine.MarkEngineFactory(
         MarkSession(source="clip", clip_id="cinematic_60", max_cameras=3),
         supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
@@ -261,7 +349,7 @@ def test_synthetic_cameras_use_session_resolution():
     from autoptz.ui import mark_engine
 
     eng = mark_engine.MarkEngineFactory(
-        MarkSession(source="synthetic", max_cameras=3, resolution="1080p"),
+        MarkSession(source="clip", max_cameras=3, resolution="1080p"),
         supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
     )
     try:
@@ -330,6 +418,53 @@ def test_clip_source_falls_back_to_anim_when_clip_missing(monkeypatch):
         assert rec.camera_config.source.type == "synthetic"
         # Falls back to the drawn scene, NOT the (missing) clip path.
         assert rec.camera_config.source.address == "anim"
+    finally:
+        eng.stop()
+
+
+def test_drawn_anim_scene_only_reachable_via_gt_env(monkeypatch):
+    """The drawn ("anim") scene is NO LONGER a user source: it is reachable only as
+    the ground-truth scene gated by AUTOPTZ_MARK_GT.  With the clip present and GT on,
+    the cameras draw the synthetic scene; with GT off they broadcast the real clip."""
+    from autoptz.ui import mark_engine
+
+    monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
+    cached = "/tmp/mark-cache/crowd/1920x1080_30fps.mp4"
+    _stub_cache_factory(monkeypatch, _StubCache(cached=cached))
+    monkeypatch.setenv("AUTOPTZ_MARK_GT", "1")
+
+    session = MarkSession(source="clip", max_cameras=2, resolution="1080p")
+    eng = mark_engine.MarkEngineFactory(
+        session,
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    try:
+        rec = eng.client.cameraModel.get_record(eng.client.cameraModel.camera_ids()[0])
+        # GT on → the drawn ground-truth scene, even though a real clip is present.
+        assert rec.camera_config.source.address == "anim"
+    finally:
+        eng.stop()
+
+
+def test_clip_present_feeds_real_clip_not_drawn_scene_without_gt(monkeypatch):
+    """Without AUTOPTZ_MARK_GT, a clip session feeds the REAL clip variant to every
+    camera — never the drawn 'anim' scene (the drawn source is removed)."""
+    from autoptz.ui import mark_engine
+
+    monkeypatch.delenv("AUTOPTZ_MARK_GT", raising=False)
+    monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
+    cached = "/tmp/mark-cache/crowd/1920x1080_30fps.mp4"
+    _stub_cache_factory(monkeypatch, _StubCache(cached=cached))
+
+    session = MarkSession(source="clip", max_cameras=2, resolution="1080p")
+    eng = mark_engine.MarkEngineFactory(
+        session,
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    try:
+        rec = eng.client.cameraModel.get_record(eng.client.cameraModel.camera_ids()[0])
+        assert rec.camera_config.source.address == cached
+        assert rec.camera_config.source.address != "anim"
     finally:
         eng.stop()
 
@@ -475,6 +610,101 @@ def test_clip_build_failure_falls_back_to_master(monkeypatch):
         eng.stop()
 
 
+# ── NDI broadcasts the selected clip (not the drawn scene) ────────────────────
+
+
+class _RecFleet:
+    """A recording stand-in for MarkNDIFleet (cyndilib absent in CI/.venv)."""
+
+    calls: list[dict] = []
+
+    def __init__(self, n, *, width, height, fps=30.0, frame_source=None):
+        type(self).calls.append(
+            {
+                "n": n,
+                "width": width,
+                "height": height,
+                "fps": fps,
+                "frame_source": frame_source,
+            }
+        )
+        self._n = n
+
+    def full_names(self, **_kwargs):
+        return [f"HOST (AutoPTZ Mark Cam {i + 1})" for i in range(self._n)]
+
+    def open(self):
+        pass
+
+    def pump_once(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def _patch_ndi_fleet(monkeypatch):
+    """Make the NDI branch usable without cyndilib: available + a recording fleet."""
+    from autoptz.benchmark import ndi_sim
+
+    _RecFleet.calls = []
+    monkeypatch.setattr(ndi_sim, "ndi_sim_available", lambda: True)
+    monkeypatch.setattr(ndi_sim, "MarkNDIFleet", _RecFleet)
+    # The first ndi:// camera is registered on the client during setup; keep the
+    # real _add_ndi_camera so the camera model is populated as in production.
+
+
+def test_ndi_fleet_built_with_clip_variant_frame_source(monkeypatch):
+    """NDI mode must broadcast the SELECTED clip (real footage), not the drawn scene.
+
+    The factory resolves the transcode-cached variant for (clip_id, resolution, fps)
+    and threads it into MarkNDIFleet as ``frame_source`` so every NDI tile shows the
+    same real video as clip mode."""
+    from autoptz.ui import mark_engine
+
+    monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
+    cached = "/tmp/mark-cache/crowd/1280x720_30fps.mp4"
+    cache = _StubCache(cached=cached)
+    _stub_cache_factory(monkeypatch, cache)
+    _patch_ndi_fleet(monkeypatch)
+
+    session = MarkSession(source="ndi", max_cameras=3, resolution="720p")
+    eng = mark_engine.MarkEngineFactory(
+        session,
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    try:
+        assert _RecFleet.calls, "the NDI fleet was never built"
+        call = _RecFleet.calls[-1]
+        # Built at the chosen resolution and fed the resolved clip variant.
+        assert call["frame_source"] == cached
+        assert (call["width"], call["height"]) == session.resolution_size()
+    finally:
+        eng.stop()
+
+
+def test_ndi_fleet_frame_source_falls_back_to_master_when_variant_fails(monkeypatch):
+    """If the variant can't build, NDI broadcasts the raw master clip (never crashes)."""
+    from autoptz.ui import mark_engine
+
+    monkeypatch.setattr(MarkSession, "clip_available", lambda self: True)
+    cache = _StubCache(cached=None, build_raises=True)
+    _stub_cache_factory(monkeypatch, cache)
+    _patch_ndi_fleet(monkeypatch)
+
+    session = MarkSession(source="ndi", max_cameras=2, resolution="720p")
+    master = session.clip_path()
+    eng = mark_engine.MarkEngineFactory(
+        session,
+        supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
+    )
+    try:
+        call = _RecFleet.calls[-1]
+        assert call["frame_source"] == master
+    finally:
+        eng.stop()
+
+
 def test_start_then_stop_is_clean():
     eng, made = _factory()
     eng.start()
@@ -576,7 +806,7 @@ def test_stop_continues_cleanup_when_supervisor_stop_raises():
             raise RuntimeError("supervisor stop boom")
 
     eng = mark_engine.MarkEngineFactory(
-        MarkSession(source="synthetic", max_cameras=2),
+        MarkSession(source="clip", max_cameras=2),
         supervisor_factory=lambda c, s: _BoomStopSup(c, s),
     )
     tmpdir = eng._tmpdir
@@ -599,7 +829,7 @@ def test_stop_removes_tmpdir_even_if_store_close_raises():
     from autoptz.ui import mark_engine
 
     eng = mark_engine.MarkEngineFactory(
-        MarkSession(source="synthetic", max_cameras=2),
+        MarkSession(source="clip", max_cameras=2),
         supervisor_factory=lambda c, s: _FakeSupervisor(c, s),
     )
     tmpdir = eng._tmpdir
@@ -622,7 +852,7 @@ def test_start_does_not_set_started_if_supervisor_start_raises():
             raise RuntimeError("supervisor start boom")
 
     eng = mark_engine.MarkEngineFactory(
-        MarkSession(source="synthetic", max_cameras=2),
+        MarkSession(source="clip", max_cameras=2),
         supervisor_factory=lambda c, s: _BoomStartSup(c, s),
     )
     try:

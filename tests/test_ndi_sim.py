@@ -34,6 +34,41 @@ def test_open_push_close_cycle() -> None:
         fleet.close()
 
 
+@_SKIP
+def test_sender_broadcasts_clip_variant_not_drawn_scene(tmp_path) -> None:
+    """NDI must broadcast the SELECTED clip (real video), not the drawn 'anim' scene.
+
+    The fix: the sender feeds the SyntheticAdapter the clip variant path the engine
+    resolved for (clip_id, resolution, fps), so every NDI tile shows the same real
+    footage as clip mode — never the procedural drawn people.
+    """
+    from autoptz.benchmark.ndi_sim import MarkNDISender
+
+    clip = str(tmp_path / "variant_1280x720_30fps.mp4")
+    sender = MarkNDISender(0, width=160, height=120, fps=30.0, frame_source=clip)
+    try:
+        # The underlying synthetic adapter is fed the clip path (loops real decode),
+        # NOT the drawn-scene address "anim".
+        assert sender._adapter._address == clip
+        assert sender._adapter._address != "anim"
+    finally:
+        sender.close()
+
+
+@_SKIP
+def test_fleet_passes_clip_variant_to_every_sender(tmp_path) -> None:
+    """A clip-variant frame source threads through to every sender in the fleet."""
+    from autoptz.benchmark.ndi_sim import MarkNDIFleet
+
+    clip = str(tmp_path / "variant.mp4")
+    fleet = MarkNDIFleet(3, width=160, height=120, fps=30.0, frame_source=clip)
+    try:
+        for s in fleet._senders:
+            assert s._adapter._address == clip
+    finally:
+        fleet.close()
+
+
 def test_resolve_full_name_matches_hostname_prefixed() -> None:
     """NDI advertises 'HOST (short)' and the ingest matches the FULL name, so the
     Mark fleet maps each short sender name to its discovered full name (the fix for
