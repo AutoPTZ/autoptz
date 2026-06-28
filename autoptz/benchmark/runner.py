@@ -29,6 +29,187 @@ log = logging.getLogger(__name__)
 _NOMINAL_FPS = 30.0  # score normaliser: sustained fps / 30 fps target
 
 
+# ── engine-reported tracking quality ──────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class QualityMetrics:
+    """Tracking-quality summary for ONE camera over a measurement window.
+
+    Derived purely from the engine's ``TelemetryMsg`` stream (no inference here):
+    how fast the target was acquired, how often / how long it was lost, identity
+    churn, how much of the window it was held, and the mean confidence while held.
+
+    Frame-count derived durations are converted to seconds via the observed mean
+    fps (falling back to the runner's ``fps_hint``).  ``time_to_first_acquire_s``
+    is ``None`` when the target was never acquired during the window.
+    """
+
+    time_to_first_acquire_s: float | None
+    total_lost_duration_s: float
+    longest_lost_duration_s: float
+    lost_event_count: int
+    reacquire_count: int
+    id_switch_count: int
+    target_hold_pct: float
+    mean_target_confidence: float
+    fps: float
+    dropped_frames: int
+
+    def to_dict(self) -> dict[str, object]:
+        """JSON-friendly dict.  ``time_to_first_acquire_s`` is ``None`` (→ JSON
+        ``null``) when the target was never acquired during the window."""
+        ttfa = self.time_to_first_acquire_s
+        return {
+            "time_to_first_acquire_s": (None if ttfa is None else round(ttfa, 3)),
+            "total_lost_duration_s": round(self.total_lost_duration_s, 3),
+            "longest_lost_duration_s": round(self.longest_lost_duration_s, 3),
+            "lost_event_count": self.lost_event_count,
+            "reacquire_count": self.reacquire_count,
+            "id_switch_count": self.id_switch_count,
+            "target_hold_pct": round(self.target_hold_pct, 2),
+            "mean_target_confidence": round(self.mean_target_confidence, 4),
+            "fps": round(self.fps, 2),
+            "dropped_frames": self.dropped_frames,
+        }
+
+
+class PerCameraQualityAccumulator:
+    """Fold a single camera's ``TelemetryMsg`` stream into ``QualityMetrics``.
+
+    Pure / headless / thread-agnostic: ``on_telemetry`` is called once per frame
+    (in arrival order) and ``finalize`` returns the summary.  The target is the
+    first ``TrackInfo`` with ``is_target`` set in each frame.  "Held" means a
+    target track is present **and** not ``lost``; the target is considered LOST
+    when its ``lost`` flag is set OR the ``is_target`` track disappears from the
+    frame entirely after it was once acquired.
+    """
+
+    def __init__(self, fps_hint: float) -> None:
+        self._fps_hint = float(fps_hint) if fps_hint and fps_hint > 0.0 else _NOMINAL_FPS
+        self._total_frames = 0
+        self._hold_frames = 0
+        self._conf_sum = 0.0
+        # First-acquire bookkeeping: frames observed before the first hold frame.
+        self._acquired = False
+        self._frames_before_acquire = 0
+        # Lost-event bookkeeping (only meaningful once acquired).
+        self._lost_event_count = 0
+        self._reacquire_count = 0
+        self._lost_frames_total = 0
+        self._cur_lost_run = 0
+        self._longest_lost_run = 0
+        self._target_was_present = False  # held on the previous frame
+        # Identity churn: the target's track_id (fallback identity_id) last seen
+        # on a target-present frame.
+        self._id_switch_count = 0
+        self._last_target_key: object | None = None
+        # Rate / drops.
+        self._fps_sum = 0.0
+        self._fps_samples = 0
+        self._dropped_frames = 0
+
+    @staticmethod
+    def _find_target(msg: Any) -> Any | None:
+        for t in getattr(msg, "tracks", None) or ():
+            if getattr(t, "is_target", False):
+                return t
+        return None
+
+    @staticmethod
+    def _target_key(track: Any) -> object:
+        tid = getattr(track, "track_id", None)
+        if tid is not None:
+            return ("tid", tid)
+        return ("iid", getattr(track, "identity_id", None))
+
+    def on_telemetry(self, msg: Any) -> None:
+        self._total_frames += 1
+
+        # Rate math: prefer msg.fps when present, else the hint.
+        msg_fps = float(getattr(msg, "fps", 0.0) or 0.0)
+        if msg_fps > 0.0:
+            self._fps_sum += msg_fps
+            self._fps_samples += 1
+
+        # Dropped frames: latest cumulative value wins (engine reports cumulative).
+        drops = getattr(msg, "dropped_frames", None)
+        if drops is not None:
+            try:
+                self._dropped_frames = int(drops)
+            except (TypeError, ValueError):
+                pass
+
+        target = self._find_target(msg)
+        held = target is not None and not getattr(target, "lost", False)
+
+        if not self._acquired:
+            if held:
+                self._acquired = True
+            else:
+                # Still hunting — this frame counts toward time-to-first-acquire.
+                self._frames_before_acquire += 1
+
+        if held:
+            self._hold_frames += 1
+            self._conf_sum += float(getattr(target, "confidence", 0.0) or 0.0)
+            # Identity churn: compare against the last target-present key.
+            key = self._target_key(target)
+            if self._last_target_key is not None and key != self._last_target_key:
+                self._id_switch_count += 1
+            self._last_target_key = key
+
+        # Lost-event transitions only matter once the target was ever acquired.
+        if self._acquired:
+            if held:
+                if not self._target_was_present and self._cur_lost_run > 0:
+                    # found again after a lost run -> close the event.
+                    self._reacquire_count += 1
+                    self._longest_lost_run = max(self._longest_lost_run, self._cur_lost_run)
+                    self._cur_lost_run = 0
+                self._target_was_present = True
+            else:
+                # Lost: flag set OR the target track vanished after acquisition.
+                if self._target_was_present:
+                    self._lost_event_count += 1  # entering a new lost run
+                self._cur_lost_run += 1
+                self._lost_frames_total += 1
+                self._target_was_present = False
+
+    def _observed_fps(self) -> float:
+        if self._fps_samples > 0:
+            return self._fps_sum / self._fps_samples
+        return self._fps_hint
+
+    def finalize(self) -> QualityMetrics:
+        fps = self._observed_fps()
+        per_frame_s = (1.0 / fps) if fps > 0.0 else 0.0
+
+        # Close any still-open lost run into the longest tally.
+        longest_run = max(self._longest_lost_run, self._cur_lost_run)
+
+        if self._acquired:
+            ttfa: float | None = self._frames_before_acquire * per_frame_s
+        else:
+            ttfa = None
+
+        hold_pct = (self._hold_frames / self._total_frames * 100.0) if self._total_frames else 0.0
+        mean_conf = (self._conf_sum / self._hold_frames) if self._hold_frames else 0.0
+
+        return QualityMetrics(
+            time_to_first_acquire_s=ttfa,
+            total_lost_duration_s=self._lost_frames_total * per_frame_s,
+            longest_lost_duration_s=longest_run * per_frame_s,
+            lost_event_count=self._lost_event_count,
+            reacquire_count=self._reacquire_count,
+            id_switch_count=self._id_switch_count,
+            target_hold_pct=hold_pct,
+            mean_target_confidence=mean_conf,
+            fps=fps,
+            dropped_frames=self._dropped_frames,
+        )
+
+
 @dataclass(frozen=True)
 class StepResult:
     """One ramp step: N cameras run for the dwell, with observed per-camera fps."""
@@ -38,6 +219,10 @@ class StepResult:
     mean_fps: float
     per_camera_fps: list[float] = field(default_factory=list)
     sustained: bool = False
+    # Engine-reported tracking quality keyed by camera id ({cid: QualityMetrics
+    # dict}).  Empty when no quality reader is wired (e.g. the math-only unit
+    # tests or the GUI/adopted path before Slice 5).
+    per_camera_quality: dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -46,6 +231,7 @@ class StepResult:
             "mean_fps": round(self.mean_fps, 2),
             "per_camera_fps": [round(f, 2) for f in self.per_camera_fps],
             "sustained": self.sustained,
+            "per_camera_quality": self.per_camera_quality,
         }
 
 
@@ -94,6 +280,7 @@ class BenchmarkRunner:
         dwell_s: float = 20.0,
         sample_fn: Callable[[int], list[float]],
         on_step: Callable[[StepResult], None] | None = None,
+        quality_reader: Callable[[], dict[str, dict]] | None = None,
     ) -> None:
         self._profile = profile
         self._floor = float(floor_fps)
@@ -101,6 +288,10 @@ class BenchmarkRunner:
         self._dwell_s = max(0.0, float(dwell_s))
         self._sample_fn = sample_fn
         self._on_step = on_step
+        # Reads the most recent {cid: QualityMetrics dict} after each sample (the
+        # headless sampler stashes it on ``last_quality``).  None -> no quality in
+        # the step results (math-only tests / adopted GUI path before Slice 5).
+        self._quality_reader = quality_reader
 
     def run(self) -> BenchmarkResult:
         steps: list[StepResult] = []
@@ -116,12 +307,19 @@ class BenchmarkRunner:
                 min_fps = 0.0
                 mean_fps = 0.0
             sustained = min_fps >= self._floor
+            quality: dict[str, dict] = {}
+            if self._quality_reader is not None:
+                try:
+                    quality = dict(self._quality_reader() or {})
+                except Exception:  # noqa: BLE001 — quality is best-effort, never aborts the ramp
+                    log.debug("benchmark quality_reader failed", exc_info=True)
             step = StepResult(
                 cameras=cameras,
                 min_fps=min_fps,
                 mean_fps=mean_fps,
                 per_camera_fps=per_camera,
                 sustained=sustained,
+                per_camera_quality=quality,
             )
             steps.append(step)
             if self._on_step is not None:
@@ -279,6 +477,20 @@ class _SupervisorSampler:
         # Pre-seed with adopted camera ids so _ensure_cameras never re-adds them.
         self._cameras: list[str] = list(cameras) if cameras else []
         self._started = bool(adopted_started)
+        # Engine-reported tracking quality from the most recent headless sample,
+        # keyed by camera id ({cid: QualityMetrics dict}).  The runner's
+        # quality_reader reads this; the adopted/GUI path (Slice 5) wires it
+        # separately.  Empty until the first headless sample finalizes.
+        self.last_quality: dict[str, dict] = {}
+        # Quality tap state (headless path only).  ``_install_quality_tap`` wraps
+        # the client's ``push_telemetry`` ONCE, *before* the supervisor spawns its
+        # workers (which capture the callback by reference at spawn time).  The
+        # wrapper fans each TelemetryMsg into ``_active_accumulators`` while a
+        # sample window is open (non-None), and is otherwise a transparent pass
+        # -through.  ``_tap_installed`` guards against double-wrapping.
+        self._tap_installed = False
+        self._active_accumulators: dict[str, PerCameraQualityAccumulator] | None = None
+        self._active_fps_hint = _NOMINAL_FPS
         # One-time warmup gate (adopted path): the detector model loads (~8s) during
         # the first dwell, so the first measured step would otherwise read ~0 fps →
         # "0 sustained" and the ramp stops immediately.  ``_warmed`` is flipped True
@@ -387,33 +599,79 @@ class _SupervisorSampler:
             self._warmup(reader)
             self._dwell_observe(dwell_s)
             return [reader(self._client, cid) for cid in self._cameras[:n]]
-        had = len(self._cameras)
-        self._ensure_cameras(n)
-        if not self._started:
-            # run_pump=False: we pump tick() ourselves so the dwell is bounded and
-            # deterministic (no UI timer in a headless benchmark).
-            self._sup.start(run_pump=False)
-            self._started = True
-        elif len(self._cameras) > had:
-            # New cameras were appended this step.  The supervisor spawns workers
-            # for the cameras present in the model at start() time, so restart it
-            # to pick up the freshly added set.
-            self._sup.stop()
-            self._sup.start(run_pump=False)
+        # Install the telemetry tap BEFORE the supervisor spawns workers — the
+        # supervisor captures push_telemetry by reference at spawn time, so a tap
+        # installed afterward would be bypassed.
+        self._install_quality_tap()
+        # Open the quality window now so every TelemetryMsg from this sample —
+        # including any the worker emits at start() — folds into a per-camera
+        # accumulator.  ``fps_hint`` seeds the rate math until the stream reports
+        # its own fps.
+        fps_hint = float(getattr(self._profile, "target_fps", 0.0) or 0.0) or _NOMINAL_FPS
+        accumulators: dict[str, PerCameraQualityAccumulator] = {}
+        self._active_fps_hint = fps_hint
+        self._active_accumulators = accumulators
+        try:
+            had = len(self._cameras)
+            self._ensure_cameras(n)
+            if not self._started:
+                # run_pump=False: we pump tick() ourselves so the dwell is bounded
+                # and deterministic (no UI timer in a headless benchmark).
+                self._sup.start(run_pump=False)
+                self._started = True
+            elif len(self._cameras) > had:
+                # New cameras were appended this step.  The supervisor spawns
+                # workers for the cameras present in the model at start() time, so
+                # restart it to pick up the freshly added set.
+                self._sup.stop()
+                self._sup.start(run_pump=False)
 
-        deadline = time.monotonic() + max(0.0, dwell_s)
-        ticks = 0
-        while ticks < max_ticks and (ticks == 0 or time.monotonic() < deadline):
-            self._sup.tick()
-            # Deliver any telemetry the worker thread queued onto this thread so
-            # the model's fps reflects live frames (no-op for synchronous fakes).
+            deadline = time.monotonic() + max(0.0, dwell_s)
+            ticks = 0
+            while ticks < max_ticks and (ticks == 0 or time.monotonic() < deadline):
+                self._sup.tick()
+                # Deliver any telemetry the worker thread queued onto this thread so
+                # the model's fps reflects live frames (no-op for synchronous fakes).
+                self._drain_events()
+                ticks += 1
+                if tick_sleep_s > 0.0:
+                    time.sleep(tick_sleep_s)
+            # Final drain so the last queued telemetry lands before we read fps.
             self._drain_events()
-            ticks += 1
-            if tick_sleep_s > 0.0:
-                time.sleep(tick_sleep_s)
-        # Final drain so the last queued telemetry lands before we read fps.
-        self._drain_events()
+        finally:
+            self._active_accumulators = None
+
+        self.last_quality = {cid: acc.finalize().to_dict() for cid, acc in accumulators.items()}
         return [reader(self._client, cid) for cid in self._cameras[:n]]
+
+    def _install_quality_tap(self) -> None:
+        """Wrap the client's ``push_telemetry`` once so each pushed ``TelemetryMsg``
+        also feeds the active per-camera quality accumulator.
+
+        Installed before the supervisor spawns its workers (they capture the
+        callback by reference at spawn time).  Transparent when no sample window is
+        open (``_active_accumulators is None``): it simply forwards to the original.
+        """
+        if self._tap_installed:
+            return
+        original = getattr(self._client, "push_telemetry", None)
+        if original is None:
+            return
+
+        def tapped(msg: Any) -> None:
+            sink = self._active_accumulators
+            if sink is not None:
+                cid = getattr(msg, "camera_id", None)
+                if cid is not None:
+                    acc = sink.get(cid)
+                    if acc is None:
+                        acc = PerCameraQualityAccumulator(self._active_fps_hint)
+                        sink[cid] = acc
+                    acc.on_telemetry(msg)
+            original(msg)
+
+        self._client.push_telemetry = tapped  # type: ignore[method-assign]
+        self._tap_installed = True
 
     def close(self) -> None:
         # Never tear down an ADOPTED supervisor — the Mark window owns its
@@ -475,6 +733,10 @@ def run_benchmark(
             fps_reader=fps_reader,
         )
 
+    def quality_reader() -> dict[str, dict]:
+        # Read whatever the sampler finalized for the most recent step.
+        return dict(getattr(sampler, "last_quality", {}) or {})
+
     def on_step(step: StepResult) -> None:
         mark = "ok " if step.sustained else "STOP"
         print(
@@ -490,6 +752,7 @@ def run_benchmark(
             dwell_s=dwell_s,
             sample_fn=sample_fn,
             on_step=on_step,
+            quality_reader=quality_reader,
         )
         result = runner.run()
     finally:
