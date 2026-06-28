@@ -270,6 +270,14 @@ def collect_services(*, engine_running: bool, engine_ep: str) -> list[dict[str, 
 _PROC: Any | None = None
 _PRIMED = False
 
+# Child processes whose CPU/RAM belong to the app's real footprint but live outside
+# this PID: the experimental process-per-camera workers (one OS process per camera)
+# and the go2rtc helper.  ``cpu_percent`` state lives on each psutil.Process object,
+# so we cache + prime them once and reuse the SAME instances across polls — sampling
+# only the GUI PID made "App CPU" undercount badly ("not accounting for the new
+# process").  Keyed by pid; pruned as children die.
+_CHILD_PROCS: dict[int, Any] = {}
+
 # A short snapshot cache so multiple callers in the same beat share ONE sample.
 # ``psutil.cpu_percent(interval=None)`` returns the load since the *previous*
 # call, so when the status bar and the Services panel each call this on their own
@@ -290,10 +298,13 @@ _CACHE_TTL_S = 1.0
 _RUSAGE_INFO_V2 = 2
 
 
-def _app_memory_bytes(proc: Any) -> int:
-    """Honest process memory: macOS phys_footprint, else RSS.
+def _proc_memory_bytes(pid: int, proc: Any) -> int:
+    """Honest per-process memory: macOS phys_footprint for *pid*, else RSS.
 
-    *proc* is a ``psutil.Process`` used for the cross-platform RSS fallback.
+    *pid* selects which process the macOS ``proc_pid_rusage`` reads (so a child
+    camera process reports its OWN footprint, not the parent's); *proc* is a
+    ``psutil.Process`` used for the cross-platform RSS fallback and when the rusage
+    call fails (e.g. an unreadable / vanished pid).
     """
     if sys.platform == "darwin":
         try:
@@ -310,13 +321,61 @@ def _app_memory_bytes(proc: Any) -> int:
             libc = ctypes.CDLL("/usr/lib/libSystem.dylib")
             buf = _RUsageV2()
             rc = libc.proc_pid_rusage(
-                ctypes.c_int(os.getpid()), ctypes.c_int(_RUSAGE_INFO_V2), ctypes.byref(buf)
+                ctypes.c_int(int(pid)), ctypes.c_int(_RUSAGE_INFO_V2), ctypes.byref(buf)
             )
             if rc == 0:
                 return int(buf._f7)  # ri_phys_footprint
         except Exception:  # noqa: BLE001 — fall back to RSS on any failure
             pass
-    return int(proc.memory_info().rss)
+    try:
+        return int(proc.memory_info().rss)
+    except Exception:  # noqa: BLE001 — a vanished child must not break the sample
+        return 0
+
+
+def _app_tree_cpu(parent: Any) -> float:
+    """Total ``cpu_percent`` of *parent*'s tracked descendants (each read once).
+
+    Keeps :data:`_CHILD_PROCS` in sync with the live descendant set: a descendant
+    seen for the FIRST time is *primed* (its first read establishes the 0 baseline)
+    and contributes 0 this call; from the next call on it contributes real CPU —
+    exactly how the main process is primed.  Real reads always come from the cached
+    (primed) instance, because ``children()`` mints a fresh psutil.Process per call
+    and a fresh object's ``cpu_percent`` baseline would reset to ~0 every time.
+    Dead descendants are pruned.  The parent's own CPU is added by the caller.
+    """
+    try:
+        live = list(parent.children(recursive=True))  # listed ONCE per call
+    except Exception:  # noqa: BLE001 — psutil may briefly fail mid-teardown
+        return _sum_primed_cpu(list(_CHILD_PROCS.values()))
+    live_pids = {c.pid for c in live}
+    newcomers = [c for c in live if c.pid not in _CHILD_PROCS]
+
+    for pid in [p for p in _CHILD_PROCS if p not in live_pids]:
+        _CHILD_PROCS.pop(pid, None)
+
+    total = _sum_primed_cpu(list(_CHILD_PROCS.values()))
+    for child in newcomers:
+        try:
+            child.cpu_percent(interval=None)  # prime only — 0 baseline, not summed yet
+            _CHILD_PROCS[child.pid] = child
+        except Exception:  # noqa: BLE001 — child vanished between listing and priming
+            _CHILD_PROCS.pop(child.pid, None)
+    return total
+
+
+def _sum_primed_cpu(procs: list[Any]) -> float:
+    """Sum ``cpu_percent(interval=None)`` over already-primed procs, skipping any
+    that raise (a child that died between discovery and this sample)."""
+    total = 0.0
+    for proc in procs:
+        try:
+            total += float(proc.cpu_percent(interval=None))
+        except Exception:  # noqa: BLE001 — drop the vanished child from the cache
+            pid = getattr(proc, "pid", None)
+            if pid is not None:
+                _CHILD_PROCS.pop(pid, None)
+    return total
 
 
 def system_metrics() -> dict[str, Any]:
@@ -363,14 +422,18 @@ def system_metrics() -> dict[str, Any]:
         out["cpu_percent"] = round(float(psutil.cpu_percent(interval=None)), 1)
         vm = psutil.virtual_memory()
         out["mem_percent"] = round(float(vm.percent), 1)
+        # "App CPU/Mem" spans the whole app process tree, not just this PID: the
+        # experimental process-per-camera workers (and go2rtc) run in their OWN
+        # processes, so sampling only os.getpid() made App CPU read tiny while the
+        # machine was busy.  Sum the GUI process + its live descendants.
         # Process CPU can exceed 100% across cores; normalise to the whole machine.
-        out["app_cpu_percent"] = round(
-            float(_PROC.cpu_percent(interval=None)) / float(ncpu),
-            1,
-        )
+        app_cpu = float(_PROC.cpu_percent(interval=None)) + _app_tree_cpu(_PROC)
+        out["app_cpu_percent"] = round(app_cpu / float(ncpu), 1)
         # Honest "App Mem" — phys_footprint on macOS (matches Activity Monitor),
-        # not the RSS that mmap'd model files inflate.
-        app_mem = _app_memory_bytes(_PROC)
+        # not the RSS that mmap'd model files inflate — summed over the same tree.
+        app_mem = _proc_memory_bytes(_PROC.pid, _PROC)
+        for pid, child in list(_CHILD_PROCS.items()):
+            app_mem += _proc_memory_bytes(pid, child)
         out["app_rss_mb"] = round(app_mem / (1 << 20), 1)
         total = max(1, int(getattr(vm, "total", 0) or 0))
         out["app_mem_percent"] = round((float(app_mem) / float(total)) * 100.0, 1)

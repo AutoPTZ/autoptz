@@ -260,23 +260,168 @@ class TestSystemMetricsShape:
         # RSS. Feed a FAKE proc with a fixed RSS so the fallback is deterministic —
         # a live process's RSS churns between two reads, which made the old
         # `mem == rss` assertion flaky on non-macOS CI.
+        import os
         import sys
         import types
 
-        from autoptz.engine.runtime.diagnostics import _app_memory_bytes
+        from autoptz.engine.runtime.diagnostics import _proc_memory_bytes
 
         sentinel_rss = 7_000_000_003  # implausible exact value
         fake = types.SimpleNamespace(memory_info=lambda: types.SimpleNamespace(rss=sentinel_rss))
 
-        mem = _app_memory_bytes(fake)
+        # Pass THIS process's pid: macOS reads its real phys_footprint for that pid.
+        mem = _proc_memory_bytes(os.getpid(), fake)
         assert mem > 0
         if sys.platform == "darwin":
-            # macOS reads the real proc_pid_rusage phys_footprint of THIS process
-            # (ignoring the passed proc), so it must differ from the sentinel RSS.
+            # macOS reads the real proc_pid_rusage phys_footprint of the given pid,
+            # so it must differ from the sentinel RSS fallback.
             assert mem != sentinel_rss
         else:
             # Non-macOS returns the proc's RSS straight through — now exact.
             assert mem == sentinel_rss
+
+    def test_unreadable_pid_falls_back_to_rss(self) -> None:
+        # A child pid the rusage call can't read (or any non-darwin path) must fall
+        # back to the proc's RSS rather than raising or returning 0.
+        import types
+
+        from autoptz.engine.runtime.diagnostics import _proc_memory_bytes
+
+        sentinel_rss = 4_242_424_247
+        fake = types.SimpleNamespace(memory_info=lambda: types.SimpleNamespace(rss=sentinel_rss))
+        # An obviously-invalid pid: proc_pid_rusage fails → RSS fallback on every OS.
+        mem = _proc_memory_bytes(-1, fake)
+        assert mem == sentinel_rss
+
+
+def _burn_cpu() -> None:  # pragma: no cover — runs in a spawned child
+    """Tight loop that pins one core; the parent measures whether it's counted."""
+    x = 0
+    while True:
+        x = (x * 1_000_003 + 7) % 2_147_483_647
+
+
+class TestAppProcessTreeCpu:
+    """``system_metrics`` must count child processes (process-per-camera workers,
+    go2rtc) in App CPU/Mem — the GUI PID alone undercounts badly once cameras run
+    in their own processes ('not accounting for the new process')."""
+
+    def _reset(self, monkeypatch) -> None:
+        from autoptz.engine.runtime import diagnostics as diag
+
+        for name, val in (
+            ("_PROC", None),
+            ("_PRIMED", False),
+            ("_CHILD_PROCS", {}),
+            ("_CACHE", None),
+            ("_CACHE_T", 0.0),
+        ):
+            monkeypatch.setattr(diag, name, val)
+
+    def test_tree_cpu_primes_newcomers_then_counts_them(self, monkeypatch) -> None:
+        from autoptz.engine.runtime import diagnostics as diag
+
+        monkeypatch.setattr(diag, "_CHILD_PROCS", {})
+
+        class FakeChild:
+            def __init__(self, pid: int, value: float) -> None:
+                self.pid, self.value, self.calls = pid, value, 0
+
+            def cpu_percent(self, interval=None):  # noqa: ANN001
+                self.calls += 1
+                return self.value
+
+        child = FakeChild(101, 40.0)
+
+        class FakeParent:
+            def children(self, recursive=False):  # noqa: ANN001
+                return [child]
+
+        parent = FakeParent()
+        # First sight → primed only (0 baseline), contributes nothing this round.
+        assert diag._app_tree_cpu(parent) == 0.0
+        # Known on the next round → its real CPU is counted.
+        assert diag._app_tree_cpu(parent) == 40.0
+        assert child.calls == 2
+
+    def test_tree_cpu_reads_the_primed_instance_across_calls(self, monkeypatch) -> None:
+        # children() hands back a FRESH Process object each call (like psutil); the
+        # real read must come from the cached/primed instance, not the fresh one —
+        # else the cpu_percent baseline resets every call and CPU reads as ~0.
+        from autoptz.engine.runtime import diagnostics as diag
+
+        monkeypatch.setattr(diag, "_CHILD_PROCS", {})
+
+        class FakeChild:
+            def __init__(self, pid: int, value: float) -> None:
+                self.pid, self.value, self.calls = pid, value, 0
+
+            def cpu_percent(self, interval=None):  # noqa: ANN001
+                self.calls += 1
+                return self.value
+
+        primed = FakeChild(101, 33.0)
+        fresh = FakeChild(101, 999.0)
+        batches = iter([[primed], [fresh]])
+
+        class FakeParent:
+            def children(self, recursive=False):  # noqa: ANN001
+                return next(batches)
+
+        parent = FakeParent()
+        assert diag._app_tree_cpu(parent) == 0.0  # primes `primed`
+        assert diag._app_tree_cpu(parent) == 33.0  # reads cached `primed`, not `fresh`
+        assert primed.calls == 2
+        assert fresh.calls == 0  # the fresh duplicate-pid object is never sampled
+
+    def test_tree_cpu_drops_dead_children(self, monkeypatch) -> None:
+        from autoptz.engine.runtime import diagnostics as diag
+
+        monkeypatch.setattr(diag, "_CHILD_PROCS", {})
+
+        class FakeChild:
+            def __init__(self, pid: int) -> None:
+                self.pid = pid
+
+            def cpu_percent(self, interval=None):  # noqa: ANN001
+                return 50.0
+
+        child = FakeChild(7)
+        batches = iter([[child], []])
+
+        class FakeParent:
+            def children(self, recursive=False):  # noqa: ANN001
+                return next(batches)
+
+        parent = FakeParent()
+        diag._app_tree_cpu(parent)  # track + prime pid 7
+        assert 7 in diag._CHILD_PROCS
+        diag._app_tree_cpu(parent)  # pid 7 gone → pruned
+        assert 7 not in diag._CHILD_PROCS
+
+    def test_app_cpu_percent_counts_a_busy_child(self, monkeypatch) -> None:
+        import multiprocessing as mp
+        import time
+
+        psutil = pytest.importorskip("psutil")
+        from autoptz.engine.runtime import diagnostics as diag
+
+        self._reset(monkeypatch)
+        ncpu = psutil.cpu_count(logical=True) or 1
+        one_core_share = 100.0 / ncpu
+
+        proc = mp.get_context().Process(target=_burn_cpu, daemon=True)
+        proc.start()
+        try:
+            diag.system_metrics()  # prime main + discover/prime the child (child → 0)
+            time.sleep(1.2)  # exceed the 1 s cache TTL; let the child pin a core
+            metrics = diag.system_metrics()  # recompute → child CPU now included
+            assert metrics["available"]
+            # Without the fix the parent is idle (~0%); with it, ≈ one core's share.
+            assert metrics["app_cpu_percent"] > 0.4 * one_core_share, metrics["app_cpu_percent"]
+        finally:
+            proc.terminate()
+            proc.join(timeout=5)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
