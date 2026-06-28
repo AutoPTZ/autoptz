@@ -968,11 +968,15 @@ class Supervisor:
             # detector in the background and serves [] until it is in), so this returns
             # near-instantly — it does not block the caller for the whole model load.
             if not ready.wait(timeout=30.0):
-                log.warning("model-server slow to accept requests; cameras get empty "
-                            "detections until it catches up.")
+                log.warning(
+                    "model-server slow to accept requests; cameras get empty "
+                    "detections until it catches up."
+                )
             log.info("model-server ON — 1 shared detector serving %d camera(s)", len(camera_ids))
         except Exception:  # noqa: BLE001 — never load-bearing; children fall back
-            log.warning("model-server init failed; cameras build their own detector.", exc_info=True)
+            log.warning(
+                "model-server init failed; cameras build their own detector.", exc_info=True
+            )
             # Clear the half-built handles so children fall back to a LOCAL detector
             # instead of delegating to a server that never came up.
             self._model_server_proc = None

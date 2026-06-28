@@ -50,7 +50,11 @@ def discover(n: int, timeout_s: float = 20.0) -> list[str]:
                     resolved[short] = full
         time.sleep(0.05)
     f.close()
-    return [resolved[f"AutoPTZ Bench Cam {i + 1}"] for i in range(n) if f"AutoPTZ Bench Cam {i + 1}" in resolved]
+    return [
+        resolved[f"AutoPTZ Bench Cam {i + 1}"]
+        for i in range(n)
+        if f"AutoPTZ Bench Cam {i + 1}" in resolved
+    ]
 
 
 def main() -> None:
@@ -118,8 +122,14 @@ def main() -> None:
                     "qd": int(getattr(tm, "ndi_queue_depth", -1)),
                 }
             )
-        samples.append({"app_cpu": m.get("app_cpu_percent", 0.0), "sys_cpu": m.get("cpu_percent", 0.0),
-                        "app_mem_mb": m.get("app_rss_mb", 0.0), "per": per})
+        samples.append(
+            {
+                "app_cpu": m.get("app_cpu_percent", 0.0),
+                "sys_cpu": m.get("cpu_percent", 0.0),
+                "app_mem_mb": m.get("app_rss_mb", 0.0),
+                "per": per,
+            }
+        )
 
     # Steady-state aggregation (all collected samples are post-warmup).
     def med(xs):
@@ -159,7 +169,9 @@ def main() -> None:
         # fast); detect_active_pct is the share of camera-samples where detection
         # executed at all (0 => detection dead). stall_s_max flags a wedged pipeline.
         "detect_ms_median": med(detect_all),
-        "detect_active_pct": round(100.0 * len(detect_all) / max(1, sum(len(s["per"]) for s in samples)), 1),
+        "detect_active_pct": round(
+            100.0 * len(detect_all) / max(1, sum(len(s["per"]) for s in samples)), 1
+        ),
         "stall_s_max": round(max(stall_all), 1) if stall_all else 0.0,
         "cams_reporting": len(last),
     }

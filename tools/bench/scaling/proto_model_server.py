@@ -91,7 +91,9 @@ def _server_proc(shm_names, req_q, resp_qs, w, h, ready_ev, stop_ev, served_q): 
 
     from autoptz.engine.pipeline.pool import build_inference_pool
 
-    pool = build_inference_pool(detector_tier="auto", unified_pose=False, allow_model_download=False)
+    pool = build_inference_pool(
+        detector_tier="auto", unified_pose=False, allow_model_download=False
+    )
     detector = pool.detector() if pool is not None else None
     views = {}
     shms = {}
@@ -137,7 +139,11 @@ def discover(n, timeout_s=20.0):
                     resolved[short] = full
         time.sleep(0.05)
     f.close()
-    return [resolved[f"AutoPTZ Bench Cam {i + 1}"] for i in range(n) if f"AutoPTZ Bench Cam {i + 1}" in resolved]
+    return [
+        resolved[f"AutoPTZ Bench Cam {i + 1}"]
+        for i in range(n)
+        if f"AutoPTZ Bench Cam {i + 1}" in resolved
+    ]
 
 
 def main():
@@ -171,13 +177,21 @@ def main():
     ready_ev = ctx.Event()
     stop_ev = ctx.Event()
 
-    server = ctx.Process(target=_server_proc, args=(shm_names, req_q, resp_qs, W, H, ready_ev, stop_ev, served_q), daemon=True)
+    server = ctx.Process(
+        target=_server_proc,
+        args=(shm_names, req_q, resp_qs, W, H, ready_ev, stop_ev, served_q),
+        daemon=True,
+    )
     server.start()
     ready_ev.wait(timeout=60)  # wait for the model to load
 
     cams = []
     for cid, ndi in zip(cam_ids, names, strict=True):
-        p = ctx.Process(target=_camera_proc, args=(cid, ndi, shm_names[cid], req_q, resp_qs[cid], W, H, FPS, DUR, result_q), daemon=True)
+        p = ctx.Process(
+            target=_camera_proc,
+            args=(cid, ndi, shm_names[cid], req_q, resp_qs[cid], W, H, FPS, DUR, result_q),
+            daemon=True,
+        )
         p.start()
         cams.append(p)
 
@@ -234,7 +248,9 @@ def main():
         "cams_ok": sum(1 for r in results if r[3] == "ok"),
         "capture_fps_median": round(cap_fps[len(cap_fps) // 2], 1) if cap_fps else 0.0,
         "capture_fps_min": round(min(cap_fps), 1) if cap_fps else 0.0,
-        "detect_per_s_per_cam_median": round(sorted(det_fps)[len(det_fps) // 2], 2) if det_fps else 0.0,
+        "detect_per_s_per_cam_median": round(sorted(det_fps)[len(det_fps) // 2], 2)
+        if det_fps
+        else 0.0,
         "server_detections_per_s": round(served / DUR, 1) if served >= 0 else -1,
         "total_cpu_pct_of_machine": round(cpu / ncpu, 1),
         "total_rss_gb": round(rss / (1 << 30), 2),
