@@ -69,7 +69,7 @@ class AboutMarkDialog(QDialog):
         form.addRow(
             "Guide",
             _wrap(
-                "Pick a source (synthetic or NDI) and a camera count, then Start. "
+                "Pick a source (bundled clip or NDI) and a camera count, then Start. "
                 "Mark adds fake cameras one at a time and reports the sustained "
                 "frame-rate at each step."
             ),
