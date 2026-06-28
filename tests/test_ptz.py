@@ -1050,3 +1050,70 @@ class TestSlewRateLimit:
         high = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.45, True, t=0.8)[0]  # centered now
         lower = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.45, True, t=0.9)[0]
         assert 0.0 <= lower < high  # decelerating, not slamming to 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 0b — command_send_ms instrumentation (measured PTZ transport wall time)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _SlowBackend(MockBackend):
+    """MockBackend whose move_velocity blocks a fixed ms, to measure send time."""
+
+    def __init__(self, send_delay_s: float) -> None:
+        super().__init__()
+        self._send_delay_s = send_delay_s
+
+    def move_velocity(self, pan: float, tilt: float, zoom: float = 0.0) -> None:
+        time.sleep(self._send_delay_s)
+        super().move_velocity(pan, tilt, zoom)
+
+
+class TestCommandSendMs:
+    def test_send_ms_zero_before_first_send(self) -> None:
+        ctrl = PTZController(MockBackend(), _cfg(kp=0.6))
+        assert ctrl.last_cmd_send_ms() == 0.0
+
+    def test_send_ms_measured_on_a_real_send(self) -> None:
+        ctrl = PTZController(_SlowBackend(send_delay_s=0.02), _cfg(kp=0.6))
+        # First non-centered step fires move_velocity (command changed from 0).
+        ctrl.step((1.0, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
+        sent = ctrl.last_cmd_send_ms()
+        # Loosely gated: a real send happened and took at least a few ms.  (Timing
+        # is not asserted tightly so a loaded CI runner can't flake it.)
+        assert sent > 0.0
+
+    def test_send_ms_holds_when_command_suppressed(self) -> None:
+        """A tick whose command is unchanged does NOT fire a send → value holds."""
+        backend = _SlowBackend(send_delay_s=0.02)
+        ctrl = PTZController(backend, _cfg(kp=0.6))
+        ctrl.step((1.0, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
+        first = ctrl.last_cmd_send_ms()
+        n_sends_before = len(backend.velocity_calls)
+        # Re-step with the SAME error → identical command → change-suppression skips
+        # the backend send, so last_cmd_send_ms must be untouched.
+        ctrl.step((1.0, 0.0), (0.0, 0.0), 0.45, True, t=0.05)
+        assert len(backend.velocity_calls) == n_sends_before  # suppressed
+        assert ctrl.last_cmd_send_ms() == first
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 0b — PTZConfig.actuation_estimate_ms (configured camera-motor lag)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestActuationEstimateConfig:
+    def test_default_is_forty_ms(self) -> None:
+        cfg = PTZConfig()
+        assert cfg.actuation_estimate_ms == 40.0
+
+    def test_accepts_in_range_value(self) -> None:
+        cfg = PTZConfig(actuation_estimate_ms=120.0)
+        assert cfg.actuation_estimate_ms == 120.0
+
+    def test_clamps_reject_out_of_range(self) -> None:
+        from pydantic import ValidationError
+
+        for bad in (-1.0, 1000.1):
+            with pytest.raises(ValidationError):
+                PTZConfig(actuation_estimate_ms=bad)

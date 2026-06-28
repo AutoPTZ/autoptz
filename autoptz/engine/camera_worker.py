@@ -225,6 +225,26 @@ def _ptz_pump_enabled() -> bool:
     )
 
 
+def _true_latency_lead_enabled() -> bool:
+    """Lead the PTZ aim by the MEASURED end-to-end latency (default OFF).
+
+    When OFF (the default — ``AUTOPTZ_TRUE_LATENCY_LEAD`` unset/0), the controller
+    is fed the legacy ``ingest+inference`` latency exactly as before (zero
+    behavior change).  When ON, it's fed the measured whole-pipeline dead time
+    (capture age + command send + configured actuation estimate).  The
+    decomposition is measured for telemetry either way; this flag only changes
+    which value steers the lead.
+    """
+    import os
+
+    return os.environ.get("AUTOPTZ_TRUE_LATENCY_LEAD", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _appearance_guarded(method: Callable) -> Callable:
     """Serialise a target/identity method under the worker's ``_appearance_lock``.
 
@@ -566,10 +586,18 @@ class CameraWorker:
         self._frame_lock = threading.Lock()
         self._latest_frame: NDArray[np.uint8] | None = None
         self._latest_frame_id = 0
+        # Phase 0b — monotonic capture timestamp of the latest frame, stamped by
+        # the capture thread under ``_frame_lock`` so the inference thread can
+        # measure how old the driving frame is when auto-control commands the
+        # camera (``capture_age_ms``).  0.0 until the first frame is captured.
+        self._latest_capture_ts = 0.0
         self._frame_ready = threading.Event()
         self._inference_start = threading.Event()
         self._inference_start.set()
         self._current_inference_frame_id = 0
+        # Capture timestamp of the frame the inference thread is currently driving
+        # from, read under ``_frame_lock`` alongside the frame.  0.0 until stamped.
+        self._current_inference_capture_ts = 0.0
         # Most recent inference output, read by the capture thread for telemetry.
         self._last_tracks: list[TrackInfo] = []
         self._last_tracks_frame_id = 0
@@ -673,6 +701,14 @@ class CameraWorker:
         # in milliseconds, published in telemetry for the live stats overlay.
         self._latency_ms = 0.0
         self._inference_ms = 0.0
+        # Phase 0b — true end-to-end latency decomposition (ms), measured each
+        # auto-control tick in _drive_ptz_auto and surfaced in telemetry.  These
+        # are measured-only by default; only when AUTOPTZ_TRUE_LATENCY_LEAD is on
+        # does ``end_to_end_ms`` actually steer the controller's lead.
+        self._true_latency_lead = _true_latency_lead_enabled()
+        self._capture_age_ms = 0.0
+        self._command_send_ms = 0.0
+        self._end_to_end_ms = 0.0
         self._ingest_ms = 0.0
         self._detect_ms = 0.0
         self._track_ms = 0.0
@@ -1401,9 +1437,26 @@ class CameraWorker:
                 ctrl.note_manual_hold()
             return
 
-        # Tell the controller how long this machine's capture+inference pipeline
-        # takes so its lead time anticipates the real delay (lead_time_auto).
-        ctrl.set_loop_latency(self._latency_ms / 1000.0)
+        # Phase 0b — measure the true end-to-end control dead time decomposition.
+        # ``capture_age_ms`` = how old the driving frame is at command time (spans
+        # ingest read + handoff wait + detect + track); ``command_send_ms`` = the
+        # PTZ transport send wall time from the controller's last real send;
+        # ``actuation_estimate_ms`` = the configured (not observable) motor lag.
+        cap_ts = self._current_inference_capture_ts
+        self._capture_age_ms = (now - cap_ts) * 1000.0 if cap_ts > 0 else 0.0
+        self._command_send_ms = float(getattr(ctrl, "last_cmd_send_ms", lambda: 0.0)())
+        actuation_ms = float(getattr(self.config.ptz, "actuation_estimate_ms", 40.0))
+        self._end_to_end_ms = self._capture_age_ms + self._command_send_ms + actuation_ms
+
+        # Tell the controller how long this machine's pipeline takes so its lead
+        # time anticipates the real delay (lead_time_auto).  DEFAULT (flag off) =
+        # the legacy ingest+inference latency, unchanged.  Only when
+        # AUTOPTZ_TRUE_LATENCY_LEAD is on do we feed the measured end-to-end dead
+        # time so the lead also covers transport + actuation.
+        if self._true_latency_lead:
+            ctrl.set_loop_latency(self._end_to_end_ms / 1000.0)
+        else:
+            ctrl.set_loop_latency(self._latency_ms / 1000.0)
 
         # Global ``tracking`` switch hard-gates auto-following: when off we never
         # drive the camera toward a target (the controller is stepped idle so it
@@ -2687,9 +2740,12 @@ class CameraWorker:
 
                         # Hand the newest frame to the inference thread (latest wins)
                         # so detection/face never gate the capture+preview rate.
+                        # Stamp the capture instant (reuse ``now``) so auto-control
+                        # can measure how old the driving frame is (capture_age_ms).
                         with self._frame_lock:
                             self._latest_frame = frame
                             self._latest_frame_id += 1
+                            self._latest_capture_ts = now
                         self._frames_captured += 1
                         self._frame_ready.set()
 
@@ -2814,6 +2870,7 @@ class CameraWorker:
                     with self._frame_lock:
                         frame = self._latest_frame
                         fid = self._latest_frame_id
+                        self._current_inference_capture_ts = self._latest_capture_ts
                     if frame is None or fid == last_id:
                         continue
                     last_id = fid
@@ -4998,6 +5055,9 @@ class CameraWorker:
         # a streaming-but-box-blind camera has no tracks.
         if last_error is None and self._infer_last_error is not None:
             last_error = self._infer_last_error
+        # Phase 0a — per-source frame-delivery telemetry (NDI-only real values;
+        # other sources return {} and fall back to the worker's own counters).
+        dm = self._delivery_metrics()
         msg = TelemetryMsg(
             camera_id=self.camera_id,
             seq=self._seq,
@@ -5013,6 +5073,15 @@ class CameraWorker:
             track_ms=self._track_ms,
             face_ms=self._face_ms,
             pose_ms=self._pose_ms,
+            capture_age_ms=self._capture_age_ms,
+            command_send_ms=self._command_send_ms,
+            actuation_estimate_ms=float(getattr(self.config.ptz, "actuation_estimate_ms", 40.0)),
+            end_to_end_ms=self._end_to_end_ms,
+            frames_delivered=int(dm.get("frames_delivered", self._frames_captured)),
+            frames_dropped_est=int(dm.get("frames_dropped_est", 0)),
+            delivered_fps=float(dm.get("delivered_fps", self._fps)),
+            source_fps=float(dm.get("source_fps", 0.0)),
+            ndi_queue_depth=int(dm.get("ndi_queue_depth", -1)),
             streaming=self._frame_w > 0,
             source_fps_cap=self._source_fps_cap(),
             target_fps=self._target_fps(),
@@ -5058,6 +5127,24 @@ class CameraWorker:
         except Exception:  # noqa: BLE001
             return 0.0
         return float(cap) if cap else 0.0
+
+    def _delivery_metrics(self) -> dict[str, float | int]:
+        """Per-source frame-delivery telemetry from the running frame source.
+
+        Empty ``{}`` when no source, no method, or it raises — the caller then
+        falls back to the worker's own frame counters (Phase 0a).
+        """
+        src = self._source
+        if src is None:
+            return {}
+        fn = getattr(src, "delivery_metrics", None)
+        if not callable(fn):
+            return {}
+        try:
+            m = fn()
+        except Exception:  # noqa: BLE001
+            return {}
+        return m if isinstance(m, dict) else {}
 
     def _ground_truth(self) -> list[GroundTruthPerson]:
         """Synthetic-scene ground truth for the AutoPTZ Mark accuracy bench.

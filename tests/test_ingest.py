@@ -780,6 +780,137 @@ class TestNDIReadFrame:
         assert adapter._color_format_pref == "bgra"
 
 
+# ── Phase 0a: per-source frame-drop + queue telemetry ──────────────────────────
+
+
+class TestNDIDeliveryMetrics:
+    """NDIAdapter estimates source-vs-delivered drops over a rolling 1.0 s window.
+
+    FrameSync ALWAYS returns the latest frame (never "no new frame") so true
+    drops aren't directly observable — they're estimated from ``source_fps`` vs
+    ``delivered_fps`` over the window.  These tests drive a fake monotonic clock
+    and a real (non-None) frame so only the rolling-window math is exercised.
+    """
+
+    def _adapter(self, fourcc: str = "BGRA") -> NDIAdapter:
+        buf = np.full(_H * _W * 4, 128, dtype=np.uint8)  # BGRA layout
+        adapter = NDIAdapter("cam-ndi-metrics", ndi_name="SRC (CAM)")
+        adapter._color_format_pref = "fastest"
+        vf = MagicMock()
+        vf.xres = _W
+        vf.yres = _H
+        vf.get_array.return_value = buf
+        vf.get_fourcc.return_value = types.SimpleNamespace(name=fourcc)
+        adapter._video_frame = vf
+        adapter._receiver = MagicMock()
+        return adapter
+
+    def test_drop_estimate_accrues_when_delivered_below_source(self) -> None:
+        """Source advertises 30 fps but we only deliver 20 in the window → ~10 drops."""
+        adapter = self._adapter()
+        # Advertise 30 fps so source_fps > delivered_fps.
+        adapter._video_frame.frame_rate_N = 30
+        adapter._video_frame.frame_rate_D = 1
+
+        clock = {"t": 100.0}
+        with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
+            # Deliver 20 frames, then trip the 1.0 s window boundary.
+            for _ in range(20):
+                assert adapter._read_frame() is not None
+            clock["t"] += 1.0
+            assert adapter._read_frame() is not None  # 21st delivered, window computed
+
+        m = adapter.delivery_metrics()
+        assert m["source_fps"] >= 29.0
+        assert 8 <= m["frames_dropped_est"] <= 12
+
+    def test_no_false_drops_when_keeping_up(self) -> None:
+        """Delivering at the advertised rate accrues no drops."""
+        adapter = self._adapter()
+        adapter._video_frame.frame_rate_N = 30
+        adapter._video_frame.frame_rate_D = 1
+
+        clock = {"t": 200.0}
+        with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
+            for _ in range(30):
+                adapter._read_frame()
+            clock["t"] += 1.0
+            adapter._read_frame()
+
+        assert adapter.delivery_metrics()["frames_dropped_est"] == 0
+
+    def test_source_fps_peak_fallback_when_rate_not_advertised(self) -> None:
+        """With no advertised rate, source_fps falls back to the peak delivered fps."""
+        adapter = self._adapter()
+        # No frame_rate_N/D attributes → peak-delivered fallback only.
+        for attr in ("frame_rate_N", "frame_rate_D"):
+            if hasattr(adapter._video_frame, attr):
+                delattr(adapter._video_frame, attr)
+        adapter._video_frame.configure_mock(spec=["xres", "yres", "get_array", "get_fourcc"])
+
+        clock = {"t": 300.0}
+        with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
+            for _ in range(25):
+                adapter._read_frame()
+            clock["t"] += 1.0
+            adapter._read_frame()
+
+        m = adapter.delivery_metrics()
+        # Peak delivered ≈ 25 fps over the 1.0 s window.
+        assert m["source_fps"] >= 24.0
+        assert m["delivered_fps"] >= 24.0
+
+    def test_queue_probe_returns_value_when_exposed(self) -> None:
+        adapter = self._adapter()
+        adapter._receiver.get_queue_depth = MagicMock(return_value=3)
+        adapter._read_frame()
+        assert adapter.delivery_metrics()["ndi_queue_depth"] == 3
+
+    def test_queue_probe_is_minus_one_when_probe_raises(self) -> None:
+        adapter = self._adapter()
+        # get_queue_depth raises and frame_sync exposes no queue_depth → -1.
+        adapter._receiver.get_queue_depth = MagicMock(side_effect=RuntimeError("boom"))
+        # Restrict frame_sync so the auto-mock doesn't fabricate a truthy
+        # ``queue_depth`` (only the capture_video the read path actually uses).
+        adapter._receiver.frame_sync = MagicMock(spec=["capture_video"])
+        adapter._read_frame()
+        assert adapter.delivery_metrics()["ndi_queue_depth"] == -1
+
+    def test_counters_reset_on_reconnect(self) -> None:
+        """_open/_close reset the rolling-window state so a reconnect starts clean."""
+        adapter = self._adapter()
+        adapter._video_frame.frame_rate_N = 30
+        adapter._video_frame.frame_rate_D = 1
+
+        clock = {"t": 400.0}
+        with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
+            for _ in range(15):
+                adapter._read_frame()
+            clock["t"] += 1.0
+            adapter._read_frame()
+        assert adapter.delivery_metrics()["frames_delivered"] > 0
+
+        adapter._close()
+        m = adapter.delivery_metrics()
+        assert m["frames_delivered"] == 0
+        assert m["frames_dropped_est"] == 0
+        assert m["delivered_fps"] == 0.0
+
+
+class TestBaseAdapterDeliveryMetrics:
+    def test_base_adapter_returns_noop_defaults(self) -> None:
+        """A non-NDI adapter returns the no-op default delivery metrics."""
+        adapter = USBAdapter("cam-base", source=0)
+        m = adapter.delivery_metrics()
+        assert m == {
+            "frames_delivered": 0,
+            "frames_dropped_est": 0,
+            "delivered_fps": 0.0,
+            "source_fps": 0.0,
+            "ndi_queue_depth": -1,
+        }
+
+
 class TestSyntheticDrawnSceneCleanBackground:
     """The drawn ('anim') ground-truth scene must NOT paint a bundled photo behind the
     people (no zidane/bus 'picture floating around') — a plain/neutral procedural

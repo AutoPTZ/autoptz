@@ -124,6 +124,20 @@ EXPERIMENTAL_FLAGS: tuple[ExperimentalFlag, ...] = (
         restart_required=True,
     ),
     ExperimentalFlag(
+        env_key="AUTOPTZ_TRUE_LATENCY_LEAD",
+        label="True end-to-end latency lead",
+        description=(
+            "Lead the PTZ aim by the MEASURED whole-pipeline dead time (capture "
+            "age + command send + configured actuation estimate) instead of just "
+            "the ingest+inference latency. Off by default; the decomposition is "
+            "always measured for telemetry, but only steers the lead when on."
+        ),
+        default="0",
+        kind="bool",
+        choices=(),
+        restart_required=True,
+    ),
+    ExperimentalFlag(
         env_key="AUTOPTZ_NDI_COLOR_FORMAT",
         label="NDI receive color format",
         description=(

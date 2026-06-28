@@ -44,7 +44,17 @@ def test_expected_flags_inventoried() -> None:
         "AUTOPTZ_COREML_UNITS",
         "AUTOPTZ_NDI_COLOR_FORMAT",
         "AUTOPTZ_PTZ_SERIAL_AUTOPROBE",
+        "AUTOPTZ_TRUE_LATENCY_LEAD",
     }
+
+
+def test_true_latency_lead_flag_registered() -> None:
+    flag = next(f for f in EXPERIMENTAL_FLAGS if f.env_key == "AUTOPTZ_TRUE_LATENCY_LEAD")
+    assert flag.kind == "bool"
+    assert flag.default == "0"  # default OFF → legacy latency lead
+    assert flag.restart_required is True
+    assert flag.label.strip()
+    assert flag.description.strip()
 
 
 def test_ndi_color_format_uses_real_source_values() -> None:

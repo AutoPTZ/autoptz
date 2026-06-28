@@ -169,6 +169,23 @@ class SourceAdapter(ABC):
         with self._status_lock:
             self._status.source_fps_cap = cap
 
+    def delivery_metrics(self) -> dict[str, float | int]:
+        """Per-source frame-delivery telemetry (Phase 0a).
+
+        No-op default — only :class:`NDIAdapter` tracks real values (NDI's
+        FrameSync never signals "no new frame", so drops are *estimated* from
+        ``source_fps`` vs ``delivered_fps`` over a rolling window).  Every other
+        adapter has direct frame-miss accounting already, so it returns the
+        zero/unknown defaults here.
+        """
+        return {
+            "frames_delivered": 0,
+            "frames_dropped_est": 0,
+            "delivered_fps": 0.0,
+            "source_fps": 0.0,
+            "ndi_queue_depth": -1,
+        }
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -958,7 +975,32 @@ class NDIAdapter(SourceAdapter):
         # next reconnect self-heals to the universal SDK-converted path.
         self._color_format_pref = _ndi_color_format_pref()
 
+        # ── Phase 0a: per-source frame-drop + queue telemetry ─────────────────
+        # FrameSync ALWAYS hands back the latest frame (never "no new frame"), so
+        # true drops can't be read directly.  Estimate them over a rolling 1.0 s
+        # window from ``source_fps`` (advertised, or peak-delivered fallback) vs
+        # ``delivered_fps``.  Guarded by the inherited ``_status_lock``.
+        self._delivered = 0  # frames delivered this rolling window
+        self._win_t0 = 0.0  # monotonic start of the current window
+        self._win_delivered0 = 0  # cumulative delivered at window start
+        self._delivered_fps = 0.0
+        self._source_fps = 0.0
+        self._frames_dropped_est = 0  # cumulative estimated drops since (re)connect
+        self._queue_depth = -1  # SDK queue depth, -1 when the SDK exposes none
+
+    def _reset_delivery_metrics(self) -> None:
+        """Clear the rolling-window drop/queue state (on (re)connect/close)."""
+        with self._status_lock:
+            self._delivered = 0
+            self._win_t0 = 0.0
+            self._win_delivered0 = 0
+            self._delivered_fps = 0.0
+            self._source_fps = 0.0
+            self._frames_dropped_est = 0
+            self._queue_depth = -1
+
     def _open(self) -> bool:
+        self._reset_delivery_metrics()
         if not _probe_ndi():
             self._set_error("cyndilib not available — install cyndilib.")
             return False
@@ -1070,6 +1112,7 @@ class NDIAdapter(SourceAdapter):
             fourcc = _ndi_fourcc_name(vf)
             bgr = _ndi_frame_to_bgr(arr, fourcc, h, w)
             if bgr is not None:
+                self._note_delivered(vf)
                 return np.ascontiguousarray(bgr)
 
             # Unsupported native format (16-bit P216/PA16) on the fastest path:
@@ -1090,6 +1133,87 @@ class NDIAdapter(SourceAdapter):
             log.debug("camera_id=%s NDI read_frame error: %s", self.camera_id, exc)
             return None
 
+    def _note_delivered(self, vf: object) -> None:
+        """Account one delivered frame and roll the 1.0 s drop-estimate window.
+
+        ``source_fps`` prefers the source's advertised ``frame_rate_N/frame_rate_D``
+        (guarded), else falls back to the *peak* delivered fps observed so far.
+        Drops are accrued only when the source-vs-delivered shortfall exceeds half
+        a frame, so per-window jitter doesn't manufacture phantom drops.  All
+        writes are under the inherited status lock; never raises.
+        """
+        now = time.monotonic()
+        with self._status_lock:
+            self._delivered += 1
+            # Best-effort SDK queue-depth probe (almost always absent → -1).
+            # Done every delivered frame so the latest depth is always current.
+            self._queue_depth = self._probe_queue_depth()
+            if self._win_t0 <= 0.0:
+                self._win_t0 = now
+                self._win_delivered0 = self._delivered
+                return
+            dt = now - self._win_t0
+            if dt < 1.0:
+                return
+            delivered = self._delivered - self._win_delivered0
+            self._delivered_fps = delivered / dt if dt > 0 else 0.0
+
+            # Advertised source rate (guarded) → peak-delivered fallback.
+            adv = 0.0
+            try:
+                rate_n = float(getattr(vf, "frame_rate_N", 0) or 0)
+                rate_d = float(getattr(vf, "frame_rate_D", 0) or 0)
+                if rate_n > 0 and rate_d > 0:
+                    adv = rate_n / rate_d
+            except Exception:  # noqa: BLE001 — telemetry must never fail the read
+                adv = 0.0
+            if adv > 0.0:
+                self._source_fps = max(self._source_fps, adv)
+            self._source_fps = max(self._source_fps, self._delivered_fps)
+
+            expected = self._source_fps * dt
+            shortfall = expected - delivered
+            if shortfall > 0.5:
+                self._frames_dropped_est += int(round(shortfall))
+
+            # Reset the window.
+            self._win_t0 = now
+            self._win_delivered0 = self._delivered
+
+    def _probe_queue_depth(self) -> int:
+        """Best-effort SDK queue-depth probe; -1 when nothing exposes one.
+
+        cyndilib does not expose a queue/performance API, but newer SDK builds
+        or wrappers might.  Try a couple of likely accessors and swallow anything
+        that raises — this is pure telemetry and must never break the read.
+        """
+        receiver = self._receiver
+        try:
+            fn = getattr(receiver, "get_queue_depth", None)
+            if callable(fn):
+                return int(fn())
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            fs = getattr(receiver, "frame_sync", None)
+            qd = getattr(fs, "queue_depth", None)
+            if qd is not None:
+                return int(qd)
+        except Exception:  # noqa: BLE001
+            pass
+        return -1
+
+    def delivery_metrics(self) -> dict[str, float | int]:
+        """Return the tracked rolling-window delivery telemetry (Phase 0a)."""
+        with self._status_lock:
+            return {
+                "frames_delivered": int(self._delivered),
+                "frames_dropped_est": int(self._frames_dropped_est),
+                "delivered_fps": float(self._delivered_fps),
+                "source_fps": float(self._source_fps),
+                "ndi_queue_depth": int(self._queue_depth),
+            }
+
     def _close(self) -> None:
         receiver = self._receiver
         if receiver is not None:
@@ -1106,6 +1230,7 @@ class NDIAdapter(SourceAdapter):
         self._receiver = None
         self._finder = None
         self._video_frame = None
+        self._reset_delivery_metrics()
 
 
 # ── Synthetic Adapter (test / scaling, no camera or OS permission needed) ────────

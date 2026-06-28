@@ -309,6 +309,12 @@ class PTZConfig(BaseModel, frozen=True):
     # inference) in addition to ``lead_time_s``, so following compensates for how
     # long the pipeline actually takes on this machine, not a fixed guess.
     lead_time_auto: bool = True
+    # Phase 0b — configured estimate of the camera-motor actuation lag (ms): the
+    # delay between issuing a PTZ command and the camera physically starting to
+    # move.  Not directly observable, so it's an operator-set estimate; it's the
+    # final term of the true end-to-end lead (capture_age + command_send +
+    # actuation) and is surfaced in telemetry as ``actuation_estimate_ms``.
+    actuation_estimate_ms: float = Field(default=40.0, ge=0.0, le=1000.0)
     # Motion prediction: project the aim point forward by this many seconds using
     # the target's measured velocity, so the camera anticipates motion instead of
     # always chasing where the subject *was* (which reads as laggy following).
