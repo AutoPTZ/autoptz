@@ -138,3 +138,53 @@ class InferenceScheduler:
                     on_result(result)
                 except Exception:  # noqa: BLE001 — a bad consumer must not kill the scheduler
                     log.debug("inference result callback for %s/%s failed", cam, kind, exc_info=True)
+
+
+class SchedulerDetector:
+    """Drop-in detector that routes ``detect()`` through a shared scheduler.
+
+    Has the same surface a worker uses (``detect(frame)`` + ``ep`` + anything else it
+    delegates to the real detector), so swapping it in needs no change to the camera
+    worker's inference loop. ``detect`` submits the frame and **blocks** until the one
+    scheduler thread runs it — while blocked, this camera's thread holds no GIL, so
+    other cameras' capture/track and the scheduler run freely. Net effect: the heavy
+    detect glue (letterbox/NMS) happens once, serially, on the scheduler instead of N
+    camera threads thrashing the GIL in parallel.
+
+    Each ``detect`` call is synchronous, so there is at most one in-flight job per
+    camera and the scheduler's latest-wins drop never discards a frame here.
+    """
+
+    def __init__(
+        self,
+        camera_id: str,
+        real_detector: Any,
+        scheduler: InferenceScheduler,
+        timeout_s: float = 5.0,
+    ) -> None:
+        self._camera_id = camera_id
+        self._real = real_detector
+        self._scheduler = scheduler
+        self._timeout_s = timeout_s
+
+    @property
+    def ep(self) -> str:
+        return str(getattr(self._real, "ep", "") or "")
+
+    def detect(self, frame: Any) -> Any:
+        box: list[Any] = []
+        done = threading.Event()
+
+        def _cb(result: Any) -> None:
+            box.append(result)
+            done.set()
+
+        self._scheduler.submit(self._camera_id, "detect", frame, on_result=_cb)
+        if not done.wait(self._timeout_s):
+            log.warning("scheduler detect timed out for %s", self._camera_id)
+            return []
+        return box[0] if box else []
+
+    def __getattr__(self, name: str) -> Any:
+        # Delegate everything else (e.g. input_size, model metadata) to the real detector.
+        return getattr(self._real, name)

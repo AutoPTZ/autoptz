@@ -660,6 +660,11 @@ class CameraWorker:
         self._last_digital_crop_rect: tuple[int, int, int, int] | None = None
         self._detect: _DetectStack | None = None
         self._pooled_detector = False
+        # Shared single-accelerator inference scheduler (AUTOPTZ_INFERENCE_SCHEDULER);
+        # None = inline detection. ``_sched_detector`` caches the drop-in proxy keyed
+        # to the current real detector so a hot-swap rebuilds it.
+        self._inference_scheduler: Any | None = None
+        self._sched_detector: Any | None = None
         # True when the detector is the unified YOLO11-pose model (boxes+keypoints
         # in one pass); the worker then sources pose-aim keypoints from the
         # detections instead of running a separate pose forward pass.
@@ -884,6 +889,17 @@ class CameraWorker:
         ``None`` (tests/fakes) the worker keeps its per-worker build path.
         """
         self._pool = pool
+
+    def set_inference_scheduler(self, scheduler: Any | None) -> None:
+        """Inject the shared single-accelerator inference scheduler (opt-in).
+
+        When set, the worker routes detection through the scheduler (one owner of
+        the accelerator for ALL cameras) instead of calling the detector inline on
+        its own thread — so the heavy detect glue runs once, serially, rather than N
+        camera threads contending on the GIL.  ``None`` (the default) keeps the
+        inline path unchanged.
+        """
+        self._inference_scheduler = scheduler
 
     def refresh_detector_from_pool(self) -> None:
         """Point this worker at the pool's current detector after a hot-swap."""
@@ -3790,6 +3806,28 @@ class CameraWorker:
         out[:h, :w] = src[:h, :w, :3]
         return out
 
+    def _run_detect(self, frame: NDArray[np.uint8]) -> list[Any]:
+        """Detect on *frame* — inline, or routed through the shared inference
+        scheduler when one is injected (AUTOPTZ_INFERENCE_SCHEDULER).
+
+        The scheduler path swaps in a :class:`SchedulerDetector` drop-in (cached and
+        rebuilt on a detector hot-swap), so all cameras' detect glue runs once on the
+        scheduler thread instead of N camera threads contending on the GIL.
+        """
+        detect = self._detect
+        real = detect.detector if detect is not None else None
+        if real is None:
+            return []
+        scheduler = self._inference_scheduler
+        if scheduler is None:
+            return real.detect(frame)
+        sd = self._sched_detector
+        if sd is None or getattr(sd, "_real", None) is not real:
+            from autoptz.engine.pipeline.inference_scheduler import SchedulerDetector
+
+            sd = self._sched_detector = SchedulerDetector(self.camera_id, real, scheduler)
+        return sd.detect(frame)
+
     def _maybe_track(self, frame: NDArray[np.uint8] | None) -> list[TrackInfo]:
         """Run detection + tracking whenever a detector is available.
 
@@ -3820,7 +3858,7 @@ class CameraWorker:
             )
             if should_detect:
                 self._detected_this_tick = True
-                detections = self._detect.detector.detect(frame)
+                detections = self._run_detect(frame)
                 detections = self._filter_small_detections(detections, frame)
                 self._last_detections = detections
             else:

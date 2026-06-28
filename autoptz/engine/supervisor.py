@@ -150,6 +150,10 @@ class Supervisor:
         # per-camera.  Each worker keeps its own (stateful) tracker.  Built lazily
         # and gracefully; workers fall back to per-worker models if it's None.
         self._inference_pool: Any | None = None
+        # Optional single-accelerator scheduler (AUTOPTZ_INFERENCE_SCHEDULER): one
+        # worker owns detection for ALL cameras so the heavy glue runs once serially
+        # instead of N camera threads contending on the GIL.  None when the flag is off.
+        self._inference_scheduler: Any | None = None
 
         # Global ML-subsystem switches (detection / tracking / face_recognition /
         # pose), broadcast via SetFeaturesCmd and applied to every worker.
@@ -281,6 +285,15 @@ class Supervisor:
                 self._client.request_provider_detach(_cid)
             except Exception:  # noqa: BLE001
                 log.debug("provider detach request failed for %s", _cid, exc_info=True)
+
+        # Stop the shared inference scheduler (no workers submit to it now).
+        sched = self._inference_scheduler
+        self._inference_scheduler = None
+        if sched is not None:
+            try:
+                sched.stop()
+            except Exception:  # noqa: BLE001
+                log.debug("inference scheduler stop failed", exc_info=True)
 
     def _start_pump_if_needed(self, run_pump: bool) -> None:
         if run_pump and self._pump_thread is None:
@@ -890,6 +903,41 @@ class Supervisor:
             self._inference_pool = None
         return self._inference_pool
 
+    def _ensure_inference_scheduler(self) -> Any | None:
+        """Build + start (once) the shared single-accelerator inference scheduler.
+
+        Only when ``AUTOPTZ_INFERENCE_SCHEDULER`` is on AND the shared pool exists —
+        the scheduler's ``run_fn`` dispatches each camera's detect job to the ONE
+        shared detector, so all detection runs serially on the scheduler thread.
+        Returns ``None`` (the default) so workers keep calling the detector inline.
+        """
+        from autoptz.engine.runtime.flags import env_inference_scheduler
+
+        if not env_inference_scheduler():
+            return None
+        if self._inference_scheduler is not None:
+            return self._inference_scheduler
+        pool = self._ensure_inference_pool()
+        if pool is None:
+            return None
+        try:
+            from autoptz.engine.pipeline.inference_scheduler import InferenceScheduler
+
+            def _run(_cam: str, kind: str, frame: Any) -> Any:
+                det = pool.detector() if hasattr(pool, "detector") else None
+                if kind == "detect" and det is not None:
+                    return det.detect(frame)
+                return []
+
+            sched = InferenceScheduler(run_fn=_run)
+            sched.start()
+            self._inference_scheduler = sched
+            log.info("inference scheduler ON (centralized single-accelerator detection)")
+        except Exception:  # noqa: BLE001 — scheduler is an optimisation, never load-bearing
+            log.warning("inference scheduler init failed; using inline detection.", exc_info=True)
+            self._inference_scheduler = None
+        return self._inference_scheduler
+
     def _apply_hardware_env(self, camera_count: int) -> None:
         """Publish global hardware prefs into the environment before workers start.
 
@@ -1144,6 +1192,9 @@ class Supervisor:
         pool = self._ensure_inference_pool()
         if pool is not None and hasattr(worker, "set_inference_pool"):
             worker.set_inference_pool(pool)
+        scheduler = self._ensure_inference_scheduler()
+        if scheduler is not None and hasattr(worker, "set_inference_scheduler"):
+            worker.set_inference_scheduler(scheduler)
         if self._features and hasattr(worker, "set_features"):
             worker.set_features(dict(self._features))
         if defer_inference and hasattr(worker, "set_inference_start_paused"):

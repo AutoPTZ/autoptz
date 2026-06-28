@@ -76,7 +76,23 @@ EXPERIMENTAL_FLAGS: tuple[ExperimentalFlag, ...] = (
         label="One process per camera",
         description=(
             "Run each camera worker in its own OS process to sidestep the Python "
-            "GIL across cameras. Higher memory use; experimental. Off by default."
+            "GIL across cameras. Big win at a few cameras, but each child duplicates "
+            "the full model set so it does NOT scale (heavy RAM, collapses at ~16). "
+            "Experimental, off by default."
+        ),
+        default="0",
+        kind="bool",
+        choices=(),
+        restart_required=True,
+    ),
+    ExperimentalFlag(
+        env_key="AUTOPTZ_INFERENCE_SCHEDULER",
+        label="Centralized inference scheduler",
+        description=(
+            "Route all cameras' detection through ONE shared scheduler that owns the "
+            "accelerator (fair across cameras), instead of each camera thread running "
+            "the detector inline. Aims to scale without the per-process RAM cost. "
+            "Experimental, off by default."
         ),
         default="0",
         kind="bool",

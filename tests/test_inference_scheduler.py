@@ -17,7 +17,7 @@ from __future__ import annotations
 import threading
 import time
 
-from autoptz.engine.pipeline.inference_scheduler import InferenceScheduler
+from autoptz.engine.pipeline.inference_scheduler import InferenceScheduler, SchedulerDetector
 
 
 def _wait(pred, timeout=2.0):
@@ -102,6 +102,38 @@ def test_stop_is_clean_and_idempotent() -> None:
     sched.stop()
     sched.stop()  # second stop must not raise
     assert not sched.is_running
+
+
+def test_scheduler_detector_blocks_and_returns_scheduled_result() -> None:
+    # A drop-in detector: detect() submits to the scheduler and blocks for the result,
+    # which comes from the scheduler's run_fn (the real shared detector in production).
+    class _RealDetector:
+        ep = "CoreMLExecutionProvider"
+
+        def detect(self, frame):  # noqa: ANN001
+            return [("box", frame)]
+
+        def input_size(self):
+            return 640
+
+    real = _RealDetector()
+    sched = InferenceScheduler(run_fn=lambda cam, kind, frame: real.detect(frame))
+    sched.start()
+    try:
+        proxy = SchedulerDetector("camA", real, sched)
+        assert proxy.detect(7) == [("box", 7)]  # routed through the scheduler thread
+        assert proxy.ep == "CoreMLExecutionProvider"  # delegates attrs
+        assert proxy.input_size() == 640  # __getattr__ delegation
+    finally:
+        sched.stop()
+
+
+def test_scheduler_detector_returns_empty_on_timeout() -> None:
+    # If the scheduler never delivers (e.g. stopped), detect() returns [] rather than
+    # hanging the camera's inference loop forever.
+    sched = InferenceScheduler(run_fn=lambda cam, kind, frame: [1])  # not started
+    proxy = SchedulerDetector("camA", object(), sched, timeout_s=0.2)
+    assert proxy.detect(1) == []
 
 
 def test_run_fn_exception_does_not_kill_the_worker() -> None:

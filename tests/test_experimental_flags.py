@@ -45,6 +45,7 @@ def test_expected_flags_inventoried() -> None:
         "AUTOPTZ_NDI_COLOR_FORMAT",
         "AUTOPTZ_PTZ_SERIAL_AUTOPROBE",
         "AUTOPTZ_TRUE_LATENCY_LEAD",
+        "AUTOPTZ_INFERENCE_SCHEDULER",
     }
 
 

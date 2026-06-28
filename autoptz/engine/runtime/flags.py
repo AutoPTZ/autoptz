@@ -26,6 +26,16 @@ def env_process_per_camera() -> bool:
     return _env_true("AUTOPTZ_PROCESS_PER_CAMERA")
 
 
+def env_inference_scheduler() -> bool:
+    """Opt-in for the centralized single-accelerator inference scheduler.
+
+    When on, all cameras route detection through ONE scheduler thread (fair across
+    cameras) instead of each camera thread calling the shared detector inline — so
+    the heavy detect glue runs once serially rather than N-way GIL-contended.
+    """
+    return _env_true("AUTOPTZ_INFERENCE_SCHEDULER")
+
+
 def env_unified_pose() -> bool:
     """Process-wide opt-in for the unified (one-backbone) pose detector.
 
