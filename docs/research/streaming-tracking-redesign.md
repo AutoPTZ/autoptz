@@ -202,20 +202,43 @@ construction (all native deps below exist on macOS/Windows/Linux).
 6. **Run inference on a bandwidth‑lowest / lower‑res proxy** where available; pull
    full bandwidth only for display.
 
-### 5.2 Parallelism (fixes multi‑stream scaling) — **[verified, refined]**
+### 5.2 Parallelism (fixes multi‑stream scaling) — **[verified, refined: do we even need per‑process?]**
 
-The naive "process‑per‑camera, each rebuilds its own model set" is the current
-experimental mode and its **RAM cost is why it's opt‑in**. Adversarial review
-**[PARTIAL]** flagged that per‑process model replication is a GPU anti‑pattern.
-**Refined recommendation:**
+**Short answer: probably not as a default, and not in its current form.** Today's
+`AUTOPTZ_PROCESS_PER_CAMERA` showed **no real‑world benefit** because it solves the
+*secondary* cause (the GIL) at high cost — it **duplicates the entire model set per
+child** (RAM + more total CPU as N full pipelines run at once) and adds IPC, while
+the *primary* cause (per‑frame copy/convert) is untouched (each child still does the
+heavy BGRA convert). Until [PR #134] even fixed the CPU accounting it *looked* like
+nothing was using the CPU the children were burning. It targeted GIL contention
+before the cheaper, bigger win (cut per‑frame work + batch inference) was taken.
 
-- **Per‑source capture in its own process** (own GIL) — this is the part that must
-  be isolated and is cheap.
-- **A single shared model‑server process** holding one ORT + insightface set;
-  capture processes send frames/crops over SHM and get detections back. This caps
-  RAM at one model set, keeps batching/GPU occupancy, and still removes the GIL
-  from capture. (Frigate decouples capture per‑stream but centralizes inference —
-  the proven pattern.)
+The redesign therefore converges on **ONE concurrency model, not a "normal vs
+per‑process" fork**, and the cures in §5.1/§5.3 are threading‑agnostic — they fix
+every camera the same way regardless of thread vs process:
+
+- **Default = single process.** Capture is a **receive‑only thread per source**
+  doing *only* native work (NDI recv + one `cvtColor` into the shm slot) — both
+  **release the GIL**, so threads give true parallelism here once the per‑frame
+  Python glue is gone. *(Phase 0 verifies cyndilib actually releases the GIL during
+  `recv`; if it holds it, that's a small binding fix — or the one place capture
+  goes to a process.)*
+- **Inference = a single shared, batched stage.** ORT already runs ops on native
+  threads; the GIL‑bound part is the Python glue (NMS, letterbox, tracker update).
+  Run that glue **once per N‑camera batch**, not once per camera‑thread, and the
+  per‑camera GIL contention largely disappears — the DeepStream/Frigate pattern.
+  This caps RAM at **one** model set (vs one‑per‑child today).
+- **Put the capture↔inference↔control boundaries behind one `Worker` Protocol** so
+  the boundary can be a thread *or* a process as a **measured, internal choice —
+  never a user‑facing mode.**
+- **Per‑process is demoted to two narrow, measured roles** (always with the shared
+  model‑server, never model‑per‑child): (a) **fault isolation** — a flaky NDI
+  source / buggy driver that segfaults can't take down the GUI (a reliability win,
+  the only durable reason to keep it); (b) **last‑resort parallelism** — only if
+  Phase‑0 profiling shows residual *Python‑glue* contention that batching can't
+  remove. **Decision rule:** default to threads + shared batched inference; promote
+  a stage to a process only when a profiler proves it's GIL‑bound on Python work
+  that can't be batched away, or when a source is crash‑prone.
 - **Free‑threaded CPython is NOT the path today [verified: SUPPORTED]**: OpenCV has
   no `cp313t` wheels (limited‑API blocker, [opencv/opencv#27933](https://github.com/opencv/opencv-python/issues/1029)),
   and onnxruntime **re‑enables the GIL on import** on 3.13t
@@ -314,8 +337,13 @@ without any architectural rewrite.
 - **Phase 3 — Predictive control (the real cure).** Kalman/alpha‑beta predict‑ahead
   with measured dead time; CV Kalman predict on skip frames; startup direction/gain
   self‑calibration; confidence‑gated adaptive deadband.
-- **Phase 4 — Parallelism (multi‑stream scaling).** Per‑source capture process +
-  **shared model‑server** (cap RAM); dynamic thread re‑budget; drop inert env caps.
+- **Phase 4 — Concurrency convergence (this is where per‑process is resolved).**
+  Single process by default: native capture threads + **one shared, batched
+  inference** stage. **Retire** the model‑per‑child `AUTOPTZ_PROCESS_PER_CAMERA`;
+  replace it with a `Worker` Protocol whose boundary is a *measured* thread/process
+  choice, not a user mode. Keep process isolation only for fault‑isolation /
+  profiled residual contention — always with the shared model‑server. Dynamic
+  thread re‑budget; drop inert env caps.
 - **Phase 5 — Decomposition + cleanup.** Split `CameraWorker` into staged
   components behind a Worker Protocol; two telemetry channels; delete the excess
   (dead ingest arch, Mark scaffolding out of the hot path, collapse the three
