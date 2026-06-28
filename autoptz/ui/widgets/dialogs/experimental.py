@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -122,12 +123,15 @@ class ExperimentalFeaturesDialog(QDialog):
             "Restore defaults", QDialogButtonBox.ButtonRole.ResetRole
         )
         close_btn = buttons.addButton("Close", QDialogButtonBox.ButtonRole.RejectRole)
-        self._apply_btn.clicked.connect(self._apply)
+        self._apply_btn.clicked.connect(self._on_apply)
         self._restore_btn.clicked.connect(self._restore_defaults)
         close_btn.clicked.connect(self.reject)
         outer.addWidget(buttons)
 
         self._load()
+        # Baseline for "did the user change anything since this was last applied?"
+        # — drives whether Apply offers a restart (no nag when nothing changed).
+        self._applied_snapshot = self._collect()
 
     # ── row builders ─────────────────────────────────────────────────────────
 
@@ -212,7 +216,71 @@ class ExperimentalFeaturesDialog(QDialog):
         return out
 
     def _apply(self) -> None:
+        """Persist the current selection.  Pure — no UI side effects (callers/tests
+        rely on this), the visible feedback + restart prompt live in `_on_apply`."""
         _safe(lambda: self._client.setSetting("experimental_features", self._collect()), None)
+
+    def _on_apply(self) -> None:
+        """Apply button handler: persist, acknowledge the click, then — only if the
+        user actually changed something since the last apply — offer a restart."""
+        new = self._collect()
+        changed = new != self._applied_snapshot
+        self._apply()
+        self._applied_snapshot = new
+        self._flash_applied()
+        if changed and self._confirm_restart():
+            self._do_restart()
+
+    def _flash_applied(self) -> None:
+        """Briefly show "Applied ✓" on the button so the click reads as effective."""
+        self._apply_btn.setText("Applied ✓")
+        self._apply_btn.setEnabled(False)
+        QTimer.singleShot(1500, self._reset_apply_button)
+
+    def _reset_apply_button(self) -> None:
+        self._apply_btn.setText("Apply")
+        self._apply_btn.setEnabled(True)
+
+    def _confirm_restart(self) -> bool:
+        """Ask the operator whether to restart the app now.  Returns True for yes.
+
+        Isolated (and overridden in tests) so the rest of the Apply flow stays
+        free of a blocking modal.
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Restart required")
+        box.setText("Experimental settings saved.")
+        box.setInformativeText(
+            "AutoPTZ needs to restart for these changes to take effect. Restart now?"
+        )
+        restart_btn = box.addButton("Restart Now", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(restart_btn)
+        box.exec()
+        return box.clickedButton() is restart_btn
+
+    def _do_restart(self) -> None:
+        """Relaunch the application so every flag is re-read from a clean process.
+
+        A full relaunch (not just an engine restart) is the honest apply: several
+        flags bind library thread pools / env at *import* time, which only a fresh
+        process resets.  Isolated (and overridden in tests) so it never fires there.
+        """
+        import sys
+
+        from PySide6.QtCore import QCoreApplication, QProcess
+
+        self.accept()
+        if getattr(sys, "frozen", False):
+            program, args = sys.executable, sys.argv[1:]
+        else:
+            program, args = sys.executable, ["-m", "autoptz", *sys.argv[1:]]
+        try:
+            QProcess.startDetached(program, args)
+        except Exception:  # noqa: BLE001 — relaunch is best-effort; still quit so the
+            log.warning("relaunch spawn failed; quitting anyway", exc_info=True)
+        QTimer.singleShot(0, QCoreApplication.quit)
 
     def _restore_defaults(self) -> None:
         for flag in EXPERIMENTAL_FLAGS:
@@ -224,3 +292,4 @@ class ExperimentalFeaturesDialog(QDialog):
         for name, _label, _desc, default in TRACKING_DEFAULT_FIELDS:
             self._tracking_boxes[name].setChecked(bool(default))
         self._apply()
+        self._applied_snapshot = self._collect()
