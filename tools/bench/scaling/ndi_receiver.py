@@ -109,6 +109,12 @@ def main() -> None:
                     "drops": int(getattr(tm, "frames_dropped_est", 0)),
                     "e2e_ms": float(getattr(tm, "end_to_end_ms", 0.0)),
                     "capture_age_ms": float(getattr(tm, "capture_age_ms", 0.0)),
+                    # detect_ms is the alive/dead proof for the model-server: a dead
+                    # server makes detect() block the full IPC timeout (~5000ms); a live
+                    # one returns in ANE+IPC time (tens of ms). Stall age confirms
+                    # inference is completing regularly, not wedged.
+                    "detect_ms": float(getattr(tm, "detect_ms", 0.0)),
+                    "stall_s": float(getattr(tm, "inference_stall_age_s", 0.0)),
                     "qd": int(getattr(tm, "ndi_queue_depth", -1)),
                 }
             )
@@ -133,6 +139,8 @@ def main() -> None:
     span_s = max(1e-6, (len(samples) - 1)) if len(samples) > 1 else 1.0
     drops_delta = max(0, total_drops - drops_start)
     e2e_all = [c["e2e_ms"] for s in samples for c in s["per"] if c["e2e_ms"] > 0]
+    detect_all = [c["detect_ms"] for s in samples for c in s["per"] if c["detect_ms"] > 0]
+    stall_all = [c["stall_s"] for s in samples for c in s["per"]]
 
     result = {
         "N": N,
@@ -147,6 +155,12 @@ def main() -> None:
         "drops_steady_window": drops_delta,
         "drops_per_s_steady": round(drops_delta / span_s, 1),
         "e2e_ms_median": med(e2e_all),
+        # Detection-health: detect_ms_median proves inference actually ran (and how
+        # fast); detect_active_pct is the share of camera-samples where detection
+        # executed at all (0 => detection dead). stall_s_max flags a wedged pipeline.
+        "detect_ms_median": med(detect_all),
+        "detect_active_pct": round(100.0 * len(detect_all) / max(1, sum(len(s["per"]) for s in samples)), 1),
+        "stall_s_max": round(max(stall_all), 1) if stall_all else 0.0,
         "cams_reporting": len(last),
     }
     print("RESULT_JSON " + json.dumps(result), flush=True)

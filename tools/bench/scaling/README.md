@@ -36,15 +36,29 @@ AUTOPTZ_MODEL_SERVER=1 python tools/bench/scaling/ndi_receiver.py 16 full 18 40
 (detect+track+control) or `streams` (ingest only). Give per-process / model-
 server runs a longer warmup; spawned children load models before steady state.
 
-## Measured result (Apple Silicon, yolo11s, NDI 1080p30)
+## Measure detection health, not just capture
 
-| N=16 | fps/cam | drops/s | e2e latency | sys CPU | RAM |
-|------|---------|---------|-------------|---------|-----|
-| threaded     | 29.7\* | 232.9 | 1716 ms | 51.6% | 5.6 GB |
-| per-process  | 14.8   | 202.8 | 94 ms   | 100%  | 15.7 GB |
-| model-server | **30.0** | **9.7** | **54 ms** | 49.4% | 11.4 GB |
+`ndi_receiver.py` reports `detect_active_pct` / `detect_ms_median` / `stall_s_max`,
+and the model-server logs `served=N/s` under `AUTOPTZ_MS_DIAG=1`. **Always check one
+of these.** The fps / drops / e2e numbers come from the *capture* path, which runs on
+its own thread — so a model-server that is serving **zero** detections (e.g. a wiring
+bug where readers never attach) still shows great fps/latency. The first model-server
+benchmark looked perfect (30 fps, 48 ms) while `served=0`: it was measuring capture
+with detection dead. Trust `served/s > 0` (or `detect_active_pct ≈ 100`) as the proof
+detection actually ran.
 
-\* threaded "fps" counts frames *arriving*; the 1.7 s e2e latency + 233 drops/s
-show the pipeline running ~1.7 s behind — the cause of the "bouncing" aim. Only
-the model-server holds full 30 fps with near-real-time latency at 16 cameras,
-at half the per-process CPU and without its RAM cliff.
+## Measured result — detection VERIFIED alive (Apple Silicon, yolo11s, NDI 1080p30)
+
+| N=16 | fps/cam | drops/s | e2e latency | sys CPU | RAM | detect served/s |
+|------|---------|---------|-------------|---------|-----|-----------------|
+| threaded     | 29.8\* | 237 | 1635 ms | 43% | 5.3 GB | — |
+| per-process  | 4.2 💥 | 807 | 580 ms  | (under-counted) | 13.7 GB | — |
+| model-server | **23.8** | 146 | **54 ms** | 59% | **10.9 GB** | ~7–18 |
+
+\* threaded "fps" counts frames *arriving*; the 1.6 s e2e latency + 237 drops/s show
+the pipeline ~1.6 s behind — the cause of the "bouncing" aim. The model-server is the
+best-scaling option (low, stable latency; no RAM cliff; graceful degradation vs
+per-process's 4.2 fps collapse) — but it does **not** hold 30 fps at 16 cams, and
+detection is sparse (~0.5 det/cam/s, the single ANE under-fed by per-camera process
+overhead), so **predictive tracking is required** for smooth aim at high camera counts.
+See `docs/research/streaming-tracking-redesign.md`.
