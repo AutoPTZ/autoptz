@@ -136,6 +136,45 @@ class TestRelayIdentityLockFree:
         )
 
 
+class TestChildIdentityWiring:
+    """``spec.db_path`` crosses the process boundary as a str; identity init must
+    rebuild a ``ConfigStore`` from a Path, not the raw str (which crashed the child's
+    identity gallery with ``'str' object has no attribute 'parent'`` → faces/reid
+    silently dead in process-per-camera mode)."""
+
+    def test_builds_configstore_with_path_not_str(self, monkeypatch) -> None:
+        from pathlib import Path
+
+        import autoptz.config.store as store_mod
+        import autoptz.engine.identity.service as svc_mod
+        import autoptz.engine.pipeline.pool as pool_mod
+        from autoptz.engine import process_worker as pw
+
+        captured: dict[str, object] = {}
+
+        class _FakeStore:
+            def __init__(self, db_path=None, **_kw) -> None:  # noqa: ANN001
+                captured["db_path"] = db_path
+
+        monkeypatch.setattr(store_mod, "ConfigStore", _FakeStore)
+        monkeypatch.setattr(svc_mod, "IdentityService", lambda _store: object())
+        monkeypatch.setattr(pool_mod, "build_inference_pool", lambda **_k: None)
+
+        class _FakeWorker:
+            def set_inference_pool(self, _p) -> None:  # noqa: ANN001
+                pass
+
+            def set_identity_service(self, _s) -> None:  # noqa: ANN001
+                captured["wired"] = True
+
+        spec = WorkerSpec(camera_id="cam", config=_config("cam"), db_path="/tmp/ident.db")
+        pw._wire_models_and_identity(_FakeWorker(), spec)
+
+        assert isinstance(captured.get("db_path"), Path)
+        assert captured["db_path"] == Path("/tmp/ident.db")
+        assert captured.get("wired") is True
+
+
 class TestChildThreadCaps:
     """A spawned camera child must re-apply the per-camera thread budget itself.
 

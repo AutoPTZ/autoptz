@@ -265,14 +265,24 @@ def _provider_options(ep: EP, prefs: HardwarePrefs | None) -> dict[str, object]:
     if ep is EP.COREML:
         # MLProgram routes to the Apple Neural Engine / GPU (incl. AMD on Intel
         # Macs via Metal); the compute-unit target is tunable (AUTOPTZ_COREML_UNITS)
-        # so an Intel+AMD Mac can verify/force the GPU path. ModelCacheDirectory
-        # persists the compiled MLProgram so the slow first compile is one-time per
-        # machine, not paid on every session build (acute with process-per-camera).
-        return {
+        # so an Intel+AMD Mac can verify/force the GPU path.
+        coreml_opts: dict[str, object] = {
             "ModelFormat": "MLProgram",
             "MLComputeUnits": _coreml_compute_units(),
-            "ModelCacheDirectory": _coreml_cache_dir(),
         }
+        # ModelCacheDirectory persists the compiled MLProgram so the slow first
+        # compile is one-time per machine — BUT in a *spawned* child process
+        # (process-per-camera) the CoreML EP fails to build with it set
+        # ("Failed to create model URL from path"), which forced a CPU fallback /
+        # bare re-compile and was a big reason process-per-camera "had no benefit".
+        # Omit the on-disk cache in that mode: the child still runs on the ANE/GPU,
+        # it just recompiles its MLProgram each start (the cache is incompatible
+        # with spawn). The shared in-process path keeps the cache.
+        from autoptz.engine.runtime.flags import env_process_per_camera
+
+        if not env_process_per_camera():
+            coreml_opts["ModelCacheDirectory"] = _coreml_cache_dir()
+        return coreml_opts
     if ep is EP.TENSORRT:
         opts: dict[str, object] = {
             "trt_engine_cache_enable": True,

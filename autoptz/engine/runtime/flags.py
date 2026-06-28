@@ -17,6 +17,15 @@ def _env_true(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_VALUES
 
 
+def env_process_per_camera() -> bool:
+    """Process-wide opt-in for the experimental process-per-camera mode.
+
+    Lives here (not just in ``process_worker``) so lightweight callers like the
+    inference layer can branch on it without importing the heavy worker module.
+    """
+    return _env_true("AUTOPTZ_PROCESS_PER_CAMERA")
+
+
 def env_unified_pose() -> bool:
     """Process-wide opt-in for the unified (one-backbone) pose detector.
 

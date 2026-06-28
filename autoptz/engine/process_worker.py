@@ -250,10 +250,16 @@ def _wire_models_and_identity(worker: Any, spec: WorkerSpec) -> None:
         log.warning("camera process %s: inference pool init failed", spec.camera_id, exc_info=True)
 
     try:
+        from pathlib import Path
+
         from autoptz.config.store import ConfigStore
         from autoptz.engine.identity.service import IdentityService
 
-        store = ConfigStore(spec.db_path) if spec.db_path else ConfigStore()
+        # ``spec.db_path`` crosses the process boundary as a plain str (pickle); the
+        # ConfigStore wants a Path, so passing the str crashed identity init in the
+        # child with ``'str' object has no attribute 'parent'`` — leaving the camera
+        # process with NO identity gallery (faces/reid silently dead).
+        store = ConfigStore(Path(spec.db_path)) if spec.db_path else ConfigStore()
         service = IdentityService(store)
         if hasattr(worker, "set_identity_service"):
             worker.set_identity_service(service)
