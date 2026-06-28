@@ -499,7 +499,14 @@ class ThemeController(QObject):
     # Discrete UI-scale steps offered in the View menu / cycled by shortcuts.
     SCALE_STEPS = (0.9, 1.0, 1.1, 1.25, 1.5)
 
-    def __init__(self, app: object, client: object) -> None:
+    def __init__(self, app: object, client: object, *, install_global_hooks: bool = True) -> None:
+        """``install_global_hooks`` installs the process-global popup-rounder event
+        filter + the OS colour-scheme listener on the shared ``QApplication``.  The
+        main app's controller owns those for the whole process; a TRANSIENT
+        controller (e.g. the AutoPTZ Mark window on its isolated client) must pass
+        ``False`` so it doesn't accumulate a global event filter per window — it
+        still re-themes the app on its client's ``themeChanged`` via ``apply()``.
+        """
         super().__init__()
         self._app = app
         self._client = client
@@ -527,20 +534,29 @@ class ThemeController(QObject):
         # Round QMenu / combo-popup backgrounds (translucent-window recipe) so
         # rounded borders no longer sit over square fills.  Held as an attribute
         # so the filter isn't garbage-collected.
-        self._popup_rounder = _PopupRounder(self)
-        try:
-            app.installEventFilter(self._popup_rounder)  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            log.debug("popup rounder install failed", exc_info=True)
-        try:
-            app.styleHints().colorSchemeChanged.connect(lambda _s: self.apply())  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            pass
+        self._popup_rounder = _PopupRounder(self) if install_global_hooks else None
+        if install_global_hooks:
+            try:
+                app.installEventFilter(self._popup_rounder)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                log.debug("popup rounder install failed", exc_info=True)
+            try:
+                app.styleHints().colorSchemeChanged.connect(lambda _s: self.apply())  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
         try:
             client.themeChanged.connect(self._on_mode_changed)  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             pass
-        self.apply()
+        # The main (global-hooks) controller applies the theme to the whole app at
+        # startup.  A TRANSIENT controller (Mark, install_global_hooks=False) must
+        # NOT re-run the global app.setStyleSheet() on construction — the app is
+        # already themed and the window inherits it, so a redundant apply() here
+        # re-polishes every live widget (O(N²) when many Mark windows are built in
+        # one process, e.g. the test suite).  It still themes live on a toggle via
+        # _on_mode_changed.
+        if install_global_hooks:
+            self.apply()
 
     def _on_mode_changed(self, mode: str) -> None:
         self._mode = mode or "dark"

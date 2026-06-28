@@ -156,13 +156,25 @@ def _clip_path(filename: str = _CLIP_FILENAME) -> Path:
 @dataclass(frozen=True)
 class MarkSession:
     profile: str = "full"
-    source: str = "clip"  # "clip" | "synthetic" | "ndi"
+    source: str = "clip"  # "clip" | "ndi"
     floor_fps: float = 30.0
     max_cameras: int = 4
     dwell_s: float = 10.0
     resolution: str = "1080p"  # "720p" | "1080p" | "4k"
     model: str = "small"  # "auto" | "nano" | "small" | "medium"
     clip_id: str = ""  # selected CLIP_LIBRARY id; "" → DEFAULT_CLIP_ID
+
+    def __post_init__(self) -> None:
+        # The user-facing "synthetic" (drawn-people) source was removed: the only
+        # sources are "clip" and "ndi".  Normalise here so a legacy persisted value
+        # (or any unknown/malformed source) is tolerated by mapping to "clip" — the
+        # drawn scene now survives only as the env-gated ground-truth scene, never
+        # as a user-selectable source.  Frozen dataclass → set via object.__setattr__.
+        normalized = str(self.source).strip().lower()
+        if normalized != "ndi":
+            normalized = "clip"
+        if normalized != self.source:
+            object.__setattr__(self, "source", normalized)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -203,8 +215,9 @@ class MarkSession:
         For a CLIP source the target is the clip's *native* cadence: a 24fps clip
         physically can't sustain a 30fps target (the decoder caps at the clip's own
         rate), and a 60fps clip should be graded against 60 — so picking a scene
-        sets the rate it's tested at.  For synthetic / NDI sources (which can render
-        at any rate) the user-chosen ``floor_fps`` is the target.
+        sets the rate it's tested at.  For NDI sources (which can render
+        at any rate) the user-chosen ``floor_fps`` is the target. (A 'synthetic' source
+        value is normalised to 'clip', so it takes the native-fps branch above.)
         """
         if self.is_clip():
             return float(self.clip_info().native_fps)

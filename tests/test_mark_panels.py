@@ -133,6 +133,53 @@ def test_control_panel_object_names(qtapp) -> None:
     p.deleteLater()
 
 
+def test_stop_button_is_prominent_danger_styled(qtapp) -> None:
+    """Fix 2: the Stop button reads as a prominent danger/accent-filled action — its
+    inline stylesheet is driven by theme tokens (the danger color) so it stands out."""
+    from autoptz.ui import theme as T
+    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+
+    p = MarkControlPanel()
+    sheet = p._stop_btn.styleSheet().lower()
+    assert sheet  # carries inline prominent styling (not bare default)
+    # Danger-filled: the destructive/danger color drives the prominent look.
+    assert T.DANGER.lower() in sheet
+    # Visibly bigger / weightier than a default button.
+    assert "font-weight" in sheet
+    assert "padding" in sheet
+    p.deleteLater()
+
+
+def test_exit_button_is_prominent_secondary_styled(qtapp) -> None:
+    """Fix 2: the Exit Mark button reads as a clear, obvious secondary action — a
+    bigger themed button styled from the active palette tokens."""
+    from autoptz.ui import theme as T
+    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+
+    p = MarkControlPanel()
+    sheet = p._exit_btn.styleSheet().lower()
+    assert sheet  # carries inline prominent styling
+    # Themed from palette tokens (border/text), so it tracks light/dark.
+    assert T.CURRENT.text.lower() in sheet or T.CURRENT.border.lower() in sheet
+    assert "font-weight" in sheet
+    assert "padding" in sheet
+    p.deleteLater()
+
+
+def test_prominent_button_styling_survives_theme_flip(qtapp) -> None:
+    """Fix 2: the prominent button styling is re-applied in _restyle so a Light/Dark
+    flip keeps Stop danger-filled and Exit themed (not reverted to bare defaults)."""
+    from autoptz.ui import theme as T
+    from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
+
+    p = MarkControlPanel()
+    p._restyle()  # simulate a theme flip
+    assert T.DANGER.lower() in p._stop_btn.styleSheet().lower()
+    exit_sheet = p._exit_btn.styleSheet().lower()
+    assert T.CURRENT.text.lower() in exit_sheet or T.CURRENT.border.lower() in exit_sheet
+    p.deleteLater()
+
+
 def test_control_panel_verdict_has_no_inline_stylesheet(qtapp) -> None:
     # The verdict label is styled by the global #markVerdict rule + the _restyle
     # fallback — it must NOT carry a hard-coded inline color/size that ignores the

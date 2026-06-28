@@ -133,12 +133,39 @@ class TestPreflight:
         from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 
         dlg = MarkPreflightDialog(defaults=MarkSession())
-        # Three source radios: clip / synthetic / ndi; clip selected by default.
+        # Two source radios: clip / ndi; clip selected by default.
         assert dlg._clip_radio.isChecked()
-        assert not dlg._synthetic_radio.isChecked()
         assert dlg.session().source == "clip"
         # NDI radio gating mirrors cyndilib availability.
         assert dlg._ndi_radio.isEnabled() == ndi_sim_available()
+        dlg.deleteLater()
+
+    def test_only_clip_and_ndi_sources_offered(self, qtapp) -> None:
+        from PySide6.QtWidgets import QRadioButton
+
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+        # The user-facing "Synthetic — drawn people" option is removed entirely:
+        # the only source radios are the bundled clip + real NDI sources.
+        assert not hasattr(dlg, "_synthetic_radio")
+        radios = dlg._source_group.buttons()
+        assert dlg._clip_radio in radios
+        assert dlg._ndi_radio in radios
+        assert len(radios) == 2  # exactly clip + ndi, nothing else
+        labels = " ".join(r.text().lower() for r in dlg.findChildren(QRadioButton))
+        # The removed "Synthetic — drawn people" option's wording is gone entirely.
+        assert "synthetic" not in labels
+        dlg.deleteLater()
+
+    def test_old_synthetic_default_falls_back_to_clip(self, qtapp) -> None:
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        # A legacy default carrying the removed "synthetic" source must open on the
+        # bundled clip (the session normalises synthetic→clip) — never crash.
+        dlg = MarkPreflightDialog(defaults=MarkSession(source="synthetic"))
+        assert dlg._clip_radio.isChecked()
+        assert dlg.session().source == "clip"
         dlg.deleteLater()
 
     def test_clip_copy_warns_when_clip_missing(self, qtapp, monkeypatch) -> None:
@@ -161,14 +188,6 @@ class TestPreflight:
         clip_text = dlg._clip_radio.text().lower()
         assert "real people" in clip_text
         assert "not installed" not in clip_text
-        dlg.deleteLater()
-
-    def test_synthetic_source_selectable(self, qtapp) -> None:
-        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
-
-        dlg = MarkPreflightDialog(defaults=MarkSession(source="synthetic"))
-        assert dlg._synthetic_radio.isChecked()
-        assert dlg.session().source == "synthetic"
         dlg.deleteLater()
 
     def test_eta_formula(self, qtapp) -> None:

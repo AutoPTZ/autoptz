@@ -96,8 +96,30 @@ class TestClipSource:
     def test_default_source_is_clip(self) -> None:
         assert MarkSession().source == "clip"
         assert MarkSession().is_clip() is True
-        assert MarkSession(source="synthetic").is_clip() is False
+        # The user-facing "synthetic" source is removed: a legacy/old value maps to
+        # "clip" (the only sources now are "clip" and "ndi").
+        assert MarkSession(source="synthetic").is_clip() is True
         assert MarkSession(source="ndi").is_clip() is False
+
+    def test_source_is_clip_or_ndi_only(self) -> None:
+        # The only two sources are "clip" and "ndi"; anything else (the removed
+        # "synthetic", an unknown / malformed value) is tolerated by mapping to "clip".
+        assert MarkSession(source="clip").source == "clip"
+        assert MarkSession(source="ndi").source == "ndi"
+        assert MarkSession(source="synthetic").source == "clip"
+        assert MarkSession(source="garbage").source == "clip"
+        assert MarkSession(source="").source == "clip"
+
+    def test_old_synthetic_session_loads_as_clip(self) -> None:
+        # A persisted session from before the synthetic source was removed must load
+        # cleanly, mapping the old "synthetic" value to "clip".
+        store = _Store({MARK_SESSION_KEY: {"source": "synthetic"}})
+        loaded = load_mark_session(store)
+        assert loaded is not None
+        assert loaded.source == "clip"
+        assert loaded.is_clip() is True
+        # from_dict directly also maps it.
+        assert MarkSession.from_dict({"source": "synthetic"}).source == "clip"
 
     def test_clip_path_points_at_bundled_mp4(self) -> None:
         from pathlib import Path
@@ -238,8 +260,7 @@ class TestClipLibrary:
         assert MarkSession(source="clip", clip_id="").target_fps() == float(
             CLIP_LIBRARY[DEFAULT_CLIP_ID].native_fps
         )
-        # For synthetic / NDI (render-any-rate) sources the user's floor_fps wins.
-        assert MarkSession(source="synthetic", floor_fps=45.0).target_fps() == 45.0
+        # For an NDI (render-any-rate) source the user's floor_fps wins.
         assert MarkSession(source="ndi", floor_fps=24.0).target_fps() == 24.0
 
 

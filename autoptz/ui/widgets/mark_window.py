@@ -235,6 +235,27 @@ class MarkWindow(MainWindow):
             context_menu_enabled=False,
         )
         self.setWindowTitle("AutoPTZ Mark")  # NO version (lives in About)
+        # Fix 1 (live theme toggle in Mark): the global ThemeController (app.py) is
+        # bound to the MAIN client and re-applies the app palette/stylesheet on a
+        # theme change.  Mark runs on an ISOLATED client, so View→Appearance here
+        # never reached that controller and the shell stayed stale.  Build our OWN
+        # ThemeController bound to the QApplication + the isolated client so toggling
+        # the theme in Mark re-themes the whole window live.  (The HUD's QPainter
+        # chart still needs an explicit update() — kept in _inject_mark_ui; the
+        # controller is constructed FIRST so its themeChanged.apply() runs before the
+        # deferred panel _restyle slots.)
+        from PySide6.QtWidgets import QApplication
+
+        from autoptz.ui.theme import ThemeController
+
+        # Transient controller on the ISOLATED client so View→Appearance re-themes
+        # the whole Mark shell live. install_global_hooks=False: the main app's
+        # controller already owns the process-global popup-rounder / colour-scheme
+        # hooks, so Mark must not add a second global event filter per window
+        # (that accumulated + made the offscreen test suite quadratically slow).
+        self._theme = ThemeController(
+            QApplication.instance(), self._engine.client, install_global_hooks=False
+        )
         # Auto-size so the whole wall + panels fit (was a fixed 1200×780 that
         # cramped/scrolled the content); the showEvent maximizes once on first show.
         self.resize(1280, 820)
@@ -402,18 +423,19 @@ class MarkWindow(MainWindow):
     def _gt_active(self) -> bool:
         """True when ground-truth comparison should run for this Mark session.
 
-        Requires both the ``AUTOPTZ_MARK_GT`` env flag AND a synthetic/drawn
-        capability scene — the engine only populates ``TelemetryMsg.ground_truth``
-        for the drawn (``"anim"``) scene, which is what a synthetic session (or a
-        clip session falling back to drawn people) renders.
+        Requires both the ``AUTOPTZ_MARK_GT`` env flag AND the drawn (``"anim"``)
+        scene — the engine only populates ``TelemetryMsg.ground_truth`` for that
+        scene.  The user-facing synthetic source is gone, and NDI broadcasts the
+        SELECTED CLIP (real video, no drawn scene), so the drawn GT scene is reached
+        only by a CLIP session whose bundled asset is missing (it falls back to
+        drawn people).
         """
         if os.environ.get("AUTOPTZ_MARK_GT", "").strip().lower() not in ("1", "true", "yes", "on"):
             return False
         session = self._session
-        # The drawn scene is rendered for any non-clip source, or a clip session
-        # whose bundled asset is missing (falls back to drawn people).
+        # Drawn scene == a clip session whose bundled asset isn't present.
         try:
-            return (not session.is_clip()) or (not session.clip_available())
+            return session.is_clip() and not session.clip_available()
         except Exception:  # noqa: BLE001 — a probe must never block Mark startup
             return False
 

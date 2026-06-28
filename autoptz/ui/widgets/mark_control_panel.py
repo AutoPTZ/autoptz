@@ -73,10 +73,14 @@ class MarkControlPanel(QWidget):
         self._restyle()
 
     def _restyle(self) -> None:
-        """Refresh the verdict styling from the active palette (re-run on theme flip).
+        """Refresh the verdict + button styling from the active palette.
 
-        Honors the current final/in-flight state so a Light/Dark flip keeps a finished
-        score highlighted (accent + bold) and a live progress line plain.
+        Re-run on every theme flip.  The verdict honors the current final/in-flight
+        state (a finished score stays accent + bold, a live line stays plain), and the
+        Stop / Exit buttons get prominent inline styling driven by theme tokens so a
+        Light/Dark flip keeps Stop danger-filled and Exit a clear, obvious secondary
+        (the global stylesheet rules can't be added from here, so they're inlined and
+        re-applied here to survive theme flips).
         """
         if self._verdict_final:
             self._verdict_label.setStyleSheet(
@@ -86,6 +90,34 @@ class MarkControlPanel(QWidget):
             self._verdict_label.setStyleSheet(
                 f"color: {T.CURRENT.text}; font-size: {T.fs(14)}px; font-weight: 600;"
             )
+        self._restyle_buttons()
+
+    def _restyle_buttons(self) -> None:
+        """Prominent inline styling for the Stop + Exit buttons (theme-token driven).
+
+        Stop is a filled DANGER action (red, white text, no border) so stopping the run
+        is unmistakable; it greys out cleanly when disabled (idle).  Exit Mark is a
+        clear, obvious secondary: a bigger bordered button in the active palette's text
+        / surface / border tokens, accent-bordered on hover.  Both are sized larger
+        (bigger padding + bold) than a default button so they read as primary controls.
+        """
+        danger_hov = T.DANGER_HOVER
+        self._stop_btn.setStyleSheet(
+            f"QPushButton#markStopBtn {{ background: {T.DANGER}; color: {T.ACCENT_TEXT};"
+            f" border: none; border-radius: {T.RADIUS}px;"
+            f" padding: {T.fs(9)}px {T.fs(22)}px; font-size: {T.fs(14)}px; font-weight: 700; }}"
+            f"QPushButton#markStopBtn:hover {{ background: {danger_hov}; }}"
+            f"QPushButton#markStopBtn:disabled {{ background: {T.CURRENT.surface_alt};"
+            f" color: {T.CURRENT.muted}; }}"
+        )
+        self._exit_btn.setStyleSheet(
+            f"QPushButton#markExitBtn {{ background: {T.CURRENT.surface_alt};"
+            f" color: {T.CURRENT.text}; border: 1px solid {T.CURRENT.border};"
+            f" border-radius: {T.RADIUS}px; padding: {T.fs(9)}px {T.fs(22)}px;"
+            f" font-size: {T.fs(14)}px; font-weight: 600; }}"
+            f"QPushButton#markExitBtn:hover {{ background: {T.CURRENT.surface_hov};"
+            f" border-color: {T.ACCENT.name()}; }}"
+        )
 
     def set_verdict(self, text: str, *, final: bool = False) -> None:
         """Set the verdict line.

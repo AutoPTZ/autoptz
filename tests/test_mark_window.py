@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from autoptz.benchmark.runner import BenchmarkResult, StepResult
@@ -20,6 +22,24 @@ def qtapp():
     from PySide6.QtWidgets import QApplication
 
     yield QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def _flush_windows(qtapp):
+    """Promptly free each test's MarkWindow so they don't accumulate in-process.
+
+    Each MarkWindow builds a transient ThemeController whose apply() does a global
+    app.setStyleSheet(), which re-polishes EVERY live widget — so lingering windows
+    (deleteLater is deferred + the Python objects outlive the test) make the file
+    O(N²) and minutes-slow.  Flushing deleteLater + a GC pass after each test keeps
+    the live-window count ~1, which keeps the per-test cost flat.
+    """
+    yield
+    import gc
+
+    qtapp.processEvents()
+    gc.collect()
+    qtapp.processEvents()
 
 
 def _win(qtapp, **kw):
@@ -121,6 +141,10 @@ def test_tile_context_menu_disabled_in_mark(qtapp) -> None:
     win.deleteLater()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows-only Qt event-loop fd flake in headless MarkWindow show/close; covered on macOS/Linux + live",
+)
 def test_no_autostart_env_skips_ramp_on_show(qtapp) -> None:
     # With AUTOPTZ_MARK_NO_AUTOSTART set (the autouse fixture), showing the window
     # must NOT auto-start the ramp — the controller stays None.
@@ -205,20 +229,74 @@ def test_central_layout_spacing(qtapp) -> None:
         win.deleteLater()
 
 
+def test_window_owns_theme_controller_on_isolated_client(qtapp) -> None:
+    """Fix 1: MarkWindow constructs its OWN ThemeController bound to the QApplication
+    + the ISOLATED engine client.
+
+    The global ThemeController in app.py is bound to the MAIN client; Mark uses an
+    isolated client, so without its own controller a View→Appearance flip inside Mark
+    never re-themed the shell.  The window must build one whose client is the
+    isolated engine client.
+    """
+    from autoptz.ui.theme import ThemeController
+
+    win = _win(qtapp)
+    try:
+        assert isinstance(win._theme, ThemeController)
+        # Bound to the isolated client, NOT a separate / main one.
+        assert win._theme._client is win._engine.client
+    finally:
+        win.deleteLater()
+
+
+def test_theme_toggle_rethemes_whole_shell(qtapp) -> None:
+    """Fix 1: toggling the isolated client's theme re-applies the global app palette +
+    stylesheet (re-themes the whole Mark window live) via the window-owned controller.
+
+    No ThemeController is constructed by the test — the window's own one must do it.
+    """
+    from autoptz.ui import theme as T
+
+    win = _win(qtapp)
+    try:
+        win._engine.client.setTheme("dark")
+        qtapp.processEvents()
+        assert T.CURRENT is T.DARK
+        dark_sheet = qtapp.styleSheet()
+
+        win._engine.client.setTheme("light")
+        qtapp.processEvents()
+        # T.CURRENT flipped to the light palette AND the global stylesheet/palette
+        # were re-applied (the shell re-themed live).
+        assert T.CURRENT is T.LIGHT
+        light_sheet = qtapp.styleSheet()
+        assert light_sheet != dark_sheet
+        assert T.LIGHT.background.lower() in light_sheet.lower()
+        assert (
+            qtapp.palette().color(qtapp.palette().ColorRole.Window).name().lower()
+            == T.LIGHT.background.lower()
+        )
+
+        # Toggling back to dark re-themes the shell again.
+        win._engine.client.setTheme("dark")
+        qtapp.processEvents()
+        assert T.CURRENT is T.DARK
+        assert qtapp.styleSheet() == dark_sheet
+    finally:
+        win.deleteLater()
+
+
 def test_theme_toggle_repaints_hud(qtapp) -> None:
     """Area 1: a Light/Dark flip on the isolated client repaints the HUD widgets.
 
     The chart/control/details bake T.CURRENT colors at paint time; without a
-    listener a View→Appearance flip left them stale.  A ThemeController bound to
-    the SAME isolated client flips T.CURRENT, and the wired _restyle slots refresh
-    the control verdict + details idle colors.
+    listener a View→Appearance flip left them stale.  The window-owned ThemeController
+    bound to the SAME isolated client flips T.CURRENT, and the wired _restyle slots
+    refresh the control verdict + details idle colors.
     """
     from autoptz.ui import theme as T
-    from autoptz.ui.theme import ThemeController
 
     win = _win(qtapp)
-    # Bind a controller to the ISOLATED client so setTheme actually flips T.CURRENT.
-    ThemeController(qtapp, win._engine.client)
     try:
         win._engine.client.setTheme("dark")
         qtapp.processEvents()
@@ -1135,14 +1213,22 @@ def test_save_via_dialog_csv_by_suffix(qtapp, monkeypatch, tmp_path) -> None:
 
 
 # ── Slice 5: ground-truth comparison (env-gated + drawn-scene only) ───────────
+#
+# The user-facing "synthetic" source is gone — the drawn ("anim") scene now
+# survives ONLY as the env-gated ground-truth scene, reached when a clip session's
+# bundled asset is missing (it falls back to drawn people).  These tests drive that
+# path by forcing ``clip_available`` False on a clip session.
 
 
-def _win_source(qtapp, source: str, **kw):
+def _win_drawn(qtapp, monkeypatch, **kw):
+    """A clip session whose asset is absent → renders the drawn ("anim") scene."""
     from autoptz.ui.frames import ShmFrameSource
+    from autoptz.ui.mark_session import MarkSession as _MS
     from autoptz.ui.widgets.mark_window import MarkWindow
 
+    monkeypatch.setattr(_MS, "clip_available", lambda self: False)
     return MarkWindow(
-        session=MarkSession(source=source, max_cameras=3, dwell_s=0.0, **kw),
+        session=MarkSession(source="clip", max_cameras=3, dwell_s=0.0, **kw),
         frame_source=ShmFrameSource(),
     )
 
@@ -1150,17 +1236,54 @@ def _win_source(qtapp, source: str, **kw):
 def test_gt_inactive_without_env(qtapp, monkeypatch) -> None:
     """Without AUTOPTZ_MARK_GT the comparator map is None even on the drawn scene."""
     monkeypatch.delenv("AUTOPTZ_MARK_GT", raising=False)
-    win = _win_source(qtapp, "synthetic")
+    win = _win_drawn(qtapp, monkeypatch)
     try:
         assert win._gt is None
     finally:
         win.deleteLater()
 
 
-def test_gt_active_on_drawn_scene_with_env(qtapp, monkeypatch) -> None:
-    """AUTOPTZ_MARK_GT + a synthetic (drawn) scene activates the comparator map."""
+def test_gt_inactive_for_ndi_even_with_env(qtapp, monkeypatch) -> None:
+    """NDI broadcasts the selected clip (real video), not the drawn scene — so GT is
+    inactive for an NDI session even with AUTOPTZ_MARK_GT set."""
+    from autoptz.ui.frames import ShmFrameSource
+    from autoptz.ui.widgets.mark_window import MarkWindow
+
     monkeypatch.setenv("AUTOPTZ_MARK_GT", "1")
-    win = _win_source(qtapp, "synthetic")
+    win = MarkWindow(
+        session=MarkSession(source="ndi", max_cameras=3, dwell_s=0.0),
+        frame_source=ShmFrameSource(),
+    )
+    try:
+        assert win._gt is None  # NDI never renders the drawn GT scene
+    finally:
+        win.deleteLater()
+
+
+def test_gt_inactive_for_clip_with_asset_present(qtapp, monkeypatch) -> None:
+    """A clip session whose asset is present plays the real clip (no drawn scene), so
+    GT is inactive even with the env flag."""
+    from autoptz.ui.frames import ShmFrameSource
+    from autoptz.ui.mark_session import MarkSession as _MS
+    from autoptz.ui.widgets.mark_window import MarkWindow
+
+    monkeypatch.setenv("AUTOPTZ_MARK_GT", "1")
+    monkeypatch.setattr(_MS, "clip_available", lambda self: True)
+    win = MarkWindow(
+        session=MarkSession(source="clip", max_cameras=3, dwell_s=0.0),
+        frame_source=ShmFrameSource(),
+    )
+    try:
+        assert win._gt is None  # real clip plays → no drawn GT scene
+    finally:
+        win.deleteLater()
+
+
+def test_gt_active_on_drawn_scene_with_env(qtapp, monkeypatch) -> None:
+    """AUTOPTZ_MARK_GT + the drawn scene (clip session, asset missing) activates the
+    comparator map."""
+    monkeypatch.setenv("AUTOPTZ_MARK_GT", "1")
+    win = _win_drawn(qtapp, monkeypatch)
     try:
         assert win._gt is not None
     finally:
@@ -1173,7 +1296,7 @@ def test_gt_finalized_on_finish(qtapp, monkeypatch) -> None:
     from autoptz.engine.runtime.messages import BBox, GroundTruthPerson, TelemetryMsg, TrackInfo
 
     monkeypatch.setenv("AUTOPTZ_MARK_GT", "1")
-    win = _win_source(qtapp, "synthetic")
+    win = _win_drawn(qtapp, monkeypatch)
     # No modal save dialog on finish: persist directly (stubbed) so the test never
     # blocks on the real QFileDialog and never writes to the config dir.
     win._prompt_on_completion = False

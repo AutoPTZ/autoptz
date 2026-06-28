@@ -177,6 +177,9 @@ class MarkPreflightDialog(QDialog):
         col.addWidget(profile_box)
 
         # ── source ─────────────────────────────────────────────────────────────
+        # Only two sources: the bundled clip (real decode) and real NDI senders.
+        # The old "Synthetic — drawn people" option is removed — the drawn scene now
+        # survives only as the env-gated ground-truth scene, never a user source.
         source_box = QGroupBox("Camera source")
         source_col = QVBoxLayout(source_box)
         self._source_group = QButtonGroup(self)
@@ -186,21 +189,16 @@ class MarkPreflightDialog(QDialog):
             else "Bundled clip — not installed (uses drawn people)"
         )
         self._clip_radio = QRadioButton(clip_label)
-        self._synthetic_radio = QRadioButton("Synthetic — drawn people (light)")
         ndi_ok = ndi_sim_available()
         ndi_text = "Real NDI sources" if ndi_ok else "Real NDI sources  (requires cyndilib)"
         self._ndi_radio = QRadioButton(ndi_text)
         self._ndi_radio.setEnabled(ndi_ok)
         self._source_group.addButton(self._clip_radio)
-        self._source_group.addButton(self._synthetic_radio)
         self._source_group.addButton(self._ndi_radio)
         source_col.addWidget(self._clip_radio)
-        source_col.addWidget(self._synthetic_radio)
         source_col.addWidget(self._ndi_radio)
         if d.source == "ndi" and ndi_ok:
             self._ndi_radio.setChecked(True)
-        elif d.source == "synthetic":
-            self._synthetic_radio.setChecked(True)
         else:
             # Default (and any clip / unknown / NDI-without-cyndilib) → bundled clip.
             self._clip_radio.setChecked(True)
@@ -421,8 +419,6 @@ class MarkPreflightDialog(QDialog):
         """Read the current control values into a :class:`MarkSession`."""
         if self._ndi_radio.isEnabled() and self._ndi_radio.isChecked():
             source = "ndi"
-        elif self._synthetic_radio.isChecked():
-            source = "synthetic"
         else:
             source = "clip"
         profile = "streams" if self._streams_radio.isChecked() else "full"
