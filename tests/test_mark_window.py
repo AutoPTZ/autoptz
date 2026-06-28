@@ -671,7 +671,9 @@ def test_completion_modal_save_then_open(qtapp, monkeypatch, tmp_path, _patch_co
         assert target.exists()  # save wrote the chosen path
         assert win._benchmarks_dir == target.parent
         assert opened  # open revealed the saved dir
-        assert str(target.parent) in opened[0].toLocalFile()
+        # QUrl.toLocalFile() uses forward slashes on every OS; compare separator-
+        # agnostically so the assertion holds on Windows (backslash paths) too.
+        assert target.parent.as_posix() in opened[0].toLocalFile()
     finally:
         mc.MarkCompletionDialog = orig  # type: ignore[attr-defined]
         win.deleteLater()
