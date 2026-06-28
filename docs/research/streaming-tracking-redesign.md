@@ -220,9 +220,15 @@ every camera the same way regardless of thread vs process:
 - **Default = single process.** Capture is a **receive‑only thread per source**
   doing *only* native work (NDI recv + one `cvtColor` into the shm slot) — both
   **release the GIL**, so threads give true parallelism here once the per‑frame
-  Python glue is gone. *(Phase 0 verifies cyndilib actually releases the GIL during
-  `recv`; if it holds it, that's a small binding fix — or the one place capture
-  goes to a process.)*
+  Python glue is gone. **[Phase 0 finding — resolved]** cyndilib actually *holds*
+  the GIL during capture (no `with nogil:` on its call chain), **but** AutoPTZ uses
+  the *non‑blocking* FrameSync snapshot (a microsecond‑scale memcpy of the latest
+  frame, not a blocking network wait) and the expensive `cv2.cvtColor` releases the
+  GIL — so the GIL bite on NDI capture today is negligible and **capture can stay
+  threads**. (Critical corollary: do **not** "fix" this by switching to cyndilib's
+  blocking `RecvThread`/`Receiver.receive()` — that path holds the GIL across the
+  blocking receive and would be strictly worse.) The thread‑vs‑process decision is
+  therefore driven by *whole‑pipeline* GIL contention, not capture.
 - **Inference = a single shared, batched stage.** ORT already runs ops on native
   threads; the GIL‑bound part is the Python glue (NMS, letterbox, tracker update).
   Run that glue **once per N‑camera batch**, not once per camera‑thread, and the
