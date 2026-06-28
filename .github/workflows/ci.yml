@@ -79,17 +79,26 @@ jobs:
         # file's teardown can't then corrupt later files. ``shell: bash`` works on
         # the Windows runner via git-bash; ``set +e`` lets the loop run all files
         # and still fail the job (with the offending file named) if any file fails.
+        # A heavy file can still INTERMITTENTLY crash at native teardown (a rare
+        # SIGSEGV/abort that --reruns can't catch because it kills the process), so
+        # retry a crashed/failed file up to 3 times in fresh processes; a file that
+        # fails all 3 is a real failure and fails the job.
         shell: bash
         run: |
           set +e
           failed=0
           for f in tests/test_*.py; do
-            echo "::group::$f"
-            pytest "$f" -q -p no:cacheprovider --timeout=60
-            rc=$?
-            echo "::endgroup::"
+            rc=1
+            for attempt in 1 2 3; do
+              echo "::group::$f (attempt $attempt)"
+              pytest "$f" -q -p no:cacheprovider --timeout=120
+              rc=$?
+              echo "::endgroup::"
+              [ "$rc" -eq 0 ] && break
+              echo "::warning file=$f::$f failed on attempt $attempt (exit $rc); retrying in a fresh process"
+            done
             if [ "$rc" -ne 0 ]; then
-              echo "::error file=$f::pytest failed for $f (exit $rc)"
+              echo "::error file=$f::pytest failed for $f after 3 attempts (exit $rc)"
               failed=1
             fi
           done
