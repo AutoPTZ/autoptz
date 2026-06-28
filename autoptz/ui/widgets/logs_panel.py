@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
-from PySide6.QtGui import QColor, QKeySequence, QPainter, QShortcut
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -195,6 +197,28 @@ class LogTableModel(QAbstractTableModel):
         self.endResetModel()
 
 
+class LogItemDelegate(QStyledItemDelegate):
+    """Paint each cell in its model ``ForegroundRole`` color.
+
+    Qt's style-sheet engine treats ``QTableView::item { color: … }`` as an
+    *override* of the model's per-row :data:`Qt.ForegroundRole`, so the moment the
+    panel set a flat item color for theming, every log line rendered monochrome —
+    the per-level (red/amber) and per-camera tints never reached the screen.
+
+    Copying the role into the style option's palette here colors the text through
+    the painter instead of the stylesheet, so it survives the view's stylesheet
+    and shows whether or not the row is selected (``Text`` for normal rows,
+    ``HighlightedText`` for the selected one).
+    """
+
+    def initStyleOption(self, option: QStyleOptionViewItem, index: QModelIndex) -> None:  # noqa: N802
+        super().initStyleOption(option, index)
+        color = index.data(Qt.ItemDataRole.ForegroundRole)
+        if isinstance(color, QColor):
+            option.palette.setColor(QPalette.ColorRole.Text, color)
+            option.palette.setColor(QPalette.ColorRole.HighlightedText, color)
+
+
 class LogsPanel(QWidget):
     """Filterable log console bound to the shared LogListModel."""
 
@@ -281,11 +305,22 @@ class LogsPanel(QWidget):
         mono.setFamily("Menlo")
         mono.setPixelSize(11)
         self._table.setFont(mono)
+        # Per-row coloring goes through a delegate so the view stylesheet can't
+        # clobber the model's ForegroundRole (see LogItemDelegate).
+        self._table.setItemDelegate(LogItemDelegate(self._table))
         hh = self._table.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        # Draggable columns: Time / Level / Logger are independently resizable;
+        # Message stretches to fill the remainder (and is resized by dragging the
+        # divider to its left).  Sections are also reorderable.
+        for col in range(4):
+            hh.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+        hh.setStretchLastSection(True)
+        hh.setSectionsMovable(True)
+        # First-run widths; any persisted widths below take precedence.
+        for col, width in enumerate((96, 78, 200, 600)):
+            hh.resizeSection(col, width)
+        self._restore_column_widths()
+        hh.sectionResized.connect(self._on_section_resized)
         root.addWidget(self._table, 1)
 
         self._proxy.rowsInserted.connect(self._on_rows)
@@ -298,17 +333,16 @@ class LogsPanel(QWidget):
         """Repaint the log table and force empty viewport areas onto the theme."""
         pal = T.CURRENT
         self.setStyleSheet(f"QWidget#logsPanel {{ background-color: {pal.surface}; }}")
+        # NB: deliberately no ``QTableView::item { color }`` rule — pinning a flat
+        # item foreground here overrides the model's per-row ForegroundRole and the
+        # whole console renders monochrome.  Row colors come from LogItemDelegate;
+        # cell/selection backgrounds come from the base view rule below (Qt's
+        # default item painting, which honors selection-background-color).
         self._table.setStyleSheet(
             f"QTableView {{ background-color: {pal.surface};"
             f" border: 1px solid {pal.border}; gridline-color: {pal.border};"
-            f" selection-background-color: {T.SELECTION}; selection-color: {pal.text};"
+            f" selection-background-color: {T.SELECTION};"
             f" outline: none; }}"
-            f"QTableView::item {{ background-color: {pal.surface}; color: {pal.text}; }}"
-            # A per-item background overrides selection-background-color, so selected
-            # rows looked unselected (the "selection does nothing" bug) — restate the
-            # highlight explicitly for :selected so a click/drag is actually visible.
-            f"QTableView::item:selected {{ background-color: {T.SELECTION};"
-            f" color: {pal.text}; }}"
         )
         self._table.viewport().setStyleSheet(f"background-color: {pal.surface};")
         self._table.viewport().update()
@@ -331,6 +365,40 @@ class LogsPanel(QWidget):
         self._autoscroll_btn.setText(f"Autoscroll: {'On' if on else 'Off'}")
         if on:
             self._table.scrollToBottom()
+
+    # ── column-width persistence ─────────────────────────────────────────────────
+
+    def _restore_column_widths(self) -> None:
+        """Apply persisted Time/Level/Logger widths (Message stretches to fill)."""
+        self._restoring_columns = True
+        try:
+            try:
+                saved = self._client.getSetting("logs_columns", {}) or {}
+            except Exception:  # noqa: BLE001 — bad/absent settings → keep defaults
+                saved = {}
+            if isinstance(saved, dict):
+                hh = self._table.horizontalHeader()
+                for key, width in saved.items():
+                    try:
+                        col, w = int(key), int(width)
+                    except (TypeError, ValueError):
+                        continue
+                    if 0 <= col < 3 and w > 0:
+                        hh.resizeSection(col, w)
+        finally:
+            self._restoring_columns = False
+
+    def _on_section_resized(self, index: int, _old: int, new: int) -> None:
+        """Persist a user drag of a Time/Level/Logger column (Message is derived)."""
+        if getattr(self, "_restoring_columns", False) or not (0 <= index < 3):
+            return
+        try:
+            saved = self._client.getSetting("logs_columns", {}) or {}
+            saved = dict(saved) if isinstance(saved, dict) else {}
+            saved[str(index)] = int(new)
+            self._client.setSetting("logs_columns", saved)
+        except Exception:  # noqa: BLE001 — persistence is best-effort
+            log.debug("persist log column width failed", exc_info=True)
 
     def _on_rows(self, *_args: Any) -> None:
         if self._autoscroll:
