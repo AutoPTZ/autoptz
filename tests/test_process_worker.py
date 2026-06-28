@@ -136,6 +136,48 @@ class TestRelayIdentityLockFree:
         )
 
 
+class TestChildThreadCaps:
+    """A spawned camera child must re-apply the per-camera thread budget itself.
+
+    It inherits the supervisor's env, but ``torch.set_num_threads`` / OpenCV caps
+    are *runtime* calls no env performs — without them each camera process imports
+    torch/cv2 at cores-wide and several oversubscribe the machine (the "each new
+    process eats a lot of CPU" headroom)."""
+
+    def test_applies_inherited_budget_to_torch_and_opencv(self, monkeypatch) -> None:
+        from autoptz.engine import process_worker as pw
+        from autoptz.engine.runtime import flags
+
+        seen: dict[str, object] = {}
+        monkeypatch.setattr(
+            flags, "apply_opencv_thread_cap", lambda *a, **k: seen.setdefault("cv2", True)
+        )
+        monkeypatch.setattr(flags, "apply_thread_caps", lambda n: seen.__setitem__("torch", n))
+        monkeypatch.setenv("AUTOPTZ_ORT_INTRA_THREADS", "3")
+
+        pw._apply_child_thread_caps()
+
+        assert seen.get("cv2") is True
+        assert seen.get("torch") == 3
+
+    def test_skips_torch_cap_when_no_budget_published(self, monkeypatch) -> None:
+        from autoptz.engine import process_worker as pw
+        from autoptz.engine.runtime import flags
+
+        seen: dict[str, object] = {}
+        monkeypatch.setattr(
+            flags, "apply_opencv_thread_cap", lambda *a, **k: seen.setdefault("cv2", True)
+        )
+        monkeypatch.setattr(flags, "apply_thread_caps", lambda n: seen.__setitem__("torch", n))
+        monkeypatch.delenv("AUTOPTZ_ORT_INTRA_THREADS", raising=False)
+
+        pw._apply_child_thread_caps()
+
+        # OpenCV cap (reads its own env) still runs; the torch budget cap is skipped.
+        assert seen.get("cv2") is True
+        assert "torch" not in seen
+
+
 class TestHandleProxy:
     """The handle must serialize each supervisor method call onto the command queue
     (post-start), and buffer pre-start feature/defer config into the spec."""

@@ -123,6 +123,28 @@ def _safe_put(q: Any, item: Any) -> None:
         pass
 
 
+def _apply_child_thread_caps() -> None:
+    """Re-apply the supervisor's per-camera thread budget inside this child process.
+
+    A spawned child inherits the published ``AUTOPTZ_*`` / ``OMP_*`` env (so a
+    library imported here reads the cap at import), but ``cv2.setNumThreads`` and
+    ``torch.set_num_threads`` are *runtime* calls no env performs.  Without them
+    each camera process runs OpenCV/torch at cores-wide, and several of them
+    oversubscribe the CPU — the "each new process eats a lot of CPU" headroom.
+    Best-effort: a thread-cap hint must never break the child.
+    """
+    from autoptz.engine.runtime.flags import apply_opencv_thread_cap, apply_thread_caps
+
+    apply_opencv_thread_cap()
+    raw = os.environ.get("AUTOPTZ_ORT_INTRA_THREADS", "").strip()
+    if not raw:
+        return
+    try:
+        apply_thread_caps(max(1, int(raw)))
+    except ValueError:
+        pass
+
+
 def _configure_child_logging() -> None:
     """Make a child's WARNING+ logs visible to the operator (best-effort).
 
@@ -161,11 +183,11 @@ def run_camera_process(
     except Exception:  # noqa: BLE001
         pass
 
-    # Re-apply the OpenCV thread cap in this child (it inherited AUTOPTZ_CV2_THREADS
-    # from the parent but not the in-process cv2.setNumThreads call).
-    from autoptz.engine.runtime.flags import apply_opencv_thread_cap
-
-    apply_opencv_thread_cap()
+    # Re-apply the full per-camera thread budget in this child.  It inherited the
+    # supervisor's env, but the OpenCV and torch caps are *runtime* calls no env
+    # performs — so each camera process must do them itself or it imports cv2/torch
+    # at cores-wide and several of them oversubscribe the machine.
+    _apply_child_thread_caps()
 
     worker = None
     try:
