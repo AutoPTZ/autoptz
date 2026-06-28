@@ -354,6 +354,12 @@ class PTZController:
         # as extra lead so the aim anticipates the real pipeline delay.
         self._loop_latency_s: float = 0.0
 
+        # Phase 0b — measured PTZ transport send wall time (ms) of the most recent
+        # tick that actually fired a backend ``move_velocity`` (change-suppressed
+        # ticks leave this untouched).  0.0 until the first real send.  Surfaced as
+        # ``command_send_ms`` in telemetry + fed into the true end-to-end lead.
+        self._last_cmd_send_ms: float = 0.0
+
         # last command sent (for rate-limit suppression)
         self._last_pan: float = 0.0
         self._last_tilt: float = 0.0
@@ -587,12 +593,26 @@ class PTZController:
             or abs(tilt_cmd - self._last_tilt) > 1e-4
             or abs(zoom_cmd - self._last_zoom) > 1e-4
         ):
+            # Measure the transport send wall time only when a send actually fires
+            # (change-suppression skips unchanged commands, so the prior reading
+            # holds across suppressed ticks — Phase 0b ``command_send_ms``).
+            send_t0 = time.perf_counter()
             self._backend.move_velocity(pan_cmd, tilt_cmd, zoom_cmd)
+            self._last_cmd_send_ms = (time.perf_counter() - send_t0) * 1000.0
             self._last_pan = pan_cmd
             self._last_tilt = tilt_cmd
             self._last_zoom = zoom_cmd
 
         return pan_cmd, tilt_cmd, zoom_cmd
+
+    def last_cmd_send_ms(self) -> float:
+        """Most recent measured PTZ transport send wall time (ms).
+
+        0.0 until the first real send; holds across change-suppressed ticks (a
+        tick whose command is unchanged fires no backend send, so this value is
+        not overwritten).
+        """
+        return self._last_cmd_send_ms
 
     def _heartbeat_stalled(self) -> bool:
         """True when actively driving but the producer feed has gone stale.

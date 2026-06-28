@@ -139,6 +139,20 @@ class _AdapterFrameSource:
         except Exception:  # noqa: BLE001
             return None
 
+    def delivery_metrics(self) -> dict[str, float | int]:
+        """Pass through the adapter's per-source frame-delivery telemetry.
+
+        Returns ``{}`` when the wrapped adapter predates the method (older fakes
+        in tests), so the worker can fall back to its own frame counters.
+        """
+        fn = getattr(self._adapter, "delivery_metrics", None)
+        if not callable(fn):
+            return {}
+        try:
+            return fn()
+        except Exception:  # noqa: BLE001
+            return {}
+
 
 def build_frame_source(camera_id: str, config: CameraConfig) -> FrameSource:
     """Construct the right ingest-adapter-backed FrameSource for *config*.

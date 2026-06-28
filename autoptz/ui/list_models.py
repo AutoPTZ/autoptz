@@ -100,6 +100,73 @@ class CameraRecord:
             return 0.0
         return float(getattr(self.telemetry, "source_fps_cap", 0.0))
 
+    # ── Phase 0 per-source delivery telemetry ─────────────────────────────────
+
+    @property
+    def frames_delivered(self) -> int:
+        """Cumulative frames the receiver actually delivered (0 until known)."""
+        if not self.telemetry:
+            return 0
+        return int(getattr(self.telemetry, "frames_delivered", 0))
+
+    @property
+    def frames_dropped_est(self) -> int:
+        """Estimated frames the source produced but the receiver missed."""
+        if not self.telemetry:
+            return 0
+        return int(getattr(self.telemetry, "frames_dropped_est", 0))
+
+    @property
+    def delivered_fps(self) -> float:
+        """Receiver-side delivered frame rate (0.0 until known)."""
+        if not self.telemetry:
+            return 0.0
+        return float(getattr(self.telemetry, "delivered_fps", 0.0))
+
+    @property
+    def source_fps(self) -> float:
+        """Source-advertised frame rate (0.0 until known)."""
+        if not self.telemetry:
+            return 0.0
+        return float(getattr(self.telemetry, "source_fps", 0.0))
+
+    @property
+    def ndi_queue_depth(self) -> int:
+        """Pending receive-queue depth; -1 when the source exposes no queue."""
+        if not self.telemetry:
+            return -1
+        return int(getattr(self.telemetry, "ndi_queue_depth", -1))
+
+    # ── Phase 0 end-to-end latency decomposition ──────────────────────────────
+
+    @property
+    def end_to_end_ms(self) -> float:
+        """Capture→actuation control dead time (0.0 until the probe runs)."""
+        if not self.telemetry:
+            return 0.0
+        return float(getattr(self.telemetry, "end_to_end_ms", 0.0))
+
+    @property
+    def capture_age_ms(self) -> float:
+        """Age of the driving frame at command time (0.0 until known)."""
+        if not self.telemetry:
+            return 0.0
+        return float(getattr(self.telemetry, "capture_age_ms", 0.0))
+
+    @property
+    def command_send_ms(self) -> float:
+        """PTZ transport send wall time (0.0 until known)."""
+        if not self.telemetry:
+            return 0.0
+        return float(getattr(self.telemetry, "command_send_ms", 0.0))
+
+    @property
+    def actuation_estimate_ms(self) -> float:
+        """Configured camera-motor actuation lag estimate (0.0 until known)."""
+        if not self.telemetry:
+            return 0.0
+        return float(getattr(self.telemetry, "actuation_estimate_ms", 0.0))
+
     def _crop_norm(self) -> tuple[float, float, float, float] | None:
         """Active digital-crop mapping params ``(cx, cy, cw, ch)`` in full-frame
         pixels when Center Stage is driving the preview, else None.

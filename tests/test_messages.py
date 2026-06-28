@@ -114,6 +114,56 @@ class TestTelemetryMsg:
         assert restored.height == 1080
         assert restored.dropped_frames == 7
 
+    def test_delivery_metrics_default(self) -> None:
+        # Phase 0a: per-source frame-delivery telemetry. queue depth is -1
+        # ("unavailable") by default since most sources expose no SDK queue.
+        msg = TelemetryMsg(camera_id="c", seq=0)
+        assert msg.frames_delivered == 0
+        assert msg.frames_dropped_est == 0
+        assert msg.delivered_fps == 0.0
+        assert msg.source_fps == 0.0
+        assert msg.ndi_queue_depth == -1
+
+    def test_delivery_metrics_round_trip(self) -> None:
+        msg = TelemetryMsg(
+            camera_id="c",
+            seq=1,
+            frames_delivered=900,
+            frames_dropped_est=42,
+            delivered_fps=28.5,
+            source_fps=30.0,
+            ndi_queue_depth=3,
+        )
+        restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+        assert restored.frames_delivered == 900
+        assert restored.frames_dropped_est == 42
+        assert restored.delivered_fps == pytest.approx(28.5)
+        assert restored.source_fps == pytest.approx(30.0)
+        assert restored.ndi_queue_depth == 3
+
+    def test_latency_breakdown_default_zero(self) -> None:
+        # Phase 0b: true end-to-end latency decomposition.
+        msg = TelemetryMsg(camera_id="c", seq=0)
+        assert msg.capture_age_ms == 0.0
+        assert msg.command_send_ms == 0.0
+        assert msg.actuation_estimate_ms == 0.0
+        assert msg.end_to_end_ms == 0.0
+
+    def test_latency_breakdown_round_trip(self) -> None:
+        msg = TelemetryMsg(
+            camera_id="c",
+            seq=1,
+            capture_age_ms=55.0,
+            command_send_ms=7.5,
+            actuation_estimate_ms=40.0,
+            end_to_end_ms=102.5,
+        )
+        restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
+        assert restored.capture_age_ms == pytest.approx(55.0)
+        assert restored.command_send_ms == pytest.approx(7.5)
+        assert restored.actuation_estimate_ms == pytest.approx(40.0)
+        assert restored.end_to_end_ms == pytest.approx(102.5)
+
     def test_digital_crop_rect_defaults_none(self) -> None:
         msg = TelemetryMsg(camera_id="c", seq=0)
         assert msg.digital_crop_rect is None
