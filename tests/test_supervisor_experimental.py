@@ -71,42 +71,31 @@ def test_model_server_init_failure_clears_infer_queues(tmp_path: Any, monkeypatc
     assert sup._infer_resp_qs == {}
 
 
-def test_stop_unlinks_infer_shm_segments(tmp_path: Any) -> None:
+def test_stop_unlinks_infer_shm_segments(tmp_path: Any, monkeypatch: Any) -> None:
     """stop() must unlink each camera's detection shm segment. The camera child that
     created the writer is torn down via terminate() (SIGTERM), so its own finally that
     would close+unlink the segment never runs — the supervisor must clean it, else the
-    segment leaks in shared memory across restarts.
+    segment leaks across restarts.
+
+    Verify the call (not the filesystem effect): POSIX unlink-by-name removes the
+    segment immediately, but on Windows ``SharedMemory.unlink`` is a no-op (shm is freed
+    by handle-close, so the name persists while any handle is open) — so asserting the
+    segment is gone is platform-specific. The supervisor's contract is "unlink every
+    camera's segment on stop", which is what we pin here.
     """
-    from multiprocessing.shared_memory import SharedMemory
+    import autoptz.engine.runtime.shm as shm_mod
+    from autoptz.engine.pipeline.inference_server import shm_name_for
 
-    import pytest
-
-    from autoptz.engine.pipeline.inference_server import (
-        SERVER_FRAME_H,
-        SERVER_FRAME_W,
-        shm_name_for,
-    )
-    from autoptz.engine.runtime.shm import ShmWriter
+    unlinked: list[str] = []
+    monkeypatch.setattr(shm_mod, "unlink_shared_memory_pair", lambda name: unlinked.append(name))
 
     sup, _store = _sup(tmp_path)
-    cam = "camShm"
     sup._running = True
-    sup._infer_resp_qs = {cam: object()}  # model-server mode knows this camera
-    name = shm_name_for(cam)
-    writer = ShmWriter(
-        name, SERVER_FRAME_H, SERVER_FRAME_W
-    )  # the child's writer (segment now exists)
-    try:
-        sup.stop()
-        with pytest.raises(FileNotFoundError):
-            SharedMemory(name=name, create=False)  # unlinked by stop()
-        with pytest.raises(FileNotFoundError):
-            SharedMemory(name=f"{name}__idx", create=False)  # commit-index segment too
-    finally:
-        try:
-            writer.close()  # tolerant if already unlinked
-        except Exception:  # noqa: BLE001
-            pass
+    sup._infer_resp_qs = {"camA": object(), "camB": object()}  # model-server mode cameras
+    sup.stop()
+
+    assert shm_name_for("camA") in unlinked
+    assert shm_name_for("camB") in unlinked
 
 
 def test_choice_flag_value_is_set(tmp_path: Any, monkeypatch: Any) -> None:

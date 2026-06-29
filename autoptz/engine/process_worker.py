@@ -149,10 +149,19 @@ def _apply_child_thread_caps() -> None:
 def _parent_is_gone(original_ppid: int) -> bool:
     """True once this process's parent has died.
 
-    When the parent dies the child is reparented (to launchd/init), so ``getppid()``
-    no longer matches the pid recorded at start.
+    On Unix the child is reparented (to launchd/init) when the parent dies, so
+    ``getppid()`` no longer matches the pid recorded at start — the cheap primary check.
+    Windows does NOT reparent, so ``getppid()`` stays put there; fall back to a process-
+    liveness probe so the watchdog still fires cross-platform.
     """
-    return os.getppid() != original_ppid
+    if os.getppid() != original_ppid:
+        return True
+    try:
+        import psutil  # noqa: PLC0415
+
+        return not psutil.pid_exists(original_ppid)
+    except Exception:  # noqa: BLE001 — psutil missing/unsupported → trust getppid only
+        return False
 
 
 def _install_parent_death_watchdog(poll_s: float = 1.0) -> None:
