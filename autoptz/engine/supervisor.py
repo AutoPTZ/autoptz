@@ -297,6 +297,7 @@ class Supervisor:
         # delegates to it.
         proc = self._model_server_proc
         stop_ev = self._model_server_stop
+        infer_cam_ids = list(self._infer_resp_qs.keys())  # capture before clearing
         self._model_server_proc = None
         self._model_server_stop = None
         self._infer_req_q = None
@@ -310,6 +311,18 @@ class Supervisor:
                     proc.terminate()
             except Exception:  # noqa: BLE001
                 log.debug("model-server stop failed", exc_info=True)
+        # Unlink each camera's detection shm. The child that created the writer is torn
+        # down via terminate() (SIGTERM), so its own close()+unlink finally never runs —
+        # clean the segments here or they leak in shared memory across restarts.
+        if infer_cam_ids:
+            from autoptz.engine.pipeline.inference_server import shm_name_for
+            from autoptz.engine.runtime.shm import unlink_shared_memory_pair
+
+            for cam in infer_cam_ids:
+                try:
+                    unlink_shared_memory_pair(shm_name_for(cam))
+                except Exception:  # noqa: BLE001
+                    log.debug("infer shm unlink failed for %s", cam, exc_info=True)
 
     def _start_pump_if_needed(self, run_pump: bool) -> None:
         if run_pump and self._pump_thread is None:

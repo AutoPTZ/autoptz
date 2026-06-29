@@ -245,12 +245,18 @@ def run_inference_server(
     import os as _os
     import threading as _threading
 
-    from autoptz.engine.process_worker import _configure_child_logging
+    from autoptz.engine.process_worker import (
+        _configure_child_logging,
+        _install_parent_death_watchdog,
+    )
     from autoptz.engine.runtime.shm import ShmReader
 
     # A spawned child inherits no log handlers, so the detector-build error and the
     # optional health log would go nowhere without this.
     _configure_child_logging()
+    # Never outlive the app: exit if the parent is killed by signal/crash so the shared
+    # detector process (RAM + accelerator) is never orphaned.
+    _install_parent_death_watchdog()
     if _os.environ.get("AUTOPTZ_MS_DIAG") == "1":
         _logging.getLogger(__name__).setLevel(_logging.INFO)
         _logging.getLogger().setLevel(_logging.INFO)

@@ -53,6 +53,7 @@ import logging
 import multiprocessing as mp
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -145,6 +146,38 @@ def _apply_child_thread_caps() -> None:
         pass
 
 
+def _parent_is_gone(original_ppid: int) -> bool:
+    """True once this process's parent has died.
+
+    When the parent dies the child is reparented (to launchd/init), so ``getppid()``
+    no longer matches the pid recorded at start.
+    """
+    return os.getppid() != original_ppid
+
+
+def _install_parent_death_watchdog(poll_s: float = 1.0) -> None:
+    """Force-exit this child when its parent (the app/supervisor process) dies.
+
+    daemon=True children are only reaped on a CLEAN parent exit (multiprocessing's
+    atexit). A parent killed by signal (SIGTERM/SIGKILL) or a crash would otherwise
+    orphan the model-server / per-camera workers, leaking RAM + the accelerator. This
+    watchdog polls the parent pid and ``os._exit``-s the moment it goes away, so a child
+    never outlives the app regardless of how it died.
+    """
+    original_ppid = os.getppid()
+
+    def _watch() -> None:
+        while True:
+            time.sleep(poll_s)
+            try:
+                if _parent_is_gone(original_ppid):
+                    os._exit(0)
+            except Exception:  # noqa: BLE001 — never let the watchdog raise
+                os._exit(0)
+
+    threading.Thread(target=_watch, name="parent-death-watchdog", daemon=True).start()
+
+
 def _configure_child_logging() -> None:
     """Make a child's WARNING+ logs visible to the operator (best-effort).
 
@@ -184,6 +217,10 @@ def run_camera_process(
         _configure_child_logging()
     except Exception:  # noqa: BLE001
         pass
+
+    # Never outlive the app: if the parent is killed by signal/crash (so its clean
+    # teardown never runs), exit instead of orphaning this worker.
+    _install_parent_death_watchdog()
 
     # Re-apply the full per-camera thread budget in this child.  It inherited the
     # supervisor's env, but the OpenCV and torch caps are *runtime* calls no env

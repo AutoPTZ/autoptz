@@ -71,6 +71,44 @@ def test_model_server_init_failure_clears_infer_queues(tmp_path: Any, monkeypatc
     assert sup._infer_resp_qs == {}
 
 
+def test_stop_unlinks_infer_shm_segments(tmp_path: Any) -> None:
+    """stop() must unlink each camera's detection shm segment. The camera child that
+    created the writer is torn down via terminate() (SIGTERM), so its own finally that
+    would close+unlink the segment never runs — the supervisor must clean it, else the
+    segment leaks in shared memory across restarts.
+    """
+    from multiprocessing.shared_memory import SharedMemory
+
+    import pytest
+
+    from autoptz.engine.pipeline.inference_server import (
+        SERVER_FRAME_H,
+        SERVER_FRAME_W,
+        shm_name_for,
+    )
+    from autoptz.engine.runtime.shm import ShmWriter
+
+    sup, _store = _sup(tmp_path)
+    cam = "camShm"
+    sup._running = True
+    sup._infer_resp_qs = {cam: object()}  # model-server mode knows this camera
+    name = shm_name_for(cam)
+    writer = ShmWriter(
+        name, SERVER_FRAME_H, SERVER_FRAME_W
+    )  # the child's writer (segment now exists)
+    try:
+        sup.stop()
+        with pytest.raises(FileNotFoundError):
+            SharedMemory(name=name, create=False)  # unlinked by stop()
+        with pytest.raises(FileNotFoundError):
+            SharedMemory(name=f"{name}__idx", create=False)  # commit-index segment too
+    finally:
+        try:
+            writer.close()  # tolerant if already unlinked
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def test_choice_flag_value_is_set(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.delenv("AUTOPTZ_REID_DEVICE", raising=False)
     sup, store = _sup(tmp_path)

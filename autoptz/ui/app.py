@@ -73,6 +73,45 @@ def _queue_macos_camera_access_result(bridge: object, granted: bool) -> None:
     bridge.resolved.emit(bool(granted))  # type: ignore[attr-defined]
 
 
+def _install_signal_shutdown(app: object, hard_exit_delay: float | None = 6.0) -> None:
+    """Route SIGINT/SIGTERM through a clean Qt quit, with a hard-exit backstop.
+
+    Qt's event loop blocks in native code, so a signal would otherwise terminate the
+    process WITHOUT running the orderly shutdown after ``app.exec()`` — orphaning the
+    model-server / per-camera worker processes (spawned under ``AUTOPTZ_MODEL_SERVER`` /
+    ``AUTOPTZ_PROCESS_PER_CAMERA``), which keep holding RAM + the accelerator. Asking the
+    app to quit lets ``app.exec()`` return so ``client.stopEngine()`` →
+    ``supervisor.stop()`` terminates the children cleanly. The always-on ~30 Hz pump
+    timer keeps the loop returning to Python so the handler fires within a frame.
+
+    Backstop: if the clean quit doesn't complete within ``hard_exit_delay`` seconds (a
+    wedged teardown, or a C library that replaced our handler so app.quit never ran),
+    force-exit so a signal ALWAYS stops the app — the spawned children reap themselves
+    via their own parent-death watchdog. Pass ``hard_exit_delay=None`` to disable the
+    backstop (tests). Best-effort: ``signal.signal`` only works on the main thread.
+    """
+    import signal  # noqa: PLC0415
+    import threading  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    def _hard_exit() -> None:
+        time.sleep(hard_exit_delay or 0)
+        os._exit(0)
+
+    def _handler(_signum: int, _frame: object) -> None:
+        quit_fn = getattr(app, "quit", None)
+        if callable(quit_fn):
+            quit_fn()
+        if hard_exit_delay is not None:
+            threading.Thread(target=_hard_exit, name="signal-hard-exit", daemon=True).start()
+
+    for _sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(_sig, _handler)
+        except (ValueError, OSError):  # not main thread / unsupported platform
+            log.debug("could not install shutdown handler for signal %s", _sig, exc_info=True)
+
+
 def _start_engine_after_macos_camera_preflight(client: object, bridge: object | None) -> None:
     """Start the engine after macOS camera authorization is known.
 
@@ -322,6 +361,12 @@ def run(argv: list[str] | None = None, *, mode: str = "normal") -> int:
 
     pump_timer.timeout.connect(_pump)
     pump_timer.start()
+
+    # Reap spawned child processes on signal termination: route SIGINT/SIGTERM through
+    # a clean Qt quit so the post-exec teardown (stopEngine → supervisor.stop) runs
+    # instead of orphaning the model-server / per-camera workers. The 30 Hz pump above
+    # keeps the loop returning to Python so the handler fires promptly.
+    _install_signal_shutdown(app)
 
     # ── theme + window ─────────────────────────────────────────────────────────
     theme = ThemeController(app, client)
