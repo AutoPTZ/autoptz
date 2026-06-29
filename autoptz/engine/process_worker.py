@@ -53,6 +53,7 @@ import logging
 import multiprocessing as mp
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -145,6 +146,47 @@ def _apply_child_thread_caps() -> None:
         pass
 
 
+def _parent_is_gone(original_ppid: int) -> bool:
+    """True once this process's parent has died.
+
+    On Unix the child is reparented (to launchd/init) when the parent dies, so
+    ``getppid()`` no longer matches the pid recorded at start — the cheap primary check.
+    Windows does NOT reparent, so ``getppid()`` stays put there; fall back to a process-
+    liveness probe so the watchdog still fires cross-platform.
+    """
+    if os.getppid() != original_ppid:
+        return True
+    try:
+        import psutil  # noqa: PLC0415
+
+        return not psutil.pid_exists(original_ppid)
+    except Exception:  # noqa: BLE001 — psutil missing/unsupported → trust getppid only
+        return False
+
+
+def _install_parent_death_watchdog(poll_s: float = 1.0) -> None:
+    """Force-exit this child when its parent (the app/supervisor process) dies.
+
+    daemon=True children are only reaped on a CLEAN parent exit (multiprocessing's
+    atexit). A parent killed by signal (SIGTERM/SIGKILL) or a crash would otherwise
+    orphan the model-server / per-camera workers, leaking RAM + the accelerator. This
+    watchdog polls the parent pid and ``os._exit``-s the moment it goes away, so a child
+    never outlives the app regardless of how it died.
+    """
+    original_ppid = os.getppid()
+
+    def _watch() -> None:
+        while True:
+            time.sleep(poll_s)
+            try:
+                if _parent_is_gone(original_ppid):
+                    os._exit(0)
+            except Exception:  # noqa: BLE001 — never let the watchdog raise
+                os._exit(0)
+
+    threading.Thread(target=_watch, name="parent-death-watchdog", daemon=True).start()
+
+
 def _configure_child_logging() -> None:
     """Make a child's WARNING+ logs visible to the operator (best-effort).
 
@@ -169,6 +211,8 @@ def run_camera_process(
     cmd_q: Any,
     telemetry_q: Any,
     identity_q: Any,
+    infer_req_q: Any = None,
+    infer_resp_q: Any = None,
 ) -> None:
     """Child-process entrypoint: build + run a CameraWorker, driven by ``cmd_q``.
 
@@ -182,6 +226,10 @@ def run_camera_process(
         _configure_child_logging()
     except Exception:  # noqa: BLE001
         pass
+
+    # Never outlive the app: if the parent is killed by signal/crash (so its clean
+    # teardown never runs), exit instead of orphaning this worker.
+    _install_parent_death_watchdog()
 
     # Re-apply the full per-camera thread budget in this child.  It inherited the
     # supervisor's env, but the OpenCV and torch caps are *runtime* calls no env
@@ -208,7 +256,26 @@ def run_camera_process(
             on_identity=_emit_identity,
         )
 
-        if not spec.synthetic:
+        # Model-server mode: this child does NOT load the detector — it delegates
+        # detection to the ONE shared model-server process via the IPC client, so
+        # there's a single model set across all cameras (no per-process RAM cliff).
+        # The tracker is still built locally per camera (it holds per-camera state).
+        _infer_writer = None
+        if infer_req_q is not None and infer_resp_q is not None:
+            from autoptz.engine.pipeline.inference_server import (
+                SERVER_FRAME_H,
+                SERVER_FRAME_W,
+                InferenceClient,
+                RemotePool,
+                shm_name_for,
+            )
+            from autoptz.engine.runtime.shm import ShmWriter
+
+            _infer_writer = ShmWriter(shm_name_for(spec.camera_id), SERVER_FRAME_H, SERVER_FRAME_W)
+            client = InferenceClient(spec.camera_id, infer_req_q, infer_resp_q, _infer_writer)
+            worker.set_inference_pool(RemotePool(client))
+            worker._infer_shm_writer = _infer_writer  # keep the shm alive for the worker's life
+        elif not spec.synthetic:
             _wire_models_and_identity(worker, spec)
 
         if spec.features:
@@ -226,6 +293,13 @@ def run_camera_process(
                 worker.stop()
             except Exception:  # noqa: BLE001
                 log.debug("camera process %s stop failed", spec.camera_id, exc_info=True)
+        if _infer_writer is not None:
+            # Explicitly close+unlink the detection shm slot — relying on GC misses the
+            # SIGTERM/terminate() teardown path and would leak the segment in /dev/shm.
+            try:
+                _infer_writer.close()
+            except Exception:  # noqa: BLE001
+                log.debug("camera process %s infer-shm close failed", spec.camera_id, exc_info=True)
 
 
 def _wire_models_and_identity(worker: Any, spec: WorkerSpec) -> None:
@@ -316,9 +390,15 @@ class ProcessWorkerHandle:
         db_path: str,
         detector_tier: str = "auto",
         unified_pose: bool = False,
+        infer_req_q: Any = None,
+        infer_resp_q: Any = None,
     ) -> None:
         self.camera_id = camera_id
         self.config = config
+        # Model-server IPC handles (model-server mode): the shared request queue and
+        # this camera's response queue. None → the child builds its own detector.
+        self._infer_req_q = infer_req_q
+        self._infer_resp_q = infer_resp_q
         self.shm_name = f"cam_{camera_id[:8]}_preview"  # must match CameraWorker's
         self._on_telemetry = on_telemetry
         self._on_identity: Any | None = None
@@ -385,7 +465,14 @@ class ProcessWorkerHandle:
         self._identity_q = ctx.Queue()
         self._proc = ctx.Process(
             target=run_camera_process,
-            args=(spec, self._cmd_q, self._telemetry_q, self._identity_q),
+            args=(
+                spec,
+                self._cmd_q,
+                self._telemetry_q,
+                self._identity_q,
+                self._infer_req_q,
+                self._infer_resp_q,
+            ),
             name=f"camproc-{self.camera_id[:8]}",
             daemon=True,
         )
@@ -563,10 +650,8 @@ class ProcessWorkerHandle:
 
 
 def process_per_camera_enabled() -> bool:
-    """True when the experimental process-per-camera mode is switched on."""
-    return os.environ.get("AUTOPTZ_PROCESS_PER_CAMERA", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    """True when per-camera processes are wanted — the experimental
+    process-per-camera mode OR the model-server mode (which also runs per-camera)."""
+    from autoptz.engine.runtime.flags import env_process_per_camera
+
+    return env_process_per_camera()
