@@ -884,6 +884,33 @@ class TestPtzPumpFlag:
         worker._drive_ptz_auto([], None, now)
         assert ctrl.manual_holds == 0, "OFF mode must not call note_manual_hold"
 
+    def test_unusable_bbox_publishes_idle_not_tracking(self, monkeypatch) -> None:
+        from autoptz.engine.runtime.messages import BBox, TrackInfo
+
+        worker, ctrl = self._worker(monkeypatch, pump=False)
+        worker._tracking_enabled = True
+        worker._target_track_id = 7
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        valid = TrackInfo(
+            track_id=7,
+            bbox=BBox(x1=100, y1=100, x2=220, y2=360),
+            confidence=0.9,
+        )
+        worker._apply_target_lock([valid], frame, now=1.0)
+        ctrl.steps.clear()
+
+        tiny = TrackInfo(
+            track_id=7,
+            bbox=BBox(x1=500, y1=20, x2=510, y2=30),
+            confidence=0.9,
+        )
+        worker._apply_target_lock([tiny], frame, now=1.1)
+        worker._drive_ptz_auto([tiny], frame, now=1.1)
+
+        assert ctrl.steps
+        assert ctrl.steps[-1][3] is False
+
 
 class _ThreadedSpyController:
     """Spy controller with a real daemon loop, like the production controller.

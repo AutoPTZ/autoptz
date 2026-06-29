@@ -90,6 +90,38 @@ class TestTargetBoxEvidence:
         assert w._target_box_usable_for_ptz(_track(1, BBox(x1=10, y1=10, x2=20, y2=20)), frame) is False
         assert w._target_box_usable_for_ptz(_track(1, BBox(x1=10, y1=10, x2=120, y2=140)), frame) is True
 
+    def test_unusable_box_never_becomes_initial_trusted_target(self):
+        w = _worker()
+        w._target_track_id = 1
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        tiny = _track(1, BBox(x1=10, y1=10, x2=20, y2=20))
+        w._apply_target_lock([tiny], frame=frame, now=1.0)
+
+        assert tiny.lost is True
+        assert w._target_lock.status == "pending"
+        assert w._target_lock.reason == "bbox_unusable"
+        assert w._target_lock.trusted_bbox is None
+
+    def test_unusable_box_preserves_existing_trusted_target(self):
+        w = _worker()
+        w._target_track_id = 1
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        first = _track(1, BBox(x1=100, y1=100, x2=220, y2=360))
+        w._apply_target_lock([first], frame=frame, now=1.0)
+
+        tiny = _track(1, BBox(x1=500, y1=20, x2=510, y2=30))
+        w._apply_target_lock([tiny], frame=frame, now=1.1)
+
+        assert tiny.lost is True
+        assert tiny.bbox.x1 == 100
+        assert tiny.aim_source != "bbox"
+        assert w._target_lock.status == "ambiguous"
+        assert w._target_lock.reason == "bbox_unusable"
+        assert w._target_lock.trusted_bbox is not None
+        assert w._target_lock.trusted_bbox.x1 == 100
+
     def test_single_bbox_teleport_is_held_until_confirmed(self):
         w = _worker()
         w._target_track_id = 1

@@ -2059,6 +2059,17 @@ class CameraWorker:
             return
         if target.lost:
             return
+        if frame is not None and not self._target_box_usable_for_ptz(target, frame):
+            # A malformed/tiny/held box is not target evidence. Do not let it
+            # refresh the trusted lock, otherwise the next missing-target hold can
+            # freeze to a bad box and the PTZ layer has to fight stale geometry.
+            if self._target_lock.trusted_bbox is not None:
+                self._mark_target_ambiguous(target, now=now, reason="bbox_unusable")
+            else:
+                target.lost = True
+                self._target_lock.status = "pending"
+                self._target_lock.reason = "bbox_unusable"
+            return
 
         # ── flag-gated associator path (OFF by default) ──────────────────────────
         if getattr(self.config.tracking, "use_target_associator", False):
