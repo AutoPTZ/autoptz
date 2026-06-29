@@ -6,6 +6,69 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.0-rc8] — 2026-06-29
+
+> Pre-release for testing. Headline: the **scalable shared model-server**
+> (`AUTOPTZ_MODEL_SERVER`, experimental) — the architecture that finally escapes
+> the Python GIL under many NDI streams **without** the per-process RAM cliff: each
+> camera runs in its own process and delegates detection to ONE shared detector. On
+> real NDI 1080p30 it cut end-to-end latency from ~1.6 s (threaded, the cause of
+> "bouncing" aim) to **54 ms at 16 cameras** with no RAM cliff. Also: the Phase-0
+> streaming/tracking instrumentation (per-source frame-drop estimate, true
+> end-to-end latency probe), per-process reliability fixes, and signal/crash-safe
+> teardown. **Experimental and off by default — please validate on your machine.**
+
+### Added
+
+- **Scalable shared model-server (Help → Experimental Features → "Shared
+  model-server"; `AUTOPTZ_MODEL_SERVER`, off by default).** A multi-process
+  architecture for many NDI cameras: the engine spawns ONE model-server process
+  holding the single detector, and each camera runs in its OWN process (escaping the
+  GIL for capture/track/control) and delegates detection to the server over a
+  torn-read-safe shared-memory ring + queues. One model set across all cameras →
+  GIL-free **without** the per-process RAM cliff. Measured on real NDI 1080p30
+  (Apple Silicon): at 16 cameras it holds ~24 fps with **54 ms** end-to-end latency
+  and ~11 GB RAM, where the naive one-process-per-camera path collapses to ~4 fps /
+  ~14 GB. Detection-only delegation in v1 (face/pose still run per-camera); smooth
+  aim at high camera counts still needs the predictive-tracking work to follow.
+  Health is observable via `AUTOPTZ_MS_DIAG=1` (served detections/sec). (#139)
+- **Phase-0 streaming/tracking instrumentation.** New per-source telemetry to
+  diagnose the multi-stream perf cliff: an estimated frame-drop count (source vs
+  delivered fps over a rolling window, since NDI's FrameSync never signals "no new
+  frame"), a true end-to-end latency decomposition (capture age + command send +
+  configured actuation estimate, surfaced in Camera Info ▸ Performance), and a
+  latency-aware tracking evaluation harness. (#136)
+- **NDI multi-camera scaling benchmark** (`tools/bench/scaling/`) — drives the real
+  Supervisor over N independent NDI sources and reports delivered fps, steady-state
+  drops, end-to-end latency, App/System CPU + RAM, **and detection-health**
+  (served/sec) so a silently-empty pipeline can't pass as a win. (#139)
+- **Streaming + tracking redesign research report** (`docs/research/`) — the
+  verified root-cause analysis (NDI drops = consumer back-pressure > GIL; bounce =
+  whole-pipeline dead time, not the NDI link) and a cross-platform redesign plan. (#135)
+
+### Changed
+
+- **Logs panel: colored levels + resizable columns.** Log rows are now colored by
+  level and the title/columns are user-resizable. (#134)
+- **Experimental Features: clearer Apply.** Applying a flag shows immediate "applied"
+  feedback and prompts to restart the app so the change takes effect. (#134)
+- **Per-process camera CPU accounting.** The status bar now accounts for spawned
+  camera-process CPU instead of reporting only the parent (which made
+  process-per-camera look misleadingly cheap). (#134)
+
+### Fixed
+
+- **Process-per-camera reliability.** A spawned camera child built its identity
+  gallery from a pickled string path (`'str' has no attribute 'parent'` → no
+  identity in children) — wrapped in `Path`; and the CoreML on-disk model cache made
+  the CoreML provider fail to build in a spawned child — omit the cache under
+  process-per-camera so children still use the accelerator. (#137)
+- **Model-server teardown is signal/crash-safe.** Spawned model-server + per-camera
+  worker processes no longer orphan (holding RAM/accelerator) when the app is killed
+  by a signal or crash: each child runs a parent-death watchdog that exits when the
+  app goes away, a SIGINT/SIGTERM handler routes through a clean quit with a
+  hard-exit backstop, and detection shared-memory is unlinked on stop. (#139)
+
 ## [2.2.0-rc7] — 2026-06-28
 
 > Pre-release for testing. Headline: the new **AutoPTZ Mark** visual benchmark
