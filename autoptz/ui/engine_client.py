@@ -396,6 +396,10 @@ class EngineClient(QObject):
             total=len(self._model.camera_ids()),
             missing=self._missing_optional_components(promptable_only=True),
         )
+        # Drop stale feature-sync commands from a prior stopped-engine toggle.
+        # Startup must be governed by the persisted feature map below, not an old
+        # queued SetFeaturesCmd that happens to drain after workers come online.
+        self._queue_feature_sync(enqueue=False)
         # Seed the supervisor with the persisted feature switches BEFORE it spawns
         # workers, so a disabled service is never built at spin-up (the worker
         # gates model construction on these flags).  Without priming, workers
@@ -443,7 +447,7 @@ class EngineClient(QObject):
         # suspenders alongside prime_features, and the source of truth for any
         # worker that spawned before priming).
         try:
-            self._enqueue(SetFeaturesCmd(camera_id=None, features=self.features()))
+            self._queue_feature_sync(enqueue=True)
         except Exception:  # noqa: BLE001
             log.debug("initial SetFeaturesCmd enqueue failed", exc_info=True)
         self.engineStateChanged.emit()
@@ -1012,6 +1016,20 @@ class EngineClient(QObject):
         except Exception:  # noqa: BLE001
             log.debug("persist feature overrides failed", exc_info=True)
 
+    def _queue_feature_sync(self, *, enqueue: bool) -> None:
+        """Replace any pending feature command with the current feature map.
+
+        Feature switches are startup-critical: a stale queued ``SetFeaturesCmd``
+        can turn a service back off after a restart even though persisted settings
+        say it is on.  Treat feature sync as last-writer-wins, not append-only.
+        """
+        with self._lock:
+            self._cmd_queue = deque(
+                cmd for cmd in self._cmd_queue if not isinstance(cmd, SetFeaturesCmd)
+            )
+            if enqueue:
+                self._cmd_queue.append(SetFeaturesCmd(camera_id=None, features=self.features()))
+
     @Slot(result="QVariant")
     def features(self) -> dict[str, bool]:
         """Return the persisted ML-subsystem switches (all default True).
@@ -1037,7 +1055,7 @@ class EngineClient(QObject):
         feats[name] = bool(enabled)
         self._features = feats
         self._persist_features()
-        self._enqueue(SetFeaturesCmd(camera_id=None, features=feats))
+        self._queue_feature_sync(enqueue=self._engine_running)
         self.featuresChanged.emit()
 
     @Slot()
@@ -1047,8 +1065,7 @@ class EngineClient(QObject):
         changed = feats != self._features
         self._features = feats
         self._persist_features()
-        if self._engine_running:
-            self._enqueue(SetFeaturesCmd(camera_id=None, features=feats))
+        self._queue_feature_sync(enqueue=self._engine_running)
         if changed:
             self.featuresChanged.emit()
 

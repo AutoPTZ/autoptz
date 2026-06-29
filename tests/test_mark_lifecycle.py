@@ -29,6 +29,24 @@ def _main(qtapp):
     return MainWindow(client, frame_source=ShmFrameSource())
 
 
+class _FeatureSupervisor:
+    active_ep = "CPU"
+    is_running = False
+
+    def __init__(self) -> None:
+        self.primed: dict[str, bool] | None = None
+
+    def prime_features(self, features: dict[str, bool]) -> None:
+        self.primed = dict(features)
+
+    def start(self, *, staged: bool = False, progress=None, run_pump: bool = False) -> None:
+        del staged, progress, run_pump
+        self.is_running = True
+
+    def stop(self) -> None:
+        self.is_running = False
+
+
 class _FakeDlg:
     def __init__(self, *a, **k) -> None: ...
 
@@ -159,6 +177,29 @@ def test_engine_resumes_if_was_running(qtapp, monkeypatch) -> None:
     assert stopped["n"] == 1  # suspended on enter
     win._mark_window.request_return()
     assert started["n"] == 1  # resumed on return
+
+
+def test_mark_return_restores_current_service_state(qtapp) -> None:
+    from autoptz.engine.runtime.messages import SetFeaturesCmd
+
+    win = _main(qtapp)
+    sup = _FeatureSupervisor()
+    win._client.set_supervisor(sup)
+    win._client.setFeatureEnabled("pose", False)
+    win._client.resetFeatureOverrides()
+
+    win._engine_was_running = True
+    win._mark_window = None
+    win._exit_mark_mode(quit_app=False)
+
+    feature_cmds = [
+        cmd for cmd in win._client.drain_commands() if isinstance(cmd, SetFeaturesCmd)
+    ]
+    assert sup.primed is not None
+    assert sup.primed["pose"] is True
+    assert len(feature_cmds) == 1
+    assert feature_cmds[0].features["pose"] is True
+    win.deleteLater()
 
 
 @pytest.mark.skipif(
