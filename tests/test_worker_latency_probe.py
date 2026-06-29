@@ -31,13 +31,22 @@ def _bare_worker() -> CameraWorker:
 class TestFrameSourceDeliveryPassthrough:
     def test_passthrough_returns_adapter_metrics(self) -> None:
         class _Adapter:
-            def delivery_metrics(self) -> dict[str, float | int]:
+            def delivery_metrics(self) -> dict[str, float | int | str]:
                 return {
                     "frames_delivered": 7,
                     "frames_dropped_est": 2,
                     "delivered_fps": 28.0,
                     "source_fps": 30.0,
+                    "duplicate_frames": 1,
+                    "stale_frames": 0,
                     "ndi_queue_depth": -1,
+                    "ndi_queue_audio": -1,
+                    "ndi_queue_metadata": -1,
+                    "ndi_total_video_frames": 20,
+                    "ndi_dropped_video_frames": 1,
+                    "ndi_connections": 1,
+                    "ndi_fourcc": "UYVY",
+                    "ndi_conversion_ms": 0.9,
                 }
 
         src = cw._AdapterFrameSource(_Adapter())
@@ -52,23 +61,23 @@ class TestFrameSourceDeliveryPassthrough:
 
     def test_passthrough_returns_empty_when_method_raises(self) -> None:
         class _Adapter:
-            def delivery_metrics(self) -> dict[str, float | int]:
+            def delivery_metrics(self) -> dict[str, float | int | str]:
                 raise RuntimeError("boom")
 
         src = cw._AdapterFrameSource(_Adapter())
         assert src.delivery_metrics() == {}
 
 
-# ── Feature 0a: _emit_telemetry populates the 5 delivery fields ─────────────────
+# ── Feature 0a: _emit_telemetry populates the delivery fields ──────────────────
 
 
 class _FakeDeliverySource:
     """A frame source exposing only delivery_metrics() for telemetry tests."""
 
-    def __init__(self, metrics: dict[str, float | int]) -> None:
+    def __init__(self, metrics: dict[str, float | int | str]) -> None:
         self._metrics = metrics
 
-    def delivery_metrics(self) -> dict[str, float | int]:
+    def delivery_metrics(self) -> dict[str, float | int | str]:
         return self._metrics
 
 
@@ -80,7 +89,20 @@ def test_emit_telemetry_includes_delivery_fields() -> None:
             "frames_dropped_est": 9,
             "delivered_fps": 27.5,
             "source_fps": 30.0,
+            "duplicate_frames": 6,
+            "stale_frames": 2,
             "ndi_queue_depth": 4,
+            "ndi_queue_audio": 1,
+            "ndi_queue_metadata": 0,
+            "ndi_total_video_frames": 600,
+            "ndi_dropped_video_frames": 3,
+            "ndi_total_audio_frames": 600,
+            "ndi_dropped_audio_frames": 1,
+            "ndi_total_metadata_frames": 10,
+            "ndi_dropped_metadata_frames": 0,
+            "ndi_connections": 1,
+            "ndi_fourcc": "UYVY",
+            "ndi_conversion_ms": 1.4,
         }
     )
     captured: list[TelemetryMsg] = []
@@ -93,7 +115,20 @@ def test_emit_telemetry_includes_delivery_fields() -> None:
     assert msg.frames_dropped_est == 9
     assert msg.delivered_fps == 27.5
     assert msg.source_fps == 30.0
+    assert msg.duplicate_frames == 6
+    assert msg.stale_frames == 2
     assert msg.ndi_queue_depth == 4
+    assert msg.ndi_queue_audio == 1
+    assert msg.ndi_queue_metadata == 0
+    assert msg.ndi_total_video_frames == 600
+    assert msg.ndi_dropped_video_frames == 3
+    assert msg.ndi_total_audio_frames == 600
+    assert msg.ndi_dropped_audio_frames == 1
+    assert msg.ndi_total_metadata_frames == 10
+    assert msg.ndi_dropped_metadata_frames == 0
+    assert msg.ndi_connections == 1
+    assert msg.ndi_fourcc == "UYVY"
+    assert msg.ndi_conversion_ms == 1.4
 
 
 def test_emit_telemetry_falls_back_to_worker_counters() -> None:
@@ -111,7 +146,16 @@ def test_emit_telemetry_falls_back_to_worker_counters() -> None:
     assert msg.frames_dropped_est == 0
     assert msg.delivered_fps == 24.0
     assert msg.source_fps == 0.0
+    assert msg.duplicate_frames == 0
+    assert msg.stale_frames == 0
     assert msg.ndi_queue_depth == -1
+    assert msg.ndi_queue_audio == -1
+    assert msg.ndi_queue_metadata == -1
+    assert msg.ndi_total_video_frames == 0
+    assert msg.ndi_dropped_video_frames == 0
+    assert msg.ndi_connections == -1
+    assert msg.ndi_fourcc == ""
+    assert msg.ndi_conversion_ms == 0.0
 
 
 # ── Feature 0b: true end-to-end latency probe ──────────────────────────────────

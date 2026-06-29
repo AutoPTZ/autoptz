@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import pickle
-import time
 import uuid
 
 from autoptz.config.models import CameraConfig, SourceConfig
@@ -609,7 +608,7 @@ class TestEndToEndSpawn:
     """Spawn a real child process with a synthetic source (no camera, no models):
     frames must reach shared memory and telemetry must flow back, then stop cleanly."""
 
-    def test_child_delivers_frames_and_telemetry_then_stops(self) -> None:
+    def test_child_delivers_frames_and_telemetry_then_stops(self, wait_until) -> None:
         from autoptz.engine.camera_worker import _PREVIEW_H, _PREVIEW_W
         from autoptz.engine.process_worker import run_camera_process
         from autoptz.engine.runtime.shm import ShmReader
@@ -650,18 +649,25 @@ class TestEndToEndSpawn:
 
             # A real frame should land in the child's shm preview ring.
             reader = None
-            frame = None
-            deadline = time.monotonic() + 15.0
-            while time.monotonic() < deadline and frame is None:
+
+            def _latest_child_frame():
+                nonlocal reader
                 try:
                     if reader is None:
                         reader = ShmReader(shm_name, _PREVIEW_H, _PREVIEW_W)
                     result = reader.latest()
                     if result is not None:
-                        frame = result[1]
+                        return result[1]
                 except Exception:
                     reader = None
-                time.sleep(0.1)
+                return None
+
+            frame = wait_until(
+                _latest_child_frame,
+                timeout=15.0,
+                interval=0.1,
+                message="no frame reached shared memory from the child process",
+            )
             assert frame is not None, "no frame reached shared memory from the child process"
             assert frame.shape == (_PREVIEW_H, _PREVIEW_W, 3)
             assert int(frame.mean()) == 123  # the synthetic source's solid colour

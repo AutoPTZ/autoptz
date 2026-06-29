@@ -24,7 +24,7 @@ import logging
 import time
 from typing import Any
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -53,10 +53,11 @@ from autoptz.ui.widgets.tile_helpers import (  # re-exported for back-compat
     _format_target_button_label,
     _head_bbox,
     _ignore_arms,
-    _norm_bbox_contains,
+    _norm_bbox_contains,  # noqa: F401  re-exported for tests/back-compat
     _pose,
     _rect_close,
     _rect_jump,
+    _select_enrollment_face_bbox,
     _snap_center_axis,
     _tracking_enabled,
     _tracking_status,
@@ -1013,7 +1014,7 @@ class CameraTile(QWidget):
         try:
             return self._client.overlays()
         except Exception:  # noqa: BLE001
-            return {"detection": True, "faces": False, "pose": False, "prediction": False}
+            return {"detection": True, "faces": True, "pose": False, "prediction": False}
 
     def _on_overlays_changed(self) -> None:
         self._overlays = self._read_overlays()
@@ -1587,6 +1588,7 @@ class CameraTile(QWidget):
             return
         identity_id = combo.currentData() or ""
         click = self._normalized_video_point(click_pos) if click_pos is not None else None
+        thumbnail = self._enrollment_thumbnail_png(track_id, click_pos)
         try:
             if identity_id:
                 if click is not None:
@@ -1596,9 +1598,15 @@ class CameraTile(QWidget):
                         track_id,
                         click[0],
                         click[1],
+                        thumbnail,
                     )
                 else:
-                    self._client.assignTrackToIdentity(self.camera_id, identity_id, track_id)
+                    self._client.assignTrackToIdentity(
+                        self.camera_id,
+                        identity_id,
+                        track_id,
+                        thumbnail=thumbnail,
+                    )
             else:
                 nm = name.text().strip()
                 if nm:
@@ -1609,9 +1617,15 @@ class CameraTile(QWidget):
                             track_id,
                             click[0],
                             click[1],
+                            thumbnail,
                         )
                     else:
-                        self._client.enrollIdentity(self.camera_id, nm, track_id)
+                        self._client.enrollIdentity(
+                            self.camera_id,
+                            nm,
+                            track_id,
+                            thumbnail=thumbnail,
+                        )
         except Exception:  # noqa: BLE001
             log.debug("assign identity failed", exc_info=True)
 
@@ -1637,45 +1651,54 @@ class CameraTile(QWidget):
         crop_box = face_box or _head_bbox(track_box)
         return self._crop_preview(img, crop_box, pad=0.28 if face_box else 0.18)
 
+    def _enrollment_thumbnail_png(
+        self,
+        track_id: int,
+        click_pos: QPointF | None,
+    ) -> bytes | None:
+        img = self._frames.latest_qimage(self.camera_id) if self._frames else None
+        if img is None or img.isNull():
+            return None
+        rec = self._record()
+        if rec is None:
+            return None
+        track = next((t for t in _tracks(rec) if t.get("track_id") == track_id), None)
+        if track is None:
+            return None
+        click = self._normalized_video_point(click_pos)
+        track_box = track.get("bbox", {})
+        face_box = self._face_bbox_for_preview(rec, track_box, click)
+        crop_box = face_box or _head_bbox(track_box)
+        crop = self._crop_qimage(img, crop_box, pad=0.28 if face_box else 0.18, max_side=220)
+        if crop is None or crop.isNull():
+            return None
+        data = QByteArray()
+        buf = QBuffer(data)
+        if not buf.open(QIODevice.OpenModeFlag.WriteOnly):
+            return None
+        try:
+            if not crop.save(buf, "PNG"):
+                return None
+            return bytes(data)
+        finally:
+            buf.close()
+
     def _face_bbox_for_preview(
         self,
         rec: Any,
         track_box: dict[str, float],
         click: tuple[float, float] | None,
     ) -> dict[str, float] | None:
-        candidates = []
-        for face in _faces(rec):
-            box = face.get("bbox", {})
-            cx = (float(box.get("x1", 0.0)) + float(box.get("x2", 0.0))) * 0.5
-            cy = (float(box.get("y1", 0.0)) + float(box.get("y2", 0.0))) * 0.5
-            if not _norm_bbox_contains(track_box, cx, cy):
-                continue
-            candidates.append(box)
-        if not candidates:
-            return None
-        if click is None:
-            return max(
-                candidates,
-                key=lambda b: (b.get("x2", 0.0) - b.get("x1", 0.0))
-                * (b.get("y2", 0.0) - b.get("y1", 0.0)),
-            )
+        return _select_enrollment_face_bbox(_faces(rec), track_box, click)
 
-        def score(box: dict[str, float]) -> tuple[int, float]:
-            x, y = click
-            inside = _norm_bbox_contains(box, x, y)
-            cx = (float(box.get("x1", 0.0)) + float(box.get("x2", 0.0))) * 0.5
-            cy = (float(box.get("y1", 0.0)) + float(box.get("y2", 0.0))) * 0.5
-            return (0 if inside else 1, (cx - x) ** 2 + (cy - y) ** 2)
-
-        return min(candidates, key=score)
-
-    def _crop_preview(
+    def _crop_qimage(
         self,
         img: Any,
         bbox: dict[str, float],
         *,
         pad: float,
-    ) -> QPixmap | None:
+        max_side: int | None = None,
+    ) -> Any | None:
         w, h = img.width(), img.height()
         x1 = float(bbox.get("x1", 0.0)) * w
         y1 = float(bbox.get("y1", 0.0)) * h
@@ -1690,7 +1713,29 @@ class CameraTile(QWidget):
         y2 = min(h, int(round(y2 + bh * pad)))
         if x2 <= x1 or y2 <= y1:
             return None
-        pix = QPixmap.fromImage(img.copy(x1, y1, x2 - x1, y2 - y1))
+        crop = img.copy(x1, y1, x2 - x1, y2 - y1)
+        if max_side is not None:
+            side = max(crop.width(), crop.height())
+            if side > max_side:
+                crop = crop.scaled(
+                    max_side,
+                    max_side,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+        return crop
+
+    def _crop_preview(
+        self,
+        img: Any,
+        bbox: dict[str, float],
+        *,
+        pad: float,
+    ) -> QPixmap | None:
+        crop = self._crop_qimage(img, bbox, pad=pad)
+        if crop is None or crop.isNull():
+            return None
+        pix = QPixmap.fromImage(crop)
         if pix.isNull():
             return None
         return pix.scaled(

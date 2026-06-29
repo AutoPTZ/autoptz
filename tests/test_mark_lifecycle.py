@@ -239,6 +239,7 @@ def test_app_run_sets_no_quit_on_last_window_closed(qtapp, monkeypatch) -> None:
     import autoptz.ui.app as app_mod
 
     monkeypatch.setattr(QApplication, "exec", lambda self: 0)
+    monkeypatch.setattr(QApplication, "processEvents", lambda self, *a, **k: None)
     monkeypatch.setattr(app_mod, "_build_main_window", lambda *a, **k: _Win())
     app_mod.run([])
     assert QApplication.instance().quitOnLastWindowClosed() is False

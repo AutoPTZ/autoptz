@@ -183,6 +183,7 @@ class IdentityService:
             name=name,
             embeddings=embeddings,
             thumbnail=thumbnail,
+            thumbnails=[thumbnail] if thumbnail else [],
             enabled=enabled,
             labeled=True,
         )

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 
 import numpy as np
 import PySide6  # noqa: F401
@@ -166,7 +165,7 @@ class _FakeSource:
 
 
 class TestWorkerPopulatesLatency:
-    def test_latency_ms_becomes_positive(self, qapp) -> None:
+    def test_latency_ms_becomes_positive(self, qapp, wait_until) -> None:
         from autoptz.config.models import CameraConfig, SourceConfig
         from autoptz.engine.camera_worker import CameraWorker
 
@@ -191,15 +190,18 @@ class TestWorkerPopulatesLatency:
         )
         worker.start()
         try:
-            deadline = time.monotonic() + 3.0
-            best = 0.0
-            while time.monotonic() < deadline:
+            def _best_latency() -> float:
                 with lock:
                     if received:
-                        best = max(best, received[-1].latency_ms)
-                if best > 0.0:
-                    break
-                time.sleep(0.02)
+                        return max(m.latency_ms for m in received)
+                return 0.0
+
+            best = wait_until(
+                _best_latency,
+                timeout=3.0,
+                interval=0.02,
+                message="latency_ms never became positive with a live source",
+            )
             assert best > 0.0, "latency_ms never became positive with a live source"
         finally:
             worker.stop()

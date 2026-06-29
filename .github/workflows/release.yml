@@ -58,17 +58,14 @@ jobs:
           notary-password: ${{ secrets.MACOS_NOTARY_PASSWORD }}
           sign-required: "1"
 
-  # Intel (x86_64) — best-effort. GitHub retired the macos-13 Intel image (Dec 2025);
-  # `macos-15-intel` is its standard-runner replacement and the last Intel image
-  # (x86_64 support ends ~Fall 2027). This job is deliberately NOT a dependency of
-  # `release`, so a missing/slow Intel runner can never hold up the arm64 + Windows +
-  # Linux release; continue-on-error keeps the run green if it fails, and the x86_64
-  # dmg ships whenever it finishes in time.
+  # Intel (x86_64) — required. Intel Macs are still a supported 2.2.0 target, so
+  # this build is part of the main release set, not an after-the-fact attachment.
+  # SHA256SUMS is generated only after this job and the other installer jobs have
+  # all succeeded, so an Intel DMG can never be uploaded without a manifest entry.
   macos-intel:
-    name: Build macOS .dmg (x86_64, best-effort)
+    name: Build macOS .dmg (x86_64)
     needs: guard
-    runs-on: macos-15-intel
-    continue-on-error: true
+    runs-on: macos-26-intel
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -136,7 +133,15 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [macos, windows, linux]
+    needs: [macos, macos-intel, windows, linux]
+    if: >-
+      ${{
+        always() &&
+        needs.macos.result == 'success' &&
+        needs['macos-intel'].result == 'success' &&
+        needs.windows.result == 'success' &&
+        needs.linux.result == 'success'
+      }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -162,19 +167,3 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
-
-  publish-macos-intel:
-    name: Attach macOS x86_64 artifact if available
-    needs: [release, macos-intel]
-    if: ${{ always() && github.ref_type == 'tag' && needs.release.result == 'success' && needs.macos-intel.result == 'success' }}
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: macos-x86_64
-          path: artifacts/macos-x86_64
-      - name: Upload x86_64 dmg to release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" artifacts/macos-x86_64/*.dmg --clobber --repo "${GITHUB_REPOSITORY}"

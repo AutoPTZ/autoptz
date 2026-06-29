@@ -452,7 +452,7 @@ class MainWindow(QMainWindow):
             ),
         ):
             act = QAction(label, self, checkable=True)
-            act.setChecked(bool(cur.get(key, key == "detection")))
+            act.setChecked(bool(cur.get(key, key in {"detection", "faces"})))
             act.setToolTip(tip)
             act.toggled.connect(lambda on, k=key: self._client.setOverlay(k, on))
             overlays.addAction(act)

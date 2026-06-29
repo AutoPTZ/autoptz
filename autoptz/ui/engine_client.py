@@ -577,11 +577,12 @@ class EngineClient(QObject):
 
     # ── on-video overlays (operator toggles) ────────────────────────────────────
 
-    # Default visibility for each overlay layer; detection boxes on, the heavier
-    # diagnostic layers off until the operator asks for them.
+    # Default visibility for each overlay layer. Detection and face boxes are on so
+    # users can see the two visual recognition paths without hunting for hidden
+    # debug toggles; pose/prediction stay off.
     _OVERLAY_DEFAULTS = {
         "detection": True,
-        "faces": False,
+        "faces": True,
         "pose": False,
         "prediction": False,
     }
@@ -1368,6 +1369,7 @@ class EngineClient(QObject):
         track_id: int,
         click_x: float | None = None,
         click_y: float | None = None,
+        thumbnail: bytes | None = None,
     ) -> None:
         """Register a new identity and send enrollment command to engine."""
         from autoptz.config.models import IdentityRecord
@@ -1377,14 +1379,21 @@ class EngineClient(QObject):
             return
 
         identity_id = str(uuid.uuid4())
-        identity = IdentityRecord(id=identity_id, name=identity_name.strip())
+        photos = [thumbnail] if thumbnail else []
+        identity = IdentityRecord(
+            id=identity_id,
+            name=identity_name.strip(),
+            thumbnail=thumbnail,
+            thumbnails=photos,
+        )
 
         # Prefer the live gallery (it owns persistence); else store directly.
         if self._identity_service is not None:
             try:
-                self._identity_service.enroll(
+                identity = self._identity_service.enroll(
                     identity_name.strip(),
                     None,
+                    thumbnail=thumbnail,
                     identity_id=identity_id,
                 )
             except Exception:  # noqa: BLE001
@@ -1417,6 +1426,7 @@ class EngineClient(QObject):
         track_id: int,
         click_x: float | None = None,
         click_y: float | None = None,
+        thumbnail: bytes | None = None,
     ) -> None:
         """Bind a clicked track's face to an EXISTING identity (click-to-assign).
 
@@ -1430,6 +1440,29 @@ class EngineClient(QObject):
             if ident.get("id") == identity_id:
                 name = ident.get("name", "")
                 break
+        if thumbnail:
+            updated = None
+            if self._identity_service is not None:
+                try:
+                    if self._identity_service.add_photo(identity_id, thumbnail):
+                        updated = self._identity_service.get(identity_id)
+                except Exception:  # noqa: BLE001
+                    log.debug("identity_service.add_photo(assign) failed", exc_info=True)
+            if updated is None:
+                rec = self._identity_model.get(identity_id)
+                if rec is not None:
+                    photos = (list(getattr(rec, "thumbnails", []) or []) + [thumbnail])[-8:]
+                    updated = rec.model_copy(
+                        update={
+                            "thumbnail": getattr(rec, "thumbnail", None) or thumbnail,
+                            "thumbnails": photos,
+                        }
+                    )
+                    if self._store:
+                        self._store.save_identity(updated)
+            if updated is not None:
+                self._identity_model.update_identity(updated)
+                self.identitiesChanged.emit()
         self._enqueue(
             EnrollIdentityCmd(
                 camera_id=camera_id,

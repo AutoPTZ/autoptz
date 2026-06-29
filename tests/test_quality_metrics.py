@@ -31,12 +31,48 @@ def _msg(
     fps: float = 30.0,
     tracks: list[TrackInfo] | None = None,
     dropped_frames: int = 0,
+    frames_delivered: int = 0,
+    frames_dropped_est: int = 0,
+    delivered_fps: float = 0.0,
+    source_fps: float = 0.0,
+    duplicate_frames: int = 0,
+    stale_frames: int = 0,
+    ndi_queue_depth: int = -1,
+    ndi_queue_audio: int = -1,
+    ndi_queue_metadata: int = -1,
+    ndi_total_video_frames: int = 0,
+    ndi_dropped_video_frames: int = 0,
+    ndi_total_audio_frames: int = 0,
+    ndi_dropped_audio_frames: int = 0,
+    ndi_total_metadata_frames: int = 0,
+    ndi_dropped_metadata_frames: int = 0,
+    ndi_connections: int = -1,
+    ndi_fourcc: str = "",
+    ndi_conversion_ms: float = 0.0,
 ) -> TelemetryMsg:
     return TelemetryMsg(
         camera_id="cam-a",
         seq=seq,
         fps=fps,
         dropped_frames=dropped_frames,
+        frames_delivered=frames_delivered,
+        frames_dropped_est=frames_dropped_est,
+        delivered_fps=delivered_fps,
+        source_fps=source_fps,
+        duplicate_frames=duplicate_frames,
+        stale_frames=stale_frames,
+        ndi_queue_depth=ndi_queue_depth,
+        ndi_queue_audio=ndi_queue_audio,
+        ndi_queue_metadata=ndi_queue_metadata,
+        ndi_total_video_frames=ndi_total_video_frames,
+        ndi_dropped_video_frames=ndi_dropped_video_frames,
+        ndi_total_audio_frames=ndi_total_audio_frames,
+        ndi_dropped_audio_frames=ndi_dropped_audio_frames,
+        ndi_total_metadata_frames=ndi_total_metadata_frames,
+        ndi_dropped_metadata_frames=ndi_dropped_metadata_frames,
+        ndi_connections=ndi_connections,
+        ndi_fourcc=ndi_fourcc,
+        ndi_conversion_ms=ndi_conversion_ms,
         tracks=tracks or [],
     )
 
@@ -251,6 +287,78 @@ class TestDroppedFramesAndFps:
         assert abs(q.fps - 12.0) < 1e-6
 
 
+class TestSourceHealthMetrics:
+    def test_source_health_is_preserved_for_mark_json(self) -> None:
+        acc = PerCameraQualityAccumulator(fps_hint=30.0)
+        acc.on_telemetry(
+            _msg(
+                1,
+                fps=30.0,
+                tracks=[_target(1)],
+                frames_delivered=120,
+                frames_dropped_est=2,
+                delivered_fps=29.0,
+                source_fps=30.0,
+                duplicate_frames=1,
+                stale_frames=0,
+                ndi_queue_depth=1,
+                ndi_queue_audio=0,
+                ndi_queue_metadata=0,
+                ndi_total_video_frames=120,
+                ndi_dropped_video_frames=1,
+                ndi_connections=1,
+                ndi_fourcc="uyvy",
+                ndi_conversion_ms=1.0,
+            )
+        )
+        acc.on_telemetry(
+            _msg(
+                2,
+                fps=30.0,
+                tracks=[_target(1)],
+                frames_delivered=121,
+                frames_dropped_est=3,
+                delivered_fps=27.0,
+                source_fps=30.0,
+                duplicate_frames=4,
+                stale_frames=2,
+                ndi_queue_depth=2,
+                ndi_queue_audio=1,
+                ndi_queue_metadata=0,
+                ndi_total_video_frames=121,
+                ndi_dropped_video_frames=2,
+                ndi_total_audio_frames=121,
+                ndi_dropped_audio_frames=1,
+                ndi_total_metadata_frames=3,
+                ndi_dropped_metadata_frames=0,
+                ndi_connections=1,
+                ndi_fourcc="UYVY",
+                ndi_conversion_ms=2.0,
+            )
+        )
+
+        q = acc.finalize()
+
+        assert q.frames_delivered == 121
+        assert q.frames_dropped_est == 3
+        assert q.delivered_fps == 28.0
+        assert q.source_fps == 30.0
+        assert q.duplicate_frames == 4
+        assert q.stale_frames == 2
+        assert q.ndi_queue_depth == 2
+        assert q.ndi_queue_audio == 1
+        assert q.ndi_queue_metadata == 0
+        assert q.ndi_total_video_frames == 121
+        assert q.ndi_dropped_video_frames == 2
+        assert q.ndi_total_audio_frames == 121
+        assert q.ndi_dropped_audio_frames == 1
+        assert q.ndi_total_metadata_frames == 3
+        assert q.ndi_dropped_metadata_frames == 0
+        assert q.ndi_connections == 1
+        assert q.ndi_fourcc == "UYVY"
+        assert q.ndi_conversion_ms == 1.5
+
+
 class TestQualityMetricsToDict:
     def test_to_dict_round_trips_through_json(self) -> None:
         fps = 10.0
@@ -273,6 +381,25 @@ class TestQualityMetricsToDict:
             "mean_target_confidence",
             "fps",
             "dropped_frames",
+            "app_induced_drops",
+            "frames_delivered",
+            "frames_dropped_est",
+            "delivered_fps",
+            "source_fps",
+            "duplicate_frames",
+            "stale_frames",
+            "ndi_queue_depth",
+            "ndi_queue_audio",
+            "ndi_queue_metadata",
+            "ndi_total_video_frames",
+            "ndi_dropped_video_frames",
+            "ndi_total_audio_frames",
+            "ndi_dropped_audio_frames",
+            "ndi_total_metadata_frames",
+            "ndi_dropped_metadata_frames",
+            "ndi_connections",
+            "ndi_fourcc",
+            "ndi_conversion_ms",
         ):
             assert key in round_tripped
 
@@ -292,10 +419,12 @@ class TestStepResultQuality:
             mean_fps=30.0,
             per_camera_fps=[30.0],
             sustained=True,
+            app_induced_drops=0,
             per_camera_quality=quality,
         )
         d = step.to_dict()
         assert "per_camera_quality" in d
+        assert d["app_induced_drops"] == 0
         assert d["per_camera_quality"]["cam-a"]["target_hold_pct"] == 100.0
         # JSON round-trips.
         json.loads(json.dumps(d))
@@ -304,6 +433,7 @@ class TestStepResultQuality:
         step = StepResult(cameras=1, min_fps=30.0, mean_fps=30.0, per_camera_fps=[30.0])
         assert step.per_camera_quality == {}
         assert step.to_dict()["per_camera_quality"] == {}
+        assert step.to_dict()["app_induced_drops"] == 0
 
 
 class TestBenchmarkResultQuality:
@@ -317,10 +447,14 @@ class TestBenchmarkResultQuality:
             mean_fps=30.0,
             per_camera_fps=[30.0],
             sustained=True,
+            app_induced_drops=0,
             per_camera_quality={"cam-a": q.finalize().to_dict()},
         )
         result = BenchmarkResult(
             profile="full",
+            profile_description="Full service stack",
+            profile_features={"pose": True, "face_recognition": True},
+            experimental_flags={"AUTOPTZ_UNIFIED_POSE": "1"},
             weight=1.0,
             floor_fps=24.0,
             max_cameras=1,
@@ -331,6 +465,9 @@ class TestBenchmarkResultQuality:
         )
         d = result.to_dict()
         data = json.loads(json.dumps(d))
+        assert data["profile_description"] == "Full service stack"
+        assert data["profile_features"] == {"pose": True, "face_recognition": True}
+        assert data["experimental_flags"] == {"AUTOPTZ_UNIFIED_POSE": "1"}
         assert data["steps"][0]["per_camera_quality"]["cam-a"]["target_hold_pct"] == 100.0
 
 
@@ -368,3 +505,37 @@ class TestRunnerWiresQualityReader:
         )
         result = runner.run()
         assert all(s.per_camera_quality == {} for s in result.steps)
+
+    def test_run_fails_step_when_quality_reports_app_induced_drop(self) -> None:
+        prof = get_profile("full")
+
+        runner = BenchmarkRunner(
+            prof,
+            sample_fn=lambda n: [30.0] * n,
+            floor_fps=24.0,
+            max_cameras=2,
+            dwell_s=0.0,
+            quality_reader=lambda: {"cam-x": {"app_induced_drops": 1}},
+        )
+        result = runner.run()
+        assert result.sustained_cameras == 0
+        assert len(result.steps) == 1
+        assert result.steps[0].sustained is False
+        assert result.steps[0].app_induced_drops == 1
+
+    def test_app_induced_drop_delta_ignores_first_cumulative_value(self) -> None:
+        acc = PerCameraQualityAccumulator(fps_hint=30.0)
+        # First value is the baseline for this measurement window (e.g. source add).
+        acc.on_telemetry(_msg(1, fps=30.0, tracks=[_target(1)], dropped_frames=5))
+        acc.on_telemetry(_msg(2, fps=30.0, tracks=[_target(1)], dropped_frames=5))
+        q = acc.finalize()
+        assert q.dropped_frames == 5
+        assert q.app_induced_drops == 0
+
+    def test_app_induced_drop_delta_counts_in_window_growth(self) -> None:
+        acc = PerCameraQualityAccumulator(fps_hint=30.0)
+        acc.on_telemetry(_msg(1, fps=30.0, tracks=[_target(1)], dropped_frames=5))
+        acc.on_telemetry(_msg(2, fps=30.0, tracks=[_target(1)], dropped_frames=7))
+        q = acc.finalize()
+        assert q.dropped_frames == 7
+        assert q.app_induced_drops == 2

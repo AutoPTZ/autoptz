@@ -111,6 +111,25 @@ _CSV_HEADER = [
     "target_hold_pct",
     "mean_target_confidence",
     "dropped_frames",
+    "app_induced_drops",
+    "frames_delivered",
+    "frames_dropped_est",
+    "delivered_fps",
+    "source_fps",
+    "duplicate_frames",
+    "stale_frames",
+    "ndi_queue_depth",
+    "ndi_queue_audio",
+    "ndi_queue_metadata",
+    "ndi_total_video_frames",
+    "ndi_dropped_video_frames",
+    "ndi_total_audio_frames",
+    "ndi_dropped_audio_frames",
+    "ndi_total_metadata_frames",
+    "ndi_dropped_metadata_frames",
+    "ndi_connections",
+    "ndi_fourcc",
+    "ndi_conversion_ms",
     "gt_miss_rate",
     "gt_id_switch_rate",
     "gt_motp",
@@ -130,6 +149,25 @@ def _quality(*, ttfa: float | None = 0.5) -> dict[str, object]:
         "mean_target_confidence": 0.9123,
         "fps": 30.0,
         "dropped_frames": 3,
+        "app_induced_drops": 0,
+        "frames_delivered": 900,
+        "frames_dropped_est": 0,
+        "delivered_fps": 30.0,
+        "source_fps": 30.0,
+        "duplicate_frames": 0,
+        "stale_frames": 0,
+        "ndi_queue_depth": -1,
+        "ndi_queue_audio": -1,
+        "ndi_queue_metadata": -1,
+        "ndi_total_video_frames": 900,
+        "ndi_dropped_video_frames": 0,
+        "ndi_total_audio_frames": 900,
+        "ndi_dropped_audio_frames": 0,
+        "ndi_total_metadata_frames": 3,
+        "ndi_dropped_metadata_frames": 0,
+        "ndi_connections": 1,
+        "ndi_fourcc": "",
+        "ndi_conversion_ms": 0.0,
     }
 
 
@@ -145,9 +183,10 @@ def _step(cameras: int, *, with_quality: bool = True, ttfa_none_idx: int = -1) -
         min_fps=min(per_camera_fps),
         mean_fps=sum(per_camera_fps) / len(per_camera_fps),
         per_camera_fps=per_camera_fps,
-        sustained=True,
-        per_camera_quality=quality,
-    )
+            sustained=True,
+            app_induced_drops=0,
+            per_camera_quality=quality,
+        )
 
 
 def _two_step_result() -> BenchmarkResult:
@@ -189,6 +228,25 @@ class TestSaveCsv:
         assert step1[1]["target_hold_pct"] == "87.5"
         assert step1[1]["id_switch_count"] == "2"
         assert step1[1]["dropped_frames"] == "3"
+        assert step1[1]["app_induced_drops"] == "0"
+        assert step1[1]["frames_delivered"] == "900"
+        assert step1[1]["frames_dropped_est"] == "0"
+        assert step1[1]["delivered_fps"] == "30.0"
+        assert step1[1]["source_fps"] == "30.0"
+        assert step1[1]["duplicate_frames"] == "0"
+        assert step1[1]["stale_frames"] == "0"
+        assert step1[1]["ndi_queue_depth"] == "-1"
+        assert step1[1]["ndi_queue_audio"] == "-1"
+        assert step1[1]["ndi_queue_metadata"] == "-1"
+        assert step1[1]["ndi_total_video_frames"] == "900"
+        assert step1[1]["ndi_dropped_video_frames"] == "0"
+        assert step1[1]["ndi_total_audio_frames"] == "900"
+        assert step1[1]["ndi_dropped_audio_frames"] == "0"
+        assert step1[1]["ndi_total_metadata_frames"] == "3"
+        assert step1[1]["ndi_dropped_metadata_frames"] == "0"
+        assert step1[1]["ndi_connections"] == "1"
+        assert step1[1]["ndi_fourcc"] == ""
+        assert step1[1]["ndi_conversion_ms"] == "0.0"
         # Step 1, camera 0 has a real ttfa.
         assert step1[0]["time_to_first_acquire_s"] == "0.5"
 

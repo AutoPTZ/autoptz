@@ -224,19 +224,9 @@ class TestMacOSCameraPreflight:
 
         app_mod._start_engine_after_macos_camera_preflight(_PreflightClient(), bridge)
 
-    @pytest.mark.xfail(
-        sys.platform == "darwin",
-        reason=(
-            "pre-existing: on macOS this hits OSError(9) 'Bad file descriptor' in "
-            "qapp.processEvents() ONLY when run late in the single-process full-suite "
-            "CI (a prior test leaves Qt's event loop with a stale fd notifier); it "
-            "passes per-file. Surfaced once the headless model-prompt recursion fix "
-            "let the macOS suite run to completion. Tracked for a CI test-isolation/"
-            "sharding fix; strict=False so a per-file xpass is fine."
-        ),
-        strict=False,
-    )
-    def test_permission_result_is_delivered_on_qt_event_loop(self, monkeypatch, qapp) -> None:
+    def test_permission_result_is_delivered_on_qt_event_loop(
+        self, monkeypatch, qapp, wait_until
+    ) -> None:
         from PySide6.QtCore import QObject, Signal, Slot
 
         import autoptz.ui.app as app_mod
@@ -271,7 +261,12 @@ class TestMacOSCameraPreflight:
         handlers[0](True)
 
         assert client.starts == 0
-        qapp.processEvents()
+        wait_until(
+            lambda: client.starts == 1,
+            timeout=2.0,
+            message="macOS camera permission result was not delivered on the Qt event loop",
+            pump_qt=True,
+        )
         assert client.starts == 1
         assert client.errors == []
 
@@ -928,6 +923,7 @@ class TestEngineClient:
         db = tmp_path / "cfg.db"
         store = ConfigStore(db_path=db, debounce_s=0)
         c = EngineClient(store=store)
+        assert c.overlays()["faces"] is True
         assert c.overlays()["prediction"] is False
         c.setOverlay("prediction", True)
         assert c.overlays()["prediction"] is True
@@ -941,6 +937,40 @@ class TestEngineClient:
             assert c2.overlays()["prediction"] is True
         finally:
             store2.close()
+
+    def test_enroll_identity_persists_preview_thumbnail(self, qapp, tmp_path) -> None:
+        from autoptz.config.store import ConfigStore
+        from autoptz.ui.engine_client import EngineClient
+
+        store = ConfigStore(db_path=tmp_path / "cfg.db", debounce_s=0)
+        c = EngineClient(store=store)
+        c.enrollIdentity("cam-1", "Alice", 7, thumbnail=b"png-preview")
+
+        rec = c._identity_model.get_all()[0]
+        assert rec.name == "Alice"
+        assert rec.thumbnail == b"png-preview"
+        assert rec.thumbnails == [b"png-preview"]
+        assert store.load_identities()[0].thumbnail == b"png-preview"
+        store.close()
+
+    def test_assign_identity_adds_preview_thumbnail(self, qapp, tmp_path) -> None:
+        from autoptz.config.models import IdentityRecord
+        from autoptz.config.store import ConfigStore
+        from autoptz.ui.engine_client import EngineClient
+
+        store = ConfigStore(db_path=tmp_path / "cfg.db", debounce_s=0)
+        c = EngineClient(store=store)
+        ident = IdentityRecord(id="id-existing", name="Alice")
+        store.save_identity(ident)
+        c._identity_model.add_identity(ident)
+
+        c.assignTrackToIdentity("cam-1", "id-existing", 7, thumbnail=b"png-preview")
+
+        rec = c._identity_model.get("id-existing")
+        assert rec.thumbnail == b"png-preview"
+        assert rec.thumbnails == [b"png-preview"]
+        assert store.load_identities()[0].thumbnail == b"png-preview"
+        store.close()
 
     def test_set_target_fps_enqueues_single_fps_command(self, qapp) -> None:
         c = _client(qapp)
@@ -1178,13 +1208,12 @@ class TestShmFrameSource:
 
         assert ShmFrameSource().latest_qimage("no-such-cam") is None
 
-    def test_self_healing_reads_after_writer_appears(self) -> None:
+    def test_self_healing_reads_after_writer_appears(self, wait_until) -> None:
         """attach() BEFORE the writer exists → None until it appears, then a frame.
 
         This is the old blank-preview regression: an attach that races ahead of
         the writer's segment must still serve real frames once it shows up.
         """
-        import time
         import uuid
 
         import numpy as np
@@ -1203,15 +1232,19 @@ class TestShmFrameSource:
         try:
             writer = ShmWriter(shm_name, h, w)
             writer.push(np.full((h, w, 3), 200, dtype=np.uint8))  # BGR grey
-            real = None
-            deadline = time.monotonic() + 2.0
-            while time.monotonic() < deadline:
+
+            def _read_real_frame():
                 img = src.latest_qimage(cid)
                 if img is not None and img.width() == w and img.height() == h:
-                    real = img
-                    break
-                time.sleep(0.02)
-            assert real is not None, "frame source never served the real frame"
+                    return img
+                return None
+
+            real = wait_until(
+                _read_real_frame,
+                timeout=2.0,
+                interval=0.02,
+                message="frame source never served the real frame",
+            )
             px = real.pixelColor(w // 2, h // 2)
             assert (px.red(), px.green(), px.blue()) == (200, 200, 200)
         finally:
@@ -1330,6 +1363,26 @@ class TestCameraTileHelpers:
         box = {"x1": 0.2, "y1": 0.1, "x2": 0.8, "y2": 0.9}
         assert _norm_bbox_contains(box, 0.5, 0.5)
         assert not _norm_bbox_contains(box, 0.1, 0.5)
+
+    def test_enrollment_face_selection_prefers_clicked_face(self, qapp) -> None:
+        from autoptz.ui.widgets.tile_helpers import _select_enrollment_face_bbox
+
+        track = {"x1": 0.1, "y1": 0.1, "x2": 0.9, "y2": 0.9}
+        wrong = {"bbox": {"x1": 0.2, "y1": 0.2, "x2": 0.35, "y2": 0.35}}
+        clicked = {"bbox": {"x1": 0.55, "y1": 0.55, "x2": 0.7, "y2": 0.72}}
+
+        assert _select_enrollment_face_bbox([wrong, clicked], track, (0.62, 0.62)) == clicked[
+            "bbox"
+        ]
+
+    def test_enrollment_face_selection_falls_back_to_largest_face(self, qapp) -> None:
+        from autoptz.ui.widgets.tile_helpers import _select_enrollment_face_bbox
+
+        track = {"x1": 0.1, "y1": 0.1, "x2": 0.9, "y2": 0.9}
+        small = {"bbox": {"x1": 0.2, "y1": 0.2, "x2": 0.3, "y2": 0.3}}
+        large = {"bbox": {"x1": 0.5, "y1": 0.2, "x2": 0.8, "y2": 0.5}}
+
+        assert _select_enrollment_face_bbox([small, large], track, None) == large["bbox"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

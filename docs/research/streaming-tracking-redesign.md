@@ -12,6 +12,91 @@
 
 ---
 
+## 0. Primary-source refresh (2026-06-29)
+
+These are the current load-bearing facts for the 2.2 ingest and scheduler work.
+They are intentionally explicit so future agents do not reinterpret the
+performance plan as "just use multiprocessing" or "just switch languages."
+
+- **NDI receive format:** NDI's SDK documentation says
+  `NDIlib_recv_color_format_fastest` returns buffers in the format the SDK
+  processes internally, without conversion before delivery, and is the best
+  performance / lower-latency receive path. On most no-alpha sources this is
+  UYVY; `allow_video_fields` is effectively true in this mode.
+  Source: https://docs.ndi.video/all/developing-with-ndi/sdk/ndi-recv
+- **NDI receive loop:** NDI's performance guide explicitly recommends
+  `NDIlib_recv_color_format_fastest` for receiving, separate receive waits for
+  audio/video where needed, and a reasonable `NDIlib_recv_capture_v3` timeout
+  instead of zero-timeout polling. This directly supports changing AutoPTZ's NDI
+  path from Python-paced polling to blocking receive with measured pacing.
+  Source:
+  https://docs.ndi.video/all/developing-with-ndi/sdk/performance-and-implementation
+- **BGRA/BGRX cost:** The same NDI performance guide warns that BGRA/BGRX incur a
+  memory-bandwidth and conversion penalty. For AutoPTZ, that means BGRA is a UI
+  boundary format, not the production capture format. Capturing in BGRA just to
+  convert/copy again later is release-blocking waste.
+  Source:
+  https://docs.ndi.video/all/developing-with-ndi/sdk/performance-and-implementation
+- **cyndilib mapping:** cyndilib exposes the same NDI receive format choices;
+  its docs describe `fastest` as the best-performance receive mode and show the
+  usual no-alpha result as UYVY. AutoPTZ should keep the actual FourCC in
+  `SourceHealth` rather than hiding it behind "BGR frame arrived."
+  Source: https://cyndilib.readthedocs.io/en/latest/reference/wrapper/ndi_recv.html
+- **Receiver diagnostics are first-class, not optional:** the NDI receive SDK
+  exposes receiver performance and queue-depth APIs for dropped/dequeued frames
+  and pending queues. AutoPTZ's Python wrapper does not expose every native field
+  today, so the production contract must record every available backend counter
+  and avoid treating "no counter exposed" as "healthy."
+  Source: https://docs.ndi.video/all/developing-with-ndi/sdk/ndi-recv
+- **Timestamp/timecode are the cheap duplicate detector:** NDI Analysis documents
+  per-video-frame timestamp and timecode fields in 100 ns units and uses them to
+  compare sender vs receiver frame timing. AutoPTZ should use those scalar source
+  stamps, when exposed by the wrapper, to count duplicate/stale FrameSync returns
+  without hashing full 1080p frames on the capture path.
+  Source: https://docs.ndi.video/all/using-ndi/utilities/analysis
+- **ONNX Runtime CPU thread pools:** ORT's default
+  `intra_op_num_threads = 0` creates intra-op worker threads up to the number of
+  physical CPU cores per session, with spinning enabled by default. If AutoPTZ
+  creates a session per camera or per process on CPU-only hosts, it can multiply
+  full-core thread pools and create CPU oversubscription even when Python itself
+  is not the immediate bottleneck. Production must centralize model ownership or
+  explicitly cap session threads and disable/limit spinning on CPU profiles.
+  Source: https://onnxruntime.ai/docs/performance/tune-performance/threading.html
+- **Python GIL reality:** Python's threading docs still state that only one
+  thread executes Python bytecode at a time in normal CPython builds, while
+  threads remain appropriate for I/O-bound work. Python's FAQ recommends
+  processes or C extensions that release the GIL for CPU work. For AutoPTZ this
+  means: keep receive threads I/O/native-heavy, move Python CPU work off capture,
+  and avoid per-camera process duplication unless memory and ORT thread budgets
+  are proven.
+  Sources:
+  https://docs.python.org/3/library/threading.html and
+  https://docs.python.org/3/_sources/faq/library.rst.txt
+
+Implementation consequences for 2.2:
+
+- The 8-stream gate measures **app-induced capture drops**, not detector skips.
+  Inference cadence may be reduced on CPU-only hosts, but capture must still
+  drain every source except during add/remove-source transitions.
+- NDI capture must expose actual FourCC, conversion time, delivered fps,
+  duplicate/stale counts, and receiver/backend counters in `SourceHealth`.
+  Native NDI performance counters (`total_*` / `dropped_*`) are not equivalent to
+  AutoPTZ's `frames_dropped_est`: native dropped frames mean the receiver had
+  frames available that the app did not dequeue fast enough, while the estimate
+  compares observed delivered cadence against source cadence when the wrapper
+  exposes no direct dropped-frame signal.
+- The production receiver must prefer `fastest` / native YCbCr receive and
+  convert once at the boundary that actually needs BGR/RGB. Preview and model
+  input may choose different downscale/convert points, but capture must not pay
+  repeated full-frame conversion costs.
+- Per-camera processes are not a production answer by themselves. They bypass
+  the GIL for Python bytecode, but they also multiply model memory and ORT thread
+  pools. The default 2.2 scheduler should use shared model ownership plus
+  explicit CPU cadence/thread caps; Labs can keep process/model-server variants
+  only when Mark artifacts show a net win.
+
+---
+
 ## 1. Executive summary
 
 Both problems are real and both are **fixable without a rewrite**, but the popular
@@ -445,7 +530,40 @@ not detection throughput.
 detections/sec** on this ANE (measured in the prototype below), not ~20 — the earlier
 figure used a freshly‑exported dynamic model that was slower. 3× more budget.
 
-### 7.6 ⭐ Validated: in‑process scheduler FAILS, multi‑process model‑server SCALES
+### 7.6 Tracking-control conclusion: bbox is evidence, not the PTZ target truth
+
+Primary tracking literature supports bounding boxes as a practical detection and
+association primitive, not as an unconditional control command:
+
+- [SORT](https://arxiv.org/abs/1602.00763) models boxes with motion prediction and
+  assignment; it is explicitly a simple baseline, not a PTZ control policy.
+- [ByteTrack](https://arxiv.org/abs/2110.06864) improves association by using
+  lower-confidence detections carefully rather than discarding them, which reinforces
+  the point that weak boxes need classification and association logic.
+- [BoT-SORT](https://arxiv.org/abs/2206.14651) adds camera-motion compensation and
+  stronger association because box position alone is not stable enough in moving
+  camera scenes.
+- The [1 Euro filter](https://www.researchgate.net/publication/254005010_1_Filter_A_Simple_Speed-based_Low-pass_Filter_for_Noisy_Input_in_Interactive_Systems)
+  is the right kind of low-latency jitter suppression for aim signals, but it does
+  not decide whether a measurement is trustworthy.
+
+AutoPTZ's implication for 2.2 is:
+
+- A bbox remains the universal fallback because it exists for every detector and
+  every platform.
+- The controller should not blindly follow the raw bbox center. Pose/fused torso aim
+  can improve the target point when it is already available and owned by the same
+  track, but pose must stay optional because it is another inference/service cost.
+- Before PTZ sees a target, the worker must classify the evidence: lost/held boxes,
+  degenerate boxes, too-small boxes, collapsed occlusion boxes, and one-frame
+  low-overlap teleports are treated as no PTZ evidence.
+- A low-overlap jump is accepted only after repeated consistent evidence, or when
+  trusted pose/body evidence confirms it. This prevents a one-frame tracker teleport
+  from causing the camera to over-correct, while still allowing real reacquire.
+- Lost target behavior should hold/stop by default. Search and zoom-out remain Labs
+  until they prove they do not create bobbing or surprise reframing.
+
+### 7.7 ⭐ Validated: in‑process scheduler FAILS, multi‑process model‑server SCALES
 
 Two architectures were built behind flags and **measured** end‑to‑end on real NDI +
 the real detector:

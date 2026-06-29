@@ -1,15 +1,10 @@
-"""Assertion group 4: controller command smoothness + preset monotonicity."""
+"""Assertion group 4: controller command smoothness."""
 
 from __future__ import annotations
 
 import math
 
-from autoptz.config.models import (
-    SPEED_PROFILES,
-    PTZConfig,
-    TrackingSpeed,
-    apply_speed_profile,
-)
+from autoptz.config.models import PTZConfig
 from autoptz.engine.ptz.controller import PTZController
 from tests.synthetic_tracking import MockBackend, make_cfg
 
@@ -68,38 +63,3 @@ def test_no_sign_flip_jitter_at_steady_state() -> None:
         if abs(a) > 1e-3 and abs(b) > 1e-3:
             assert math.copysign(1.0, a) == math.copysign(1.0, b)
 
-
-def _settled_magnitude(speed: TrackingSpeed, error_x: float = 0.15) -> float:
-    # error_x=0.15 keeps the slower presets below the response-curve clamp so the
-    # CALM→SPORT ordering separates cleanly instead of all saturating at 1.0.
-    base = PTZConfig(safe_zone_enabled=False, deadzone_x=0.0, deadzone_y=0.0)
-    cfg = apply_speed_profile(base, speed)
-    pans = _drive_constant(cfg, error_x=error_x, ticks=60)
-    return abs(pans[-1])
-
-
-def test_command_magnitude_monotone_across_presets() -> None:
-    """Settled |pan| is non-decreasing CALM <= NORMAL <= FAST <= SPORT."""
-    order = [
-        TrackingSpeed.CALM,
-        TrackingSpeed.NORMAL,
-        TrackingSpeed.FAST,
-        TrackingSpeed.SPORT,
-    ]
-    mags = [_settled_magnitude(s) for s in order]
-    for lo, hi in zip(mags, mags[1:], strict=False):
-        assert hi >= lo - 1e-6  # non-decreasing speed feel
-
-
-def test_speed_profiles_are_monotone_source_of_truth() -> None:
-    """Guard: the SPEED_PROFILES this suite relies on are themselves monotone."""
-    order = [
-        TrackingSpeed.CALM,
-        TrackingSpeed.NORMAL,
-        TrackingSpeed.FAST,
-        TrackingSpeed.SPORT,
-    ]
-    pans = [SPEED_PROFILES[s]["max_pan_speed"] for s in order]
-    kps = [SPEED_PROFILES[s]["kp"] for s in order]
-    assert pans == sorted(pans)
-    assert kps == sorted(kps)

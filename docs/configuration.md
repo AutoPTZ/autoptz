@@ -34,7 +34,7 @@ Defaults are the validated, broadcast-sane starting point; one concept = one con
 
 | Setting | Default | Notes |
 | --- | --- | --- |
-| `max_pan_speed` / `max_tilt_speed` / `max_zoom_speed` | `0.5` / `0.5` / `0.3` | Per-axis speed ceilings (0–1). |
+| `max_pan_speed` / `max_tilt_speed` / `max_zoom_speed` | `0.7` / `0.7` / `0.3` | Internal per-axis ceilings (0–1). Normal users do not tune tracking speed; the controller adapts speed from target error, velocity, and measured latency. |
 | `kp` / `kd` / `kv` | `0.6` / `0.05` / `0.1` | Proportional, derivative, and velocity feed-forward gains. |
 | `lead_time_s` | `0.15` | Motion prediction: project the aim point forward by this much using measured velocity. |
 | `aim_smoothing` | `0.5` | 0 = snappiest, 1 = smoothest (maps to the one-euro filter cutoff). |
@@ -42,9 +42,9 @@ Defaults are the validated, broadcast-sane starting point; one concept = one con
 | `safe_zone_x/y/w/h` | centred, `0.15`×`0.22` | Box centre offset + half-extents (fraction of half-frame). |
 | `safe_zone_roundness` | `1.0` | 0 = rectangle … 1 = full oval. |
 | `deadzone_x` / `deadzone_y` | `0.05` | Per-axis circular deadzone (used when the safe zone is off). |
-| `auto_zoom` | `true` | Drive zoom to keep the subject at the framing target height. |
+| `auto_zoom` | `false` | Labs-only during 2.2 stabilization. Fixed zoom is the release default because pan/tilt is easier to stabilize when zoom is not changing the image scale. |
 | `zoom_framing` | `upper_body` | Auto-zoom target height: `face`, `head_shoulders`, `upper_body`, `full_body`, or `wide`. Mirrors `framing`; `wide` is the one extra (looser) option. |
-| `loss_zoom_out` / `reacquire_window_s` | `0.25` / `4.0` | On loss, gently zoom out to widen the view and re-find the subject. |
+| `loss_zoom_out` / `reacquire_window_s` | `0.0` / `4.0` | Loss defaults to hold/stop. Zoom-out search is Labs-only until tracking is stable. |
 | `soft_limits` | none | Optional pan/tilt/zoom travel clamps. |
 
 ## Hardware

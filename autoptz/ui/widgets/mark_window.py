@@ -36,7 +36,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QMetaObject, Qt, Signal, Slot
+from PySide6.QtCore import QMetaObject, QRect, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 from autoptz.benchmark.profiles import get_profile
-from autoptz.benchmark.runner import BenchmarkResult, StepResult
+from autoptz.benchmark.runner import BenchmarkResult, StepResult, _quality_app_induced_drops
 from autoptz.ui import theme as T
 from autoptz.ui.mark_session import MarkSession
 from autoptz.ui.widgets.camera_wall import CameraWall
@@ -78,6 +78,26 @@ def _no_autostart() -> bool:
     )
 
 
+def _result_with_recomputed_gate(result: BenchmarkResult) -> BenchmarkResult:
+    """Recompute summary fields from enriched GUI steps after drop gates."""
+    if not result.steps:
+        return result
+    sustained_cameras = 0
+    min_fps_at_sustained = 0.0
+    for step in result.steps:
+        if not step.sustained:
+            break
+        sustained_cameras = int(step.cameras)
+        min_fps_at_sustained = float(step.min_fps)
+    score = round(sustained_cameras * (min_fps_at_sustained / 30.0) * result.weight, 2)
+    return dataclasses.replace(
+        result,
+        sustained_cameras=sustained_cameras,
+        min_fps_at_sustained=min_fps_at_sustained,
+        score=score,
+    )
+
+
 class _MarkRampChart(QWidget):
     """A small QPainter line chart: x = camera count, y = min fps per step.
 
@@ -91,7 +111,13 @@ class _MarkRampChart(QWidget):
         self.setObjectName("markChart")
         self._steps: list[StepResult] = []
         self._floor: float = 24.0
-        self.setMinimumHeight(140)
+        self.setMinimumHeight(168)
+        self.setToolTip(
+            "Minimum delivered FPS by camera count. Points pass only when they meet the "
+            "target FPS and report zero app-induced capture drops."
+        )
+        self.setAccessibleName("AutoPTZ Mark performance chart")
+        self.setAccessibleDescription(self.toolTip())
 
     def set_steps(self, steps: list[StepResult], floor: float) -> None:
         self._steps = list(steps)
@@ -104,11 +130,20 @@ class _MarkRampChart(QWidget):
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             w = self.width()
             h = self.height()
-            pad = 10
-            x0, y0 = pad, pad
-            x1, y1 = max(pad + 1, w - pad), max(pad + 1, h - pad)
+            pad = 12
+            x0, y0 = pad, pad + 26
+            x1, y1 = max(pad + 1, w - pad), max(pad + 1, h - pad - 16)
 
             painter.fillRect(self.rect(), QColor(T.CURRENT.surface))
+            painter.setPen(QPen(QColor(T.CURRENT.text), 1))
+            painter.drawText(QRect(pad, pad, max(1, w - 2 * pad), 18), Qt.AlignmentFlag.AlignLeft, "Min FPS")
+            summary = self._summary_text()
+            painter.setPen(QPen(QColor(T.CURRENT.subtext), 1))
+            painter.drawText(
+                QRect(pad, pad, max(1, w - 2 * pad), 18),
+                Qt.AlignmentFlag.AlignRight,
+                summary,
+            )
 
             # Vertical scale: 0 .. max(observed fps, floor) * 1.15 headroom.
             observed = [s.min_fps for s in self._steps] + [self._floor]
@@ -129,6 +164,11 @@ class _MarkRampChart(QWidget):
             painter.setPen(floor_pen)
             fy = fps_y(self._floor)
             painter.drawLine(x0, int(fy), x1, int(fy))
+            painter.drawText(
+                QRect(x0 + 4, int(fy) - 18, max(1, x1 - x0 - 8), 16),
+                Qt.AlignmentFlag.AlignRight,
+                f"target {self._floor:.0f} fps",
+            )
 
             n = len(self._steps)
             if n == 0:
@@ -156,8 +196,30 @@ class _MarkRampChart(QWidget):
                 painter.setPen(QPen(color, 1))
                 px, py = step_x(i), fps_y(s.min_fps)
                 painter.drawEllipse(int(px) - 3, int(py) - 3, 6, 6)
+                if n <= 8:
+                    painter.setPen(QPen(QColor(T.CURRENT.subtext), 1))
+                    painter.drawText(
+                        QRect(int(px) - 18, int(y1) + 2, 36, 14),
+                        Qt.AlignmentFlag.AlignCenter,
+                        str(int(s.cameras)),
+                    )
+            painter.setPen(QPen(QColor(T.CURRENT.subtext), 1))
+            painter.drawText(
+                QRect(x0, int(y1) + 2, max(1, x1 - x0), 14),
+                Qt.AlignmentFlag.AlignRight,
+                "cameras",
+            )
         finally:
             painter.end()
+
+    def _summary_text(self) -> str:
+        if not self._steps:
+            return "target line | drops fail"
+        step = self._steps[-1]
+        drops = int(getattr(step, "app_induced_drops", 0) or 0)
+        drop_text = "0 drops" if drops == 0 else f"{drops} drops"
+        verdict = "pass" if step.sustained else "fail"
+        return f"{int(step.cameras)} cam | min {step.min_fps:.1f} fps | {drop_text} | {verdict}"
 
 
 class MarkWindow(MainWindow):
@@ -493,7 +555,7 @@ class MarkWindow(MainWindow):
         if not _no_autostart():
             self._engine.start()
             # Auto-track a (seeded) target per camera so Center Stage visibly engages
-            # on the full profile; a no-op for the streams (no-inference) profile.
+            # on tracking-enabled profiles; a no-op for streams (no inference).
             self._engine.auto_track_targets(seed=0xA17)
 
     def showEvent(self, event: Any) -> None:  # noqa: N802
@@ -656,7 +718,13 @@ class MarkWindow(MainWindow):
         # double-feeding / carryover between steps).
         quality = {cid: acc.finalize().to_dict() for cid, acc in self._quality.items()}
         if quality:
-            step = dataclasses.replace(step, per_camera_quality=quality)
+            app_drops = _quality_app_induced_drops(quality)
+            step = dataclasses.replace(
+                step,
+                per_camera_quality=quality,
+                app_induced_drops=app_drops,
+                sustained=step.sustained and app_drops == 0,
+            )
         self._quality = {}
         self._chart._steps.append(step)
         self._chart.set_steps(self._chart._steps, self._effective_floor())
@@ -680,20 +748,23 @@ class MarkWindow(MainWindow):
         steps = (
             enriched if (enriched and len(enriched) == len(result.steps)) else list(result.steps)
         )
-        result = dataclasses.replace(
-            result,
-            steps=steps,
-            scene_clip_id=(
-                self._session.clip_info().id if self._session.is_clip() else self._session.source
-            ),
-            ground_truth=gt_summary,
+        result = _result_with_recomputed_gate(
+            dataclasses.replace(
+                result,
+                steps=steps,
+                scene_clip_id=(
+                    self._session.clip_info().id
+                    if self._session.is_clip()
+                    else self._session.source
+                ),
+                ground_truth=gt_summary,
+            )
         )
         self._result = result
         self._teardown_controller()
         self._controls.set_running(False)
-        # Color steps against the SAME discounted floor the ramp graded with (the
-        # chart's pass line), not result.floor_fps mixed with the raw target — so
-        # green dots sit above the line and red below.
+        # Color steps against the same exact floor the ramp graded with so green
+        # dots sit above the line and red below.
         self._chart.set_steps(list(result.steps) or self._chart._steps, self._effective_floor())
         # The finished verdict: the human rating word + the transparent score math
         # (e.g. "Good — 2 cam × 28/30 fps × 1.0 weight = 1.87").  final=True highlights
@@ -882,13 +953,10 @@ class MarkWindow(MainWindow):
             log.debug("could not open results folder", exc_info=True)
 
     def _effective_floor(self) -> float:
-        """The DISCOUNTED pass floor the ramp actually grades against.
+        """The exact pass floor the ramp grades against.
 
-        Mark grades a camera as sustaining at ``target × _MARK_SUSTAIN_RATIO`` (the
-        capped sources can't hit the raw target exactly — see
-        :class:`MarkRampController`).  The chart's pass line must use THIS threshold
-        so green (sustained) dots sit above the line and red (fail) below; using the
-        raw target would put passing-but-capped steps below the line.
+        The chart's pass line must match :class:`MarkRampController` so green
+        (sustained) dots sit above the same threshold used by the release JSON.
         """
         from autoptz.ui.mark_runner import MarkRampController
 

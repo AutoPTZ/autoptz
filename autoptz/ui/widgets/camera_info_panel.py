@@ -113,7 +113,12 @@ class CameraInfoPanel(QWidget):
                 "Dropped frames",
                 "Est. source drops",
                 "Delivered / source",
+                "Duplicate / stale",
+                "NDI recv drops",
+                "NDI connections",
                 "NDI queue depth",
+                "NDI format",
+                "NDI conversion",
             ],
         ),
         (
@@ -329,6 +334,31 @@ class CameraInfoPanel(QWidget):
         self._set_row_visible("Delivered / source", show_rates)
         if show_rates:
             self._set("Delivered / source", f"{deliv_fps:.1f} / {src_fps:.1f} fps")
+        duplicate_frames = int(getattr(rec, "duplicate_frames", 0) or 0)
+        stale_frames = int(getattr(rec, "stale_frames", 0) or 0)
+        show_stale = duplicate_frames > 0 or stale_frames > 0
+        self._set_row_visible("Duplicate / stale", show_stale)
+        if show_stale:
+            self._set(
+                "Duplicate / stale",
+                f"{duplicate_frames} / {stale_frames}",
+                color=T.WARNING if stale_frames > 0 else None,
+            )
+        ndi_recv_drops = int(getattr(rec, "ndi_dropped_video_frames", 0) or 0)
+        ndi_recv_total = int(getattr(rec, "ndi_total_video_frames", 0) or 0)
+        show_recv_drops = ndi_recv_total > 0 or ndi_recv_drops > 0
+        self._set_row_visible("NDI recv drops", show_recv_drops)
+        if show_recv_drops:
+            self._set(
+                "NDI recv drops",
+                f"{ndi_recv_drops} / {ndi_recv_total}",
+                color=T.WARNING if ndi_recv_drops > 0 else None,
+            )
+        ndi_connections = int(getattr(rec, "ndi_connections", -1))
+        show_connections = ndi_connections >= 0
+        self._set_row_visible("NDI connections", show_connections)
+        if show_connections:
+            self._set("NDI connections", str(ndi_connections))
         # -1 == the source exposes no queue; omit the row entirely so non-NDI /
         # no-queue sources don't show a confusing "-1".
         queue_depth = int(getattr(rec, "ndi_queue_depth", -1))
@@ -336,6 +366,15 @@ class CameraInfoPanel(QWidget):
         self._set_row_visible("NDI queue depth", show_queue)
         if show_queue:
             self._set("NDI queue depth", str(queue_depth))
+        fourcc = str(getattr(rec, "ndi_fourcc", "") or "")
+        self._set_row_visible("NDI format", bool(fourcc))
+        if fourcc:
+            self._set("NDI format", fourcc)
+        conversion_ms = float(getattr(rec, "ndi_conversion_ms", 0.0) or 0.0)
+        show_conversion = conversion_ms > 0.0
+        self._set_row_visible("NDI conversion", show_conversion)
+        if show_conversion:
+            self._set("NDI conversion", f"{conversion_ms:.2f} ms")
 
         target_fps = float(getattr(tel, "target_fps", 0.0) or src.get("fps", 30.0) or 30.0)
         budget_ms = float(getattr(tel, "frame_budget_ms", 0.0) or (1000.0 / max(1.0, target_fps)))

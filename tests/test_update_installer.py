@@ -168,6 +168,15 @@ def test_parse_sha256sums_case_insensitive_filename() -> None:
     assert _parse_sha256sums(content, "AutoPTZ-2.2.0-setup.exe") == "aabbcc"
 
 
+def test_parse_sha256sums_matches_manifest_path_basename() -> None:
+    content = (
+        "aabbcc  artifacts/macos-x86_64/AutoPTZ-2.2.0-macos-x86_64.dmg\n"
+        "ddeeff  artifacts\\windows\\AutoPTZ-2.2.0-windows-x64-setup.exe\n"
+    )
+    assert _parse_sha256sums(content, "AutoPTZ-2.2.0-macos-x86_64.dmg") == "aabbcc"
+    assert _parse_sha256sums(content, "AutoPTZ-2.2.0-windows-x64-setup.exe") == "ddeeff"
+
+
 # ── download_update: TLS context is passed to urlopen ────────────────────────
 
 

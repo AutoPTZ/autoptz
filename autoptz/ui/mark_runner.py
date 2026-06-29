@@ -17,6 +17,7 @@ making it raise, which surfaces as ``error("cancelled")``.  The window treats a
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -66,15 +67,10 @@ class MarkRampController(QObject):
     finished = Signal(object)  # BenchmarkResult
     error = Signal(str)
 
-    # The Mark realistic sources (bundled clip / synthetic / NDI) are CAPPED at the
-    # target fps in the adapter, so with any per-frame overhead a camera that's fully
-    # keeping up still lands a hair BELOW the target — a strict ``min_fps >= target``
-    # floor is then unachievable and no camera ever "sustains".  Mark therefore passes
-    # BenchmarkRunner a DISCOUNTED floor (target × this ratio): a Target of 30 → a
-    # camera sustains if it holds ≥ ~25.5 fps, i.e. it's keeping up with the 30fps
-    # source within realistic overhead.  Applied in the Mark path ONLY — BenchmarkRunner
-    # itself stays strict so the headless CLI / tests are unaffected.
-    _MARK_SUSTAIN_RATIO = 0.85
+    # Release scoring is exact: a 30 fps target must sustain 30 fps and zero
+    # app-induced capture drops.  Keep the ratio constant only as an internal seam
+    # for chart/test code that reads the effective floor.
+    _MARK_SUSTAIN_RATIO = 1.0
 
     def __init__(
         self,
@@ -99,10 +95,12 @@ class MarkRampController(QObject):
         self._client = client
         self._supervisor_factory = supervisor_factory
         self._cancel = False
+        self._cancel_event = threading.Event()
         self._thread: QThread | None = None
 
     def start(self) -> None:
         self._cancel = False
+        self._cancel_event.clear()
         # Standard worker-object pattern: the controller is moved INTO the thread,
         # so the thread must be unparented (a parented QObject cannot moveToThread).
         # We hold a strong ref in ``self._thread`` and free it via ``deleteLater``
@@ -117,6 +115,7 @@ class MarkRampController(QObject):
 
     def stop(self) -> None:
         self._cancel = True
+        self._cancel_event.set()
 
     def wait(self, timeout_ms: int = 5000) -> bool:
         """Block until the worker thread has finished (for clean teardown).
@@ -149,6 +148,12 @@ class MarkRampController(QObject):
         sample_fn: Callable[[int], list[float]] | None = None
         try:
             sample_fn = self._build_sample_fn()
+            sampler = getattr(sample_fn, "_sampler", None)
+            if sampler is not None and hasattr(sampler, "set_cancel_event"):
+                try:
+                    sampler.set_cancel_event(self._cancel_event)
+                except Exception:  # noqa: BLE001
+                    log.debug("sampler set_cancel_event failed", exc_info=True)
             prof = get_profile(self._profile)
             inner = sample_fn
 
@@ -156,14 +161,15 @@ class MarkRampController(QObject):
                 if self._cancel:
                     raise _MarkCancelled()
                 self.progress.emit(n, self._max, max(0.0, (self._max - n) * self._dwell))
-                return inner(n)
+                result = inner(n)
+                if self._cancel:
+                    raise _MarkCancelled()
+                return result
 
             runner = BenchmarkRunner(
                 prof,
-                # Discounted pass floor (target × ratio): the capped sources can't hit
-                # the raw target exactly, so a camera "sustains" if it's keeping up
-                # within real-world overhead.  ``self._floor`` keeps the user's target
-                # for display (the window shows it in the verdict + chart).
+                # Exact pass floor: the release benchmark must not hide under-target
+                # source delivery behind a discounted score.
                 floor_fps=self._floor * self._MARK_SUSTAIN_RATIO,
                 max_cameras=self._max,
                 dwell_s=self._dwell,

@@ -126,14 +126,17 @@ def test_absent_dict_leaves_unmanaged_env_untouched(tmp_path: Any, monkeypatch: 
     assert os.environ.get("AUTOPTZ_PROCESS_PER_CAMERA") == "1"
 
 
-def test_persisted_default_pops_stale_managed_key(tmp_path: Any, monkeypatch: Any) -> None:
-    # When the user HAS persisted a key at its engine default, a stale env var
-    # from a prior selection is cleared so the in-code fallback runs.
+def test_labs_process_flags_are_not_managed_by_normal_experimental_ui(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    # Process scaling modes are no longer part of the normal Experimental dialog.
+    # A deliberately exported labs/dev env var must not be clobbered by a stale
+    # saved UI dict from an older build.
     monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
     sup, store = _sup(tmp_path)
     store.set_setting("experimental_features", {"AUTOPTZ_PROCESS_PER_CAMERA": "0"})
     sup._apply_experimental_env()
-    assert "AUTOPTZ_PROCESS_PER_CAMERA" not in os.environ
+    assert os.environ.get("AUTOPTZ_PROCESS_PER_CAMERA") == "1"
 
 
 def test_tracking_keys_in_dict_are_ignored_for_env(tmp_path: Any, monkeypatch: Any) -> None:

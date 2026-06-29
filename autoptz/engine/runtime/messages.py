@@ -248,7 +248,20 @@ class TelemetryMsg(BaseModel):
     frames_dropped_est: int = 0
     delivered_fps: float = 0.0
     source_fps: float = 0.0
+    duplicate_frames: int = 0
+    stale_frames: int = 0
     ndi_queue_depth: int = -1
+    ndi_queue_audio: int = -1
+    ndi_queue_metadata: int = -1
+    ndi_total_video_frames: int = 0
+    ndi_dropped_video_frames: int = 0
+    ndi_total_audio_frames: int = 0
+    ndi_dropped_audio_frames: int = 0
+    ndi_total_metadata_frames: int = 0
+    ndi_dropped_metadata_frames: int = 0
+    ndi_connections: int = -1
+    ndi_fourcc: str = ""
+    ndi_conversion_ms: float = 0.0
     # True once at least one real frame has been read + pushed to the preview shm.
     # The UI gates its "No Signal" overlay on this (not on fps, which lags a full
     # second, nor on the preview Image load, which can latch on a placeholder).
@@ -285,7 +298,7 @@ class TelemetryMsg(BaseModel):
     health: HealthInfo = Field(default_factory=HealthInfo)
 
     def to_msgpack(self) -> bytes:
-        return bytes(msgpack.packb(self.model_dump(), use_bin_type=True))
+        return bytes(msgpack.packb(self.model_dump(exclude_defaults=True), use_bin_type=True))
 
     @classmethod
     def from_msgpack(cls, data: bytes) -> Self:

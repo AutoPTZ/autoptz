@@ -53,7 +53,6 @@ import logging
 import multiprocessing as mp
 import os
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -164,7 +163,9 @@ def _parent_is_gone(original_ppid: int) -> bool:
         return False
 
 
-def _install_parent_death_watchdog(poll_s: float = 1.0) -> None:
+def _install_parent_death_watchdog(
+    poll_s: float = 1.0, stop_event: threading.Event | None = None
+) -> threading.Thread:
     """Force-exit this child when its parent (the app/supervisor process) dies.
 
     daemon=True children are only reaped on a CLEAN parent exit (multiprocessing's
@@ -175,16 +176,19 @@ def _install_parent_death_watchdog(poll_s: float = 1.0) -> None:
     """
     original_ppid = os.getppid()
 
+    stop = stop_event or threading.Event()
+
     def _watch() -> None:
-        while True:
-            time.sleep(poll_s)
+        while not stop.wait(poll_s):
             try:
                 if _parent_is_gone(original_ppid):
                     os._exit(0)
             except Exception:  # noqa: BLE001 — never let the watchdog raise
                 os._exit(0)
 
-    threading.Thread(target=_watch, name="parent-death-watchdog", daemon=True).start()
+    thread = threading.Thread(target=_watch, name="parent-death-watchdog", daemon=True)
+    thread.start()
+    return thread
 
 
 def _configure_child_logging() -> None:

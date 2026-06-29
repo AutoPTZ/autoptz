@@ -147,6 +147,49 @@ def _head_bbox(box: dict[str, float]) -> dict[str, float]:
     return {"x1": cx - half_w, "y1": y1, "x2": cx + half_w, "y2": y1 + (y2 - y1) * 0.30}
 
 
+def _select_enrollment_face_bbox(
+    faces: list[dict[str, Any]],
+    track_box: dict[str, float],
+    click: tuple[float, float] | None,
+) -> dict[str, float] | None:
+    """Pick the detected face that should be enrolled for a clicked person box."""
+    candidates: list[dict[str, float]] = []
+    for face in faces:
+        box = face.get("bbox", {})
+        if not isinstance(box, dict):
+            continue
+        cx = (float(box.get("x1", 0.0)) + float(box.get("x2", 0.0))) * 0.5
+        cy = (float(box.get("y1", 0.0)) + float(box.get("y2", 0.0))) * 0.5
+        in_track = _norm_bbox_contains(track_box, cx, cy)
+        click_selects_face = (
+            click is not None
+            and _norm_bbox_contains(track_box, click[0], click[1])
+            and _norm_bbox_contains(box, click[0], click[1])
+        )
+        if in_track or click_selects_face:
+            candidates.append(box)
+    if not candidates:
+        return None
+    if click is None:
+        return max(
+            candidates,
+            key=lambda b: (float(b.get("x2", 0.0)) - float(b.get("x1", 0.0)))
+            * (float(b.get("y2", 0.0)) - float(b.get("y1", 0.0))),
+        )
+
+    def score(box: dict[str, float]) -> tuple[int, float, float]:
+        x, y = click
+        inside = _norm_bbox_contains(box, x, y)
+        cx = (float(box.get("x1", 0.0)) + float(box.get("x2", 0.0))) * 0.5
+        cy = (float(box.get("y1", 0.0)) + float(box.get("y2", 0.0))) * 0.5
+        area = (float(box.get("x2", 0.0)) - float(box.get("x1", 0.0))) * (
+            float(box.get("y2", 0.0)) - float(box.get("y1", 0.0))
+        )
+        return (0 if inside else 1, (cx - x) ** 2 + (cy - y) ** 2, -area)
+
+    return min(candidates, key=score)
+
+
 def _rect_close(a: QRectF, b: QRectF) -> bool:
     return (
         abs(a.x() - b.x()) < 0.5

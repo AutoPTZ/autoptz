@@ -7,7 +7,6 @@ side-effects and no hardware needed.
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 
 import pytest
@@ -401,12 +400,16 @@ class TestIdentityStore:
 
 
 class TestDebounce:
-    def test_debounced_write_eventually_persists(self, tmp_path: Path, cam: CameraConfig) -> None:
+    def test_debounced_write_eventually_persists(
+        self, tmp_path: Path, cam: CameraConfig, wait_until
+    ) -> None:
         store = ConfigStore(db_path=tmp_path / "db.db", debounce_s=0.1)
         store.save_camera_debounced(cam)
-        # Before debounce fires: may or may not be persisted yet (implementation-dependent)
-        time.sleep(0.25)  # well past the 0.1 s window
-        cameras = store.load_cameras()
+        cameras = wait_until(
+            lambda: store.load_cameras(),
+            timeout=1.0,
+            message="debounced camera write did not persist",
+        )
         store.close()
         assert len(cameras) == 1
         assert cameras[0].id == cam.id

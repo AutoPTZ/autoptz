@@ -169,7 +169,7 @@ class SourceAdapter(ABC):
         with self._status_lock:
             self._status.source_fps_cap = cap
 
-    def delivery_metrics(self) -> dict[str, float | int]:
+    def delivery_metrics(self) -> dict[str, float | int | str]:
         """Per-source frame-delivery telemetry (Phase 0a).
 
         No-op default — only :class:`NDIAdapter` tracks real values (NDI's
@@ -183,7 +183,20 @@ class SourceAdapter(ABC):
             "frames_dropped_est": 0,
             "delivered_fps": 0.0,
             "source_fps": 0.0,
+            "duplicate_frames": 0,
+            "stale_frames": 0,
             "ndi_queue_depth": -1,
+            "ndi_queue_audio": -1,
+            "ndi_queue_metadata": -1,
+            "ndi_total_video_frames": 0,
+            "ndi_dropped_video_frames": 0,
+            "ndi_total_audio_frames": 0,
+            "ndi_dropped_audio_frames": 0,
+            "ndi_total_metadata_frames": 0,
+            "ndi_dropped_metadata_frames": 0,
+            "ndi_connections": -1,
+            "ndi_fourcc": "",
+            "ndi_conversion_ms": 0.0,
         }
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -897,6 +910,48 @@ def _ndi_fourcc_name(vf: object) -> str:
     return str(getattr(fc, "name", fc)).upper()
 
 
+def _ndi_source_stamp(vf: object) -> object | None:
+    """Best-effort source-frame identity for duplicate/stale accounting.
+
+    cyndilib/SDK builds expose this under different names (often timecode or a
+    timestamp).  Only scalar values are trusted; mocks/proxy objects are ignored so
+    telemetry stays conservative when the wrapper does not expose a real stamp.
+    """
+    for name in (
+        "timestamp",
+        "timecode",
+        "time_code",
+        "frame_timestamp",
+        "frame_time",
+        "source_timestamp",
+    ):
+        try:
+            val = getattr(vf, name)
+        except Exception:  # noqa: BLE001
+            continue
+        try:
+            if callable(val):
+                val = val()
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(val, int | float | str | bytes):
+            return val.decode(errors="replace") if isinstance(val, bytes) else val
+    for name in ("get_timestamp", "get_timecode", "get_time_code"):
+        try:
+            fn = getattr(vf, name)
+        except Exception:  # noqa: BLE001
+            continue
+        if not callable(fn):
+            continue
+        try:
+            val = fn()
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(val, int | float | str | bytes):
+            return val.decode(errors="replace") if isinstance(val, bytes) else val
+    return None
+
+
 def _ndi_frame_to_bgr(
     arr: NDArray[np.uint8], fourcc: str, h: int, w: int
 ) -> NDArray[np.uint8] | None:
@@ -987,6 +1042,21 @@ class NDIAdapter(SourceAdapter):
         self._source_fps = 0.0
         self._frames_dropped_est = 0  # cumulative estimated drops since (re)connect
         self._queue_depth = -1  # SDK queue depth, -1 when the SDK exposes none
+        self._queue_audio = -1
+        self._queue_metadata = -1
+        self._total_video_frames = 0
+        self._dropped_video_frames = 0
+        self._total_audio_frames = 0
+        self._dropped_audio_frames = 0
+        self._total_metadata_frames = 0
+        self._dropped_metadata_frames = 0
+        self._ndi_connections = -1
+        self._last_fourcc = ""
+        self._conversion_ms = 0.0
+        self._duplicate_frames = 0
+        self._stale_frames = 0
+        self._last_source_stamp: object | None = None
+        self._last_source_change_t = 0.0
 
     def _reset_delivery_metrics(self) -> None:
         """Clear the rolling-window drop/queue state (on (re)connect/close)."""
@@ -998,6 +1068,21 @@ class NDIAdapter(SourceAdapter):
             self._source_fps = 0.0
             self._frames_dropped_est = 0
             self._queue_depth = -1
+            self._queue_audio = -1
+            self._queue_metadata = -1
+            self._total_video_frames = 0
+            self._dropped_video_frames = 0
+            self._total_audio_frames = 0
+            self._dropped_audio_frames = 0
+            self._total_metadata_frames = 0
+            self._dropped_metadata_frames = 0
+            self._ndi_connections = -1
+            self._last_fourcc = ""
+            self._conversion_ms = 0.0
+            self._duplicate_frames = 0
+            self._stale_frames = 0
+            self._last_source_stamp = None
+            self._last_source_change_t = 0.0
 
     def _open(self) -> bool:
         self._reset_delivery_metrics()
@@ -1110,9 +1195,16 @@ class NDIAdapter(SourceAdapter):
             # Dispatch on the actual FourCC so the native ("fastest") receive path
             # is correct for whatever the SDK hands back, not just BGRA.
             fourcc = _ndi_fourcc_name(vf)
+            t_convert = time.perf_counter()
             bgr = _ndi_frame_to_bgr(arr, fourcc, h, w)
+            conversion_ms = (time.perf_counter() - t_convert) * 1000.0
             if bgr is not None:
-                self._note_delivered(vf)
+                self._note_delivered(
+                    vf,
+                    fourcc=fourcc,
+                    conversion_ms=conversion_ms,
+                    source_stamp=_ndi_source_stamp(vf),
+                )
                 return np.ascontiguousarray(bgr)
 
             # Unsupported native format (16-bit P216/PA16) on the fastest path:
@@ -1133,7 +1225,14 @@ class NDIAdapter(SourceAdapter):
             log.debug("camera_id=%s NDI read_frame error: %s", self.camera_id, exc)
             return None
 
-    def _note_delivered(self, vf: object) -> None:
+    def _note_delivered(
+        self,
+        vf: object,
+        *,
+        fourcc: str,
+        conversion_ms: float,
+        source_stamp: object | None,
+    ) -> None:
         """Account one delivered frame and roll the 1.0 s drop-estimate window.
 
         ``source_fps`` prefers the source's advertised ``frame_rate_N/frame_rate_D``
@@ -1145,19 +1244,21 @@ class NDIAdapter(SourceAdapter):
         now = time.monotonic()
         with self._status_lock:
             self._delivered += 1
-            # Best-effort SDK queue-depth probe (almost always absent → -1).
-            # Done every delivered frame so the latest depth is always current.
-            self._queue_depth = self._probe_queue_depth()
-            if self._win_t0 <= 0.0:
-                self._win_t0 = now
-                self._win_delivered0 = self._delivered
-                return
-            dt = now - self._win_t0
-            if dt < 1.0:
-                return
-            delivered = self._delivered - self._win_delivered0
-            self._delivered_fps = delivered / dt if dt > 0 else 0.0
-
+            self._last_fourcc = str(fourcc or "").upper()
+            self._conversion_ms = float(conversion_ms)
+            # Best-effort SDK performance probes. Done every delivered frame so
+            # the latest values are current; unsupported wrappers stay sentinel.
+            self._queue_depth, self._queue_audio, self._queue_metadata = self._probe_queue_depths()
+            self._ndi_connections = self._probe_no_connections()
+            perf = self._probe_performance_counters()
+            self._total_video_frames = perf.get("total_video", self._total_video_frames)
+            self._dropped_video_frames = perf.get("dropped_video", self._dropped_video_frames)
+            self._total_audio_frames = perf.get("total_audio", self._total_audio_frames)
+            self._dropped_audio_frames = perf.get("dropped_audio", self._dropped_audio_frames)
+            self._total_metadata_frames = perf.get("total_metadata", self._total_metadata_frames)
+            self._dropped_metadata_frames = perf.get(
+                "dropped_metadata", self._dropped_metadata_frames
+            )
             # Advertised source rate (guarded) → peak-delivered fallback.
             adv = 0.0
             try:
@@ -1169,6 +1270,33 @@ class NDIAdapter(SourceAdapter):
                 adv = 0.0
             if adv > 0.0:
                 self._source_fps = max(self._source_fps, adv)
+
+            if source_stamp is not None:
+                if self._last_source_stamp is None or source_stamp != self._last_source_stamp:
+                    self._last_source_stamp = source_stamp
+                    self._last_source_change_t = now
+                else:
+                    self._duplicate_frames += 1
+                    source_rate = adv if adv > 0.0 else self._source_fps
+                    if source_rate <= 0.0:
+                        source_rate = float(self._target_fps)
+                    stale_after_s = max(0.1, 2.5 / max(1.0, source_rate))
+                    if (
+                        self._last_source_change_t > 0.0
+                        and now - self._last_source_change_t >= stale_after_s
+                    ):
+                        self._stale_frames += 1
+
+            if self._win_t0 <= 0.0:
+                self._win_t0 = now
+                self._win_delivered0 = self._delivered
+                return
+            dt = now - self._win_t0
+            if dt < 1.0:
+                return
+            delivered = self._delivered - self._win_delivered0
+            self._delivered_fps = delivered / dt if dt > 0 else 0.0
+
             self._source_fps = max(self._source_fps, self._delivered_fps)
 
             expected = self._source_fps * dt
@@ -1180,7 +1308,42 @@ class NDIAdapter(SourceAdapter):
             self._win_t0 = now
             self._win_delivered0 = self._delivered
 
-    def _probe_queue_depth(self) -> int:
+    @staticmethod
+    def _as_int(value: object) -> int | None:
+        """Convert scalar counter values without letting mocks become integers."""
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int | float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(float(value))
+            except ValueError:
+                return None
+        return None
+
+    @classmethod
+    def _field_int(cls, obj: object, *names: str) -> int | None:
+        """Read the first scalar field found from a dict/object/callable."""
+        for name in names:
+            try:
+                if isinstance(obj, dict):
+                    value = obj.get(name)
+                else:
+                    value = getattr(obj, name)
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                if callable(value):
+                    value = value()
+            except Exception:  # noqa: BLE001
+                continue
+            out = cls._as_int(value)
+            if out is not None:
+                return out
+        return None
+
+    def _probe_queue_depths(self) -> tuple[int, int, int]:
         """Best-effort SDK queue-depth probe; -1 when nothing exposes one.
 
         cyndilib does not expose a queue/performance API, but newer SDK builds
@@ -1191,19 +1354,132 @@ class NDIAdapter(SourceAdapter):
         try:
             fn = getattr(receiver, "get_queue_depth", None)
             if callable(fn):
-                return int(fn())
+                val = self._as_int(fn())
+                if val is not None:
+                    return (val, -1, -1)
         except Exception:  # noqa: BLE001
             pass
+        for name in ("get_queue", "get_queue_depths", "recv_get_queue"):
+            try:
+                fn = getattr(receiver, name, None)
+                data = fn() if callable(fn) else None
+            except Exception:  # noqa: BLE001
+                continue
+            video = self._field_int(data, "video_frames", "video", "video_frames_queue")
+            audio = self._field_int(data, "audio_frames", "audio", "audio_frames_queue")
+            meta = self._field_int(
+                data, "metadata_frames", "metadata", "metadata_frames_queue"
+            )
+            if video is not None or audio is not None or meta is not None:
+                return (video if video is not None else -1, audio if audio is not None else -1, meta if meta is not None else -1)
         try:
             fs = getattr(receiver, "frame_sync", None)
             qd = getattr(fs, "queue_depth", None)
-            if qd is not None:
-                return int(qd)
+            val = self._as_int(qd)
+            if val is not None:
+                return (val, -1, -1)
         except Exception:  # noqa: BLE001
             pass
+        return (-1, -1, -1)
+
+    def _probe_no_connections(self) -> int:
+        """Best-effort NDI receiver connection-count probe; -1 when unknown."""
+        receiver = self._receiver
+        for name in ("get_no_connections", "no_connections", "num_connections"):
+            try:
+                value = getattr(receiver, name)
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                if callable(value):
+                    value = value()
+            except Exception:  # noqa: BLE001
+                continue
+            out = self._as_int(value)
+            if out is not None:
+                return out
         return -1
 
-    def delivery_metrics(self) -> dict[str, float | int]:
+    def _probe_performance_counters(self) -> dict[str, int]:
+        """Best-effort NDIlib_recv_get_performance-style counters."""
+        receiver = self._receiver
+        data: object | None = None
+        for name in ("get_performance", "get_recv_performance", "recv_get_performance"):
+            try:
+                fn = getattr(receiver, name, None)
+                if callable(fn):
+                    data = fn()
+                    break
+            except Exception:  # noqa: BLE001
+                data = None
+        if data is None:
+            try:
+                data = getattr(receiver, "performance", None)
+            except Exception:  # noqa: BLE001
+                data = None
+        return self._parse_performance_counters(data)
+
+    @classmethod
+    def _parse_performance_counters(cls, data: object) -> dict[str, int]:
+        """Parse likely cyndilib/native performance-counter shapes."""
+        if data is None:
+            return {}
+
+        if isinstance(data, tuple | list) and len(data) >= 2:
+            total, dropped = data[0], data[1]
+            return cls._merge_performance_halves(total=total, dropped=dropped)
+
+        total = None
+        dropped = None
+        if isinstance(data, dict):
+            total = data.get("total") or data.get("total_frames")
+            dropped = data.get("dropped") or data.get("dropped_frames")
+        else:
+            total = getattr(data, "total", None) or getattr(data, "total_frames", None)
+            dropped = getattr(data, "dropped", None) or getattr(data, "dropped_frames", None)
+        merged = cls._merge_performance_halves(total=total, dropped=dropped)
+        if merged:
+            return merged
+
+        out: dict[str, int] = {}
+        for dest, names in {
+            "total_video": ("total_video_frames", "video_frames", "video"),
+            "dropped_video": ("dropped_video_frames", "video_frames_dropped", "video_dropped"),
+            "total_audio": ("total_audio_frames", "audio_frames", "audio"),
+            "dropped_audio": ("dropped_audio_frames", "audio_frames_dropped", "audio_dropped"),
+            "total_metadata": ("total_metadata_frames", "metadata_frames", "metadata"),
+            "dropped_metadata": (
+                "dropped_metadata_frames",
+                "metadata_frames_dropped",
+                "metadata_dropped",
+            ),
+        }.items():
+            val = cls._field_int(data, *names)
+            if val is not None:
+                out[dest] = val
+        return out
+
+    @classmethod
+    def _merge_performance_halves(cls, *, total: object, dropped: object) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for dest, obj, names in (
+            ("total_video", total, ("video_frames", "video", "total_video_frames")),
+            ("dropped_video", dropped, ("video_frames", "video", "dropped_video_frames")),
+            ("total_audio", total, ("audio_frames", "audio", "total_audio_frames")),
+            ("dropped_audio", dropped, ("audio_frames", "audio", "dropped_audio_frames")),
+            ("total_metadata", total, ("metadata_frames", "metadata", "total_metadata_frames")),
+            (
+                "dropped_metadata",
+                dropped,
+                ("metadata_frames", "metadata", "dropped_metadata_frames"),
+            ),
+        ):
+            val = cls._field_int(obj, *names)
+            if val is not None:
+                out[dest] = val
+        return out
+
+    def delivery_metrics(self) -> dict[str, float | int | str]:
         """Return the tracked rolling-window delivery telemetry (Phase 0a)."""
         with self._status_lock:
             return {
@@ -1211,7 +1487,20 @@ class NDIAdapter(SourceAdapter):
                 "frames_dropped_est": int(self._frames_dropped_est),
                 "delivered_fps": float(self._delivered_fps),
                 "source_fps": float(self._source_fps),
+                "duplicate_frames": int(self._duplicate_frames),
+                "stale_frames": int(self._stale_frames),
                 "ndi_queue_depth": int(self._queue_depth),
+                "ndi_queue_audio": int(self._queue_audio),
+                "ndi_queue_metadata": int(self._queue_metadata),
+                "ndi_total_video_frames": int(self._total_video_frames),
+                "ndi_dropped_video_frames": int(self._dropped_video_frames),
+                "ndi_total_audio_frames": int(self._total_audio_frames),
+                "ndi_dropped_audio_frames": int(self._dropped_audio_frames),
+                "ndi_total_metadata_frames": int(self._total_metadata_frames),
+                "ndi_dropped_metadata_frames": int(self._dropped_metadata_frames),
+                "ndi_connections": int(self._ndi_connections),
+                "ndi_fourcc": str(self._last_fourcc),
+                "ndi_conversion_ms": float(self._conversion_ms),
             }
 
     def _close(self) -> None:

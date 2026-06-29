@@ -1,6 +1,14 @@
 # AutoPTZ — Master Improvement Plan & Spec
 
-> **This is the single canonical plan.** It consolidates three deep reviews (architecture, PTZ/framing/Center-Stage, bundled virtual camera) into one place: *what* to do, *why*, *how*, and *in what order*. The detailed evidence lives in the appendix docs under `docs/review/`, but you should be able to act from this document alone.
+> **Historical document, 2026-06-29:** this rc5-era plan is no longer the source
+> of truth for 2.2.0 reliability work. The body below is preserved for context,
+> but tracking speed presets and normal Experimental UI access to process/model-
+> server scaling are retired. Use `docs/engineering/retired-experiments.md` and
+> `docs/release/2.2.0-reliability-gates.md` for the current release direction.
+
+> **Historical note from the original plan:** it consolidated three deep reviews
+> into one place. It should no longer be used as the canonical implementation
+> plan for 2.2.0.
 > Version reviewed: **2.2.0-rc5** · Last updated: **2026-06-25**
 
 ---
@@ -131,10 +139,16 @@ The controller's background `_loop()` (`controller.py:467`, built at 20 Hz) **is
 
 ### Phase B — Perceived-quality quick wins
 
-**B1 — Unified "Tracking Speed" preset.**
-*Why:* every winning product (OBSBOT Low/Med/High/Crazy) hides tuning behind one dial; AutoPTZ exposes six expert knobs and no unified control. This is the highest "finished product" signal per hour and matches your "one concept = one control" principle.
-*How:* a `TrackingSpeed` enum (Calm/Normal/Fast/Sport) → a coherent tuple of `max_pan/tilt_speed`, `kp`, `aim_smoothing`, `max_accel`, `catch_up_speed` (all already in `PTZConfig`). Pure config-layer map; keep the expert sliders under "Advanced."
-*Rating:* Impact **H** · Effort **S** · Risk **L (no control-loop change)**.
+**B1 — Adaptive PTZ controller, no visible speed preset.**
+*Why:* exposing Calm/Normal/Fast/Sport moved responsibility to the operator and did
+not fix the real failure mode: the same camera needs different speed depending on
+target error, target velocity, loop latency, zoom/framing, and whether target
+evidence is trustworthy.
+*How:* keep speed presets retired. The controller adapts internally from measured
+error, ego-corrected target velocity, loop latency, bounded acceleration, and the
+framing deadband. Lost, stale, collapsed, degenerate, or one-frame-teleported boxes
+are treated as no PTZ evidence.
+*Rating:* Impact **H** · Effort **S-M** · Risk **M** (movement feel must be tested on hardware).
 
 **B2 — Nonlinear band at the dead-zone edge.**
 *Why:* AutoPTZ's dead-band exit is a slope discontinuity (full proportional gain engages immediately past the band) — the one rough edge in otherwise-smooth motion. obs-face-tracker does exactly this fix.
@@ -245,12 +259,19 @@ These are the items you'd start on; the rest are specified enough above to plan 
 - **Validation:** run on the real cameras (USB-VISCA, IP-VISCA, ONVIF, NDI); confirm no regression in tracking tests (update any test asserting on `step()` return values).
 - **Risk/rollback:** medium — gate behind a flag (`AUTOPTZ_PTZ_PUMP=1`) during validation; the inline path remains until proven.
 
-### Spec — B1: Unified "Tracking Speed" preset
-- **Add:** `TrackingSpeed = Enum(CALM, NORMAL, FAST, SPORT)` in `config/models.py`; a `tracking.speed` field (default `NORMAL`).
-- **Map** each value → a frozen tuple of (`max_pan_speed`, `max_tilt_speed`, `kp`, `aim_smoothing`, `max_accel`, `catch_up_speed`). Suggested starting points: CALM = slower/smoother (lower speed+kp, higher smoothing), SPORT = faster/snappier (higher speed+catch-up, lower smoothing); NORMAL = today's defaults.
-- **UI:** a single segmented control in Properties; the existing six sliders move under an "Advanced (override preset)" disclosure. When a slider is touched, show "Custom" and surface configured→effective per the transparency principle.
-- **Acceptance:** switching presets visibly changes follow feel with no other config; expert sliders still work and override.
-- **Risk:** low — no control-loop change.
+### Spec — B1: Adaptive PTZ controller with hidden expert tuning
+- **Remove permanently:** `TrackingSpeed`, `SPEED_PROFILES`, user-facing speed
+  segmented controls, and normal-workflow PTZ tuning choices.
+- **Control source:** the PTZ loop computes speed from target error, target
+  velocity, measured frame/loop age, bounded acceleration, and camera limits.
+- **Evidence gate:** only fresh usable target evidence can set `track_active=True`.
+  Lost, held, degenerate, too-small, collapsed, off-frame, or one-frame-teleported
+  boxes hold/stop the controller until repeated evidence confirms the target.
+- **Acceptance:** no speed choice in the normal UI; a moving subject speeds up and
+  slows down automatically; a single bbox teleport never drives PTZ; a repeated
+  consistent new box is accepted and reacquired.
+- **Risk:** medium — requires real PTZ validation because camera motor dynamics
+  differ across NDI, VISCA, ONVIF, and digital backends.
 
 ### Spec — B3: Center-Stage dead-zone / hold band
 - **Current:** `DigitalFramer.frame_for` → `desired_crop(bbox,…)` recomputes the crop from the raw bbox every frame; `_step` eases with a fixed 0.18 EMA.

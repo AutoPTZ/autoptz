@@ -121,7 +121,9 @@ def _parse_sha256sums(content: str, asset_name: str) -> str | None:
             # Single-line sidecar: the entire content is the hash.
             return parts[0].lower()
         digest, fname = parts[0], parts[1].lstrip("* \t")
-        if fname.lower() == name_lower:
+        fname_lower = fname.lower()
+        basename_lower = fname.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if fname_lower == name_lower or basename_lower == name_lower:
             return digest.lower()
     return None
 

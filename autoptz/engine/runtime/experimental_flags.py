@@ -72,32 +72,6 @@ EXPERIMENTAL_FLAGS: tuple[ExperimentalFlag, ...] = (
         restart_required=True,
     ),
     ExperimentalFlag(
-        env_key="AUTOPTZ_PROCESS_PER_CAMERA",
-        label="One process per camera",
-        description=(
-            "Run each camera worker in its own OS process to sidestep the Python "
-            "GIL. Big win at a few cameras, but each child duplicates the full model "
-            "set so it does NOT scale (heavy RAM, collapses at ~16). Off by default."
-        ),
-        default="0",
-        kind="bool",
-        choices=(),
-        restart_required=True,
-    ),
-    ExperimentalFlag(
-        env_key="AUTOPTZ_MODEL_SERVER",
-        label="Shared model-server (scalable)",
-        description=(
-            "Run each camera in its own process AND share ONE detector via a model-"
-            "server process — escapes the GIL without the per-process RAM cliff. "
-            "Validated to scale to 16 NDI cameras. Off by default; experimental."
-        ),
-        default="0",
-        kind="bool",
-        choices=(),
-        restart_required=True,
-    ),
-    ExperimentalFlag(
         env_key="AUTOPTZ_PTZ_SERIAL_AUTOPROBE",
         label="Auto-probe USB PTZ serial port",
         description=(

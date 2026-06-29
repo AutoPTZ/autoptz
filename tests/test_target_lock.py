@@ -9,7 +9,10 @@ visually-similar person, then the next unknown track.
 
 from __future__ import annotations
 
+import numpy as np
+
 from autoptz.config.models import CameraConfig, SourceConfig, TrackingConfig
+from autoptz.engine.runtime.messages import BBox, TrackInfo
 
 
 def _worker(identity_id: str | None = None):
@@ -73,3 +76,36 @@ class TestTargetBoxCollapsed:
         # Reference is left intact on collapse, so the subject reappearing at full
         # size is immediately trusted again.
         assert w._target_box_collapsed(0.5) is False
+
+
+def _track(track_id: int, bbox: BBox, *, confidence: float = 0.9) -> TrackInfo:
+    return TrackInfo(track_id=track_id, bbox=bbox, confidence=confidence)
+
+
+class TestTargetBoxEvidence:
+    def test_unusable_ptz_box_rejects_degenerate_and_tiny_boxes(self):
+        w = _worker()
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        assert w._target_box_usable_for_ptz(_track(1, BBox(x1=10, y1=10, x2=10, y2=20)), frame) is False
+        assert w._target_box_usable_for_ptz(_track(1, BBox(x1=10, y1=10, x2=20, y2=20)), frame) is False
+        assert w._target_box_usable_for_ptz(_track(1, BBox(x1=10, y1=10, x2=120, y2=140)), frame) is True
+
+    def test_single_bbox_teleport_is_held_until_confirmed(self):
+        w = _worker()
+        w._target_track_id = 1
+        first = _track(1, BBox(x1=100, y1=100, x2=200, y2=320))
+        w._apply_target_lock([first], frame=None, now=1.0)
+        assert w._target_lock.status == "locked"
+
+        jump = _track(1, BBox(x1=500, y1=100, x2=600, y2=320))
+        w._apply_target_lock([jump], frame=None, now=1.1)
+        assert w._target_lock.status == "ambiguous"
+        assert w._target_lock.reason == "bbox_jump"
+        assert jump.lost is True
+        assert jump.bbox.x1 == 100
+
+        confirmed = _track(1, BBox(x1=505, y1=102, x2=605, y2=322))
+        w._apply_target_lock([confirmed], frame=None, now=1.2)
+        assert w._target_lock.status == "locked"
+        assert w._target_lock.trusted_bbox is not None
+        assert w._target_lock.trusted_bbox.x1 == 505

@@ -177,18 +177,14 @@ def test_show_autostarts_ramp(qtapp, monkeypatch) -> None:
         win.close()
 
 
-def test_return_signal_and_no_relaunch_on_close(qtapp, monkeypatch) -> None:
+def test_return_signal_and_no_relaunch_on_close(qtapp) -> None:
     import autoptz.ui.mark_session as ms
 
-    called = {"relaunch": 0}
-    monkeypatch.setattr(
-        ms, "relaunch", lambda **k: called.__setitem__("relaunch", called["relaunch"] + 1)
-    )
+    assert not hasattr(ms, "relaunch")
     win = _win(qtapp)
     seen = []
     win.closedUnexpectedly.connect(lambda: seen.append("closed"))
     win.close()
-    assert called["relaunch"] == 0  # never relaunches
     assert seen == ["closed"]
 
 
@@ -405,17 +401,13 @@ def test_finish_verdict_is_highlighted_final(qtapp) -> None:
 
 
 def test_finish_verdict_shows_min_fps_over_target(qtapp) -> None:
-    """The rating math shows the sustained min fps over the 30 fps target divisor, not
-    the runner's internal DISCOUNTED pass floor (result.floor_fps) — that threshold
-    stays out of the user-facing copy."""
+    """The rating math shows sustained min fps over the selected 30 fps target."""
     win = _win(qtapp, floor_fps=30.0)
     win._prompt_on_completion = False  # no modal: persist directly
-    # result.floor_fps is the discounted pass floor (25.5) the runner ran with — the
-    # verdict must NOT print that internal threshold.
     result = BenchmarkResult(
         profile="full",
         weight=1.0,
-        floor_fps=25.5,
+        floor_fps=30.0,
         max_cameras=3,
         sustained_cameras=2,
         min_fps_at_sustained=28.0,
@@ -425,19 +417,17 @@ def test_finish_verdict_shows_min_fps_over_target(qtapp) -> None:
     win._on_finished(result)
     text = win._controls._verdict_label.text()
     assert "28/30 fps" in text  # sustained min fps over the 30 fps target
-    assert "25" not in text  # NOT the discounted pass floor
     win.deleteLater()
 
 
-def test_chart_floor_matches_discounted_pass_threshold(qtapp) -> None:
-    """Change C: the chart's pass line is the SAME discounted floor used to color the
-    steps (session target × ratio), so green dots sit above the line and red below —
-    not the raw target (which would put passing-but-capped steps below the line)."""
+def test_chart_floor_matches_exact_pass_threshold(qtapp) -> None:
+    """The chart's pass line matches the exact threshold used to color steps."""
     from autoptz.ui.mark_runner import MarkRampController
 
     win = _win(qtapp, floor_fps=30.0)
     win._prompt_on_completion = False  # no modal: persist directly
     expected = 30.0 * MarkRampController._MARK_SUSTAIN_RATIO
+    assert expected == 30.0
     # Idle floor (set at construction / _refresh_idle_status).
     assert win._chart._floor == expected
     # After a step.
@@ -784,6 +774,31 @@ def test_chart_kept_from_old_implementation(qtapp) -> None:
     chart.deleteLater()
 
 
+def test_chart_explains_release_gate(qtapp) -> None:
+    from autoptz.ui.widgets.mark_window import _MarkRampChart
+
+    chart = _MarkRampChart()
+    chart.set_steps(
+        [
+            StepResult(
+                cameras=6,
+                min_fps=29.4,
+                mean_fps=29.8,
+                per_camera_fps=[29.4] * 6,
+                sustained=False,
+                app_induced_drops=2,
+            )
+        ],
+        floor=30.0,
+    )
+
+    assert "target FPS" in chart.toolTip()
+    assert "zero app-induced capture drops" in chart.toolTip()
+    assert chart.accessibleName() == "AutoPTZ Mark performance chart"
+    assert chart._summary_text() == "6 cam | min 29.4 fps | 2 drops | fail"
+    chart.deleteLater()
+
+
 # ── Finding #2: embedded LogsPanel streams the isolated Mark logs ──────────────
 
 
@@ -1017,7 +1032,31 @@ def test_request_exit_save_persists_result(qtapp, monkeypatch) -> None:
 # ── Slice 5: feed quality metrics from live telemetry ─────────────────────────
 
 
-def _telemetry(camera_id: str, *, fps: float = 30.0, target: bool = True):
+def _telemetry(
+    camera_id: str,
+    *,
+    fps: float = 30.0,
+    target: bool = True,
+    dropped_frames: int = 0,
+    frames_delivered: int = 0,
+    frames_dropped_est: int = 0,
+    delivered_fps: float = 0.0,
+    source_fps: float = 0.0,
+    duplicate_frames: int = 0,
+    stale_frames: int = 0,
+    ndi_queue_depth: int = -1,
+    ndi_queue_audio: int = -1,
+    ndi_queue_metadata: int = -1,
+    ndi_total_video_frames: int = 0,
+    ndi_dropped_video_frames: int = 0,
+    ndi_total_audio_frames: int = 0,
+    ndi_dropped_audio_frames: int = 0,
+    ndi_total_metadata_frames: int = 0,
+    ndi_dropped_metadata_frames: int = 0,
+    ndi_connections: int = -1,
+    ndi_fourcc: str = "",
+    ndi_conversion_ms: float = 0.0,
+):
     """A minimal TelemetryMsg carrying one (optionally target) track for a camera."""
     from autoptz.engine.runtime.messages import BBox, TelemetryMsg, TrackInfo
 
@@ -1025,6 +1064,25 @@ def _telemetry(camera_id: str, *, fps: float = 30.0, target: bool = True):
         camera_id=camera_id,
         seq=1,
         fps=fps,
+        dropped_frames=dropped_frames,
+        frames_delivered=frames_delivered,
+        frames_dropped_est=frames_dropped_est,
+        delivered_fps=delivered_fps,
+        source_fps=source_fps,
+        duplicate_frames=duplicate_frames,
+        stale_frames=stale_frames,
+        ndi_queue_depth=ndi_queue_depth,
+        ndi_queue_audio=ndi_queue_audio,
+        ndi_queue_metadata=ndi_queue_metadata,
+        ndi_total_video_frames=ndi_total_video_frames,
+        ndi_dropped_video_frames=ndi_dropped_video_frames,
+        ndi_total_audio_frames=ndi_total_audio_frames,
+        ndi_dropped_audio_frames=ndi_dropped_audio_frames,
+        ndi_total_metadata_frames=ndi_total_metadata_frames,
+        ndi_dropped_metadata_frames=ndi_dropped_metadata_frames,
+        ndi_connections=ndi_connections,
+        ndi_fourcc=ndi_fourcc,
+        ndi_conversion_ms=ndi_conversion_ms,
         tracks=[
             TrackInfo(
                 track_id=7,
@@ -1064,6 +1122,88 @@ def test_telemetry_then_step_carries_per_camera_quality(qtapp) -> None:
         assert charted.per_camera_quality  # non-empty
         assert cid in charted.per_camera_quality
         assert charted.per_camera_quality[cid]["target_hold_pct"] == 100.0
+    finally:
+        win.deleteLater()
+
+
+def test_telemetry_then_step_carries_source_health(qtapp) -> None:
+    """Mark JSON quality payload includes per-source ingest diagnostics."""
+    win = _win(qtapp)
+    try:
+        cid = win._engine.client.cameraModel.camera_ids()[0]
+        win._engine.client.push_telemetry(
+            _telemetry(
+                cid,
+                frames_delivered=240,
+                frames_dropped_est=4,
+                delivered_fps=28.0,
+                source_fps=30.0,
+                duplicate_frames=5,
+                stale_frames=1,
+                ndi_queue_depth=3,
+                ndi_queue_audio=1,
+                ndi_queue_metadata=0,
+                ndi_total_video_frames=240,
+                ndi_dropped_video_frames=2,
+                ndi_connections=1,
+                ndi_fourcc="UYVY",
+                ndi_conversion_ms=1.25,
+            )
+        )
+        step = StepResult(
+            cameras=1, min_fps=30.0, mean_fps=30.0, per_camera_fps=[30.0], sustained=True
+        )
+        win._on_step(step)
+        q = win._chart._steps[-1].per_camera_quality[cid]
+        assert q["frames_delivered"] == 240
+        assert q["frames_dropped_est"] == 4
+        assert q["delivered_fps"] == 28.0
+        assert q["source_fps"] == 30.0
+        assert q["duplicate_frames"] == 5
+        assert q["stale_frames"] == 1
+        assert q["ndi_queue_depth"] == 3
+        assert q["ndi_queue_audio"] == 1
+        assert q["ndi_queue_metadata"] == 0
+        assert q["ndi_total_video_frames"] == 240
+        assert q["ndi_dropped_video_frames"] == 2
+        assert q["ndi_connections"] == 1
+        assert q["ndi_fourcc"] == "UYVY"
+        assert q["ndi_conversion_ms"] == 1.25
+    finally:
+        win.deleteLater()
+
+
+def test_telemetry_drop_fails_enriched_step_and_final_score(qtapp) -> None:
+    """GUI-side quality enrichment must enforce the zero app-drop gate."""
+    win = _win(qtapp)
+    win._prompt_on_completion = False
+    try:
+        cid = win._engine.client.cameraModel.camera_ids()[0]
+        win._engine.client.push_telemetry(_telemetry(cid, dropped_frames=0))
+        win._engine.client.push_telemetry(_telemetry(cid, dropped_frames=1))
+        raw_step = StepResult(
+            cameras=1, min_fps=30.0, mean_fps=30.0, per_camera_fps=[30.0], sustained=True
+        )
+        win._on_step(raw_step)
+        enriched = win._chart._steps[-1]
+        assert enriched.sustained is False
+        assert enriched.app_induced_drops == 1
+
+        raw_result = BenchmarkResult(
+            profile="full",
+            weight=1.0,
+            floor_fps=30.0,
+            max_cameras=1,
+            sustained_cameras=1,
+            min_fps_at_sustained=30.0,
+            score=1.0,
+            steps=[raw_step],
+        )
+        win._on_finished(raw_result)
+        assert win._result is not None
+        assert win._result.sustained_cameras == 0
+        assert win._result.score == 0.0
+        assert win._result.steps[0].app_induced_drops == 1
     finally:
         win.deleteLater()
 

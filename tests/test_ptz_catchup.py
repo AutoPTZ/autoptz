@@ -1,10 +1,10 @@
 """Dynamic "catch-up" tracking speed.
 
-The PTZ control loop scales each axis' speed ceiling by an error-proportional
-boost: far from the target framing the camera speeds UP to catch the subject;
-near the setpoint it stays at the configured speed for precision.  These tests
-cover the boost curve, the config control, and the end-to-end effect on the
-controller command.
+The PTZ control loop scales each axis' speed ceiling by an adaptive boost: far
+from the target framing, moving quickly, or running with higher loop latency all
+increase urgency; a quiet centered subject stays at the configured speed for
+precision.  These tests cover the boost curve, the config control, and the
+end-to-end effect on the controller command.
 """
 
 from __future__ import annotations
@@ -68,27 +68,39 @@ def _cfg(**kw):
 
 class TestCatchUpBoost:
     def test_strength_zero_is_unity_everywhere(self) -> None:
-        assert _catch_up_boost(0.0, 0.0) == 1.0
-        assert _catch_up_boost(0.5, 0.0) == 1.0
-        assert _catch_up_boost(1.0, 0.0) == 1.0
+        assert _catch_up_boost(0.0, 0.0, 0.0, 0.0) == 1.0
+        assert _catch_up_boost(0.5, 1.0, 0.2, 0.0) == 1.0
+        assert _catch_up_boost(1.0, 2.0, 0.8, 0.0) == 1.0
 
-    def test_no_boost_at_setpoint(self) -> None:
-        # Centred subject (zero error) → configured speed, never boosted.
-        assert _catch_up_boost(0.0, 1.0) == 1.0
+    def test_no_boost_when_quiet_at_setpoint(self) -> None:
+        # Centered, still, low-latency subject → configured speed, no boost.
+        assert _catch_up_boost(0.0, 0.0, 0.0, 1.0) == 1.0
 
     def test_boost_grows_with_error(self) -> None:
-        b_small = _catch_up_boost(0.1, 0.6)
-        b_large = _catch_up_boost(0.5, 0.6)
+        b_small = _catch_up_boost(0.1, 0.0, 0.0, 0.6)
+        b_large = _catch_up_boost(0.5, 0.0, 0.0, 0.6)
         assert b_large > b_small > 1.0
 
     def test_boost_saturates_beyond_reference(self) -> None:
         # At/after the reference error the boost is maxed and stops growing.
-        at_ref = _catch_up_boost(_DYN_E_REF, 0.6)
-        beyond = _catch_up_boost(1.0, 0.6)
+        at_ref = _catch_up_boost(_DYN_E_REF, 0.0, 0.0, 0.6)
+        beyond = _catch_up_boost(1.0, 0.0, 0.0, 0.6)
         assert at_ref == pytest.approx(beyond)
 
     def test_sign_of_error_does_not_matter(self) -> None:
-        assert _catch_up_boost(-0.4, 0.6) == pytest.approx(_catch_up_boost(0.4, 0.6))
+        assert _catch_up_boost(-0.4, 0.0, 0.0, 0.6) == pytest.approx(
+            _catch_up_boost(0.4, 0.0, 0.0, 0.6)
+        )
+
+    def test_velocity_can_boost_small_error(self) -> None:
+        quiet = _catch_up_boost(0.05, 0.0, 0.0, 0.6)
+        moving = _catch_up_boost(0.05, 2.0, 0.0, 0.6)
+        assert moving > quiet
+
+    def test_latency_can_boost_small_error(self) -> None:
+        low = _catch_up_boost(0.05, 0.0, 0.0, 0.6)
+        lagged = _catch_up_boost(0.05, 0.0, 0.35, 0.6)
+        assert lagged > low
 
 
 # ─────────────────────────────────────────────────────────────────────────────

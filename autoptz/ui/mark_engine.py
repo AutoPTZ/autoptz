@@ -332,7 +332,7 @@ class MarkEngineFactory:
             )
         self._camera_ids.append(cid)
         # Re-apply tracking + Center Stage so a newly-grown tile comes up following
-        # and auto-framing immediately (full profile only; no-op for streams).
+        # and auto-framing immediately for tracking-enabled profiles (no-op for streams).
         self._activate_camera_ai(cid)
         # Bring up just the new worker if the engine is already running.
         if self._started:
@@ -358,14 +358,14 @@ class MarkEngineFactory:
         return bool(get_profile(self._session.profile).features.get("tracking", False))
 
     def _activate_camera_ai(self, cid: str) -> None:
-        """Turn ON tracking AND Center Stage for one camera (full profile only).
+        """Turn ON tracking AND Center Stage for one camera when the profile tracks.
 
         So every tile — including newly-grown ones — visibly tracks and auto-frames.
         Tracking uses the engine's ``enableTracking`` path; "Center Stage" is the
         engine's multi-person group-framing knob (``tracking.group_framing``), enabled
         via ``updateCameraConfigPatch`` so the camera auto-widens to keep people in
-        shot.  No-op for the streams profile (tracking stays OFF there) and resilient:
-        a demo activation must never crash the engine.
+        shot.  No-op for the streams profile (tracking stays OFF there) and
+        resilient: a demo activation must never crash the engine.
         """
         if not self._full_profile():
             return
@@ -385,8 +385,8 @@ class MarkEngineFactory:
     def auto_track_targets(self, *, seed: int = 0) -> None:
         """Auto-track a seeded target per camera + turn ON tracking and Center Stage.
 
-        Only meaningful for the **full** profile (which runs detection + tracking);
-        the streams profile has no tracks to follow, so this is a no-op there.  For
+        Only meaningful for profiles that run detection + tracking; the streams
+        profile has no tracks to follow, so this is a no-op there.  For
         each camera it (1) enables tracking + Center Stage via
         :meth:`_activate_camera_ai` so the tile follows and auto-frames, and (2) sets
         a seeded target via the engine's existing ``client.setTarget`` path: a small

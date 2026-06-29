@@ -1,8 +1,7 @@
-"""AutoPTZ Mark — session handoff across the relaunch + relaunch helpers (pure).
+"""AutoPTZ Mark — persisted benchmark session helpers.
 
-The Mark-session config crosses the relaunch via a single ``ConfigStore`` key
-(``mark_session``, JSON) rather than argv, so the relaunched process reads its
-parameters from the store.  ``ConfigStore`` has no ``delete_setting`` method, so
+The in-process Mark benchmark stores its latest setup in a single ``ConfigStore``
+key (``mark_session``, JSON). ``ConfigStore`` has no ``delete_setting`` method, so
 the ``clear_*`` helpers fall back to ``set_setting(key, None)`` and
 ``load_mark_session`` treats a falsy/absent value as "no session".
 """
@@ -10,7 +9,6 @@ the ``clear_*`` helpers fall back to ``set_setting(key, None)`` and
 from __future__ import annotations
 
 import logging
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -155,7 +153,7 @@ def _clip_path(filename: str = _CLIP_FILENAME) -> Path:
 
 @dataclass(frozen=True)
 class MarkSession:
-    profile: str = "full"
+    profile: str = "simple_follow"
     source: str = "clip"  # "clip" | "ndi"
     floor_fps: float = 30.0
     max_cameras: int = 4
@@ -191,7 +189,7 @@ class MarkSession:
     @classmethod
     def from_dict(cls, d: dict[str, object]) -> MarkSession:
         return cls(
-            profile=str(d.get("profile", "full")),
+            profile=str(d.get("profile", "simple_follow")),
             source=str(d.get("source", "clip")),
             floor_fps=float(d.get("floor_fps", 30.0)),  # type: ignore[arg-type]
             max_cameras=int(d.get("max_cameras", 4)),  # type: ignore[arg-type]
@@ -309,27 +307,3 @@ def _delete(store: object, key: str) -> None:
         deleter(key)
     else:
         store.set_setting(key, None)  # type: ignore[attr-defined]
-
-
-def relaunch_argv(*, mark: bool) -> list[str]:
-    """DEPRECATED: build the relaunch arg-vector for the old subprocess Mark flow.
-
-    AutoPTZ Mark is now an in-process swap (Help → Run AutoPTZ Mark…); nothing in
-    the app calls this anymore.  Retained for backward compatibility / the
-    deprecated ``--mark`` flag only.
-    """
-    if getattr(sys, "frozen", False):
-        argv = [sys.executable]
-    else:
-        argv = [sys.executable, "-m", "autoptz"]
-    if mark:
-        argv.append("--mark")
-    return argv
-
-
-def relaunch(*, mark: bool) -> None:
-    """DEPRECATED: spawn a fresh AutoPTZ process (old subprocess Mark flow).
-
-    Unused by the in-process Mark lifecycle; kept for backward compatibility.
-    """
-    subprocess.Popen(relaunch_argv(mark=mark), close_fds=True)  # noqa: S603 — fixed argv

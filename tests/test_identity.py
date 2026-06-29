@@ -868,7 +868,7 @@ class TestWorkerAutoHarvest:
         w._last_faces_t = time.monotonic() - 1.0
         assert w._fresh_faces_for_telemetry([track]) == []
 
-    def test_face_overlay_publishes_once_per_inference_frame(self):
+    def test_face_overlay_publishes_while_fresh(self):
         service, _ = _make_service()
         emb = _vec(613)
         service.enroll("Alice", emb)
@@ -881,7 +881,23 @@ class TestWorkerAutoHarvest:
         w._maybe_identify(_gray(22), [track], now=time.monotonic())
 
         assert len(w._fresh_faces_for_telemetry([track])) == 1
-        assert w._fresh_faces_for_telemetry([track]) == []
+        assert len(w._fresh_faces_for_telemetry([track])) == 1
+
+    def test_face_overlay_survives_newer_track_frame_until_ttl(self):
+        service, _ = _make_service()
+        emb = _vec(615)
+        service.enroll("Alice", emb)
+        app = _FakeApp([_FakeFace((280, 180, 380, 320), emb)])
+        rec = FaceRecognizer(_app=app, match_threshold=0.4)
+        w = self._worker(service, rec, [])
+        track = _StubTrack(7, (250, 150, 400, 460))
+        w._current_inference_frame_id = 12
+        w._last_tracks_frame_id = 12
+        w._maybe_identify(_gray(22), [track], now=time.monotonic())
+
+        w._last_tracks_frame_id = 13
+
+        assert len(w._fresh_faces_for_telemetry([track])) == 1
 
     def test_pending_enroll_uses_clicked_face_not_first_face(self):
         service, _ = _make_service()

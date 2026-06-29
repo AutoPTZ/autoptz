@@ -279,6 +279,23 @@ class MarkNDIFleetSampler:
         # the client + spawns its worker (the Mark factory's add_next_camera).  The
         # full fleet of SENDERS is already broadcasting; only the registration grows.
         self._on_grow = on_grow
+        self._cancel_event: Any | None = None
+
+    def set_cancel_event(self, event: Any | None) -> None:
+        """Let the Mark controller interrupt warmup/dwell sleeps during teardown."""
+        self._cancel_event = event
+
+    def _cancelled(self) -> bool:
+        event = self._cancel_event
+        return bool(event is not None and event.is_set())
+
+    def _wait(self, seconds: float) -> bool:
+        seconds = max(0.0, float(seconds))
+        event = self._cancel_event
+        if event is not None:
+            return bool(event.wait(seconds))
+        time.sleep(seconds)
+        return False
 
     @staticmethod
     def _drain_events() -> None:
@@ -316,14 +333,15 @@ class MarkNDIFleetSampler:
         if self._warmed:
             return
         deadline = time.monotonic() + max(0.0, timeout_s)
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not self._cancelled():
             cams = self._cameras
             if cams:
                 fps = [reader(self._client, cid) for cid in cams]
                 if fps and min(fps) >= min_fps:
                     break
-            time.sleep(max(0.0, poll_s))
-        time.sleep(max(0.0, settle_s))
+            if self._wait(poll_s):
+                break
+        self._wait(settle_s)
         self._warmed = True
 
     def sample(
@@ -342,7 +360,7 @@ class MarkNDIFleetSampler:
             # 3DMark-style progressive ramp: register the next ndi:// cameras one at a
             # time (the senders already broadcast the full fleet).
             if self._on_grow is not None:
-                while len(self._cameras) < n:
+                while len(self._cameras) < n and not self._cancelled():
                     cid = self._on_grow()
                     if cid is None:
                         break
@@ -354,7 +372,7 @@ class MarkNDIFleetSampler:
             # wait the dwell and read the first ``n`` pre-added NDI cameras' fps.
             assert self._fleet is not None
             self._warmup(reader)
-            time.sleep(max(0.0, dwell_s) if dwell_s > 0.0 else 0.01)
+            self._wait(max(0.0, dwell_s) if dwell_s > 0.0 else 0.01)
             self._drain_events()
             return [reader(self._client, cid) for cid in self._cameras[:n]]
         # NDI senders/receivers can't be reconfigured per-step cheaply, so build
@@ -371,13 +389,18 @@ class MarkNDIFleetSampler:
 
         deadline = time.monotonic() + max(0.0, dwell_s)
         ticks = 0
-        while ticks < max_ticks and (ticks == 0 or time.monotonic() < deadline):
+        while (
+            ticks < max_ticks
+            and (ticks == 0 or time.monotonic() < deadline)
+            and not self._cancelled()
+        ):
             self._fleet.pump_once()
             self._sup.tick()
             self._drain_events()
             ticks += 1
             if tick_sleep_s > 0.0:
-                time.sleep(tick_sleep_s)
+                if self._wait(tick_sleep_s):
+                    break
         self._drain_events()
         return [reader(self._client, cid) for cid in self._cameras[:n]]
 

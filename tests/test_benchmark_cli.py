@@ -48,6 +48,25 @@ def test_benchmark_flag_routes_to_run_benchmark(monkeypatch) -> None:
     assert captured["json_path"] == "/tmp/mark.json"
 
 
+def test_benchmark_default_profile_is_simple_follow(monkeypatch) -> None:
+    import autoptz.__main__ as main_mod
+
+    captured: dict[str, object] = {}
+
+    def fake_run_benchmark(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    import autoptz.benchmark as bench_pkg
+
+    monkeypatch.setattr(bench_pkg, "run_benchmark", fake_run_benchmark)
+    monkeypatch.setattr(sys, "argv", ["autoptz", "--benchmark"])
+    with pytest.raises(SystemExit) as exc:
+        main_mod.main()
+    assert exc.value.code == 0
+    assert captured["profile"] == "simple_follow"
+
+
 def test_plain_bench_flag_still_routes_to_acceleration(monkeypatch) -> None:
     """--bench (no -mark) keeps routing to the inference-acceleration bench."""
     import autoptz.__main__ as main_mod
