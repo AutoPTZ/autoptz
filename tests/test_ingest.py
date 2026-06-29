@@ -908,6 +908,43 @@ class TestNDIDeliveryMetrics:
         assert m["ndi_dropped_metadata_frames"] == 0
         assert m["ndi_connections"] == 1
 
+    def test_sdk_telemetry_is_sampled_not_polled_per_frame(self) -> None:
+        adapter = self._adapter()
+        total1 = types.SimpleNamespace(video_frames=100, audio_frames=80, metadata_frames=5)
+        dropped1 = types.SimpleNamespace(video_frames=2, audio_frames=1, metadata_frames=0)
+        total2 = types.SimpleNamespace(video_frames=140, audio_frames=100, metadata_frames=8)
+        dropped2 = types.SimpleNamespace(video_frames=3, audio_frames=1, metadata_frames=0)
+        adapter._receiver.get_queue_depth = MagicMock(side_effect=[2, 4])
+        adapter._receiver.get_performance = MagicMock(
+            side_effect=[(total1, dropped1), (total2, dropped2)]
+        )
+        adapter._receiver.get_no_connections = MagicMock(side_effect=[1, 2])
+
+        clock = {"t": 100.0}
+        with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
+            adapter._read_frame()
+            clock["t"] += 0.5
+            adapter._read_frame()
+            m = adapter.delivery_metrics()
+            assert m["ndi_queue_depth"] == 2
+            assert m["ndi_total_video_frames"] == 100
+            assert m["ndi_connections"] == 1
+            assert adapter._receiver.get_queue_depth.call_count == 1
+            assert adapter._receiver.get_performance.call_count == 1
+            assert adapter._receiver.get_no_connections.call_count == 1
+
+            clock["t"] += 0.51
+            adapter._read_frame()
+
+        m = adapter.delivery_metrics()
+        assert m["ndi_queue_depth"] == 4
+        assert m["ndi_total_video_frames"] == 140
+        assert m["ndi_dropped_video_frames"] == 3
+        assert m["ndi_connections"] == 2
+        assert adapter._receiver.get_queue_depth.call_count == 2
+        assert adapter._receiver.get_performance.call_count == 2
+        assert adapter._receiver.get_no_connections.call_count == 2
+
     def test_repeated_source_stamp_counts_duplicate_and_stale(self) -> None:
         """FrameSync repeats become visible when the NDI stamp does not advance."""
         adapter = self._adapter()

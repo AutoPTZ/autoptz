@@ -46,6 +46,7 @@ log = logging.getLogger(__name__)
 # per-frame ground-truth person boxes (the painted silhouettes' true positions).
 # Off by default so the field stays empty (zero payload/overhead) for normal runs.
 _MARK_GT_ENV = "AUTOPTZ_MARK_GT"
+_NDI_SDK_TELEMETRY_PROBE_INTERVAL_S = 1.0
 
 
 def _mark_gt_enabled() -> bool:
@@ -1057,6 +1058,7 @@ class NDIAdapter(SourceAdapter):
         self._stale_frames = 0
         self._last_source_stamp: object | None = None
         self._last_source_change_t = 0.0
+        self._next_sdk_telemetry_probe_t = 0.0
 
     def _reset_delivery_metrics(self) -> None:
         """Clear the rolling-window drop/queue state (on (re)connect/close)."""
@@ -1083,6 +1085,7 @@ class NDIAdapter(SourceAdapter):
             self._stale_frames = 0
             self._last_source_stamp = None
             self._last_source_change_t = 0.0
+            self._next_sdk_telemetry_probe_t = 0.0
 
     def _open(self) -> bool:
         self._reset_delivery_metrics()
@@ -1246,19 +1249,7 @@ class NDIAdapter(SourceAdapter):
             self._delivered += 1
             self._last_fourcc = str(fourcc or "").upper()
             self._conversion_ms = float(conversion_ms)
-            # Best-effort SDK performance probes. Done every delivered frame so
-            # the latest values are current; unsupported wrappers stay sentinel.
-            self._queue_depth, self._queue_audio, self._queue_metadata = self._probe_queue_depths()
-            self._ndi_connections = self._probe_no_connections()
-            perf = self._probe_performance_counters()
-            self._total_video_frames = perf.get("total_video", self._total_video_frames)
-            self._dropped_video_frames = perf.get("dropped_video", self._dropped_video_frames)
-            self._total_audio_frames = perf.get("total_audio", self._total_audio_frames)
-            self._dropped_audio_frames = perf.get("dropped_audio", self._dropped_audio_frames)
-            self._total_metadata_frames = perf.get("total_metadata", self._total_metadata_frames)
-            self._dropped_metadata_frames = perf.get(
-                "dropped_metadata", self._dropped_metadata_frames
-            )
+            self._maybe_probe_sdk_telemetry(now)
             # Advertised source rate (guarded) → peak-delivered fallback.
             adv = 0.0
             try:
@@ -1307,6 +1298,23 @@ class NDIAdapter(SourceAdapter):
             # Reset the window.
             self._win_t0 = now
             self._win_delivered0 = self._delivered
+
+    def _maybe_probe_sdk_telemetry(self, now: float) -> None:
+        """Sample optional SDK counters without putting them on every frame."""
+        if now < self._next_sdk_telemetry_probe_t:
+            return
+        self._next_sdk_telemetry_probe_t = now + _NDI_SDK_TELEMETRY_PROBE_INTERVAL_S
+        self._queue_depth, self._queue_audio, self._queue_metadata = self._probe_queue_depths()
+        self._ndi_connections = self._probe_no_connections()
+        perf = self._probe_performance_counters()
+        self._total_video_frames = perf.get("total_video", self._total_video_frames)
+        self._dropped_video_frames = perf.get("dropped_video", self._dropped_video_frames)
+        self._total_audio_frames = perf.get("total_audio", self._total_audio_frames)
+        self._dropped_audio_frames = perf.get("dropped_audio", self._dropped_audio_frames)
+        self._total_metadata_frames = perf.get("total_metadata", self._total_metadata_frames)
+        self._dropped_metadata_frames = perf.get(
+            "dropped_metadata", self._dropped_metadata_frames
+        )
 
     @staticmethod
     def _as_int(value: object) -> int | None:
@@ -1371,7 +1379,11 @@ class NDIAdapter(SourceAdapter):
                 data, "metadata_frames", "metadata", "metadata_frames_queue"
             )
             if video is not None or audio is not None or meta is not None:
-                return (video if video is not None else -1, audio if audio is not None else -1, meta if meta is not None else -1)
+                return (
+                    video if video is not None else -1,
+                    audio if audio is not None else -1,
+                    meta if meta is not None else -1,
+                )
         try:
             fs = getattr(receiver, "frame_sync", None)
             qd = getattr(fs, "queue_depth", None)

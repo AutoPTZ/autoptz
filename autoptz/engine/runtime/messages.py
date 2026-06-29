@@ -48,7 +48,7 @@ class TrackInfo(BaseModel):
     # matches PTZ control instead of the geometric box center.
     aim_x: float | None = None
     aim_y: float | None = None
-    aim_source: str = ""  # "pose", "fused", "bbox", "silhouette", or ""
+    aim_source: str = ""  # "pose", "fused", "bbox", "bbox_stable", "silhouette", or ""
 
 
 class GroundTruthPerson(BaseModel):

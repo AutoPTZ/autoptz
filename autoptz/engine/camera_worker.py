@@ -306,6 +306,11 @@ _IDENTITY_TARGET_CONFIRM = 2
 # subject covered by something) rather than the subject simply walking away.
 _OCCLUSION_COLLAPSE_FRAC = 0.55
 _OCCLUSION_REF_ALPHA = 0.10  # how fast the healthy-height reference tracks a gradual change
+_BBOX_SHAPE_STABLE_IOU_MIN = 0.35
+_BBOX_SHAPE_CHANGE_FRAC = 0.20
+_BBOX_AIM_JUMP_MIN_PX = 12.0
+_BBOX_AIM_JUMP_SCALE = 0.10
+_BBOX_SHAPE_BLEND = 0.25
 
 # EMA weight for the pose-derived aim point: lower = smoother/laggier.  Light
 # smoothing so noisy keypoint regression doesn't jitter the framing.
@@ -335,6 +340,8 @@ class _TargetLockState:
     trusted_confidence: float = 0.0
     trusted_aim: tuple[float, float] | None = None
     trusted_t: float = 0.0
+    previous_trusted_bbox: BBox | None = None
+    previous_trusted_t: float = 0.0
     status: str = "idle"
     reason: str = ""
     ambiguous_until: float = 0.0
@@ -342,6 +349,15 @@ class _TargetLockState:
     suspect_bbox: BBox | None = None
     suspect_t: float = 0.0
     suspect_count: int = 0
+
+
+@dataclass(frozen=True)
+class _FramingEvidence:
+    """A PTZ framing target derived from detector, pose, or stabilized fallback."""
+
+    aim: tuple[float, float]
+    subject_height: float
+    source: str
 
 
 # Frame-source abstraction, fps pacing, and source construction live in
@@ -1752,6 +1768,54 @@ class CameraWorker:
             return float(a.x1 - b.x2)
         return 0.0
 
+    def _stabilize_bbox_framing_evidence(
+        self,
+        evidence: _FramingEvidence,
+        track: TrackInfo,
+        frame: NDArray[np.uint8],
+    ) -> _FramingEvidence:
+        """Dampen bbox-only framing changes caused by shape noise, not motion.
+
+        Detector boxes are useful because they give us the subject envelope, but
+        they are a weak PTZ target.  A raised arm, partial occlusion, or detector
+        crop jitter can move the bbox-derived aim even when the person has not
+        actually moved.  When the same locked target still overlaps its previous
+        box, large bbox-size changes are blended against the last trusted aim so
+        PTZ follows the person rather than the box geometry.
+        """
+        lock = self._target_lock
+        prev = lock.previous_trusted_bbox
+        trusted_aim = lock.trusted_aim
+        if prev is None or trusted_aim is None:
+            return evidence
+        cur = track.bbox
+        if self._bbox_iou(prev, cur) < _BBOX_SHAPE_STABLE_IOU_MIN:
+            return evidence
+
+        prev_w = max(1.0, float(prev.x2 - prev.x1))
+        prev_h = max(1.0, float(prev.y2 - prev.y1))
+        cur_w = max(1.0, float(cur.x2 - cur.x1))
+        cur_h = max(1.0, float(cur.y2 - cur.y1))
+        size_change = max(abs(cur_w - prev_w) / prev_w, abs(cur_h - prev_h) / prev_h)
+        if size_change < _BBOX_SHAPE_CHANGE_FRAC:
+            return evidence
+
+        ax, ay = evidence.aim
+        px, py = trusted_aim
+        aim_jump = ((ax - px) ** 2 + (ay - py) ** 2) ** 0.5
+        min_extent = max(1.0, min(cur_w, cur_h))
+        if aim_jump < max(_BBOX_AIM_JUMP_MIN_PX, min_extent * _BBOX_AIM_JUMP_SCALE):
+            return evidence
+
+        frame_h = max(1.0, float(frame.shape[0]))
+        prev_height = max(0.0, min(1.0, prev_h / frame_h))
+        blend = _BBOX_SHAPE_BLEND
+        return _FramingEvidence(
+            aim=(px * (1.0 - blend) + ax * blend, py * (1.0 - blend) + ay * blend),
+            subject_height=prev_height * (1.0 - blend) + evidence.subject_height * blend,
+            source="bbox_stable",
+        )
+
     def _sync_target_flags(self, tracks: list[TrackInfo]) -> None:
         """Make TrackInfo.is_target reflect the current committed target id."""
         for t in tracks:
@@ -1771,6 +1835,12 @@ class CameraWorker:
 
     def _store_trusted_target(self, target: TrackInfo, now: float) -> None:
         lock = self._target_lock
+        if lock.trusted_bbox is not None and lock.trusted_track_id == target.track_id:
+            lock.previous_trusted_bbox = lock.trusted_bbox.model_copy()
+            lock.previous_trusted_t = lock.trusted_t
+        else:
+            lock.previous_trusted_bbox = None
+            lock.previous_trusted_t = 0.0
         lock.trusted_track_id = target.track_id
         lock.trusted_bbox = target.bbox.model_copy()
         lock.trusted_identity = target.identity
@@ -2329,6 +2399,11 @@ class CameraWorker:
         ax, ay = ax_bbox, ay_bbox
         subject_height = bbox_height
         aim_source = "bbox"
+        evidence = _FramingEvidence(
+            aim=(float(ax), float(ay)),
+            subject_height=float(subject_height),
+            source=aim_source,
+        )
 
         # ── pose anchor (landmark-precise) FUSED with the bbox by confidence ─────
         # No hard switch: the dot rides the body when pose is strong and leans on
@@ -2349,6 +2424,16 @@ class CameraWorker:
                 subject_height = (
                     torso_height if (ignore_arms and torso_height > 0.0) else bbox_height
                 )
+                evidence = _FramingEvidence(
+                    aim=(float(ax), float(ay)),
+                    subject_height=float(subject_height),
+                    source=aim_source,
+                )
+            if evidence.source == "bbox" and track.is_target:
+                evidence = self._stabilize_bbox_framing_evidence(evidence, track, frame)
+            ax, ay = evidence.aim
+            subject_height = evidence.subject_height
+            aim_source = evidence.source
             # Smooth the fused point: stable when still, snappy on a Frame-on change.
             ax, ay = self._smooth_aim((ax, ay), track, framing_name, float(max(w, h)))
 

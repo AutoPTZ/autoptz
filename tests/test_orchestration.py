@@ -1169,6 +1169,47 @@ class TestTrackErrorAimRegion:
         assert trk.aim_y == pytest.approx(38.0)
         assert trk.aim_source == "bbox"
 
+    def test_bbox_shape_change_is_stabilized_for_ptz_framing(self) -> None:
+        from autoptz.engine.runtime.messages import BBox
+
+        frame = np.zeros((1000, 1000, 3), dtype=np.uint8)
+        w = self._worker("full_body")
+        w._features["pose"] = False
+        trk = self._track(350, 200, 550, 800)  # raw bbox aim x=450
+        trk.is_target = True
+        w._target_track_id = trk.track_id
+        w._target_lock.previous_trusted_bbox = BBox(x1=450, y1=200, x2=550, y2=800)
+        w._target_lock.trusted_aim = (500.0, 500.0)
+
+        (ex, ey), height = w._track_error(trk, frame, now=10.0)
+
+        assert trk.aim_source == "bbox_stable"
+        assert trk.aim_x == pytest.approx(487.5)
+        assert trk.aim_y == pytest.approx(500.0)
+        assert ex == pytest.approx(-0.025)
+        assert ey == pytest.approx(0.0)
+        assert height == pytest.approx(0.6)
+
+    def test_bbox_motion_without_overlap_is_not_shape_stabilized(self) -> None:
+        from autoptz.engine.runtime.messages import BBox
+
+        frame = np.zeros((1000, 1000, 3), dtype=np.uint8)
+        w = self._worker("full_body")
+        w._features["pose"] = False
+        trk = self._track(650, 200, 750, 800)  # real move to the right
+        trk.is_target = True
+        w._target_track_id = trk.track_id
+        w._target_lock.previous_trusted_bbox = BBox(x1=450, y1=200, x2=550, y2=800)
+        w._target_lock.trusted_aim = (500.0, 500.0)
+
+        (ex, ey), height = w._track_error(trk, frame, now=10.0)
+
+        assert trk.aim_source == "bbox"
+        assert trk.aim_x == pytest.approx(700.0)
+        assert ex == pytest.approx(0.4)
+        assert ey == pytest.approx(0.0)
+        assert height == pytest.approx(0.6)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Supervisor — command routing & lifecycle
