@@ -33,6 +33,7 @@ import dataclasses
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,8 @@ from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
 from autoptz.ui.widgets.mark_details_panel import MarkDetailsPanel
 
 log = logging.getLogger(__name__)
+
+_SOURCE_MUTATION_DROP_GRACE_S = 2.0
 
 
 def _no_autostart() -> bool:
@@ -114,7 +117,8 @@ class _MarkRampChart(QWidget):
         self.setMinimumHeight(168)
         self.setToolTip(
             "Minimum delivered FPS by camera count. Points pass only when they meet the "
-            "target FPS and report zero app-induced capture drops."
+            "target FPS and report zero steady-state app-induced capture drops. Drops "
+            "during explicit source add/remove transitions are reported separately."
         )
         self.setAccessibleName("AutoPTZ Mark performance chart")
         self.setAccessibleDescription(self.toolTip())
@@ -214,10 +218,13 @@ class _MarkRampChart(QWidget):
 
     def _summary_text(self) -> str:
         if not self._steps:
-            return "target line | drops fail"
+            return "target line | steady drops fail"
         step = self._steps[-1]
-        drops = int(getattr(step, "app_induced_drops", 0) or 0)
-        drop_text = "0 drops" if drops == 0 else f"{drops} drops"
+        steady = int(getattr(step, "steady_state_app_induced_drops", 0) or 0)
+        allowed = int(getattr(step, "source_mutation_allowed_drops", 0) or 0)
+        drop_text = "0 steady drops" if steady == 0 else f"{steady} steady drops"
+        if allowed:
+            drop_text = f"{drop_text} (+{allowed} source-change)"
         verdict = "pass" if step.sustained else "fail"
         return f"{int(step.cameras)} cam | min {step.min_fps:.1f} fps | {drop_text} | {verdict}"
 
@@ -260,6 +267,10 @@ class MarkWindow(MainWindow):
         # maps camera id -> GroundTruthComparator (accumulated across the whole run
         # and finalized on _on_finished).  ``_gt`` is None when GT is inactive.
         self._quality: dict[str, Any] = {}
+        self._source_mutation_quality: dict[str, Any] = {}
+        self._source_mutation_events = 0
+        self._source_mutation_allowed_drops = 0
+        self._source_mutation_grace_until = 0.0
         self._gt: dict[str, Any] | None = {} if self._gt_active() else None
         self._gt_summary: dict[str, dict] = {}
         # Completion (Area 2): on a finished ramp, prompt a Save-As dialog.  Tests
@@ -514,10 +525,18 @@ class MarkWindow(MainWindow):
         cid = getattr(msg, "camera_id", None)
         if cid is None:
             return
-        acc = self._quality.get(cid)
+        target_quality = self._quality
+        now = time.monotonic()
+        if self._source_mutation_grace_until > 0.0:
+            if now <= self._source_mutation_grace_until:
+                target_quality = self._source_mutation_quality
+            else:
+                self._close_source_mutation_grace()
+
+        acc = target_quality.get(cid)
         if acc is None:
             acc = PerCameraQualityAccumulator(self._session.target_fps())
-            self._quality[cid] = acc
+            target_quality[cid] = acc
         acc.on_telemetry(msg)
 
         if self._gt is not None:
@@ -610,6 +629,39 @@ class MarkWindow(MainWindow):
             self._controller.stop()
             self._controls.set_verdict("Stopping…")
 
+    def _quality_drops(self, quality: dict[str, Any]) -> int:
+        finalized = {cid: acc.finalize().to_dict() for cid, acc in quality.items()}
+        return _quality_app_induced_drops(finalized)
+
+    def _begin_source_mutation_grace(self) -> None:
+        """Start the add/remove-source grace bucket for Mark drop accounting."""
+        if self._quality:
+            self._source_mutation_allowed_drops += self._quality_drops(self._quality)
+            self._quality = {}
+        self._source_mutation_events += 1
+        self._source_mutation_grace_until = max(
+            self._source_mutation_grace_until,
+            time.monotonic() + _SOURCE_MUTATION_DROP_GRACE_S,
+        )
+
+    def _cancel_source_mutation_grace_if_empty(self) -> None:
+        """Undo a grace window opened for a no-op grow at the camera cap."""
+        if self._source_mutation_quality:
+            return
+        self._source_mutation_events = max(0, self._source_mutation_events - 1)
+        if self._source_mutation_events == 0:
+            self._source_mutation_allowed_drops = 0
+            self._source_mutation_grace_until = 0.0
+
+    def _close_source_mutation_grace(self) -> None:
+        """Move finished source-mutation telemetry into the allowed-drop bucket."""
+        if self._source_mutation_quality:
+            self._source_mutation_allowed_drops += self._quality_drops(
+                self._source_mutation_quality
+            )
+            self._source_mutation_quality = {}
+        self._source_mutation_grace_until = 0.0
+
     @Slot()
     def _grow_one_slot(self) -> None:
         """Add the next fake camera ON THE GUI THREAD.
@@ -618,10 +670,14 @@ class MarkWindow(MainWindow):
         thread; the ramp's worker thread posts this slot and waits on the event.
         """
         try:
+            self._begin_source_mutation_grace()
             self._grow_result = self._engine.add_next_camera()
+            if self._grow_result is None:
+                self._cancel_source_mutation_grace_if_empty()
         except Exception:  # noqa: BLE001
             log.exception("Mark add_next_camera failed")
             self._grow_result = None
+            self._cancel_source_mutation_grace_if_empty()
         finally:
             self._grow_event.set()
 
@@ -637,7 +693,15 @@ class MarkWindow(MainWindow):
         from PySide6.QtCore import QThread
 
         if QThread.currentThread() is self.thread():
-            return self._engine.add_next_camera()
+            self._begin_source_mutation_grace()
+            try:
+                cid = self._engine.add_next_camera()
+            except Exception:  # noqa: BLE001
+                self._cancel_source_mutation_grace_if_empty()
+                raise
+            if cid is None:
+                self._cancel_source_mutation_grace_if_empty()
+            return cid
         self._grow_event.clear()
         self._grow_result = None
         QMetaObject.invokeMethod(self, "_grow_one_slot", Qt.ConnectionType.QueuedConnection)
@@ -716,16 +780,30 @@ class MarkWindow(MainWindow):
         # StepResult with {cid: QualityMetrics dict} BEFORE forwarding to the chart /
         # persistence, then RESET the accumulators so the next step starts clean (no
         # double-feeding / carryover between steps).
+        self._close_source_mutation_grace()
         quality = {cid: acc.finalize().to_dict() for cid, acc in self._quality.items()}
-        if quality:
-            app_drops = _quality_app_induced_drops(quality)
+        steady_app_drops = _quality_app_induced_drops(quality)
+        mutation_events = self._source_mutation_events
+        mutation_allowed = self._source_mutation_allowed_drops
+        if quality or mutation_events or mutation_allowed:
+            app_drops = steady_app_drops + mutation_allowed
             step = dataclasses.replace(
                 step,
                 per_camera_quality=quality,
                 app_induced_drops=app_drops,
-                sustained=step.sustained and app_drops == 0,
+                steady_state_app_induced_drops=steady_app_drops,
+                source_mutation_events=mutation_events,
+                source_mutation_allowed_drops=mutation_allowed,
+                source_mutation_drop_grace_s=(
+                    _SOURCE_MUTATION_DROP_GRACE_S if mutation_events else 0.0
+                ),
+                sustained=step.sustained and steady_app_drops == 0,
             )
         self._quality = {}
+        self._source_mutation_quality = {}
+        self._source_mutation_events = 0
+        self._source_mutation_allowed_drops = 0
+        self._source_mutation_grace_until = 0.0
         self._chart._steps.append(step)
         self._chart.set_steps(self._chart._steps, self._effective_floor())
         # The ramp grew the wall this step; re-target so any newly added camera also

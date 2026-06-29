@@ -130,6 +130,12 @@ _CSV_HEADER = [
     "ndi_connections",
     "ndi_fourcc",
     "ndi_conversion_ms",
+    "step_app_induced_drops",
+    "steady_state_app_induced_drops",
+    "source_mutation_events",
+    "source_mutation_allowed_drops",
+    "source_mutation_drop_grace_s",
+    "drop_policy",
     "gt_miss_rate",
     "gt_id_switch_rate",
     "gt_motp",
@@ -185,6 +191,7 @@ def _step(cameras: int, *, with_quality: bool = True, ttfa_none_idx: int = -1) -
         per_camera_fps=per_camera_fps,
             sustained=True,
             app_induced_drops=0,
+            steady_state_app_induced_drops=0,
             per_camera_quality=quality,
         )
 
@@ -247,6 +254,12 @@ class TestSaveCsv:
         assert step1[1]["ndi_connections"] == "1"
         assert step1[1]["ndi_fourcc"] == ""
         assert step1[1]["ndi_conversion_ms"] == "0.0"
+        assert step1[1]["step_app_induced_drops"] == "0"
+        assert step1[1]["steady_state_app_induced_drops"] == "0"
+        assert step1[1]["source_mutation_events"] == "0"
+        assert step1[1]["source_mutation_allowed_drops"] == "0"
+        assert step1[1]["source_mutation_drop_grace_s"] == "0.0"
+        assert step1[1]["drop_policy"] == "steady_state_zero_source_mutation_grace_only"
         # Step 1, camera 0 has a real ttfa.
         assert step1[0]["time_to_first_acquire_s"] == "0.5"
 
@@ -306,3 +319,37 @@ class TestSaveCsv:
         # store is accepted (kept signature-compatible) and does not break the write.
         path = save_mark_result_csv([_two_step_result()], tmp_path / "mark.csv", store=store)
         assert path.exists()
+
+    def test_step_drop_accounting_columns_are_exported(self, tmp_path) -> None:
+        step = StepResult(
+            cameras=1,
+            min_fps=30.0,
+            mean_fps=30.0,
+            per_camera_fps=[30.0],
+            sustained=True,
+            app_induced_drops=4,
+            steady_state_app_induced_drops=0,
+            source_mutation_events=1,
+            source_mutation_allowed_drops=4,
+            source_mutation_drop_grace_s=2.0,
+            per_camera_quality={"cam-1": _quality()},
+        )
+        result = BenchmarkResult(
+            profile="full",
+            weight=1.0,
+            floor_fps=30.0,
+            max_cameras=1,
+            sustained_cameras=1,
+            min_fps_at_sustained=30.0,
+            score=1.0,
+            steps=[step],
+        )
+        path = save_mark_result_csv([result], tmp_path / "mark.csv")
+        with path.open(newline="", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        assert rows[0]["app_induced_drops"] == "0"
+        assert rows[0]["step_app_induced_drops"] == "4"
+        assert rows[0]["steady_state_app_induced_drops"] == "0"
+        assert rows[0]["source_mutation_events"] == "1"
+        assert rows[0]["source_mutation_allowed_drops"] == "4"
+        assert rows[0]["source_mutation_drop_grace_s"] == "2.0"

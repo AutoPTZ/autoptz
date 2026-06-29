@@ -787,15 +787,16 @@ def test_chart_explains_release_gate(qtapp) -> None:
                 per_camera_fps=[29.4] * 6,
                 sustained=False,
                 app_induced_drops=2,
+                steady_state_app_induced_drops=2,
             )
         ],
         floor=30.0,
     )
 
     assert "target FPS" in chart.toolTip()
-    assert "zero app-induced capture drops" in chart.toolTip()
+    assert "zero steady-state app-induced capture drops" in chart.toolTip()
     assert chart.accessibleName() == "AutoPTZ Mark performance chart"
-    assert chart._summary_text() == "6 cam | min 29.4 fps | 2 drops | fail"
+    assert chart._summary_text() == "6 cam | min 29.4 fps | 2 steady drops | fail"
     chart.deleteLater()
 
 
@@ -1188,6 +1189,7 @@ def test_telemetry_drop_fails_enriched_step_and_final_score(qtapp) -> None:
         enriched = win._chart._steps[-1]
         assert enriched.sustained is False
         assert enriched.app_induced_drops == 1
+        assert enriched.steady_state_app_induced_drops == 1
 
         raw_result = BenchmarkResult(
             profile="full",
@@ -1204,6 +1206,30 @@ def test_telemetry_drop_fails_enriched_step_and_final_score(qtapp) -> None:
         assert win._result.sustained_cameras == 0
         assert win._result.score == 0.0
         assert win._result.steps[0].app_induced_drops == 1
+        assert win._result.steps[0].steady_state_app_induced_drops == 1
+    finally:
+        win.deleteLater()
+
+
+def test_source_mutation_drop_bucket_does_not_fail_step(qtapp) -> None:
+    """Drops during the explicit add/remove-source grace are reported separately."""
+    win = _win(qtapp)
+    try:
+        cid = win._engine.client.cameraModel.camera_ids()[0]
+        win._begin_source_mutation_grace()
+        win._engine.client.push_telemetry(_telemetry(cid, dropped_frames=0))
+        win._engine.client.push_telemetry(_telemetry(cid, dropped_frames=2))
+        raw_step = StepResult(
+            cameras=2, min_fps=30.0, mean_fps=30.0, per_camera_fps=[30.0, 30.0], sustained=True
+        )
+        win._on_step(raw_step)
+        enriched = win._chart._steps[-1]
+        assert enriched.sustained is True
+        assert enriched.app_induced_drops == 2
+        assert enriched.steady_state_app_induced_drops == 0
+        assert enriched.source_mutation_events == 1
+        assert enriched.source_mutation_allowed_drops == 2
+        assert "source-change" in win._chart._summary_text()
     finally:
         win.deleteLater()
 

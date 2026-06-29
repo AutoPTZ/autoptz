@@ -425,6 +425,10 @@ class TestStepResultQuality:
         d = step.to_dict()
         assert "per_camera_quality" in d
         assert d["app_induced_drops"] == 0
+        assert d["steady_state_app_induced_drops"] == 0
+        assert d["source_mutation_events"] == 0
+        assert d["source_mutation_allowed_drops"] == 0
+        assert d["drop_policy"] == "steady_state_zero_source_mutation_grace_only"
         assert d["per_camera_quality"]["cam-a"]["target_hold_pct"] == 100.0
         # JSON round-trips.
         json.loads(json.dumps(d))
@@ -434,6 +438,26 @@ class TestStepResultQuality:
         assert step.per_camera_quality == {}
         assert step.to_dict()["per_camera_quality"] == {}
         assert step.to_dict()["app_induced_drops"] == 0
+        assert step.to_dict()["steady_state_app_induced_drops"] == 0
+
+    def test_step_result_defaults_steady_drops_from_raw_minus_source_mutation(self) -> None:
+        step = StepResult(
+            cameras=2,
+            min_fps=30.0,
+            mean_fps=30.0,
+            per_camera_fps=[30.0, 30.0],
+            app_induced_drops=5,
+            source_mutation_events=1,
+            source_mutation_allowed_drops=2,
+            source_mutation_drop_grace_s=2.0,
+        )
+        assert step.steady_state_app_induced_drops == 3
+        data = step.to_dict()
+        assert data["app_induced_drops"] == 5
+        assert data["steady_state_app_induced_drops"] == 3
+        assert data["source_mutation_events"] == 1
+        assert data["source_mutation_allowed_drops"] == 2
+        assert data["source_mutation_drop_grace_s"] == 2.0
 
 
 class TestBenchmarkResultQuality:
@@ -468,6 +492,7 @@ class TestBenchmarkResultQuality:
         assert data["profile_description"] == "Full service stack"
         assert data["profile_features"] == {"pose": True, "face_recognition": True}
         assert data["experimental_flags"] == {"AUTOPTZ_UNIFIED_POSE": "1"}
+        assert data["drop_policy"] == "steady_state_zero_source_mutation_grace_only"
         assert data["steps"][0]["per_camera_quality"]["cam-a"]["target_hold_pct"] == 100.0
 
 
@@ -522,6 +547,52 @@ class TestRunnerWiresQualityReader:
         assert len(result.steps) == 1
         assert result.steps[0].sustained is False
         assert result.steps[0].app_induced_drops == 1
+        assert result.steps[0].steady_state_app_induced_drops == 1
+
+    def test_source_mutation_drops_are_reported_but_do_not_fail_step(self) -> None:
+        prof = get_profile("full")
+
+        runner = BenchmarkRunner(
+            prof,
+            sample_fn=lambda n: [30.0] * n,
+            floor_fps=24.0,
+            max_cameras=1,
+            dwell_s=0.0,
+            quality_reader=lambda: {},
+            source_mutation_reader=lambda: {
+                "source_mutation_events": 1,
+                "source_mutation_allowed_drops": 3,
+                "source_mutation_drop_grace_s": 2.0,
+            },
+        )
+        result = runner.run()
+        step = result.steps[0]
+        assert step.sustained is True
+        assert step.app_induced_drops == 3
+        assert step.steady_state_app_induced_drops == 0
+        assert step.source_mutation_events == 1
+        assert step.source_mutation_allowed_drops == 3
+
+    def test_steady_drop_still_fails_with_source_mutation_allowance(self) -> None:
+        prof = get_profile("full")
+
+        runner = BenchmarkRunner(
+            prof,
+            sample_fn=lambda n: [30.0] * n,
+            floor_fps=24.0,
+            max_cameras=1,
+            dwell_s=0.0,
+            quality_reader=lambda: {"cam-x": {"app_induced_drops": 1}},
+            source_mutation_reader=lambda: {
+                "source_mutation_events": 1,
+                "source_mutation_allowed_drops": 2,
+            },
+        )
+        result = runner.run()
+        step = result.steps[0]
+        assert step.sustained is False
+        assert step.app_induced_drops == 3
+        assert step.steady_state_app_induced_drops == 1
 
     def test_app_induced_drop_delta_ignores_first_cumulative_value(self) -> None:
         acc = PerCameraQualityAccumulator(fps_hint=30.0)

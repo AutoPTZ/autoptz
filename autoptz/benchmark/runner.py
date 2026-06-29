@@ -27,6 +27,7 @@ from autoptz.benchmark.profiles import BenchmarkProfile
 log = logging.getLogger(__name__)
 
 _NOMINAL_FPS = 30.0  # score normaliser: sustained fps / 30 fps target
+_DROP_POLICY = "steady_state_zero_source_mutation_grace_only"
 
 
 # ── engine-reported tracking quality ──────────────────────────────────────────
@@ -398,14 +399,35 @@ class StepResult:
     mean_fps: float
     per_camera_fps: list[float] = field(default_factory=list)
     sustained: bool = False
-    # Drops observed during the measured step, excluding the first cumulative
-    # value seen when the source is added/restarted. Any non-zero value fails the
-    # step; add/remove-source churn is allowed outside the measured window only.
+    # Raw drops observed around this step. Release gating uses
+    # ``steady_state_app_induced_drops`` so add/remove-source churn can be reported
+    # separately instead of hidden or treated as a steady-state capture failure.
     app_induced_drops: int = 0
+    steady_state_app_induced_drops: int | None = None
+    source_mutation_events: int = 0
+    source_mutation_allowed_drops: int = 0
+    source_mutation_drop_grace_s: float = 0.0
+    drop_policy: str = _DROP_POLICY
     # Engine-reported tracking quality keyed by camera id ({cid: QualityMetrics
     # dict}).  Empty when no quality reader is wired (e.g. the math-only unit
     # tests or the GUI/adopted path before Slice 5).
     per_camera_quality: dict[str, dict] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        total = max(0, int(self.app_induced_drops or 0))
+        allowed = max(0, int(self.source_mutation_allowed_drops or 0))
+        events = max(0, int(self.source_mutation_events or 0))
+        grace = max(0.0, float(self.source_mutation_drop_grace_s or 0.0))
+        if self.steady_state_app_induced_drops is None:
+            steady = max(0, total - allowed)
+        else:
+            steady = max(0, int(self.steady_state_app_induced_drops or 0))
+        object.__setattr__(self, "app_induced_drops", total)
+        object.__setattr__(self, "steady_state_app_induced_drops", steady)
+        object.__setattr__(self, "source_mutation_events", events)
+        object.__setattr__(self, "source_mutation_allowed_drops", allowed)
+        object.__setattr__(self, "source_mutation_drop_grace_s", grace)
+        object.__setattr__(self, "drop_policy", str(self.drop_policy or _DROP_POLICY))
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -415,6 +437,11 @@ class StepResult:
             "per_camera_fps": [round(f, 2) for f in self.per_camera_fps],
             "sustained": self.sustained,
             "app_induced_drops": self.app_induced_drops,
+            "steady_state_app_induced_drops": int(self.steady_state_app_induced_drops or 0),
+            "source_mutation_events": self.source_mutation_events,
+            "source_mutation_allowed_drops": self.source_mutation_allowed_drops,
+            "source_mutation_drop_grace_s": round(self.source_mutation_drop_grace_s, 3),
+            "drop_policy": self.drop_policy,
             "per_camera_quality": self.per_camera_quality,
         }
 
@@ -433,6 +460,7 @@ class BenchmarkResult:
     profile_description: str = ""
     profile_features: dict[str, bool] = field(default_factory=dict)
     experimental_flags: dict[str, str] = field(default_factory=dict)
+    drop_policy: str = _DROP_POLICY
     steps: list[StepResult] = field(default_factory=list)
     # The Mark scene this ramp ran (CLIP_LIBRARY id), for the result/CSV context.
     scene_clip_id: str = ""
@@ -446,6 +474,7 @@ class BenchmarkResult:
             "profile_description": self.profile_description,
             "profile_features": dict(self.profile_features),
             "experimental_flags": dict(self.experimental_flags),
+            "drop_policy": self.drop_policy,
             "weight": self.weight,
             "floor_fps": self.floor_fps,
             "max_cameras": self.max_cameras,
@@ -485,6 +514,46 @@ def _quality_app_induced_drops(quality: dict[str, dict]) -> int:
     return total
 
 
+def _source_mutation_snapshot(reader: Callable[[], dict[str, object] | None] | None) -> dict[str, object]:
+    """Read source-mutation accounting for the just-sampled step.
+
+    The reader reports drops that happened during an explicit add/remove-source
+    transition outside the steady measurement window. They are preserved in the
+    artifact but do not fail the steady-state capture gate.
+    """
+    if reader is None:
+        return {}
+    try:
+        raw = reader() or {}
+    except Exception:  # noqa: BLE001 — accounting must never abort the ramp
+        log.debug("benchmark source_mutation_reader failed", exc_info=True)
+        return {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _drop_accounting(
+    quality: dict[str, dict],
+    source_mutation: dict[str, object] | None = None,
+) -> tuple[int, int, int, int, float]:
+    """Return ``(total, steady, events, allowed, grace_s)`` for a step."""
+    steady = _quality_app_induced_drops(quality)
+    mutation = source_mutation or {}
+    try:
+        allowed = max(0, int(mutation.get("source_mutation_allowed_drops", 0) or 0))
+    except (TypeError, ValueError):
+        allowed = 0
+    try:
+        events = max(0, int(mutation.get("source_mutation_events", 0) or 0))
+    except (TypeError, ValueError):
+        events = 0
+    try:
+        grace_s = max(0.0, float(mutation.get("source_mutation_drop_grace_s", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        grace_s = 0.0
+    total = steady + allowed
+    return total, steady, events, allowed, grace_s
+
+
 def _experimental_flag_snapshot() -> dict[str, str]:
     """Capture managed experimental env flags for reproducible Mark artifacts."""
     import os
@@ -509,6 +578,7 @@ class BenchmarkRunner:
         sample_fn: Callable[[int], list[float]],
         on_step: Callable[[StepResult], None] | None = None,
         quality_reader: Callable[[], dict[str, dict]] | None = None,
+        source_mutation_reader: Callable[[], dict[str, object] | None] | None = None,
     ) -> None:
         self._profile = profile
         self._floor = float(floor_fps)
@@ -520,6 +590,7 @@ class BenchmarkRunner:
         # headless sampler stashes it on ``last_quality``).  None -> no quality in
         # the step results (math-only tests / adopted GUI path before Slice 5).
         self._quality_reader = quality_reader
+        self._source_mutation_reader = source_mutation_reader
 
     def run(self) -> BenchmarkResult:
         steps: list[StepResult] = []
@@ -540,8 +611,15 @@ class BenchmarkRunner:
                     quality = dict(self._quality_reader() or {})
                 except Exception:  # noqa: BLE001 — quality is best-effort, never aborts the ramp
                     log.debug("benchmark quality_reader failed", exc_info=True)
-            app_induced_drops = _quality_app_induced_drops(quality)
-            sustained = min_fps >= self._floor and app_induced_drops == 0
+            mutation = _source_mutation_snapshot(self._source_mutation_reader)
+            (
+                app_induced_drops,
+                steady_state_app_induced_drops,
+                source_mutation_events,
+                source_mutation_allowed_drops,
+                source_mutation_drop_grace_s,
+            ) = _drop_accounting(quality, mutation)
+            sustained = min_fps >= self._floor and steady_state_app_induced_drops == 0
             step = StepResult(
                 cameras=cameras,
                 min_fps=min_fps,
@@ -549,6 +627,10 @@ class BenchmarkRunner:
                 per_camera_fps=per_camera,
                 sustained=sustained,
                 app_induced_drops=app_induced_drops,
+                steady_state_app_induced_drops=steady_state_app_induced_drops,
+                source_mutation_events=source_mutation_events,
+                source_mutation_allowed_drops=source_mutation_allowed_drops,
+                source_mutation_drop_grace_s=source_mutation_drop_grace_s,
                 per_camera_quality=quality,
             )
             steps.append(step)
@@ -572,6 +654,7 @@ class BenchmarkRunner:
             profile_description=self._profile.description,
             profile_features=dict(self._profile.features),
             experimental_flags=_experimental_flag_snapshot(),
+            drop_policy=_DROP_POLICY,
             weight=self._profile.weight,
             floor_fps=self._floor,
             max_cameras=self._max_cameras,
