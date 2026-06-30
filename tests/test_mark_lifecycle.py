@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 
@@ -127,6 +125,65 @@ def test_quit_choice_quits_app(qtapp, monkeypatch) -> None:
     assert quit_called["n"] == 1
 
 
+def test_quit_choice_tears_down_active_mark_run_once(qtapp, monkeypatch) -> None:
+    """Quit from Mark while a ramp is active must stop pump/controller/engine once."""
+    from PySide6.QtWidgets import QApplication
+
+    import autoptz.ui.widgets.main_window as mw
+
+    class _Pump:
+        def __init__(self, events: list[str]) -> None:
+            self.events = events
+
+        def stop(self) -> None:
+            self.events.append("pump.stop")
+
+    class _Controller:
+        def __init__(self, events: list[str]) -> None:
+            self.events = events
+
+        def stop(self) -> None:
+            self.events.append("controller.stop")
+
+        def wait(self, timeout_ms: int) -> bool:
+            self.events.append(f"controller.wait:{timeout_ms}")
+            return True
+
+    win = _main(qtapp)
+    monkeypatch.setattr(mw, "MarkPreflightDialog", _FakeDlg, raising=False)
+    quit_called = {"n": 0}
+    monkeypatch.setattr(QApplication, "quit", lambda *a: quit_called.__setitem__("n", 1))
+    win._start_mark()
+    mark = win._mark_window
+    assert mark is not None
+
+    events: list[str] = []
+    mark._pump = _Pump(events)
+    mark._controller = _Controller(events)
+    monkeypatch.setattr(mark._engine, "stop", lambda: events.append("engine.stop"))
+
+    mark.request_quit()
+
+    assert quit_called["n"] == 1
+    assert win._mark_window is None
+    assert mark._torn_down is True
+    assert events == [
+        "pump.stop",
+        "controller.stop",
+        "controller.wait:5000",
+        "engine.stop",
+    ]
+
+    mark.close()
+    mark._on_app_about_to_quit()
+    assert events == [
+        "pump.stop",
+        "controller.stop",
+        "controller.wait:5000",
+        "engine.stop",
+    ]
+
+
 def test_os_close_routes_through_return(qtapp, monkeypatch) -> None:
     import autoptz.ui.widgets.main_window as mw
 
@@ -200,10 +257,6 @@ def test_mark_return_restores_current_service_state(qtapp) -> None:
     win.deleteLater()
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Windows-only Qt event-loop fd flake in headless MarkWindow show/close; covered on macOS/Linux + live",
-)
 def test_main_close_quits_app(qtapp, monkeypatch) -> None:
     """Closing the visible MainWindow (no Mark swap) terminates the app.
 

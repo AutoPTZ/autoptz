@@ -1424,6 +1424,68 @@ class TestCameraTileHelpers:
 
         assert _select_enrollment_face_bbox([small, large], track, None) == large["bbox"]
 
+    def test_enrollment_preview_crop_uses_selected_head_face(self, qapp) -> None:
+        from PySide6.QtCore import QPointF, QRectF
+        from PySide6.QtGui import QColor, QImage
+
+        from autoptz.ui.widgets.camera_tile import CameraTile
+
+        class _Frames:
+            def __init__(self, img: QImage) -> None:
+                self.img = img
+
+            def latest_qimage(self, _camera_id: str) -> QImage:
+                return self.img
+
+        class _Rec:
+            def tracks_as_list(self):
+                return [
+                    {
+                        "track_id": 7,
+                        "bbox": {"x1": 0.10, "y1": 0.10, "x2": 0.90, "y2": 0.90},
+                    }
+                ]
+
+            def faces_as_list(self):
+                return [
+                    {
+                        "bbox": {"x1": 0.34, "y1": 0.55, "x2": 0.68, "y2": 0.70},
+                    },
+                    {
+                        "bbox": {"x1": 0.42, "y1": 0.14, "x2": 0.58, "y2": 0.26},
+                    },
+                ]
+
+        class _Model:
+            def get_record(self, _camera_id: str) -> _Rec:
+                return _Rec()
+
+        class _Client:
+            cameraModel = _Model()
+
+        img = QImage(1000, 1000, QImage.Format.Format_RGB32)
+        img.fill(QColor("black"))
+        # Paint the expected head region red and the larger lower false-positive
+        # blue. The crop center should land on red after a body double-click.
+        for x in range(420, 580):
+            for y in range(140, 260):
+                img.setPixelColor(x, y, QColor("red"))
+        for x in range(340, 680):
+            for y in range(550, 700):
+                img.setPixelColor(x, y, QColor("blue"))
+
+        tile = CameraTile("cam-1", _Client(), frame_source=_Frames(img))
+        try:
+            tile._painted_rect = QRectF(0, 0, 1000, 1000)
+            crop = tile._enrollment_crop_qimage(7, QPointF(500, 820))
+
+            assert crop is not None
+            assert crop.width() < 320
+            assert crop.height() < 260
+            assert crop.pixelColor(crop.width() // 2, crop.height() // 2) == QColor("red")
+        finally:
+            tile.deleteLater()
+
     def test_enrollment_dialog_saves_preview_thumbnail(self, qapp, monkeypatch) -> None:
         from PySide6.QtGui import QPixmap
         from PySide6.QtWidgets import QDialog, QLineEdit

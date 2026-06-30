@@ -13,10 +13,11 @@ artifacts.
 | `artifacts/2026-06-30-8x1080p30-simple-follow-30min.json` | `simple_follow` | production shared model | 30 min | 30.0 | 0 | 42.1 ms | 41.4% | 514 MB |
 | `artifacts/2026-06-30-8x1080p30-full-default-60s.json` | `full` | production shared model | 60 s | 29.9 | 0 | 2267.7 ms | 12.2% | 2433 MB |
 | `artifacts/2026-06-30-8x1080p30-full-model-server-60s.json` | `full` | labs model server | 60 s | 29.9 | 0 | 42.0 ms | 49.8% | 6407 MB |
+| `artifacts/2026-06-30-8x1080p30-full-model-server-30min.json` | `full` | labs model server | 30 min | 29.7 | 0 | 42.1 ms | 50.3% | 3734 MB |
 | `artifacts/2026-06-30-8x1080p30-pose-default-60s.json` | `pose_follow` | production shared model | 60 s | 30.0 | 0 | 41.6 ms | 32.7% | 2256 MB |
 | `artifacts/2026-06-30-8x1080p30-pose-unified-60s.json` | `pose_follow` | unified pose flag | 60 s | 30.0 | 0 | 41.6 ms | 32.6% | 2244 MB |
 
-Sender confirmation for both local batches was `30.0 fps` on all eight fake NDI
+Sender confirmation for all local batches was `30.0 fps` on all eight fake NDI
 sources.
 
 ## Decisions From This Batch
@@ -28,9 +29,11 @@ sources.
   capture fps and had zero app-induced drops, but median end-to-end latency was
   about 2.27 seconds.
 - `AUTOPTZ_MODEL_SERVER=1` is the better latency architecture for the full
-  feature stack, but it is not ready to become the default. It used about 6.4 GB
-  RAM and the run logs show per-camera child processes still initializing
-  InsightFace, so face/appearance ownership is not truly centralized yet.
+  feature stack, but it is not ready to become the default. The 30-minute run
+  held zero app-induced drops and about 42 ms latency, but delivered-fps median
+  was 29.7 rather than the strict 30.0 target. The run logs also show per-camera
+  child processes still initializing InsightFace, so face/appearance ownership
+  is not truly centralized yet.
 - `AUTOPTZ_UNIFIED_POSE=1` stays gated. It matched default `pose_follow` capture
   and latency on this synthetic run, but did not improve latency/fps and raised
   median detector time from 20.4 ms to 23.0 ms. It still needs real tracking
@@ -42,12 +45,21 @@ sources.
 
 ## Remaining Release Gates
 
+- Do not cut an RC from this branch until these gates have matching artifacts;
+  local Apple Silicon fake-NDI evidence is not enough for release.
+- Confirm the only allowed capture drops are during explicit source add/remove
+  transitions. Any steady-state `app_induced_drops` value above zero blocks the
+  release.
 - Repeat the 30-minute Simple Follow gate on Intel Mac, CPU-only Windows, and
   accelerator-backed Windows.
-- Run a 30-minute full-feature model-server gate after face/appearance model
-  duplication is removed or bounded.
+- Re-run the 30-minute full-feature model-server gate after face/appearance model
+  duplication is removed or bounded, and require delivered fps to hold the strict
+  30.0 target.
 - Produce real-person tracking artifacts for default pose versus unified pose:
   moving person, crossing people, occlusion, delayed frames, reduced inference
   cadence, and PTZ motion feedback.
 - Validate Windows face recognition and double-click enrollment on an actual
   Windows build, including visible face boxes and saved crop/embedding match.
+- Validate Mark quit-in-middle behavior on an actual Windows GUI session. Headless
+  CI covers the signal/teardown contract, but it is not a substitute for closing
+  a running Mark window on Windows with the real event loop and build package.
