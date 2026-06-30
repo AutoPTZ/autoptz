@@ -611,9 +611,17 @@ class BenchmarkRunner:
         on_step: Callable[[StepResult], None] | None = None,
         quality_reader: Callable[[], dict[str, dict]] | None = None,
         source_mutation_reader: Callable[[], dict[str, object] | None] | None = None,
+        fps_tolerance: float = 0.0,
     ) -> None:
         self._profile = profile
         self._floor = float(floor_fps)
+        # Sub-fps jitter tolerance subtracted from the floor in the sustained check.
+        # A real "N fps" source delivers a few tenths below nominal (rolling-fps
+        # estimate + source pacing noise) while dropping ZERO frames; without this a
+        # hard floor fails a perfectly healthy step on jitter alone.  The DROPS gate
+        # stays strict, the reported floor is unchanged, and genuine under-delivery
+        # (well below the floor) still fails.  Default 0.0 keeps the CLI/exact path.
+        self._fps_tolerance = max(0.0, float(fps_tolerance))
         self._max_cameras = max(1, int(max_cameras))
         self._dwell_s = max(0.0, float(dwell_s))
         self._sample_fn = sample_fn
@@ -651,7 +659,10 @@ class BenchmarkRunner:
                 source_mutation_allowed_drops,
                 source_mutation_drop_grace_s,
             ) = _drop_accounting(quality, mutation)
-            sustained = min_fps >= self._floor and steady_state_app_induced_drops == 0
+            sustained = (
+                min_fps >= self._floor - self._fps_tolerance
+                and steady_state_app_induced_drops == 0
+            )
             step = StepResult(
                 cameras=cameras,
                 min_fps=min_fps,

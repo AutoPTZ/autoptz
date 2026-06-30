@@ -113,6 +113,34 @@ class TestRampController:
         c = MarkRampController(profile="full", floor_fps=30.0, dwell_s=0.0)
         assert c._floor == 30.0  # the user's target, undiscounted
 
+    def test_tolerates_subfps_jitter_at_target_rate(self, qapp) -> None:
+        """A real NDI source delivering 29.8 fps with ZERO drops must NOT fail the ramp.
+
+        Real "30 fps" NDI jitters a few tenths below nominal (rolling-fps estimate +
+        sender pacing noise) while dropping zero frames.  Grading must tolerate that
+        sub-fps measurement noise — the documented release gate is zero steady-state
+        app-induced drops + no fps collapse, not hitting the target to the decimal.
+        Genuine under-delivery (26 fps for a 30 target) must still fail; see
+        ``test_uses_exact_floor_for_release_scoring``.
+        """
+        from autoptz.ui.mark_runner import MarkRampController
+
+        def factory():
+            return lambda n: [29.8] * n
+
+        c = MarkRampController(
+            profile="full",
+            floor_fps=30.0,
+            max_cameras=3,
+            dwell_s=0.0,
+            sample_factory=factory,
+        )
+        done, steps, _progress = _drive(c, qapp)
+        assert "error" not in done, done.get("error")
+        res = done["result"]
+        assert res.sustained_cameras == 3
+        assert all(s.sustained for s in steps)
+
     def test_stop_before_run_sets_sampler_cancel_event(self, qapp) -> None:
         """A mid-run Mark exit must propagate cancellation into the active sampler."""
         seen: dict[str, object] = {}

@@ -72,6 +72,15 @@ class MarkRampController(QObject):
     # for chart/test code that reads the effective floor.
     _MARK_SUSTAIN_RATIO = 1.0
 
+    # Sub-fps jitter tolerance for the sustained check (NOT a discount on the floor).
+    # A real "N fps" source delivers a few tenths below nominal — e.g. NDI at 30 fps
+    # reads 29.7-29.9 with ZERO dropped frames (rolling-fps estimate + source pacing
+    # noise; the Mark fake-NDI fleet pumps senders on the GUI thread, which is noisier
+    # still).  The release gate is zero steady-state app-induced drops + no fps
+    # collapse, so a step that drops nothing must not fail on tenths of a frame.
+    # Genuine under-delivery (e.g. 26 for a 30 target) still fails by a wide margin.
+    _MARK_FPS_JITTER_EPSILON = 1.0
+
     def __init__(
         self,
         *,
@@ -175,6 +184,7 @@ class MarkRampController(QObject):
                 dwell_s=self._dwell,
                 sample_fn=wrapped,
                 on_step=self._on_step,
+                fps_tolerance=self._MARK_FPS_JITTER_EPSILON,
             )
             result = runner.run()
             self.finished.emit(result)
