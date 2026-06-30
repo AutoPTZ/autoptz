@@ -64,6 +64,10 @@ sources.
   cadence, and PTZ motion feedback.
 - Validate Windows face recognition and double-click enrollment on an actual
   Windows build, including visible face boxes and saved crop/embedding match.
+  The local code now covers the previously mismatched crop-space path where the
+  preview thumbnail used cropped-preview coordinates but the worker interpreted
+  the click as full-frame coordinates; real Windows GUI validation is still
+  required.
 - Validate Mark quit-in-middle behavior on an actual Windows GUI session. Headless
   CI covers the signal/teardown contract, but it is not a substitute for closing
   a running Mark window on Windows with the real event loop and build package.

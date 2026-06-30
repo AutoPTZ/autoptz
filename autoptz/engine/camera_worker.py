@@ -4369,6 +4369,27 @@ class CameraWorker:
                     best_d, best = d, t
         return best
 
+    def _enroll_click_frame_point(
+        self,
+        click_norm: tuple[float, float] | None,
+        frame_w: int,
+        frame_h: int,
+    ) -> tuple[float, float] | None:
+        """Map a UI enrollment click from preview space back to full-frame pixels."""
+        if click_norm is None:
+            return None
+        nx = max(0.0, min(1.0, float(click_norm[0])))
+        ny = max(0.0, min(1.0, float(click_norm[1])))
+        crop = self._last_digital_crop_rect
+        if crop is not None:
+            cx, cy, cw, ch = crop
+            if cw > 0 and ch > 0:
+                return (
+                    max(0.0, min(float(frame_w), float(cx) + nx * float(cw))),
+                    max(0.0, min(float(frame_h), float(cy) + ny * float(ch))),
+                )
+        return (nx * max(1, frame_w), ny * max(1, frame_h))
+
     def _face_for_pending_enroll(
         self,
         frame: NDArray[np.uint8],
@@ -4389,10 +4410,8 @@ class CameraWorker:
         if target_track is None or getattr(target_track, "lost", False):
             return None
         h, w = frame.shape[:2]
-        px = py = None
-        if click_norm is not None:
-            px = click_norm[0] * max(1, w)
-            py = click_norm[1] * max(1, h)
+        click_px = self._enroll_click_frame_point(click_norm, w, h)
+        px, py = click_px if click_px is not None else (None, None)
 
         def _area(obs: Any) -> float:
             x1, y1, x2, y2 = obs.bbox

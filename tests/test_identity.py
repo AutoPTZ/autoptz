@@ -943,6 +943,32 @@ class TestWorkerAutoHarvest:
         assert service.best_score(ident.id, target_emb) == pytest.approx(1.0, abs=1e-5)
         assert service.best_score(ident.id, wrong_emb) < 0.5
 
+    def test_pending_enroll_click_maps_active_digital_crop_to_full_frame(self):
+        service, _ = _make_service()
+        target_emb = _vec(618)
+        wrong_emb = _vec(619)
+        ident = service.enroll("Alice", None, identity_id="id-cropped-click")
+        app = _FakeApp(
+            [
+                # Larger head-region face that would win if the cropped-preview
+                # click were interpreted directly as full-frame normalized coords.
+                _FakeFace((195, 180, 300, 270), wrong_emb),
+                _FakeFace((315, 205, 365, 255), target_emb),
+            ]
+        )
+        rec = FaceRecognizer(_app=app, match_threshold=0.99)
+        w = self._worker(service, rec, [])
+        w._last_digital_crop_rect = (80, 40, 320, 320)
+        track = _StubTrack(7, (170, 150, 430, 450))
+
+        # The UI click is normalized in the cropped preview. It maps through the
+        # active crop to full-frame point (340, 230), inside the smaller target face.
+        w._apply_command("enroll_track", (7, ident.id, "Alice", (0.8125, 0.59375)))
+        w._maybe_identify(_gray(24), [track], now=222.0)
+
+        assert service.best_score(ident.id, target_emb) == pytest.approx(1.0, abs=1e-5)
+        assert service.best_score(ident.id, wrong_emb) < 0.5
+
     def test_target_by_identity_locks_after_repeated_match(self):
         service, _ = _make_service()
         emb = _vec(62)
