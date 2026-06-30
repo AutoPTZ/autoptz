@@ -1435,7 +1435,31 @@ def test_gt_inactive_for_ndi_even_with_env(qtapp, monkeypatch) -> None:
     from autoptz.ui.frames import ShmFrameSource
     from autoptz.ui.widgets.mark_window import MarkWindow
 
+    class _FakeNDIFleet:
+        def __init__(self, n, **_kw):
+            self._n = int(n)
+
+        def names(self):
+            return [f"AutoPTZ Mark Cam {i + 1}" for i in range(self._n)]
+
+        def full_names(self, *, timeout_s=5.0, strict=False):
+            del timeout_s, strict
+            return [f"CI-HOST (AutoPTZ Mark Cam {i + 1})" for i in range(self._n)]
+
+        def open(self):
+            return None
+
+        def pump_once(self):
+            return None
+
+        def close(self):
+            return None
+
+    import autoptz.benchmark.ndi_sim as ndi_sim
+
     monkeypatch.setenv("AUTOPTZ_MARK_GT", "1")
+    monkeypatch.setattr(ndi_sim, "ndi_sim_available", lambda: True)
+    monkeypatch.setattr(ndi_sim, "MarkNDIFleet", _FakeNDIFleet)
     win = MarkWindow(
         session=MarkSession(source="ndi", max_cameras=3, dwell_s=0.0),
         frame_source=ShmFrameSource(),

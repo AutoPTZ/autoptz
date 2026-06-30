@@ -18,22 +18,25 @@ def _env_true(name: str) -> bool:
 
 
 def env_process_per_camera() -> bool:
-    """Process-wide opt-in for the experimental process-per-camera mode.
+    """Whether camera workers should cross a process boundary.
 
     Lives here (not just in ``process_worker``) so lightweight callers like the
     inference layer can branch on it without importing the heavy worker module.
-    The model-server mode (below) also runs per-camera processes, so it implies this.
+    The standalone ``AUTOPTZ_PROCESS_PER_CAMERA`` model-per-child experiment is
+    retired and intentionally ignored.  The only remaining process-worker path is
+    model-server mode, where each camera process delegates detection to one shared
+    detector server instead of loading its own model set.
     """
-    return _env_true("AUTOPTZ_PROCESS_PER_CAMERA") or env_model_server()
+    return env_model_server()
 
 
 def env_model_server() -> bool:
-    """Opt-in for the multi-process model-server architecture (the scalable one).
+    """Opt-in for the multi-process model-server architecture candidate.
 
     Each camera runs in its own process (escaping the GIL) and delegates detection
     to ONE shared model-server process (one model set → no per-process RAM cliff).
-    Validated to scale to 16 NDI cams without the RAM cliff the plain model-per-child
-    process mode hits.
+    This is not a product feature; it stays env-only until Mark artifacts prove the
+    6/8-camera gates, CPU/RAM stability, and clean shutdown behavior.
     """
     return _env_true("AUTOPTZ_MODEL_SERVER")
 
@@ -108,7 +111,7 @@ def apply_thread_caps(budget: int) -> None:
     n_str = str(n)
 
     # Publish env vars so:
-    #   • a process-per-camera child inherits them before importing any lib, and
+    #   • a model-server camera child inherits them before importing any lib, and
     #   • any library imported *after* this call (e.g. lazy-loaded reid backends)
     #     picks up the correct value automatically.
     for var in (

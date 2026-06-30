@@ -46,10 +46,12 @@ instead of OpenCV's divergent index order.
 
 ## Tracking is laggy or jittery
 
-See [Configuration](configuration.md). Quick levers:
+See [Configuration](configuration.md). Quick levers while the 2.2 controller is
+being validated:
 
 - **Laggy follow** — lower `aim_smoothing`, raise `lead_time_s` or `kp`.
-- **Jittery** — raise `aim_smoothing`, enlarge the framing safe zone.
+- **Jittery** — raise `aim_smoothing` and check stale/lost target telemetry; the
+  framing quiet zone is internal and should not become a normal tuning knob.
 - **CPU-bound** — drop the detector tier, raise `detect_interval` (or leave
   `quality_floor=auto`), cap source `fps`.
 

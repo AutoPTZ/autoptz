@@ -718,9 +718,8 @@ class EngineClient(QObject):
         """Deep-merge *patch* into the camera's current config, then apply it.
 
         A convenience over :meth:`updateCameraConfig` for callers that only touch
-        a few nested keys (e.g. the tile dragging the framing box updates just
-        ``{"ptz": {"safe_zone_w": ..., "safe_zone_h": ...}}``) without having to
-        round-trip and rebuild the whole config dict themselves.
+        a few nested keys (for example Mark enabling profile defaults) without
+        having to round-trip and rebuild the whole config dict themselves.
         """
         cfg = self.getCameraConfig(camera_id)
         if not cfg:

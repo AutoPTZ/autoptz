@@ -3,7 +3,7 @@ and reports the new Phase-0 telemetry (delivered fps, drop estimate, end-to-end
 latency) + App CPU. Senders run in a SEPARATE process (bench_sender.py) so this
 process's CPU reflects the app's real receive+inference load.
 
-Usage: python bench_receiver.py <N> <profile full|streams> <duration_s> [warmup_s]
+Usage: python bench_receiver.py <N> <profile full|streams> <duration_s> [warmup_s] [json_path]
 Prints a JSON summary line prefixed RESULT_JSON.
 """
 
@@ -29,6 +29,7 @@ N = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 PROFILE = sys.argv[2] if len(sys.argv) > 2 else "full"
 DURATION = float(sys.argv[3]) if len(sys.argv) > 3 else 30.0
 WARMUP = float(sys.argv[4]) if len(sys.argv) > 4 else (12.0 if PROFILE == "full" else 5.0)
+JSON_PATH = sys.argv[5] if len(sys.argv) > 5 else ""
 
 
 def discover(n: int, timeout_s: float = 20.0) -> list[str]:
@@ -110,7 +111,9 @@ def main() -> None:
                     "fps": float(getattr(tm, "fps", 0.0)),
                     "delivered_fps": float(getattr(tm, "delivered_fps", 0.0)),
                     "source_fps": float(getattr(tm, "source_fps", 0.0)),
-                    "drops": int(getattr(tm, "frames_dropped_est", 0)),
+                    "app_drops": int(getattr(tm, "dropped_frames", 0)),
+                    "source_drop_est": int(getattr(tm, "frames_dropped_est", 0)),
+                    "ndi_dropped_video": int(getattr(tm, "ndi_dropped_video_frames", 0)),
                     "e2e_ms": float(getattr(tm, "end_to_end_ms", 0.0)),
                     "capture_age_ms": float(getattr(tm, "capture_age_ms", 0.0)),
                     # detect_ms is the alive/dead proof for the model-server: a dead
@@ -120,6 +123,10 @@ def main() -> None:
                     "detect_ms": float(getattr(tm, "detect_ms", 0.0)),
                     "stall_s": float(getattr(tm, "inference_stall_age_s", 0.0)),
                     "qd": int(getattr(tm, "ndi_queue_depth", -1)),
+                    "fourcc": str(getattr(tm, "ndi_fourcc", "") or ""),
+                    "ndi_buffer_ms": float(getattr(tm, "ndi_buffer_ms", 0.0) or 0.0),
+                    "ndi_conversion_ms": float(getattr(tm, "ndi_conversion_ms", 0.0) or 0.0),
+                    "ndi_copy_ms": float(getattr(tm, "ndi_copy_ms", 0.0) or 0.0),
                 }
             )
         samples.append(
@@ -142,15 +149,27 @@ def main() -> None:
     deliv_all = [c["delivered_fps"] for s in samples for c in s["per"]]
     first = samples[0]["per"] if samples else []
     last = samples[-1]["per"] if samples else []
-    total_drops = sum(c["drops"] for c in last)
+    total_app_drops = sum(c["app_drops"] for c in last)
+    total_source_drop_est = sum(c["source_drop_est"] for c in last)
+    total_ndi_dropped_video = sum(c["ndi_dropped_video"] for c in last)
     # Steady-state drops: delta across the post-warmup window (excludes the
-    # warmup/model-load period that inflates the cumulative count).
-    drops_start = sum(c["drops"] for c in first)
+    # warmup/model-load period that inflates cumulative counters).
+    app_drops_start = sum(c["app_drops"] for c in first)
+    source_drop_est_start = sum(c["source_drop_est"] for c in first)
+    ndi_dropped_video_start = sum(c["ndi_dropped_video"] for c in first)
     span_s = max(1e-6, (len(samples) - 1)) if len(samples) > 1 else 1.0
-    drops_delta = max(0, total_drops - drops_start)
+    app_drops_delta = max(0, total_app_drops - app_drops_start)
+    source_drop_est_delta = max(0, total_source_drop_est - source_drop_est_start)
+    ndi_dropped_video_delta = max(0, total_ndi_dropped_video - ndi_dropped_video_start)
     e2e_all = [c["e2e_ms"] for s in samples for c in s["per"] if c["e2e_ms"] > 0]
     detect_all = [c["detect_ms"] for s in samples for c in s["per"] if c["detect_ms"] > 0]
     stall_all = [c["stall_s"] for s in samples for c in s["per"]]
+    buffer_all = [c["ndi_buffer_ms"] for s in samples for c in s["per"] if c["ndi_buffer_ms"] > 0]
+    conversion_all = [
+        c["ndi_conversion_ms"] for s in samples for c in s["per"] if c["ndi_conversion_ms"] > 0
+    ]
+    copy_all = [c["ndi_copy_ms"] for s in samples for c in s["per"] if c["ndi_copy_ms"] > 0]
+    fourccs = sorted({c["fourcc"] for s in samples for c in s["per"] if c["fourcc"]})
 
     result = {
         "N": N,
@@ -162,9 +181,20 @@ def main() -> None:
         "app_mem_mb": round(samples[-1]["app_mem_mb"], 0) if samples else 0,
         "fps_median_per_cam": med(fps_all),
         "delivered_fps_median": med(deliv_all),
-        "drops_steady_window": drops_delta,
-        "drops_per_s_steady": round(drops_delta / span_s, 1),
+        # Release gate: only app-induced drops fail steady state. Source/SDK drop
+        # estimates are reported separately because they can reflect source pacing
+        # or receiver accounting rather than an app-induced queue miss.
+        "drops_steady_window": app_drops_delta,
+        "app_induced_drops_steady_window": app_drops_delta,
+        "app_induced_drops_per_s_steady": round(app_drops_delta / span_s, 1),
+        "source_drop_est_steady_window": source_drop_est_delta,
+        "source_drop_est_per_s_steady": round(source_drop_est_delta / span_s, 1),
+        "ndi_dropped_video_steady_window": ndi_dropped_video_delta,
         "e2e_ms_median": med(e2e_all),
+        "ndi_fourccs": fourccs,
+        "ndi_buffer_ms_median": med(buffer_all),
+        "ndi_conversion_ms_median": med(conversion_all),
+        "ndi_copy_ms_median": med(copy_all),
         # Detection-health: detect_ms_median proves inference actually ran (and how
         # fast); detect_active_pct is the share of camera-samples where detection
         # executed at all (0 => detection dead). stall_s_max flags a wedged pipeline.
@@ -175,6 +205,9 @@ def main() -> None:
         "stall_s_max": round(max(stall_all), 1) if stall_all else 0.0,
         "cams_reporting": len(last),
     }
+    if JSON_PATH:
+        Path(JSON_PATH).parent.mkdir(parents=True, exist_ok=True)
+        Path(JSON_PATH).write_text(json.dumps(result, indent=2) + "\n")
     print("RESULT_JSON " + json.dumps(result), flush=True)
     try:
         sup.stop()

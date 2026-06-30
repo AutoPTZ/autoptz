@@ -1,9 +1,10 @@
-"""Experimental, opt-in **process-per-camera** mode.
+"""Process-worker infrastructure for the model-server architecture.
 
-Default OFF.  Enable with ``AUTOPTZ_PROCESS_PER_CAMERA=1``.  Each camera's
-:class:`~autoptz.engine.camera_worker.CameraWorker` then runs in its own OS
-process for true multi-core parallelism (GIL bypass) instead of a thread in the
-GUI process.
+The standalone ``AUTOPTZ_PROCESS_PER_CAMERA`` experiment is retired: running one
+full model stack per camera duplicated RAM and did not solve the 2.2 reliability
+gate.  This module remains because ``AUTOPTZ_MODEL_SERVER=1`` still uses one
+camera child process per source while delegating detection to a single shared
+model-server process.
 
 How the boundary is crossed (the scaffolding the engine was designed around):
 
@@ -14,10 +15,10 @@ How the boundary is crossed (the scaffolding the engine was designed around):
   cross via :class:`multiprocessing.Queue`.  Queues pickle their payloads, and the
   payloads here — ``CameraConfig``, ``TelemetryMsg``, ``IdentityRecord`` — are all
   picklable pydantic models, so no hand-rolled framing is needed.
-- **Models** can't be shared across processes (an ORT ``InferenceSession`` is not
-  picklable), so each child builds **its own** inference pool.  That trades RAM
-  (≈ one model set per camera) for parallelism — which is exactly why this is
-  opt-in rather than the default.
+- **Models** are not loaded per child in the supported process path.  The camera
+  child receives model-server IPC queues and uses a shared detector server; if
+  those queues are missing, the supervisor falls back to the normal threaded
+  worker instead of reviving the retired model-per-child mode.
 
 **Identity:** labeled identities converge through the shared SQLite DB (each child
 opens its own connection).  *Unlabeled* auto-harvested faces are propagated live
@@ -34,17 +35,12 @@ independently.  This is a completeness gap, not a correctness bug: labeled
 identities converge via the shared SQLite DB, and unlabeled ones still match on
 the initial template.
 
-**RAM trade-off:** an ORT ``InferenceSession`` is not picklable, so each child
-builds **its own** inference pool — roughly one model set per camera.  That extra
-RAM is the whole reason this mode is opt-in rather than the default: it buys true
-multi-core parallelism (GIL bypass) at the cost of duplicated model memory.
-
-**Status — EXPERIMENTAL.** The IPC + lifecycle plumbing here is hardened and
-unit-tested with a synthetic source: child liveness drives the supervisor's
-auto-restart, ``stop()`` escalates join → terminate → log cleanly, child
-setup/crash logs surface to the operator, and unlabeled identities relay across
-children.  The throughput / RAM / real-camera + PTZ behaviour still needs
-validation on a real multi-camera rig before this is anything more than opt-in.
+**Status — gated architecture candidate.** The IPC + lifecycle plumbing here is
+hardened and unit-tested with a synthetic source: child liveness drives the
+supervisor's auto-restart, ``stop()`` escalates join → terminate → log cleanly,
+child setup/crash logs surface to the operator, and unlabeled identities relay
+across children.  It remains behind ``AUTOPTZ_MODEL_SERVER`` until Mark 6/8-camera
+NDI gates prove capture, inference cadence, shutdown, CPU/RAM, and PTZ behavior.
 """
 
 from __future__ import annotations
@@ -654,8 +650,7 @@ class ProcessWorkerHandle:
 
 
 def process_per_camera_enabled() -> bool:
-    """True when per-camera processes are wanted — the experimental
-    process-per-camera mode OR the model-server mode (which also runs per-camera)."""
+    """True only for model-server mode; the model-per-child flag is retired."""
     from autoptz.engine.runtime.flags import env_process_per_camera
 
     return env_process_per_camera()

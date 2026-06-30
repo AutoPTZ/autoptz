@@ -166,7 +166,7 @@ class TestModels:
         assert ptz.soft_limits.pan_min == -0.5
 
     def test_framing_box_defaults_on(self) -> None:
-        """New cameras show the framing box so the dead-zone is visible/adjustable."""
+        """New cameras keep the internal dead-zone/framing indicator enabled."""
         ptz = PTZConfig()
         assert ptz.safe_zone_enabled is True
         assert ptz.safe_zone_x == 0.0
@@ -175,7 +175,7 @@ class TestModels:
         assert ptz.safe_zone_h == 0.22
 
     def test_framing_box_center_is_configurable(self) -> None:
-        """The framing box can move away from dead centre."""
+        """Legacy configs can still validate a non-centered quiet zone."""
         ptz = PTZConfig(safe_zone_x=0.25, safe_zone_y=-0.2)
         assert ptz.safe_zone_x == 0.25
         assert ptz.safe_zone_y == -0.2

@@ -271,8 +271,8 @@ _PROC: Any | None = None
 _PRIMED = False
 
 # Child processes whose CPU/RAM belong to the app's real footprint but live outside
-# this PID: the experimental process-per-camera workers (one OS process per camera)
-# and the go2rtc helper.  ``cpu_percent`` state lives on each psutil.Process object,
+# this PID: model-server camera children and the go2rtc helper. ``cpu_percent``
+# state lives on each psutil.Process object,
 # so we cache + prime them once and reuse the SAME instances across polls — sampling
 # only the GUI PID made "App CPU" undercount badly ("not accounting for the new
 # process").  Keyed by pid; pruned as children die.
@@ -422,9 +422,9 @@ def system_metrics() -> dict[str, Any]:
         out["cpu_percent"] = round(float(psutil.cpu_percent(interval=None)), 1)
         vm = psutil.virtual_memory()
         out["mem_percent"] = round(float(vm.percent), 1)
-        # "App CPU/Mem" spans the whole app process tree, not just this PID: the
-        # experimental process-per-camera workers (and go2rtc) run in their OWN
-        # processes, so sampling only os.getpid() made App CPU read tiny while the
+        # "App CPU/Mem" spans the whole app process tree, not just this PID:
+        # model-server camera children (and go2rtc) run in their OWN processes, so
+        # sampling only os.getpid() made App CPU read tiny while the
         # machine was busy.  Sum the GUI process + its live descendants.
         # Process CPU can exceed 100% across cores; normalise to the whole machine.
         app_cpu = float(_PROC.cpu_percent(interval=None)) + _app_tree_cpu(_PROC)

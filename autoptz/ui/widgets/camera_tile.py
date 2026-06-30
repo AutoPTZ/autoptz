@@ -664,13 +664,18 @@ class CameraTile(QWidget):
             p.drawLine(QPointF(cx, cy), QPointF(cx, cy + dy * length))
         p.restore()
 
-    # ── framing box (adjustable PTZ dead-zone) ───────────────────────────────────
+    # ── framing box (passive PTZ quiet-zone indicator) ───────────────────────────
+
+    def _framing_box_editable(self) -> bool:
+        """Normal 2.2 UX keeps framing automatic; the tile overlay is informational."""
+        return False
 
     def _framing_extents(self, rec: Any) -> tuple[float, float] | None:
         """Return the framing box's (half_w, half_h) fractions, or None if off.
 
-        While a drag is in progress the live override is returned so the box
-        tracks the pointer before the change is committed to the config.
+        The box is a passive visualization of the controller's quiet zone.  The
+        live override is retained only for legacy test/dev callers that exercise
+        the old drag path directly; normal tile interaction never enters it.
         """
         cfg = getattr(rec, "camera_config", None)
         ptz = getattr(cfg, "ptz", None) if cfg is not None else None
@@ -720,8 +725,8 @@ class CameraTile(QWidget):
         return pts
 
     def _framing_handle_at(self, pos: QPointF, rec: Any) -> str | None:
-        """Return the framing handle under *pos* (only when the tile is selected)."""
-        if not self._selected:
+        """Return the framing handle under *pos* when editing is explicitly enabled."""
+        if not self._framing_box_editable() or not self._selected:
             return None
         box = self._framing_box_rect(rec)
         if box is None:
@@ -732,8 +737,8 @@ class CameraTile(QWidget):
         return None
 
     def _framing_move_hit(self, pos: QPointF, rec: Any) -> bool:
-        """Return True when *pos* can drag-move the selected framing box."""
-        if not self._selected:
+        """Return True when *pos* can drag-move the framing box."""
+        if not self._framing_box_editable() or not self._selected:
             return False
         box = self._framing_box_rect(rec)
         return bool(box is not None and box.contains(pos))
@@ -755,20 +760,20 @@ class CameraTile(QWidget):
             p.drawRoundedRect(box, rad, rad)
 
     def _paint_framing_box(self, p: QPainter, rec: Any) -> None:
-        """Draw the adjustable framing region (PTZ dead-zone) over the video.
+        """Draw the passive framing quiet-zone over the video.
 
         Read straight from the camera config — no telemetry plumbing.  A subtle
         dashed outline (rectangle…oval by ``safe_zone_roundness``) plus a centre
-        "+" crosshair marking the aim reference point; when the tile is selected,
-        a brighter outline + grab handles so the operator can resize it to keep
-        the subject framed.
+        "+" crosshair marking the aim reference point.  In normal 2.2 builds this
+        is intentionally passive: the adaptive controller owns the dead-zone,
+        not the operator.
         """
         box = self._framing_box_rect(rec)
         if box is None:
             return
         roundness = self._framing_roundness(rec)
         p.save()
-        editing = self._selected
+        editing = self._selected and self._framing_box_editable()
         col = QColor(T.TARGET) if editing else QColor(255, 255, 255, 130)
         pen = QPen(col, 1.6, Qt.PenStyle.DashLine)
         p.setPen(pen)

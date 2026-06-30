@@ -5,10 +5,12 @@ camera workers using shared model ownership, source-agnostic latest-wins frames,
 and fixed-zoom tracking by default. The UI never blocks on capture, inference, or
 PTZ I/O, and workers never touch Qt.
 
-Legacy process-per-camera and model-server experiments still exist as explicit
-developer/Labs env paths, but they are not the normal product architecture. See
-`docs/engineering/retired-experiments.md` and
-`docs/release/2.2.0-reliability-gates.md` before promoting either path.
+The standalone process-per-camera/model-per-child experiment is retired: the
+`AUTOPTZ_PROCESS_PER_CAMERA` env var is ignored and the supervisor will not spawn
+camera children unless the shared model-server queues are live. `AUTOPTZ_MODEL_SERVER`
+remains an explicit release-gated architecture candidate, not a normal product
+mode. See `docs/engineering/retired-experiments.md` and
+`docs/release/2.2.0-reliability-gates.md` before promoting or deleting it.
 
 ```
 ┌────────────────────────── UI process (PySide6, GUI thread) ──────────────────────────┐

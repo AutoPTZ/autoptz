@@ -251,12 +251,12 @@ class PTZConfig(BaseModel, frozen=True):
     # Aim smoothing 0..1 (0 = most responsive, 1 = smoothest).  Maps to the
     # one-euro filter's minimum cutoff inside the controller; 0.5 ≈ the original.
     aim_smoothing: float = Field(default=0.5, ge=0.0, le=1.0)
-    # Framing box: an adjustable rounded dead-zone around frame-centre.  While the
-    # subject stays inside the box the PTZ holds still; the camera only moves to
-    # keep them within it.  ``safe_zone_w`` / ``safe_zone_h`` are the box's
-    # half-width / half-height as a fraction of the half-frame (0.15 ≈ 15% either
-    # side of centre), drawn as a draggable, resizable overlay on the tile.  On by
-    # default so new cameras show the framing region.
+    # Framing quiet zone: a rounded dead-zone around frame-centre. While the
+    # subject stays inside the zone the PTZ holds still; beyond it, the adaptive
+    # controller eases the subject back to the zone centre. ``safe_zone_w`` /
+    # ``safe_zone_h`` are half-width / half-height as a fraction of the half-frame
+    # (0.15 ≈ 15% either side of centre). The tile draws this as a passive
+    # indicator, not as a normal user-tunable control.
     safe_zone_enabled: bool = True
     safe_zone_x: float = Field(default=0.0, ge=-0.9, le=0.9)
     safe_zone_y: float = Field(default=0.0, ge=-0.9, le=0.9)

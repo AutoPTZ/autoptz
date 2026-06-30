@@ -279,6 +279,33 @@ class TestCameraTileFramingHelpers:
         assert _snap_center_axis(-0.04) == 0.0
         assert _snap_center_axis(0.041) == pytest.approx(0.041)
 
+    def test_framing_box_is_passive_not_user_draggable(self, qapp) -> None:
+        from PySide6.QtCore import QRectF
+
+        from autoptz.config.models import CameraConfig, SourceConfig
+        from autoptz.ui.engine_client import CameraRecord, EngineClient
+        from autoptz.ui.widgets.camera_tile import CameraTile
+
+        client = EngineClient()
+        cfg = CameraConfig(
+            id="cam-1",
+            name="Cam",
+            source=SourceConfig(type="synthetic", address="anim"),
+        )
+        rec = CameraRecord("cam-1", "synthetic://anim", "Cam", camera_config=cfg)
+        client.cameraModel.add_camera(rec)
+        tile = CameraTile("cam-1", client, frame_source=None)
+        try:
+            tile._selected = True
+            tile._painted_rect = QRectF(0, 0, 640, 360)
+            box = tile._framing_box_rect(rec)
+
+            assert box is not None
+            assert tile._framing_move_hit(box.center(), rec) is False
+            assert tile._framing_handle_at(box.topLeft(), rec) is None
+        finally:
+            tile.deleteLater()
+
 
 class TestElideKeepingPct:
     """On-video labels must keep the trailing 'NN%' instead of eliding it away."""
@@ -1673,6 +1700,58 @@ assert panel._cfg["ptz"]["vcam_out"] is True, f"expected True, got {{panel._cfg[
         result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
         assert result.returncode == 0, result.stderr or result.stdout
 
+    def test_normal_save_preserves_hidden_ptz_internals(self, tmp_path) -> None:
+        code = f"""
+import os
+import sys
+import json
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
+from autoptz.ui.widgets.properties_panel import PropertiesPanel
+app = QApplication(sys.argv[:1])
+client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+cid = client.addCamera("usb://0", "Cam")
+cfg = client.getCameraConfig(cid)
+cfg["ptz"].update({{
+    "kp": 0.33,
+    "aim_smoothing": 0.21,
+    "lead_time_s": 0.09,
+    "max_pan_speed": 0.42,
+    "max_tilt_speed": 0.43,
+    "catch_up_speed": 0.44,
+    "safe_zone_enabled": False,
+    "safe_zone_x": 0.27,
+    "safe_zone_y": -0.18,
+    "safe_zone_w": 0.31,
+    "safe_zone_h": 0.32,
+    "safe_zone_roundness": 0.45,
+}})
+client.updateCameraConfig(cid, json.dumps(cfg))
+panel = PropertiesPanel(client, frame_source=ShmFrameSource())
+panel.set_camera(cid)
+
+# Change a normal visible field; hidden controller internals must survive.
+panel._vcam_out.setChecked(True)
+panel._push()
+actual = client.getCameraConfig(cid)["ptz"]
+for key in (
+    "kp", "aim_smoothing", "lead_time_s", "max_pan_speed", "max_tilt_speed",
+    "catch_up_speed", "safe_zone_x", "safe_zone_y", "safe_zone_w",
+    "safe_zone_h", "safe_zone_roundness",
+):
+    assert actual[key] == cfg["ptz"][key], (key, actual[key], cfg["ptz"][key])
+assert actual["safe_zone_enabled"] is False
+assert actual["vcam_out"] is True
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
+        assert result.returncode == 0, result.stderr or result.stdout
+
 
 class TestExperimentalDialog:
     def test_construction_reads_state_and_apply_persists(self, tmp_path) -> None:
@@ -1731,8 +1810,8 @@ finally:
         assert result.returncode == 0, result.stderr or result.stdout
 
 
-class TestExperimentalMenu:
-    def test_experimental_action_present_and_opens_dialog(self, tmp_path) -> None:
+class TestNormalMenuSurface:
+    def test_mark_present_but_experimental_features_absent(self, tmp_path) -> None:
         code = f"""
 import os
 import sys
@@ -1745,20 +1824,14 @@ from autoptz.ui.engine_client import EngineClient
 from autoptz.ui.frames import ShmFrameSource
 from autoptz.ui.log_bridge import LogListModel
 from autoptz.ui.widgets import MainWindow
-from autoptz.ui.widgets.dialogs.experimental import ExperimentalFeaturesDialog
 
 app = QApplication(sys.argv[:1])
 client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
 win = MainWindow(client, log_model=LogListModel(), frame_source=ShmFrameSource())
 try:
     texts = [a.text() for a in win.findChildren(QAction)]
-    assert any("Experimental" in (t or "") for t in texts), texts
-
-    # Handler builds the dialog without raising; it is non-modal in the test
-    # because we never call exec(), we just verify construction via the handler.
-    dlg = ExperimentalFeaturesDialog(client, win)
-    assert dlg is not None
-    dlg.close()
+    assert any("Run AutoPTZ Mark" in (t or "") for t in texts), texts
+    assert not any("Experimental Features" in (t or "") for t in texts), texts
 finally:
     win.close()
 """

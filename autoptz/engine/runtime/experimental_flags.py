@@ -1,9 +1,10 @@
-"""Curated experimental AUTOPTZ_* flags + experimental TrackingConfig defaults.
+"""Curated dev/benchmark AUTOPTZ_* flags + TrackingConfig defaults.
 
-Single source of truth shared by the Experimental Features dialog (to build the
-rows) and :func:`autoptz.engine.supervisor.Supervisor._apply_experimental_env`
-(to publish the chosen values into ``os.environ`` before workers spawn).  Adding
-a flag here automatically exposes it in the UI and applies it at engine start.
+Single source of truth for env values that may be persisted by dev tools and
+then published by :func:`autoptz.engine.supervisor.Supervisor._apply_experimental_env`
+before workers spawn.  The normal product UI does not expose this inventory; a
+flag listed here remains a dev/benchmark control until release artifacts justify
+promoting it to an automatic default or deleting it.
 
 Each ``default`` is the value that means "engine default" — when the persisted
 selection equals it, the supervisor leaves the env var UNSET so the existing
@@ -18,7 +19,7 @@ from typing import Literal
 
 @dataclass(frozen=True)
 class ExperimentalFlag:
-    """One toggle-able experimental env flag surfaced in the UI."""
+    """One managed experimental env flag for dev/benchmark tools."""
 
     env_key: str
     label: str

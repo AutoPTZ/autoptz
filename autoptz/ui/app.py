@@ -77,9 +77,9 @@ def _install_signal_shutdown(app: object, hard_exit_delay: float | None = 6.0) -
     """Route SIGINT/SIGTERM through a clean Qt quit, with a hard-exit backstop.
 
     Qt's event loop blocks in native code, so a signal would otherwise terminate the
-    process WITHOUT running the orderly shutdown after ``app.exec()`` — orphaning the
-    model-server / per-camera worker processes (spawned under ``AUTOPTZ_MODEL_SERVER`` /
-    ``AUTOPTZ_PROCESS_PER_CAMERA``), which keep holding RAM + the accelerator. Asking the
+    process WITHOUT running the orderly shutdown after ``app.exec()`` — orphaning
+    model-server camera child processes (spawned under ``AUTOPTZ_MODEL_SERVER``),
+    which keep holding RAM + the accelerator. Asking the
     app to quit lets ``app.exec()`` return so ``client.stopEngine()`` →
     ``supervisor.stop()`` terminates the children cleanly. The always-on ~30 Hz pump
     timer keeps the loop returning to Python so the handler fires within a frame.

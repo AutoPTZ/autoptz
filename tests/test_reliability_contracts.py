@@ -87,8 +87,6 @@ def test_mark_camera_options_include_six() -> None:
         4,
         6,
         8,
-        10,
         12,
-        14,
         16,
     ]

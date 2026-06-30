@@ -40,7 +40,6 @@ from autoptz.ui.widgets.camera_wall import CameraWall
 from autoptz.ui.widgets.common import on_theme_changed
 from autoptz.ui.widgets.dialogs import (
     AboutDialog,
-    ExperimentalFeaturesDialog,
     ModelManagerDialog,
     NetworkCameraDialog,
 )
@@ -529,14 +528,6 @@ class MainWindow(QMainWindow):
                 tip="Benchmark this machine with simulated cameras (3DMark-style).",
             )
         )
-        helpm.addAction(
-            _action(
-                self,
-                "Experimental Features…",
-                self._show_experimental,
-                tip="Toggle experimental engine flags and new-camera tracking defaults.",
-            )
-        )
         helpm.addAction(_action(self, "About AutoPTZ", self._show_about))
 
     def _build_scale_menu(self, view: QMenu) -> None:
@@ -873,9 +864,6 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         AboutDialog(self._client, self).exec()
-
-    def _show_experimental(self) -> None:
-        ExperimentalFeaturesDialog(self._client, self).exec()
 
     def _start_mark(self) -> None:
         """Help → Run AutoPTZ Mark…: confirm (it will SUSPEND AutoPTZ), then swap.

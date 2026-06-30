@@ -31,7 +31,7 @@ class TestPreflight:
         # Default source is the bundled clip (real people) unless NDI was chosen.
         assert s.source == "clip"
         assert s.floor_fps in (24.0, 30.0)
-        assert s.max_cameras in (1, 2, 4, 6, 8, 10, 12, 14, 16)
+        assert s.max_cameras in (1, 2, 4, 6, 8, 12, 16)
         assert s.dwell_s in (5.0, 10.0, 15.0, 20.0)
         assert s.resolution in ("720p", "1080p", "4k")
         assert s.model in ("auto", "nano", "small", "medium")
@@ -121,8 +121,7 @@ class TestPreflight:
         max_keys = {dlg._max_combo.itemData(i) for i in range(dlg._max_combo.count())}
         fps_keys = {dlg._fps_combo.itemData(i) for i in range(dlg._fps_combo.count())}
         step_keys = {dlg._step_combo.itemData(i) for i in range(dlg._step_combo.count())}
-        # Max cameras offers every even count from 4 through 16, plus 1/2.
-        assert {1, 2, 4, 6, 8, 10, 12, 14, 16} <= max_keys
+        assert max_keys == {1, 2, 4, 6, 8, 12, 16}
         assert dlg._max_combo.currentData() == 4
         # Target FPS offers 24/30, default 30.
         assert {24.0, 30.0} <= fps_keys

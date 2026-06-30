@@ -18,8 +18,9 @@ Per-camera commands are honoured between ticks:
 ``ptzNudge(pan, tilt, zoom)`` (drives the PTZ controller/backend if one is
 configured; otherwise a safe no-op), and ``updateConfig(CameraConfig)``.
 
-Threading model is per-thread today (capture + inference); process-per-camera is
-the future hardening step (see ``supervisor.py``).
+Production runs camera workers on threads in this process. The only process
+boundary retained for 2.2 validation is the explicit model-server candidate, where
+camera children delegate detector inference to one shared server.
 """
 
 from __future__ import annotations

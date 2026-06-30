@@ -2,8 +2,8 @@
 
 > **Historical document, 2026-06-29:** this rc5-era plan is no longer the source
 > of truth for 2.2.0 reliability work. The body below is preserved for context,
-> but tracking speed presets and normal Experimental UI access to process/model-
-> server scaling are retired. Use `docs/engineering/retired-experiments.md` and
+> but tracking speed presets and the normal Help-menu Experimental Features
+> surface are retired. Use `docs/engineering/retired-experiments.md` and
 > `docs/release/2.2.0-reliability-gates.md` for the current release direction.
 
 > **Historical note from the original plan:** it consolidated three deep reviews
@@ -71,7 +71,7 @@ Priority: **P0** = do now · **P1** = next · **P2** = then · **P3** = later/ro
 | G1 | Resolve pretrained-weight license landmines | insightface, OSNet/MSMT17, ultralytics weights block a paid SKU | P2 | M+legal |
 | G2 | Swap abandoned `onvif-zeep` → `onvif-zeep-async`; pin deps | A 2018-abandoned dependency on a core PTZ path | P2 | M |
 | G3 | Sign Windows + Linux artifacts | macOS is signed/notarized; Win/Linux are not | P3 | M |
-| G4 | Decide: process-per-camera (commit & validate, or shelf it) | Half-built; the only real >4-camera scaling story | P3 | M |
+| G4 | Validate or delete model-server process mode | Standalone model-per-child is retired; model-server must prove the GIL/RAM story | P3 | M |
 | — | "Random underscore" report | **Not a code bug** (verified) — see §6 | — | — |
 
 ---
@@ -239,7 +239,7 @@ are treated as no PTZ evidence.
 
 **G3 — Sign Windows (Authenticode) + GPG-sign the AppImage** (macOS already done). *Impact **M** · Effort **M** · Risk **L**.*
 
-**G4 — Decide on process-per-camera:** commit + validate (the only real >4-camera path) or shelve it behind a clearly-experimental flag — don't carry it half-live. *Impact **H if multi-cam matters** · Effort **M (decision)**.*
+**G4 — Validate or delete model-server process mode:** standalone model-per-child is retired (`AUTOPTZ_PROCESS_PER_CAMERA` is ignored). Keep only the shared model-server candidate long enough to produce Mark 6/8-camera artifacts; promote it only if it beats production without RAM/CPU cliffs, otherwise delete it. *Impact **H if multi-cam matters** · Effort **M (decision + validation)**.*
 
 ---
 
@@ -318,7 +318,7 @@ The pipeline-stage layer, the shared `InferencePool`, the typed `messages.py`/SH
 ## 8. Decisions that change the plan (your call)
 
 1. **Commercial (paid) SKU?** If yes, G1 (weights licenses) + E1 (`pyvirtualcam`) become release blockers and move up.
-2. **How many cameras on one machine?** If 5+, G4 (process-per-camera) and A5 (thread caps) matter much more.
+2. **How many cameras on one machine?** If 5+, G4 (model-server validation) and A5 (thread caps) matter much more.
 3. **Which OS matters most for the bundled camera?** macOS (E4) is the cleanest tech but the biggest signing lift; Windows (E3) reaches the most users. The Tier-1 quality fixes (B5/B6) help all of them regardless.
 
 ---

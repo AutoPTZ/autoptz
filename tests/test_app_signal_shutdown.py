@@ -1,9 +1,9 @@
 """SIGTERM/SIGINT must route through a clean Qt quit.
 
 Qt's event loop blocks in native code, so a signal would otherwise terminate the
-process WITHOUT running the orderly shutdown after ``app.exec()`` — leaving the
-model-server / per-camera worker processes (spawned under AUTOPTZ_MODEL_SERVER /
-AUTOPTZ_PROCESS_PER_CAMERA) orphaned, holding RAM/accelerator. Routing the signal
+process WITHOUT running the orderly shutdown after ``app.exec()`` — leaving
+model-server camera child processes (spawned under AUTOPTZ_MODEL_SERVER)
+orphaned, holding RAM/accelerator. Routing the signal
 through ``app.quit()`` lets ``app.exec()`` return so ``client.stopEngine()`` →
 ``supervisor.stop()`` terminates the children.
 """

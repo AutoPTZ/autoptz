@@ -64,11 +64,41 @@ adaptive controller cannot handle a supported camera class. If a control returns
 it must be a camera capability/profile selected automatically or during setup,
 not a day-to-day tracking choice.
 
+## 2026-06-29 - Normal Help-menu Experimental Features entry
+
+### Problem Tried
+The app exposed a normal Help-menu `Experimental Features...` dialog with engine
+flags and new-camera tracking defaults. This made implementation probes look like
+supported product modes.
+
+### Why It Failed
+AutoPTZ 2.2 needs one reliable production behavior, not a menu of runtime
+research switches. A normal user should not have to decide whether unified pose,
+PTZ pump, true latency lead, ReID device selection, CoreML unit selection, or NDI
+receive color format is the correct deployment answer. Those are release-gate
+questions for Mark artifacts and maintainer tools.
+
+### Removed
+- The `Help -> Experimental Features...` menu action.
+- Normal app routing to `ExperimentalFeaturesDialog`.
+
+### Replacement
+AutoPTZ Mark remains the visible Labs benchmark because it exercises realistic
+deployments and emits validation artifacts. Engine flags stay as dev/benchmark
+inputs only: set by environment or explicit test harnesses, never presented as a
+normal product mode. A dev/benchmark flag must either be promoted to an automatic
+default after evidence, or deleted and documented here.
+
+### Reconsideration Criteria
+Do not restore a generic experimental menu. If a setting is important enough for
+users, make it part of a focused setup flow with a safe default and platform
+evidence. If it is only for validation, keep it in Mark/headless tools or env.
+
 ## 2026-06-29 - Process-per-camera in the normal Experimental Features UI
 
 ### Problem Tried
 `AUTOPTZ_PROCESS_PER_CAMERA` was exposed as a normal experimental toggle to bypass
-the Python GIL by running one worker process per camera.
+the Python GIL by running one full camera worker process per camera.
 
 ### Why It Failed
 It can improve Python parallelism but duplicates model stacks and raises memory
@@ -78,15 +108,20 @@ the 2.2 target is eight reliable 1080p30 streams on mixed hardware.
 ### Removed
 - `AUTOPTZ_PROCESS_PER_CAMERA` is no longer listed in the normal Experimental
   Features dialog.
+- `AUTOPTZ_PROCESS_PER_CAMERA` is now ignored by the env parser.
+- The supervisor no longer falls back to model-per-child children when the shared
+  model-server queues are absent; it uses the normal threaded worker instead.
 
 ### Replacement
-The env flag remains a developer/Labs path only. Production defaults to shared
-model ownership inside one supported runtime path.
+No standalone replacement. Production defaults to the normal threaded worker with
+shared in-process model ownership. The only remaining process-worker path is the
+separate `AUTOPTZ_MODEL_SERVER` candidate, where camera children delegate detector
+work to one shared server instead of loading their own model set.
 
 ### Reconsideration Criteria
-Only promote a process mode if AutoPTZ Mark proves it beats the production path
-on 6-camera and 8-camera gates without RAM cliffs, orphaned child processes, or
-unbounded CPU growth.
+Do not reintroduce the model-per-child flag. If process isolation is needed, it
+must use shared model ownership and pass the 6-camera and 8-camera gates without
+RAM cliffs, orphaned child processes, or unbounded CPU growth.
 
 ## 2026-06-29 - Model-server in the normal Experimental Features UI
 
@@ -95,17 +130,21 @@ unbounded CPU growth.
 processes delegating detector work to one shared model-server process.
 
 ### Why It Failed
-The implementation is promising but still a Labs architecture. It uses fixed
-1080p shared-memory slots and serial detector requests. That is not yet a
-general production scheduler contract for all source types and resolutions.
+The implementation is promising because it avoids the model-per-child RAM cliff,
+but it is not yet a production scheduler contract. It still needs deterministic
+fake-NDI gates, source preflight, clean dynamic membership, Windows/macOS shutdown
+proof, and 30-minute 8x1080p30 validation with zero steady-state app-induced
+capture drops.
 
 ### Removed
 - `AUTOPTZ_MODEL_SERVER` is no longer listed in the normal Experimental Features
   dialog.
 
 ### Replacement
-Keep it as an explicit env-driven Labs path while the production architecture
-gets a source-agnostic capture plane and CPU-safe scheduler.
+Keep it only as an explicit env-driven release-gate candidate while the production
+architecture gets a source-agnostic capture plane and CPU-safe scheduler. It is
+not a user-facing feature and must be deleted or promoted based on Mark artifacts,
+not preference.
 
 ### Reconsideration Criteria
 Only promote after it passes the same release gates as production: 6 and 8 fake

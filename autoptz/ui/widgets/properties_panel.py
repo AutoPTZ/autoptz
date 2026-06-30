@@ -1615,21 +1615,9 @@ class PropertiesPanel(QWidget):
         cfg["ptz"]["auto_zoom"] = self._auto_zoom.isChecked()
         cfg["ptz"]["vcam_out"] = self._vcam_out.isChecked()
         cfg["ptz"]["zoom_framing"] = framing
-        # Advanced tracking tuning (sliders hold hundredths of the cfg value).
-        cfg["ptz"]["kp"] = self._kp.value() / 100.0
-        cfg["ptz"]["aim_smoothing"] = self._smoothing.value() / 100.0
-        cfg["ptz"]["lead_time_s"] = self._lead.value() / 100.0
-        cfg["ptz"]["max_pan_speed"] = self._max_speed.value() / 100.0
-        cfg["ptz"]["max_tilt_speed"] = self._max_speed.value() / 100.0
-        cfg["ptz"]["catch_up_speed"] = self._catch_up.value() / 100.0
-        # max_accel has no normal UI control; keep the persisted config value.
-        # (If _cfg already has a value, dict() above copied it; nothing to do.)
-        cfg["ptz"]["safe_zone_enabled"] = self._safe_zone.isChecked()
-        cfg["ptz"]["safe_zone_x"] = self._safe_x.value() / 100.0
-        cfg["ptz"]["safe_zone_y"] = self._safe_y.value() / 100.0
-        cfg["ptz"]["safe_zone_w"] = self._safe_w.value() / 100.0
-        cfg["ptz"]["safe_zone_h"] = self._safe_h.value() / 100.0
-        cfg["ptz"]["safe_zone_roundness"] = self._safe_round.value() / 100.0
+        # Advanced PTZ internals are no longer normal-user controls. Preserve any
+        # saved legacy values from ``_cfg``; do not rewrite speed/gain/dead-zone
+        # fields during ordinary PropertiesPanel saves.
         self._cfg = cfg
         try:
             self._client.updateCameraConfig(self._camera_id, json.dumps(cfg))

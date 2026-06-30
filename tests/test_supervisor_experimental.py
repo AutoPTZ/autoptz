@@ -120,23 +120,22 @@ def test_absent_dict_leaves_unmanaged_env_untouched(tmp_path: Any, monkeypatch: 
     # Feature-inactive baseline: with nothing persisted, a directly-set env var
     # (exported by the operator, or by another test) is NOT clobbered.  Only keys
     # the user actually persists in experimental_features are managed.
-    monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+    monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
     sup, _store = _sup(tmp_path)  # nothing persisted
     sup._apply_experimental_env()
-    assert os.environ.get("AUTOPTZ_PROCESS_PER_CAMERA") == "1"
+    assert os.environ.get("AUTOPTZ_MODEL_SERVER") == "1"
 
 
-def test_labs_process_flags_are_not_managed_by_normal_experimental_ui(
+def test_process_scaling_flags_are_not_managed_by_dev_flag_persistence(
     tmp_path: Any, monkeypatch: Any
 ) -> None:
-    # Process scaling modes are no longer part of the normal Experimental dialog.
-    # A deliberately exported labs/dev env var must not be clobbered by a stale
-    # saved UI dict from an older build.
-    monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+    # The model-server candidate is env-only. A deliberately exported env var
+    # must not be clobbered by a stale saved dict from an older build.
+    monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
     sup, store = _sup(tmp_path)
-    store.set_setting("experimental_features", {"AUTOPTZ_PROCESS_PER_CAMERA": "0"})
+    store.set_setting("experimental_features", {"AUTOPTZ_MODEL_SERVER": "0"})
     sup._apply_experimental_env()
-    assert os.environ.get("AUTOPTZ_PROCESS_PER_CAMERA") == "1"
+    assert os.environ.get("AUTOPTZ_MODEL_SERVER") == "1"
 
 
 def test_tracking_keys_in_dict_are_ignored_for_env(tmp_path: Any, monkeypatch: Any) -> None:

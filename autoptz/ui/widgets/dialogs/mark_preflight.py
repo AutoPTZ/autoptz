@@ -53,9 +53,7 @@ _MAX_CAMERA_OPTS: list[tuple[str, int]] = [
     ("4 cameras", 4),
     ("6 cameras", 6),
     ("8 cameras", 8),
-    ("10 cameras", 10),
     ("12 cameras", 12),
-    ("14 cameras", 14),
     ("16 cameras", 16),
 ]
 _STEP_OPTS: list[tuple[str, float]] = [

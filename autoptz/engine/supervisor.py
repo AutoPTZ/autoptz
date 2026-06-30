@@ -17,10 +17,9 @@ The :class:`Supervisor` is the engine's top-level orchestrator.  It:
 Threading
 ---------
 Each camera runs on its own threads (capture + inference) in this process.
-**Future hardening:** process-per-camera (``multiprocessing`` with shm transport)
-for fault isolation and to sidestep the GIL under many cameras — the
-worker/telemetry contract is already process-safe (shm + msgpack), so that is a
-localized change.
+The retired model-per-child process mode is not a product path. The only retained
+process boundary is the explicit model-server candidate, where camera children
+use shm/msgpack transport and delegate detector inference to one shared server.
 
 The command pump can either be driven externally (``tick()`` from a GUI-thread
 ``QTimer`` — the default the UI uses) or by an internal daemon thread
@@ -1001,9 +1000,9 @@ class Supervisor:
         """Publish global hardware prefs into the environment before workers start.
 
         :func:`autoptz.engine.runtime.inference.prefs_from_env` reads these for
-        every ORT session, so prefs reach the per-camera worker threads (and a
-        future process-per-camera build, which would inherit the env) without
-        threading them through the command schema.
+        every ORT session, so prefs reach the per-camera worker threads and any
+        model-server camera child that inherits the env, without threading them
+        through the command schema.
         """
         import os
 
@@ -1037,15 +1036,15 @@ class Supervisor:
         # optical flow (ego-motion), defaulting to *all* cores. With several camera
         # threads each firing cv2 work that oversubscribes the CPU and is a real
         # source of the frame-time/CPU spikes — ORT alone was capped, OpenCV was not.
-        # Cap it to the same per-camera budget. Published too so a process-per-camera
-        # child (which doesn't run this code) can re-apply it in-process.
+        # Cap it to the same per-camera budget. Published too so a model-server
+        # camera child (which doesn't run this code) can re-apply it in-process.
         os.environ["AUTOPTZ_CV2_THREADS"] = str(threads)
         apply_opencv_thread_cap(threads)
 
         # Cap OMP/BLAS/MKL/NumExpr env vars and the torch intra-op pool to the
         # same per-camera budget.  Env vars reach any library not yet imported
-        # (and any future process-per-camera child that inherits the env before
-        # first import); torch.set_num_threads() reaches the already-running
+        # (and any model-server camera child that inherits the env before first
+        # import); torch.set_num_threads() reaches the already-running
         # pool regardless of import order.
         apply_thread_caps(threads)
 
@@ -1062,11 +1061,11 @@ class Supervisor:
         self._apply_experimental_env()
 
     def _apply_experimental_env(self) -> None:
-        """Publish the user's experimental-flag selections into ``os.environ``.
+        """Publish persisted dev/benchmark flag selections into ``os.environ``.
 
         Read once at engine start (from inside :meth:`_apply_hardware_env`, before
         any worker spawns) so the flags take effect on the next engine run.  Only
-        keys the user has actually persisted in the ``experimental_features`` dict
+        keys persisted in the ``experimental_features`` dict by legacy UI/dev tools
         are managed: for each such env-flag key, set the env var when the saved
         value differs from the flag's engine default, or pop it (clearing a stale
         value from a prior selection) when it equals the default.  Keys in the
@@ -1088,7 +1087,7 @@ class Supervisor:
 
         for flag in EXPERIMENTAL_FLAGS:
             if flag.env_key not in saved:
-                # Not persisted by the user → don't clobber a directly-set env var.
+                # Not persisted by a dev tool → don't clobber a directly-set env var.
                 continue
             value = saved[flag.env_key]
             if value != flag.default and value not in (None, ""):
@@ -1115,18 +1114,18 @@ class Supervisor:
     def _relay_identity_to_siblings(self, source_cid: str, record: Any) -> None:
         """Broadcast a harvested identity to every OTHER process worker.
 
-        True no-op outside opt-in process-per-camera mode: threaded workers share
-        one in-process gallery (so a harvested record is already visible to every
+        True no-op outside model-server process mode: threaded workers share one
+        in-process gallery (so a harvested record is already visible to every
         sibling), so we only relay to workers flagged ``_is_process_worker`` —
-        ``ProcessWorkerHandle``s whose child holds a *separate* gallery.  Threaded
+        ``ProcessWorkerHandle``s whose child holds a *separate* gallery. Threaded
         ``CameraWorker``s also expose ``ingest_identity`` but are deliberately
         skipped here, keeping the default path free of any cross-thread supervisor
         -lock traffic.  Best-effort per sibling; one failing relay never blocks the
         others.
 
-        The early-return on the disabled path is intentionally lock-free: when
-        process-per-camera is off every worker shares the same in-process gallery
-        and no relay is necessary, so we avoid touching the supervisor RLock at all.
+        The early-return on the disabled path is intentionally lock-free: when no
+        process workers are active every worker shares the same in-process gallery,
+        so no relay is necessary and we avoid touching the supervisor RLock.
         """
         from autoptz.engine.process_worker import process_per_camera_enabled
 
@@ -1147,11 +1146,15 @@ class Supervisor:
                     log.debug("identity relay to %s failed", cid, exc_info=True)
 
     def _make_worker(self, camera_id: str, config: CameraConfig) -> Any:
-        """Build a camera worker — a thread-based one, or (opt-in) a child process.
+        """Build a camera worker.
 
-        Process-per-camera is used only when ``AUTOPTZ_PROCESS_PER_CAMERA`` is set
-        AND no test/custom worker factory was injected, so the default and all
-        tests keep the in-process threaded worker.
+        Production uses the threaded worker.  The only remaining process-worker
+        path is the explicit model-server architecture: camera children may run in
+        separate processes only when a shared inference request queue and a
+        per-camera response queue are ready.  If the model-server did not start or
+        the camera was added after its fixed queue set was built, fall back to the
+        normal threaded worker instead of recreating the retired model-per-child
+        experiment.
         """
         on_telemetry = self._make_telemetry_callback(camera_id)
         from autoptz.engine.process_worker import (
@@ -1169,6 +1172,14 @@ class Supervisor:
         )
         if not use_process:
             return self._worker_factory(camera_id, config, on_telemetry)
+        infer_resp_q = self._infer_resp_qs.get(camera_id)
+        if self._infer_req_q is None or infer_resp_q is None:
+            log.warning(
+                "model-server process worker unavailable for %s; using the normal "
+                "threaded worker instead of the retired model-per-child process path.",
+                camera_id,
+            )
+            return self._worker_factory(camera_id, config, on_telemetry)
 
         tier = "auto"
         try:
@@ -1182,28 +1193,16 @@ class Supervisor:
             db_path = str(getattr(self._store, "_path", "") or "")
         except Exception:  # noqa: BLE001
             db_path = ""
-        log.info("spawning camera %s as its own PROCESS (experimental)", camera_id)
+        log.info("spawning camera %s as a model-server camera process", camera_id)
         try:
             camera_count = len(self._client.cameraModel.camera_ids())
         except Exception:  # noqa: BLE001
             camera_count = 0
         if camera_count >= 4:
             log.info(
-                "process-per-camera active with %d cameras — each child rebuilds its "
-                "own model set (more RAM) in exchange for GIL relief across cores.",
+                "model-server process mode active with %d cameras — capture/control "
+                "run in per-camera processes while detector inference is shared.",
                 camera_count,
-            )
-        infer_resp_q = self._infer_resp_qs.get(camera_id)
-        if self._infer_req_q is not None and infer_resp_q is None:
-            # Model-server is on but this camera was added AFTER the server spawned with
-            # a fixed camera set, so it has no response queue: it falls back to its own
-            # local detector (an extra model set / RAM). Surface it — dynamic membership
-            # is a v2 refinement.
-            log.warning(
-                "camera %s added after the model-server started — it builds its OWN "
-                "detector (extra RAM); restart the engine to fold it into the shared "
-                "model-server.",
-                camera_id,
             )
         return ProcessWorkerHandle(
             camera_id,
