@@ -68,6 +68,11 @@ sources.
   preview thumbnail used cropped-preview coordinates but the worker interpreted
   the click as full-frame coordinates; real Windows GUI validation is still
   required.
+- The updater checksum lookup now treats Intel macOS asset aliases
+  (`macos-intel`, `macos-x64`, `macos-x86_64`) as the same artifact name for
+  manifest lookup while still requiring the downloaded file's SHA-256 to match.
+  This addresses the reported Intel macOS "checksum file did not contain an
+  entry" failure without disabling integrity verification.
 - Validate Mark quit-in-middle behavior on an actual Windows GUI session. Headless
   CI covers the signal/teardown contract, but it is not a substitute for closing
   a running Mark window on Windows with the real event loop and build package.

@@ -109,6 +109,12 @@ def test_find_checksum_asset_sidecar() -> None:
     assert result == ("AutoPTZ-2.2.0-setup.exe.sha256", "https://example/exe.sha256")
 
 
+def test_find_checksum_asset_sidecar_accepts_intel_macos_alias() -> None:
+    assets = (("AutoPTZ-2.2.0-macos-x86_64.dmg.sha256", "https://example/intel.sha256"),)
+    result = _find_checksum_asset("AutoPTZ-2.2.0-macos-intel.dmg", assets)
+    assert result == ("AutoPTZ-2.2.0-macos-x86_64.dmg.sha256", "https://example/intel.sha256")
+
+
 def test_find_checksum_asset_sha256sums() -> None:
     assets = (
         ("AutoPTZ-2.2.0-setup.exe", "https://example/exe"),
@@ -175,6 +181,17 @@ def test_parse_sha256sums_matches_manifest_path_basename() -> None:
     )
     assert _parse_sha256sums(content, "AutoPTZ-2.2.0-macos-x86_64.dmg") == "aabbcc"
     assert _parse_sha256sums(content, "AutoPTZ-2.2.0-windows-x64-setup.exe") == "ddeeff"
+
+
+def test_parse_sha256sums_accepts_intel_macos_alias() -> None:
+    content = "aabbcc  artifacts/macos-x86_64/AutoPTZ-2.2.0-macos-x86_64.dmg\n"
+    assert _parse_sha256sums(content, "AutoPTZ-2.2.0-macos-intel.dmg") == "aabbcc"
+    assert _parse_sha256sums(content, "AutoPTZ-2.2.0-macos-x64.dmg") == "aabbcc"
+
+
+def test_parse_sha256sums_intel_alias_does_not_match_arm64() -> None:
+    content = "aabbcc  AutoPTZ-2.2.0-macos-arm64.dmg\n"
+    assert _parse_sha256sums(content, "AutoPTZ-2.2.0-macos-intel.dmg") is None
 
 
 # ── download_update: TLS context is passed to urlopen ────────────────────────
