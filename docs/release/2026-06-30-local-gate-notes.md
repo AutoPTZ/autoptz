@@ -11,6 +11,7 @@ artifacts.
 | Artifact | Profile | Runtime | Duration | Delivered fps | App-induced drops | E2E latency | CPU | RAM |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | `artifacts/2026-06-30-8x1080p30-simple-follow-30min.json` | `simple_follow` | production shared model | 30 min | 30.0 | 0 | 42.1 ms | 41.4% | 514 MB |
+| `artifacts/2026-06-30-8x1080p30-simple-follow-30min-post-estimator.json` | `simple_follow` | production shared model | 30 min | 30.0 | 0 | 46.1 ms | 40.1% | 524 MB |
 | `artifacts/2026-06-30-8x1080p30-full-default-60s.json` | `full` | production shared model | 60 s | 29.9 | 0 | 2267.7 ms | 12.2% | 2433 MB |
 | `artifacts/2026-06-30-8x1080p30-full-model-server-60s.json` | `full` | labs model server | 60 s | 29.9 | 0 | 42.0 ms | 49.8% | 6407 MB |
 | `artifacts/2026-06-30-8x1080p30-full-model-server-30min.json` | `full` | labs model server | 30 min | 29.7 | 0 | 42.1 ms | 50.3% | 3734 MB |
@@ -25,7 +26,9 @@ sources.
 
 - `simple_follow` is the only locally sustained inference/tracking gate that
   passed for 30 minutes: 8x1080p30, zero steady-state app-induced drops, 100%
-  detection-active samples, and about 42 ms median end-to-end latency.
+  detection-active samples, and about 42-46 ms median end-to-end latency. The
+  post-estimator rerun also held zero source-drop estimate and zero NDI
+  dropped-video frames while the sender reported 30.0 fps on all eight sources.
 - `full` default is not acceptable as a production multi-camera path: it held
   capture fps and had zero app-induced drops, but median end-to-end latency was
   about 2.27 seconds.
@@ -39,12 +42,13 @@ sources.
   and latency on this synthetic run, but did not improve latency/fps and raised
   median detector time from 20.4 ms to 23.0 ms. It still needs real tracking
   quality artifacts before promotion.
-- Source-side `source_drop_est_*` in the full/simple/pose artifacts was captured
+- Source-side `source_drop_est_*` in the older full/simple/pose artifacts was captured
   before the conservative source-drop estimator landed, so those values overstate
   normal receiver pacing jitter. NDI SDK dropped-video counters and app-induced
-  drops stayed at zero. The post-fix streams smoke held 30.0 delivered fps with
-  zero app-induced drops, zero NDI dropped-video, and zero source-drop estimate.
-  Re-run the long fake-NDI artifacts after this fix before using
+  drops stayed at zero. The post-fix streams smoke and 30-minute Simple Follow
+  rerun both held 30.0 delivered fps with zero app-induced drops, zero NDI
+  dropped-video, and zero source-drop estimate. Re-run the remaining full/pose
+  fake-NDI artifacts after this fix before using
   `source_drop_est_*` for source-pacing triage.
 
 ## Remaining Release Gates
