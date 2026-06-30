@@ -4379,48 +4379,60 @@ class CameraWorker:
     ) -> Any | None:
         """Pick the face to enroll for a pending clicked track.
 
-        If the UI provided a click point, choose the face under that point or
-        nearest to it within the requested track. Without a click point, use the
-        largest face in that track as a stable fallback.
+        If the UI provided a click point, choose the face under that point.  If
+        the click was a body click inside the requested track, prefer faces in
+        the track's expected head region.  This mirrors the UI preview logic so
+        the embedding crop the worker later saves is the same person the dialog
+        showed, not merely the nearest false-positive face to the click.
         """
         target_track = next((t for t in tracks if t.track_id == track_id), None)
-        candidates = []
+        if target_track is None or getattr(target_track, "lost", False):
+            return None
+        h, w = frame.shape[:2]
+        px = py = None
+        if click_norm is not None:
+            px = click_norm[0] * max(1, w)
+            py = click_norm[1] * max(1, h)
+
+        def _area(obs: Any) -> float:
+            x1, y1, x2, y2 = obs.bbox
+            return max(0.0, float(x2 - x1)) * max(0.0, float(y2 - y1))
+
+        def _contains(box: Any, x: float, y: float) -> bool:
+            x1, y1, x2, y2 = box
+            return float(x1) <= x <= float(x2) and float(y1) <= y <= float(y2)
+
+        tb = target_track.bbox
+        track_box = (float(tb.x1), float(tb.y1), float(tb.x2), float(tb.y2))
+        track_click = px is not None and py is not None and _contains(track_box, px, py)
+        candidates: list[Any] = []
+        clicked: list[Any] = []
         for obs in observations:
             tr = self._track_for_face(obs, tracks)
             if tr is not None and tr.track_id == track_id and not getattr(tr, "lost", False):
                 candidates.append(obs)
-                continue
-            if click_norm is None or target_track is None or getattr(target_track, "lost", False):
-                continue
-            h, w = frame.shape[:2]
-            px = click_norm[0] * max(1, w)
-            py = click_norm[1] * max(1, h)
-            x1, y1, x2, y2 = obs.bbox
-            if (
-                target_track.bbox.x1 <= px <= target_track.bbox.x2
-                and target_track.bbox.y1 <= py <= target_track.bbox.y2
-                and x1 <= px <= x2
-                and y1 <= py <= y2
-            ):
-                candidates.append(obs)
+            if track_click and px is not None and py is not None and _contains(obs.bbox, px, py):
+                if obs not in candidates:
+                    candidates.append(obs)
+                clicked.append(obs)
         if not candidates:
             return None
+        if clicked:
+            return max(clicked, key=_area)
         if click_norm is None:
-            return max(candidates, key=lambda o: (o.bbox[2] - o.bbox[0]) * (o.bbox[3] - o.bbox[1]))
+            return max(candidates, key=_area)
 
-        h, w = frame.shape[:2]
-        px = click_norm[0] * max(1, w)
-        py = click_norm[1] * max(1, h)
+        x1, y1, x2, y2 = track_box
+        cx = (x1 + x2) * 0.5
+        half_w = (x2 - x1) * 0.35
+        head = (cx - half_w, y1, cx + half_w, y1 + (y2 - y1) * 0.30)
 
-        def score(obs: Any) -> tuple[int, float]:
-            x1, y1, x2, y2 = obs.bbox
-            inside = x1 <= px <= x2 and y1 <= py <= y2
-            cx = (x1 + x2) * 0.5
-            cy = (y1 + y2) * 0.5
-            d2 = (cx - px) ** 2 + (cy - py) ** 2
-            return (0 if inside else 1, d2)
+        def _center_in_head(obs: Any) -> bool:
+            ox1, oy1, ox2, oy2 = obs.bbox
+            return _contains(head, (ox1 + ox2) * 0.5, (oy1 + oy2) * 0.5)
 
-        return min(candidates, key=score)
+        head_candidates = [obs for obs in candidates if _center_in_head(obs)]
+        return max(head_candidates or candidates, key=_area)
 
     def _maybe_harvest(
         self,

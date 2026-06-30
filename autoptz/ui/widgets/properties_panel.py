@@ -53,7 +53,6 @@ from autoptz.ui.widgets.properties_helpers import (  # noqa: F401  re-exported
     _set_combo,
     _set_combo_data,
     _short,
-    _signed_pct,
     _source_supports_substream,
     _with_chip,
     _wrap,
@@ -285,14 +284,6 @@ class PropertiesPanel(QWidget):
         self._push_timer.setSingleShot(True)
         self._push_timer.setInterval(400)
         self._push_timer.timeout.connect(self._push)
-        # Fast, near-live push JUST for the framing box (w/h/roundness) so the
-        # oval on the tile tracks the slider as you drag it (the 400 ms general
-        # debounce felt unresponsive for a direct-manipulation control).
-        self._framing_timer = QTimer(self)
-        self._framing_timer.setSingleShot(True)
-        self._framing_timer.setInterval(40)
-        self._framing_timer.timeout.connect(self._push_framing)
-
         # Apply the literal-color styling for every per-widget styled element once,
         # and re-run it when the user flips Light/Dark (these widgets bake
         # T.CURRENT.*/T.ERROR/T.ACCENT colors that go stale on a theme switch).
@@ -711,242 +702,10 @@ class PropertiesPanel(QWidget):
         pz.add_widget(self._build_presets())
         self._col.addWidget(pz)
 
-        # Advanced PTZ tuning is intentionally not shown in the normal 2.2 flow.
-        # The controls still exist off-layout so legacy config values can be
-        # loaded and preserved while the controller becomes adaptive internally.
-        self._advanced_tracking = self._build_advanced_tracking()
-
         # Remove — the shared destructive button (theme-tracked, no inline color).
         self._remove_btn = DangerButton("Remove Camera")
         self._remove_btn.clicked.connect(self._remove)
         self._col.addWidget(self._remove_btn)
-
-    def _build_advanced_tracking(self) -> CollapsibleGroup:
-        """Collapsed 'Advanced tracking' tuning — gain, smoothing, prediction, safe zone.
-
-        These map to per-camera ``PTZConfig`` fields and are pushed live to the
-        running controller (no restart) via the debounced config write-back.
-        """
-        adv = CollapsibleGroup("Advanced tracking", expanded=False)
-        af = _form()
-
-        def _slider(lo: int, hi: int, tip: str) -> tuple[QWidget, QSlider, QLabel]:
-            holder = QWidget()
-            row = QHBoxLayout(holder)
-            row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(8)
-            s = QSlider(Qt.Orientation.Horizontal)
-            s.setRange(lo, hi)
-            s.setToolTip(tip)
-            val = QLabel("")
-            val.setMinimumWidth(56)
-            val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            row.addWidget(s, 1)
-            row.addWidget(val)
-            return holder, s, val
-
-        gh, self._kp, self._kp_val = _slider(
-            10, 150, "How hard the camera corrects toward the subject."
-        )
-        self._kp.valueChanged.connect(
-            lambda v: (self._kp_val.setText(f"{v / 100:.2f}"), self._schedule())
-        )
-        af.addRow(
-            "Gain",
-            _with_chip(
-                gh,
-                HelpBadge(
-                    "Proportional gain (Kp). Higher reacts faster but can overshoot or "
-                    "oscillate; lower is calmer but slower to catch up."
-                ),
-            ),
-        )
-
-        sh, self._smoothing, self._smoothing_val = _slider(
-            0, 100, "Higher = smoother but laggier; lower = snappier."
-        )
-        self._smoothing.valueChanged.connect(
-            lambda v: (self._smoothing_val.setText(f"{v}%"), self._schedule())
-        )
-        af.addRow(
-            "Smoothing",
-            _with_chip(
-                sh,
-                HelpBadge(
-                    "Aim smoothing. Higher rejects jitter but adds lag; lower is more "
-                    "responsive but jumpier."
-                ),
-            ),
-        )
-
-        lh, self._lead, self._lead_val = _slider(
-            0, 50, "How far ahead the camera anticipates motion."
-        )
-        self._lead.valueChanged.connect(
-            lambda v: (self._lead_val.setText(f"{v * 10} ms"), self._schedule())
-        )
-        af.addRow(
-            "Prediction",
-            _with_chip(
-                lh,
-                HelpBadge(
-                    "Lead time: project the subject's motion forward so the camera leads "
-                    "rather than trails. 0 = follow only."
-                ),
-            ),
-        )
-
-        sph, self._max_speed, self._max_speed_val = _slider(
-            10, 100, "Top pan/tilt speed when following."
-        )
-        self._max_speed.valueChanged.connect(
-            lambda v: (self._max_speed_val.setText(f"{v}%"), self._schedule())
-        )
-        af.addRow(
-            "Tracking speed",
-            _with_chip(
-                sph,
-                HelpBadge(
-                    "Maximum pan/tilt speed the auto-tracker uses. Higher keeps up with "
-                    "fast movers; lower is calmer. Applies to both pan and tilt."
-                ),
-            ),
-        )
-
-        cuh, self._catch_up, self._catch_up_val = _slider(
-            0, 100, "How much the camera speeds up to catch an off-centre subject."
-        )
-        self._catch_up.valueChanged.connect(
-            lambda v: (self._catch_up_val.setText(f"{v}%"), self._schedule())
-        )
-        af.addRow(
-            "Catch-up speed",
-            _with_chip(
-                cuh,
-                HelpBadge(
-                    "Dynamic speed: the further the subject is from the framing, the faster "
-                    "the camera moves to catch up, easing back to the Tracking speed near "
-                    "centre for precision. 0% = fixed speed; higher = snappier catch-up of "
-                    "off-centre or fast-moving subjects."
-                ),
-            ),
-        )
-
-        self._safe_zone = QCheckBox("Framing box (hold still while centered)")
-        self._safe_zone.toggled.connect(self._schedule)
-        af.addRow(
-            "",
-            _with_chip(
-                self._safe_zone,
-                HelpBadge(
-                    "Draw an adjustable centre box on the tile; the PTZ stays still while "
-                    "the subject is inside it and only moves to keep them within it. Drag "
-                    "inside the box to move it, or drag its handles to resize it."
-                ),
-            ),
-        )
-
-        xh, self._safe_x, self._safe_x_val = _slider(
-            -90, 90, "Horizontal centre of the framing box; 0 is frame centre."
-        )
-        self._safe_x.valueChanged.connect(
-            lambda v: (self._safe_x_val.setText(_signed_pct(v)), self._schedule_framing())
-        )
-        af.addRow(
-            "Box X",
-            _with_chip(
-                xh,
-                HelpBadge(
-                    "Move the framing box left or right. This changes the target settle "
-                    "point, not just the drawing: tracking holds still around this offset."
-                ),
-            ),
-        )
-
-        yh, self._safe_y, self._safe_y_val = _slider(
-            -90, 90, "Vertical centre of the framing box; positive is higher."
-        )
-        self._safe_y.valueChanged.connect(
-            lambda v: (self._safe_y_val.setText(_signed_pct(v)), self._schedule_framing())
-        )
-        af.addRow(
-            "Box Y",
-            _with_chip(
-                yh,
-                HelpBadge(
-                    "Move the framing box up or down. Positive values place the hold-still "
-                    "region higher in the frame."
-                ),
-            ),
-        )
-
-        center = QPushButton("Center")
-        center.setToolTip("Reset Box X and Box Y to the exact frame center.")
-        center.clicked.connect(self._center_framing_box)
-        af.addRow(
-            "",
-            _with_chip(
-                center,
-                HelpBadge(
-                    "Sets the framing box centre to exact 0 / 0. Tile dragging also snaps "
-                    "each axis to exact center when it is within 4%."
-                ),
-            ),
-        )
-
-        wh, self._safe_w, self._safe_w_val = _slider(
-            3, 90, "Half-width of the framing box as a fraction of the frame."
-        )
-        self._safe_w.valueChanged.connect(
-            lambda v: (self._safe_w_val.setText(f"{v}%"), self._schedule_framing())
-        )
-        af.addRow(
-            "Box width",
-            _with_chip(
-                wh,
-                HelpBadge(
-                    "How wide the framing box is, as a fraction of the frame's half-width. "
-                    "Also adjustable by dragging the box on the tile."
-                ),
-            ),
-        )
-
-        hh, self._safe_h, self._safe_h_val = _slider(
-            3, 90, "Half-height of the framing box as a fraction of the frame."
-        )
-        self._safe_h.valueChanged.connect(
-            lambda v: (self._safe_h_val.setText(f"{v}%"), self._schedule_framing())
-        )
-        af.addRow(
-            "Box height",
-            _with_chip(
-                hh,
-                HelpBadge(
-                    "How tall the framing box is, as a fraction of the frame's half-height. "
-                    "Also adjustable by dragging the box on the tile."
-                ),
-            ),
-        )
-
-        rh, self._safe_round, self._safe_round_val = _slider(
-            0, 100, "Corner roundness of the framing region (0 = rectangle, 100 = oval)."
-        )
-        self._safe_round.valueChanged.connect(
-            lambda v: (self._safe_round_val.setText(f"{v}%"), self._schedule_framing())
-        )
-        af.addRow(
-            "Roundness",
-            _with_chip(
-                rh,
-                HelpBadge(
-                    "Shape of the framing region: 0% is a sharp rectangle, 100% a full "
-                    "oval. Tune it to whatever frames your subject best."
-                ),
-            ),
-        )
-
-        adv.add_widget(_wrap(af))
-        return adv
 
     def _build_ptz_controls(self) -> QWidget:
         """Manual PTZ: a draggable joystick (pan/tilt) beside the button pad."""
@@ -1407,28 +1166,6 @@ class PropertiesPanel(QWidget):
             self._ptz_baud.setCurrentText(str(pz.get("baud", 9600)))
             self._auto_zoom.setChecked(bool(pz.get("auto_zoom", False)))
             self._vcam_out.setChecked(bool(pz.get("vcam_out", False)))
-            # Advanced tracking tuning (sliders store hundredths of the cfg value).
-            self._kp.setValue(int(round(float(pz.get("kp", 0.6)) * 100)))
-            self._kp_val.setText(f"{self._kp.value() / 100:.2f}")
-            self._smoothing.setValue(int(round(float(pz.get("aim_smoothing", 0.5)) * 100)))
-            self._smoothing_val.setText(f"{self._smoothing.value()}%")
-            self._lead.setValue(int(round(float(pz.get("lead_time_s", 0.15)) * 100)))
-            self._lead_val.setText(f"{self._lead.value() * 10} ms")
-            self._max_speed.setValue(int(round(float(pz.get("max_pan_speed", 0.7)) * 100)))
-            self._max_speed_val.setText(f"{self._max_speed.value()}%")
-            self._catch_up.setValue(int(round(float(pz.get("catch_up_speed", 0.6)) * 100)))
-            self._catch_up_val.setText(f"{self._catch_up.value()}%")
-            self._safe_zone.setChecked(bool(pz.get("safe_zone_enabled", True)))
-            self._safe_x.setValue(int(round(float(pz.get("safe_zone_x", 0.0)) * 100)))
-            self._safe_x_val.setText(_signed_pct(self._safe_x.value()))
-            self._safe_y.setValue(int(round(float(pz.get("safe_zone_y", 0.0)) * 100)))
-            self._safe_y_val.setText(_signed_pct(self._safe_y.value()))
-            self._safe_w.setValue(int(round(float(pz.get("safe_zone_w", 0.15)) * 100)))
-            self._safe_w_val.setText(f"{self._safe_w.value()}%")
-            self._safe_h.setValue(int(round(float(pz.get("safe_zone_h", 0.22)) * 100)))
-            self._safe_h_val.setText(f"{self._safe_h.value()}%")
-            self._safe_round.setValue(int(round(float(pz.get("safe_zone_roundness", 1.0)) * 100)))
-            self._safe_round_val.setText(f"{self._safe_round.value()}%")
             self._refresh_presets()
             # Tracking target + on/off (driven via dedicated client calls).
             enabled = _safe(
@@ -1486,69 +1223,6 @@ class PropertiesPanel(QWidget):
             return
         self._refresh_cost_chips()
         self._push_timer.start()
-
-    def _schedule_framing(self) -> None:
-        """Coalesce framing-slider changes into a fast, *continuous* live push.
-
-        Crucially we do NOT restart the timer on every change — a restarting
-        single-shot timer only fires once the user STOPS moving, so the box never
-        moved during a slow drag.  Leaving an already-running timer alone makes it
-        fire every ~40 ms throughout the drag, so the oval tracks the slider live.
-        """
-        if self._loading or not self._camera_id:
-            return
-        if not self._framing_timer.isActive():
-            self._framing_timer.start()
-
-    def _push_framing(self) -> None:
-        """Push ONLY the framing-box fields so the tile oval tracks the sliders live."""
-        if not self._camera_id:
-            return
-        patch = {
-            "ptz": {
-                "safe_zone_x": self._safe_x.value() / 100.0,
-                "safe_zone_y": self._safe_y.value() / 100.0,
-                "safe_zone_w": self._safe_w.value() / 100.0,
-                "safe_zone_h": self._safe_h.value() / 100.0,
-                "safe_zone_roundness": self._safe_round.value() / 100.0,
-            }
-        }
-        # Keep the panel's cached cfg in sync so a later full push doesn't revert it.
-        if isinstance(self._cfg, dict):
-            self._cfg.setdefault("ptz", {})
-            self._cfg["ptz"].update(patch["ptz"])
-        try:
-            self._client.updateCameraConfigPatch(self._camera_id, patch)
-        except Exception:  # noqa: BLE001
-            log.debug("framing live push failed", exc_info=True)
-
-    def _center_framing_box(self) -> None:
-        """Reset framing-box X/Y to exact center and persist immediately."""
-        if self._loading:
-            return
-        for slider, label in ((self._safe_x, self._safe_x_val), (self._safe_y, self._safe_y_val)):
-            slider.blockSignals(True)
-            slider.setValue(0)
-            slider.blockSignals(False)
-            label.setText(_signed_pct(0))
-        self._push_framing()
-
-    def _sync_framing_sliders(self) -> None:
-        """Mirror the framing box config into the sliders (e.g. after a tile drag)."""
-        pz = (self._cfg or {}).get("ptz") or {}
-        for slider, val, key, default in (
-            (self._safe_x, self._safe_x_val, "safe_zone_x", 0.0),
-            (self._safe_y, self._safe_y_val, "safe_zone_y", 0.0),
-            (self._safe_w, self._safe_w_val, "safe_zone_w", 0.15),
-            (self._safe_h, self._safe_h_val, "safe_zone_h", 0.22),
-            (self._safe_round, self._safe_round_val, "safe_zone_roundness", 1.0),
-        ):
-            v = int(round(float(pz.get(key, default)) * 100))
-            if slider.value() != v:
-                slider.blockSignals(True)
-                slider.setValue(v)
-                slider.blockSignals(False)
-                val.setText(_signed_pct(v) if key in {"safe_zone_x", "safe_zone_y"} else f"{v}%")
 
     def _refresh_overlay_boxes(self) -> None:
         """Mirror the global overlay flags into the checkboxes (e.g. View-menu toggle)."""

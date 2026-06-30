@@ -22,6 +22,21 @@ The detector model couldn't be loaded. The log says why. Common causes:
 Tracking still works once a model is present; boxmot is optional (the tracker
 falls back to a built-in IoU tracker).
 
+## No face boxes / face enrollment does nothing
+
+Face recognition is optional, but when enabled the Services panel should show
+where the InsightFace `buffalo_l` pack is being loaded from. If it reports a
+missing model path, run:
+
+```bash
+python -m tools.fetch_models
+```
+
+Packaged builds should bundle the pack under `autoptz/models/insightface`.
+Source/dev runs can also set `INSIGHTFACE_HOME` to a directory containing
+`models/buffalo_l/*.onnx`. Manual click-to-track still works without face
+recognition.
+
 ## Running on CPU when a GPU is present
 
 `make_session` logs the requested vs actual EP and any downgrade. Usual fixes:

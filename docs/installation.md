@@ -96,16 +96,18 @@ uninstall all `onnxruntime*` packages, then install exactly one of
 
 Release builds may start without bundled model weights. Use **Engine →
 Models...** or run `python -m tools.fetch_models` to cache the detector
-tiers and pose model before going offline. Use **Engine → Models...** to
-delete AutoPTZ-managed detector/pose files from the local cache.
+tiers, pose model, and InsightFace face pack before going offline. Use
+**Engine → Models...** to delete AutoPTZ-managed detector/pose files from the
+local cache.
 AutoPTZ does not silently fetch a missing detector tier when you switch models
 unless **Automatically download a missing detector tier when I select it** is
 enabled in that window.
 
 The Services panel labels why each model is needed and disables feature controls
 whose required model/dependency is missing. Face recognition and ReID model packs
-are managed by their upstream packages and are not bundled or deleted by AutoPTZ
-by default; review upstream model licenses before redistributing them. See
+are loaded from `INSIGHTFACE_HOME`, the bundled AutoPTZ model pack, the AutoPTZ
+model cache, or their upstream caches. AutoPTZ does not delete those upstream
+files; review upstream model licenses before redistributing them. See
 [`NOTICE.md`](../NOTICE.md).
 
 ## Verify

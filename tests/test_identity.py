@@ -920,6 +920,29 @@ class TestWorkerAutoHarvest:
         assert service.best_score(ident.id, target_emb) == pytest.approx(1.0, abs=1e-5)
         assert service.best_score(ident.id, wrong_emb) < 0.5
 
+    def test_pending_enroll_body_click_prefers_head_region_face(self):
+        service, _ = _make_service()
+        target_emb = _vec(616)
+        wrong_emb = _vec(617)
+        ident = service.enroll("Alice", None, identity_id="id-body-click")
+        app = _FakeApp(
+            [
+                # Larger false-positive lower in the body box. This used to win
+                # because the worker scored nearest-to-click after a body click.
+                _FakeFace((250, 310, 430, 390), wrong_emb),
+                _FakeFace((300, 155, 390, 230), target_emb),
+            ]
+        )
+        rec = FaceRecognizer(_app=app, match_threshold=0.99)
+        w = self._worker(service, rec, [])
+        track = _StubTrack(7, (240, 140, 450, 430))
+
+        w._apply_command("enroll_track", (7, ident.id, "Alice", (0.50, 0.82)))
+        w._maybe_identify(_gray(23), [track], now=221.0)
+
+        assert service.best_score(ident.id, target_emb) == pytest.approx(1.0, abs=1e-5)
+        assert service.best_score(ident.id, wrong_emb) < 0.5
+
     def test_target_by_identity_locks_after_repeated_match(self):
         service, _ = _make_service()
         emb = _vec(62)

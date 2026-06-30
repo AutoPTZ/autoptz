@@ -64,6 +64,51 @@ adaptive controller cannot handle a supported camera class. If a control returns
 it must be a camera capability/profile selected automatically or during setup,
 not a day-to-day tracking choice.
 
+## 2026-06-30 - User-editable framing box / safe-zone controls
+
+### Problem Tried
+The normal camera tile and Properties panel exposed a movable/resizable framing
+box. The same `safe_zone_*` config fields also feed the PTZ controller's internal
+quiet zone: the controller holds still while the target is near center, resumes
+only after hysteresis is crossed, and eases the target back toward center.
+
+### Why It Failed
+The visible editor made an internal control primitive look like a product
+feature. Users could reasonably think they were drawing the person's bounding
+box or solving head/body framing manually. That conflicts with the 2.2 product
+goal: one adaptive follow mode that decides speed and framing automatically.
+
+It also added more places where stale code could affect tracking: tile drag
+state, fast config pushes, Properties sliders, and tooltip copy all implied that
+operators should tune a control that is supposed to be automatic. For bobbing,
+removing the quiet zone itself would be the wrong fix; the quiet zone is the
+deadband/hysteresis that prevents small detector jitter from commanding PTZ.
+The failed part was making that deadband user-editable in normal workflow.
+
+### Removed
+- The off-layout Properties-panel `Advanced tracking` builder and its gain,
+  speed, catch-up, prediction, and safe-zone sliders.
+- The fast framing-box config push timer and center/reset helpers.
+- Camera-tile drag, resize, hover-cursor, live-state, and persist methods for
+  the framing box.
+- Normal UI text that described dragging/resizing the box.
+
+### Replacement
+Keep the internal `safe_zone_*` fields as controller compatibility/config values,
+but treat them as automatic internals. The tile may draw a passive quiet-zone
+indicator for debugging user trust, but it must not be interactive in normal UI.
+The person detector bounding box remains separate: it is evidence for detection,
+tracking, association, and framing estimates; raw bbox geometry must not directly
+command PTZ when it is stale, degenerate, or shape-jumpy.
+
+### Reconsideration Criteria
+Do not reintroduce a normal user-editable center zone unless real hardware tests
+prove AutoPTZ cannot adapt without operator-set camera geometry. If it returns,
+it needs a setup-only calibration flow with pass/fail validation, not a live
+drag box in the main tracking surface. Do not remove the internal deadband unless
+it is replaced by another tested hysteresis/hold mechanism that prevents
+micro-corrections and bobbing.
+
 ## 2026-06-29 - Normal Help-menu Experimental Features entry
 
 ### Problem Tried
@@ -135,6 +180,13 @@ but it is not yet a production scheduler contract. It still needs deterministic
 fake-NDI gates, source preflight, clean dynamic membership, Windows/macOS shutdown
 proof, and 30-minute 8x1080p30 validation with zero steady-state app-induced
 capture drops.
+
+The 2026-06-30 short fake-NDI artifact showed why this remains a candidate, not
+a default: `full` profile median latency improved from about 2268 ms in the
+default threaded path to about 42 ms with `AUTOPTZ_MODEL_SERVER=1`, but RAM rose
+to about 6.4 GB and child logs showed InsightFace still initializing per camera.
+Detector ownership is centralized enough to fix latency; face/appearance
+ownership is not yet centralized enough to ship.
 
 ### Removed
 - `AUTOPTZ_MODEL_SERVER` is no longer listed in the normal Experimental Features

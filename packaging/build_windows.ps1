@@ -49,14 +49,19 @@ if (-not $SkipInstall) {
     Write-Host "==> -SkipInstall - using existing venv as-is"
 }
 
-# -- 3. pre-fetch the detector + pose models so they ship inside the app ------
-# Bundling the YOLO11 ONNX into autoptz\models makes detection work on first
-# launch with no download / network / setup. Best-effort: if the fetch fails the
-# app still downloads the prebuilt ONNX on demand (see engine\runtime\models.py).
+# -- 3. pre-fetch detector, pose, and face models so they ship inside the app --
+# Bundling the YOLO11 ONNX + pose ONNX + InsightFace pack into autoptz\models
+# makes detection and face enrollment work on first launch with no download /
+# network / setup. Best-effort: detector/pose can still download on demand; a
+# missing face pack is reported in the Services panel as a warning.
 Write-Host "==> Pre-fetching models into autoptz\models (bundled, zero-setup)"
 & $Py -m tools.fetch_models --cache-dir autoptz\models
 if ($LASTEXITCODE -ne 0) {
     Write-Host "!! model pre-fetch failed; the app will download them on first run"
+}
+$FacePack = "autoptz\models\insightface\models\buffalo_l"
+if (-not (Test-Path $FacePack) -or -not (Get-ChildItem $FacePack -Filter *.onnx -ErrorAction SilentlyContinue)) {
+    Write-Warning "InsightFace buffalo_l pack was not prefetched into $FacePack; Windows face recognition will warn until the pack is installed."
 }
 
 # -- 4. NDI runtime (optional) ------------------------------------------------

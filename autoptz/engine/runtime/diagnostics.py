@@ -134,10 +134,10 @@ def face_status() -> dict[str, str]:
             "face",
             "Face recognition",
             "warn",
-            f"insightface installed but model {model!r} not downloaded "
-            "(needs network on first run) · manual click-to-track still works",
+            f"insightface installed but model {model!r} was not found at {model_dir} "
+            "· run tools.fetch_models or use a build with the bundled face pack",
         )
-    return _entry("face", "Face recognition", "ok", "insightface SCRFD + ArcFace")
+    return _entry("face", "Face recognition", "ok", f"insightface SCRFD + ArcFace · {model_dir}")
 
 
 def pose_status() -> dict[str, str]:
@@ -229,18 +229,26 @@ def optional_components() -> list[dict[str, str]]:
     )
 
     face = face_status()
+    try:
+        from autoptz.engine.pipeline.identify import insightface_root  # noqa: PLC0415
+
+        face_path = str(Path(insightface_root()) / "models")
+    except Exception:  # noqa: BLE001
+        face_path = str(Path.home() / ".insightface" / "models")
     rows.append(
         {
             **face,
             "source": "insightface buffalo_l (SCRFD + ArcFace)",
             "size": "face model pack",
-            "path": str(Path.home() / ".insightface" / "models"),
+            "path": face_path,
             "why": "Named-person confirmation and face identity matching.",
             "managed": (
-                "Managed by the insightface upstream cache; AutoPTZ never deletes the "
-                "files but unloads face recognition from memory when its feature is off."
+                "Loaded from INSIGHTFACE_HOME, the bundled AutoPTZ model pack, the "
+                "AutoPTZ model cache, or the upstream insightface cache. AutoPTZ "
+                "never deletes these files but unloads face recognition from memory "
+                "when its feature is off."
             ),
-            "network": "insightface may download its model pack on first prepare.",
+            "network": "tools.fetch_models can prefetch the pack for offline installers.",
         }
     )
     return rows

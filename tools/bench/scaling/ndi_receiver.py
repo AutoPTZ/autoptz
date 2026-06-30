@@ -10,6 +10,8 @@ Prints a JSON summary line prefixed RESULT_JSON.
 from __future__ import annotations
 
 import json
+import os
+import platform
 import statistics
 import sys
 import tempfile
@@ -21,6 +23,7 @@ from PySide6.QtCore import QCoreApplication
 from autoptz.benchmark.ndi_sim import _add_ndi_camera
 from autoptz.benchmark.profiles import get_profile
 from autoptz.config.store import ConfigStore
+from autoptz.engine.runtime.contracts import RuntimeMode
 from autoptz.engine.runtime.diagnostics import system_metrics
 from autoptz.engine.supervisor import Supervisor
 from autoptz.ui.engine_client import EngineClient
@@ -66,16 +69,16 @@ def main() -> None:
     db = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
     client = EngineClient(store=ConfigStore(db_path=Path(db), debounce_s=0))
     sup = Supervisor(client, store=client._store)
-    sup.prime_features(dict(get_profile(PROFILE).features))
+    profile = get_profile(PROFILE)
+    sup.prime_features(dict(profile.features))
     cids = [_add_ndi_camera(client, name, i) for i, name in enumerate(names)]
     sup.start(run_pump=False)
-    import os as _os
 
     print(
         f"SCHED_ENGAGED {getattr(sup, '_inference_scheduler', None) is not None} "
-        f"flag={_os.environ.get('AUTOPTZ_INFERENCE_SCHEDULER')} "
+        f"flag={os.environ.get('AUTOPTZ_INFERENCE_SCHEDULER')} "
         f"MS_ENGAGED {getattr(sup, '_model_server_proc', None) is not None} "
-        f"ms_flag={_os.environ.get('AUTOPTZ_MODEL_SERVER')}",
+        f"ms_flag={os.environ.get('AUTOPTZ_MODEL_SERVER')}",
         flush=True,
     )
 
@@ -172,9 +175,23 @@ def main() -> None:
     fourccs = sorted({c["fourcc"] for s in samples for c in s["per"] if c["fourcc"]})
 
     result = {
+        "artifact_kind": "ndi_receiver_supervisor",
         "N": N,
         "profile": PROFILE,
+        "profile_description": profile.description,
+        "profile_features": dict(profile.features),
         "discovered": len(names),
+        "runtime_mode": RuntimeMode.from_env().value,
+        "model_server_flag": os.environ.get("AUTOPTZ_MODEL_SERVER", ""),
+        "model_server_engaged": getattr(sup, "_model_server_proc", None) is not None,
+        "unified_pose_flag": os.environ.get("AUTOPTZ_UNIFIED_POSE", ""),
+        "inference_scheduler_flag": os.environ.get("AUTOPTZ_INFERENCE_SCHEDULER", ""),
+        "inference_scheduler_engaged": getattr(sup, "_inference_scheduler", None) is not None,
+        "platform": platform.platform(),
+        "python": sys.executable,
+        "duration_s": DURATION,
+        "warmup_s": WARMUP,
+        "capture_drop_policy": "zero steady-state app-induced drops; add/remove source drops only",
         "app_cpu_median": med(app_cpu),
         "app_cpu_max": round(max(app_cpu), 1) if app_cpu else 0.0,
         "sys_cpu_median": med(sys_cpu),

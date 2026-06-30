@@ -106,6 +106,7 @@ class TestFaceStatusModelPresence:
         row = diag.face_status()
         assert row["state"] == "warn"
         assert "model" in row["detail"].lower()
+        assert str(tmp_path) in row["detail"]
 
     def test_ok_when_model_weights_present(self, monkeypatch, tmp_path) -> None:
         from autoptz.engine.runtime import diagnostics as diag
@@ -115,7 +116,16 @@ class TestFaceStatusModelPresence:
         models.mkdir(parents=True)
         (models / "det_10g.onnx").write_bytes(b"x")
         monkeypatch.setenv("INSIGHTFACE_HOME", str(tmp_path))
-        assert diag.face_status()["state"] == "ok"
+        row = diag.face_status()
+        assert row["state"] == "ok"
+        assert str(models) in row["detail"]
+
+    def test_optional_components_face_path_uses_resolved_root(self, monkeypatch, tmp_path) -> None:
+        from autoptz.engine.runtime import diagnostics as diag
+
+        monkeypatch.setenv("INSIGHTFACE_HOME", str(tmp_path))
+        face = next(row for row in diag.optional_components() if row["key"] == "face")
+        assert face["path"] == str(tmp_path / "models")
 
     def test_off_when_package_absent(self, monkeypatch) -> None:
         from autoptz.engine.runtime import diagnostics as diag

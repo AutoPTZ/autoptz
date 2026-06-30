@@ -301,8 +301,9 @@ class TestCameraTileFramingHelpers:
             box = tile._framing_box_rect(rec)
 
             assert box is not None
-            assert tile._framing_move_hit(box.center(), rec) is False
-            assert tile._framing_handle_at(box.topLeft(), rec) is None
+            assert not hasattr(tile, "_framing_move_hit")
+            assert not hasattr(tile, "_framing_handle_at")
+            assert not hasattr(tile, "_commit_framing")
         finally:
             tile.deleteLater()
 
