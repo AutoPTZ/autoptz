@@ -165,8 +165,8 @@ class TestModels:
         assert ptz.soft_limits is not None
         assert ptz.soft_limits.pan_min == -0.5
 
-    def test_framing_box_defaults_on(self) -> None:
-        """New cameras keep the internal dead-zone/framing indicator enabled."""
+    def test_safe_zone_defaults_on(self) -> None:
+        """New cameras keep the internal dead-zone enabled."""
         ptz = PTZConfig()
         assert ptz.safe_zone_enabled is True
         assert ptz.safe_zone_x == 0.0
@@ -174,14 +174,14 @@ class TestModels:
         assert ptz.safe_zone_w == 0.15
         assert ptz.safe_zone_h == 0.22
 
-    def test_framing_box_center_is_configurable(self) -> None:
+    def test_safe_zone_center_is_configurable(self) -> None:
         """Legacy configs can still validate a non-centered quiet zone."""
         ptz = PTZConfig(safe_zone_x=0.25, safe_zone_y=-0.2)
         assert ptz.safe_zone_x == 0.25
         assert ptz.safe_zone_y == -0.2
 
-    def test_framing_roundness_defaults_to_oval(self) -> None:
-        """The framing region defaults to a full oval (roundness 1.0)."""
+    def test_safe_zone_roundness_defaults_to_oval(self) -> None:
+        """The internal quiet-zone shape defaults to a full oval (roundness 1.0)."""
         assert PTZConfig().safe_zone_roundness == 1.0
         ptz = PTZConfig.model_validate({"safe_zone_roundness": 0.0})
         assert ptz.safe_zone_roundness == 0.0

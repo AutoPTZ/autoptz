@@ -255,15 +255,14 @@ class PTZConfig(BaseModel, frozen=True):
     # subject stays inside the zone the PTZ holds still; beyond it, the adaptive
     # controller eases the subject back to the zone centre. ``safe_zone_w`` /
     # ``safe_zone_h`` are half-width / half-height as a fraction of the half-frame
-    # (0.15 ≈ 15% either side of centre). The tile draws this as a passive
-    # indicator, not as a normal user-tunable control.
+    # (0.15 ≈ 15% either side of centre). Normal UI does not draw or expose this;
+    # it is an internal anti-bobbing primitive for the controller.
     safe_zone_enabled: bool = True
     safe_zone_x: float = Field(default=0.0, ge=-0.9, le=0.9)
     safe_zone_y: float = Field(default=0.0, ge=-0.9, le=0.9)
     safe_zone_w: float = Field(default=0.15, ge=0.03, le=0.9)
     safe_zone_h: float = Field(default=0.22, ge=0.03, le=0.9)
-    # Corner roundness of the framing box, 0 = sharp rectangle … 1 = full oval.
-    # Defaults to a full oval (the framing region reads as a soft ellipse).
+    # Internal quiet-zone shape, 0 = rectangular … 1 = full oval.
     safe_zone_roundness: float = Field(default=1.0, ge=0.0, le=1.0)
     # Loss recovery: when the target is lost past the coast window, optionally
     # zoom OUT (this speed) for up to ``reacquire_window_s`` to widen the view and

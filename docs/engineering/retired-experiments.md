@@ -91,12 +91,16 @@ The failed part was making that deadband user-editable in normal workflow.
 - The fast framing-box config push timer and center/reset helpers.
 - Camera-tile drag, resize, hover-cursor, live-state, and persist methods for
   the framing box.
+- The remaining passive dashed quiet-zone/crosshair overlay in the camera tile.
 - Normal UI text that described dragging/resizing the box.
 
 ### Replacement
 Keep the internal `safe_zone_*` fields as controller compatibility/config values,
-but treat them as automatic internals. The tile may draw a passive quiet-zone
-indicator for debugging user trust, but it must not be interactive in normal UI.
+but treat them as automatic internals. Normal UI must not draw a safe-zone box,
+circle, crosshair, or other center-zone indicator: users should see the tracked
+person marker and result, not a controller primitive. Debug overlays may be
+added only behind a developer-only diagnostic flag with tests proving they do
+not appear in production UI.
 The person detector bounding box remains separate: it is evidence for detection,
 tracking, association, and framing estimates; raw bbox geometry must not directly
 command PTZ when it is stale, degenerate, or shape-jumpy.

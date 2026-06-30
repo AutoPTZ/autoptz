@@ -272,16 +272,7 @@ class TestMacOSCameraPreflight:
 
 
 class TestCameraTileFramingHelpers:
-    def test_framing_snap_threshold(self, qapp) -> None:
-        from autoptz.ui.widgets.camera_tile import _snap_center_axis
-
-        assert _snap_center_axis(0.039) == 0.0
-        assert _snap_center_axis(-0.04) == 0.0
-        assert _snap_center_axis(0.041) == pytest.approx(0.041)
-
-    def test_framing_box_is_passive_not_user_draggable(self, qapp) -> None:
-        from PySide6.QtCore import QRectF
-
+    def test_safe_zone_has_no_normal_tile_overlay_or_editor(self, qapp) -> None:
         from autoptz.config.models import CameraConfig, SourceConfig
         from autoptz.ui.engine_client import CameraRecord, EngineClient
         from autoptz.ui.widgets.camera_tile import CameraTile
@@ -297,10 +288,9 @@ class TestCameraTileFramingHelpers:
         tile = CameraTile("cam-1", client, frame_source=None)
         try:
             tile._selected = True
-            tile._painted_rect = QRectF(0, 0, 640, 360)
-            box = tile._framing_box_rect(rec)
 
-            assert box is not None
+            assert not hasattr(tile, "_paint_framing_box")
+            assert not hasattr(tile, "_framing_box_rect")
             assert not hasattr(tile, "_framing_move_hit")
             assert not hasattr(tile, "_framing_handle_at")
             assert not hasattr(tile, "_commit_framing")

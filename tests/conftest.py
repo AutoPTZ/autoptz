@@ -44,6 +44,7 @@ _DARWIN_QT_WIDGET_FIRST = {
     "test_main_window_startup.py",
     "test_mark_completion_dialog.py",
     "test_mark_exit_dialog.py",
+    "test_mark_engine.py",
     "test_mark_lifecycle.py",
     "test_mark_panels.py",
     "test_mark_preflight.py",

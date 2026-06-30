@@ -40,7 +40,7 @@ Defaults are the validated, broadcast-sane starting point; one concept = one con
 | `aim_smoothing` | `0.5` | 0 = snappiest, 1 = smoothest (maps to the one-euro filter cutoff). |
 | `safe_zone_enabled` | `true` | Internal quiet-zone/deadband gate. While the target stays inside it, PTZ holds still to avoid jitter-driven bobbing. |
 | `safe_zone_x/y/w/h` | centred, `0.15`×`0.22` | Persisted internal centre offset + half-extents (fraction of half-frame). Normal UI does not expose these as tuning knobs. |
-| `safe_zone_roundness` | `1.0` | Internal shape, currently drawn only as a passive oval indicator. Removing the indicator is allowed; removing the deadband requires replacement hysteresis tests. |
+| `safe_zone_roundness` | `1.0` | Internal quiet-zone shape. Normal UI does not draw it; removing the deadband requires replacement hysteresis tests. |
 | `deadzone_x` / `deadzone_y` | `0.05` | Per-axis circular deadzone (used when the safe zone is off). |
 | `auto_zoom` | `false` | Labs-only during 2.2 stabilization. Fixed zoom is the release default because pan/tilt is easier to stabilize when zoom is not changing the image scale. |
 | `zoom_framing` | `upper_body` | Auto-zoom target height: `face`, `head_shoulders`, `upper_body`, `full_body`, or `wide`. Mirrors `framing`; `wide` is the one extra (looser) option. |

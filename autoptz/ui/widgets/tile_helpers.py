@@ -1,9 +1,9 @@
 """Pure helper functions for the camera tile (no widget state).
 
 Small, side-effect-free helpers extracted from ``camera_tile`` — context-menu
-label logic, bbox geometry, rect-jump detection, and the tile's framing-box
-snap constant — so they're easy to unit-test and the tile widget stays focused
-on painting + interaction. ``camera_tile`` re-exports these.
+label logic, bbox geometry, and rect-jump detection — so they're easy to
+unit-test and the tile widget stays focused on painting + interaction.
+``camera_tile`` re-exports these.
 """
 
 from __future__ import annotations
@@ -22,9 +22,7 @@ log = logging.getLogger(__name__)
 # Matches a trailing " 85%" token so on-video labels never elide the percentage.
 _PCT_SUFFIX = re.compile(r"\s+\d+%$")
 
-# Framing-box centre-snap threshold (fraction) and the box-jump fraction used to
-# detect a teleport vs. smooth motion. Used only by the helpers below.
-_FB_CENTER_SNAP = 0.04
+# Box-jump fraction used to detect a teleport vs. smooth motion.
 _BOX_JUMP_FRAC = 0.22
 
 
@@ -110,12 +108,6 @@ def _ignore_arms(rec: Any) -> bool:
         return rec.camera_config.tracking.aim_body_mode == "torso"
     except Exception:  # noqa: BLE001
         return True
-
-
-def _snap_center_axis(value: float) -> float:
-    """Snap a framing center axis to exact zero within the 4% threshold."""
-    value = float(value)
-    return 0.0 if abs(value) <= _FB_CENTER_SNAP else value
 
 
 def _norm_bbox_contains(box: dict[str, float], x: float, y: float) -> bool:

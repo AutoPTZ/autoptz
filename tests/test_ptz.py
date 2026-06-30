@@ -1001,7 +1001,7 @@ class TestLatencyLead:
             aim_smoothing=0.0,
             lead_time_s=0.0,
             lead_time_auto=True,
-            safe_zone_enabled=False,  # otherwise the framing box swallows the lead
+            safe_zone_enabled=False,  # otherwise the internal deadband swallows the lead
         )
         lo = PTZController(b_lo, cfg)
         hi = PTZController(b_hi, cfg)

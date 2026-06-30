@@ -3,8 +3,8 @@
 The widget paints the latest shared-memory
 frame in ``paintEvent`` (Qt double-buffers widget painting, so there is no
 flicker and no crossfade needed) and draws the broadcast HUD on top: a name
-pill, an fps/health chip, detection boxes, the target-lock reticle, a tracking
-dead-zone, and status banners.
+pill, an fps/health chip, detection boxes, the target-lock reticle, and status
+banners.
 
 It reads per-frame state directly from the :class:`CameraListModel` record
 (``fps``, ``health``, ``streaming``, ``tracks``) and the :class:`ShmFrameSource`.
@@ -58,7 +58,6 @@ from autoptz.ui.widgets.tile_helpers import (  # re-exported for back-compat
     _rect_close,
     _rect_jump,
     _select_enrollment_face_bbox,
-    _snap_center_axis,  # noqa: F401  re-exported for tests/back-compat
     _tracking_enabled,
     _tracking_status,
     _tracks,
@@ -574,7 +573,6 @@ class CameraTile(QWidget):
 
         # HUD overlays (only meaningful once we have a frame/telemetry)
         if rec is not None:
-            self._paint_framing_box(p, rec)
             self._paint_tracks(p, rec)
             self._paint_name_pill(p, rec)
             self._paint_fps_chip(p, rec)
@@ -627,88 +625,6 @@ class CameraTile(QWidget):
         ):
             p.drawLine(QPointF(cx, cy), QPointF(cx + dx * length, cy))
             p.drawLine(QPointF(cx, cy), QPointF(cx, cy + dy * length))
-        p.restore()
-
-    # ── passive PTZ quiet-zone indicator ─────────────────────────────────────────
-
-    def _framing_extents(self, rec: Any) -> tuple[float, float] | None:
-        """Return quiet-zone (half_w, half_h) fractions, or None if off.
-
-        The box is a passive visualization of the controller's quiet zone.
-        """
-        cfg = getattr(rec, "camera_config", None)
-        ptz = getattr(cfg, "ptz", None) if cfg is not None else None
-        if ptz is None or not getattr(ptz, "safe_zone_enabled", False):
-            return None
-        return (float(getattr(ptz, "safe_zone_w", 0.15)), float(getattr(ptz, "safe_zone_h", 0.22)))
-
-    def _framing_center(self, rec: Any) -> tuple[float, float]:
-        """Return the quiet-zone centre offset in controller error coordinates."""
-        cfg = getattr(rec, "camera_config", None)
-        ptz = getattr(cfg, "ptz", None) if cfg is not None else None
-        if ptz is None:
-            return (0.0, 0.0)
-        try:
-            x = max(-0.9, min(0.9, float(getattr(ptz, "safe_zone_x", 0.0))))
-            y = max(-0.9, min(0.9, float(getattr(ptz, "safe_zone_y", 0.0))))
-            return (x, y)
-        except Exception:  # noqa: BLE001
-            return (0.0, 0.0)
-
-    def _framing_box_rect(self, rec: Any) -> QRectF | None:
-        """The quiet-zone indicator in widget pixels (centred on the painted video)."""
-        ext = self._framing_extents(rec)
-        r = self._painted_rect
-        if ext is None or r.width() < 8 or r.height() < 8:
-            return None
-        hw, hh = ext
-        half_w = hw * r.width() / 2.0
-        half_h = hh * r.height() / 2.0
-        off_x, off_y = self._framing_center(rec)
-        cx = r.center().x() + off_x * (r.width() / 2.0)
-        cy = r.center().y() - off_y * (r.height() / 2.0)
-        return QRectF(cx - half_w, cy - half_h, 2 * half_w, 2 * half_h)
-
-    def _framing_roundness(self, rec: Any) -> float:
-        cfg = getattr(rec, "camera_config", None)
-        ptz = getattr(cfg, "ptz", None) if cfg is not None else None
-        try:
-            return max(0.0, min(1.0, float(getattr(ptz, "safe_zone_roundness", 1.0))))
-        except Exception:  # noqa: BLE001
-            return 1.0
-
-    def _draw_framing_shape(self, p: QPainter, box: QRectF, roundness: float) -> None:
-        """Draw the framing region as a rectangle…oval per *roundness* (0…1)."""
-        if roundness >= 0.99:
-            p.drawEllipse(box)
-        else:
-            rad = roundness * min(box.width(), box.height()) / 2.0
-            p.drawRoundedRect(box, rad, rad)
-
-    def _paint_framing_box(self, p: QPainter, rec: Any) -> None:
-        """Draw the passive framing quiet-zone over the video.
-
-        Read straight from the camera config — no telemetry plumbing.  A subtle
-        dashed outline (rectangle…oval by ``safe_zone_roundness``) plus a centre
-        "+" crosshair marking the aim reference point.  In normal 2.2 builds this
-        is intentionally passive: the adaptive controller owns the dead-zone,
-        not the operator.
-        """
-        box = self._framing_box_rect(rec)
-        if box is None:
-            return
-        roundness = self._framing_roundness(rec)
-        p.save()
-        col = QColor(255, 255, 255, 130)
-        pen = QPen(col, 1.6, Qt.PenStyle.DashLine)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        self._draw_framing_shape(p, box, roundness)
-        # Centre "+" crosshair — the reference point the PTZ keeps the subject on.
-        cx, cy = box.center().x(), box.center().y()
-        p.setPen(QPen(col, 1.4))
-        p.drawLine(QPointF(cx - 7, cy), QPointF(cx + 7, cy))
-        p.drawLine(QPointF(cx, cy - 7), QPointF(cx, cy + 7))
         p.restore()
 
     def _map_bbox(self, bbox: dict[str, float]) -> QRectF:
