@@ -324,3 +324,39 @@ class TestEdgeCases:
         t3 = tracker.update([], FRAME, fps=2.0)  # frames_lost=2 > coast_max → removed
         alive = [t for t in t3 if t.track_id == 1]
         assert len(alive) == 0
+
+
+class TestTrackerCreationFps:
+    """The BoxMOT tracker is created lazily on the FIRST frame — when the ingest
+    fps is still ~0 (frame intervals not yet timed).  A degenerate creation fps
+    permanently collapses BoT-SORT's lost-track survival window to ~0 frames
+    (``max_time_lost = frame_rate/30 * track_buffer``), so a single missed
+    detection drops the track and the reappearing person gets a NEW id —
+    id-switch / target-loss / PTZ bounce after any brief occlusion.
+    """
+
+    def test_warmup_fps_floored_to_sane_default(self) -> None:
+        from autoptz.engine.pipeline.track import _tracker_creation_fps
+
+        # The caller floors at max(1.0, fps), so warmup creation fps is ~1.0.
+        assert _tracker_creation_fps(0.0) == 30.0
+        assert _tracker_creation_fps(1.0) == 30.0
+        assert _tracker_creation_fps(2.0) == 30.0
+
+    def test_real_fps_preserved(self) -> None:
+        from autoptz.engine.pipeline.track import _tracker_creation_fps
+
+        assert _tracker_creation_fps(24.0) == 24.0
+        assert _tracker_creation_fps(30.0) == 30.0
+        assert _tracker_creation_fps(60.0) == 60.0
+
+    def test_botsort_lost_window_survives_warmup_creation(self) -> None:
+        """Regression: a BoT-SORT tracker created during warmup (fps≈1) must keep a
+        non-zero lost-track survival window so boxmot can re-associate a person who
+        reappears within the coast window (was ``max_time_lost == 0``)."""
+        if not _probe_boxmot():
+            pytest.skip("boxmot not installed")
+        tracker = Tracker(tracker_type=TrackerType.BOTSORT, coast_window=1.5)
+        tracker.update([], FRAME, fps=1.0)  # first frame during warmup
+        impl = tracker._impl
+        assert getattr(impl, "max_time_lost", 0) >= 30
