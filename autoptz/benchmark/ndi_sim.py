@@ -144,15 +144,15 @@ class MarkNDIFleet:
     def names(self) -> list[str]:
         return [s.ndi_name for s in self._senders]
 
-    def full_names(self, *, timeout_s: float = 5.0) -> list[str]:
+    def full_names(self, *, timeout_s: float = 5.0, strict: bool = False) -> list[str]:
         """Discover each sender's FULL hostname-prefixed NDI name.
 
         NDI advertises a source as ``"HOSTNAME (short name)"``, so a sender created
         as ``"AutoPTZ Mark Cam 1"`` appears on the network as e.g.
         ``"PRINCES-MBP (AutoPTZ Mark Cam 1)"``.  The ingest (``NDIAdapter``) matches
-        the FULL name exactly, so cameras MUST be registered with these — using the
-        short name is why NDI mode produced no streams.  Opens + pumps the senders
-        while a Finder resolves them; falls back to the short name on any miss.
+        the FULL name exactly, so Mark's release path sets ``strict=True`` and fails
+        before scoring if any sender cannot be resolved.  Non-strict callers keep the
+        legacy fallback to the short name for ad hoc developer experiments.
         """
         short = self.names()
         if not short:
@@ -183,6 +183,11 @@ class MarkNDIFleet:
                 finder.close()
             except Exception:  # noqa: BLE001
                 log.debug("ndi finder close failed", exc_info=True)
+        missing = [s for s in short if s not in resolved]
+        if strict and missing:
+            raise RuntimeError(
+                "NDI source preflight failed; unresolved fake NDI sources: " + ", ".join(missing)
+            )
         out = [resolved.get(s, s) for s in short]
         log.info("MarkNDIFleet resolved full NDI names: %s", out)
         return out

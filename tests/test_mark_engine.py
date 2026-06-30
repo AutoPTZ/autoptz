@@ -618,6 +618,7 @@ class _RecFleet:
     """A recording stand-in for MarkNDIFleet (cyndilib absent in CI/.venv)."""
 
     calls: list[dict] = []
+    full_name_calls: list[dict] = []
 
     def __init__(self, n, *, width, height, fps=30.0, frame_source=None):
         type(self).calls.append(
@@ -631,7 +632,8 @@ class _RecFleet:
         )
         self._n = n
 
-    def full_names(self, **_kwargs):
+    def full_names(self, **kwargs):
+        type(self).full_name_calls.append(dict(kwargs))
         return [f"HOST (AutoPTZ Mark Cam {i + 1})" for i in range(self._n)]
 
     def open(self):
@@ -649,6 +651,7 @@ def _patch_ndi_fleet(monkeypatch):
     from autoptz.benchmark import ndi_sim
 
     _RecFleet.calls = []
+    _RecFleet.full_name_calls = []
     monkeypatch.setattr(ndi_sim, "ndi_sim_available", lambda: True)
     monkeypatch.setattr(ndi_sim, "MarkNDIFleet", _RecFleet)
     # The first ndi:// camera is registered on the client during setup; keep the
@@ -676,6 +679,7 @@ def test_ndi_fleet_built_with_clip_variant_frame_source(monkeypatch):
     )
     try:
         assert _RecFleet.calls, "the NDI fleet was never built"
+        assert _RecFleet.full_name_calls[-1] == {"strict": True}
         call = _RecFleet.calls[-1]
         # Built at the chosen resolution and fed the resolved clip variant.
         assert call["frame_source"] == cached
