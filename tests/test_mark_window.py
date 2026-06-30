@@ -127,6 +127,7 @@ def test_help_menu_has_about_mark(qtapp) -> None:
 def test_usb_polling_disabled(qtapp) -> None:
     win = _win(qtapp)
     assert win._should_poll_usb() is False
+    assert win._source_discovery_enabled is False
     assert win._usb_poll_timer is None
     win.deleteLater()
 
@@ -204,7 +205,7 @@ def test_chart_object_name_and_card_ancestor(qtapp) -> None:
     win = _win(qtapp)
     try:
         assert win._chart.objectName() == "markChart"
-        # The chart is wrapped in a #chartCard QFrame (titled "PERFORMANCE RAMP").
+        # The chart is wrapped in a #chartCard QFrame (titled "FPS BY CAMERA COUNT").
         card = win._chart.parent()
         assert isinstance(card, QFrame)
         assert card.objectName() == "chartCard"

@@ -26,7 +26,7 @@ def _main(qtapp):
     from autoptz.ui.widgets.main_window import MainWindow
 
     client = EngineClient()
-    return MainWindow(client, frame_source=ShmFrameSource())
+    return MainWindow(client, frame_source=ShmFrameSource(), source_discovery_enabled=False)
 
 
 class _FeatureSupervisor:
@@ -192,9 +192,7 @@ def test_mark_return_restores_current_service_state(qtapp) -> None:
     win._mark_window = None
     win._exit_mark_mode(quit_app=False)
 
-    feature_cmds = [
-        cmd for cmd in win._client.drain_commands() if isinstance(cmd, SetFeaturesCmd)
-    ]
+    feature_cmds = [cmd for cmd in win._client.drain_commands() if isinstance(cmd, SetFeaturesCmd)]
     assert sup.primed is not None
     assert sup.primed["pose"] is True
     assert len(feature_cmds) == 1

@@ -86,9 +86,18 @@ class TestTargetBoxEvidence:
     def test_unusable_ptz_box_rejects_degenerate_and_tiny_boxes(self):
         w = _worker()
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        assert w._target_box_usable_for_ptz(_track(1, BBox(x1=10, y1=10, x2=10, y2=20)), frame) is False
-        assert w._target_box_usable_for_ptz(_track(1, BBox(x1=10, y1=10, x2=20, y2=20)), frame) is False
-        assert w._target_box_usable_for_ptz(_track(1, BBox(x1=10, y1=10, x2=120, y2=140)), frame) is True
+        assert (
+            w._target_box_usable_for_ptz(_track(1, BBox(x1=10, y1=10, x2=10, y2=20)), frame)
+            is False
+        )
+        assert (
+            w._target_box_usable_for_ptz(_track(1, BBox(x1=10, y1=10, x2=20, y2=20)), frame)
+            is False
+        )
+        assert (
+            w._target_box_usable_for_ptz(_track(1, BBox(x1=10, y1=10, x2=120, y2=140)), frame)
+            is True
+        )
 
     def test_unusable_box_never_becomes_initial_trusted_target(self):
         w = _worker()

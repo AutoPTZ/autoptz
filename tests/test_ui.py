@@ -1371,9 +1371,21 @@ class TestCameraTileHelpers:
         wrong = {"bbox": {"x1": 0.2, "y1": 0.2, "x2": 0.35, "y2": 0.35}}
         clicked = {"bbox": {"x1": 0.55, "y1": 0.55, "x2": 0.7, "y2": 0.72}}
 
-        assert _select_enrollment_face_bbox([wrong, clicked], track, (0.62, 0.62)) == clicked[
-            "bbox"
-        ]
+        assert (
+            _select_enrollment_face_bbox([wrong, clicked], track, (0.62, 0.62)) == clicked["bbox"]
+        )
+
+    def test_enrollment_body_click_prefers_head_region_face(self, qapp) -> None:
+        from autoptz.ui.widgets.tile_helpers import _select_enrollment_face_bbox
+
+        track = {"x1": 0.1, "y1": 0.1, "x2": 0.9, "y2": 0.9}
+        head = {"bbox": {"x1": 0.42, "y1": 0.14, "x2": 0.58, "y2": 0.26}}
+        lower_body_stray = {"bbox": {"x1": 0.34, "y1": 0.55, "x2": 0.68, "y2": 0.70}}
+
+        assert (
+            _select_enrollment_face_bbox([lower_body_stray, head], track, (0.50, 0.82))
+            == head["bbox"]
+        )
 
     def test_enrollment_face_selection_falls_back_to_largest_face(self, qapp) -> None:
         from autoptz.ui.widgets.tile_helpers import _select_enrollment_face_bbox
@@ -1383,6 +1395,56 @@ class TestCameraTileHelpers:
         large = {"bbox": {"x1": 0.5, "y1": 0.2, "x2": 0.8, "y2": 0.5}}
 
         assert _select_enrollment_face_bbox([small, large], track, None) == large["bbox"]
+
+    def test_enrollment_dialog_saves_preview_thumbnail(self, qapp, monkeypatch) -> None:
+        from PySide6.QtGui import QPixmap
+        from PySide6.QtWidgets import QDialog, QLineEdit
+
+        from autoptz.ui.widgets.camera_tile import CameraTile
+
+        class _Model:
+            def get_record(self, _camera_id: str):
+                return None
+
+        class _Client:
+            def __init__(self) -> None:
+                self.cameraModel = _Model()
+                self.enrolled = []
+
+            def registeredIdentities(self):
+                return []
+
+            def enrollIdentity(self, *args, **kwargs) -> None:  # noqa: N802
+                self.enrolled.append((args, kwargs))
+
+        client = _Client()
+        tile = CameraTile("cam-1", client, frame_source=None)
+        try:
+            pix = QPixmap(12, 12)
+            calls = []
+
+            def preview_and_thumb(track_id, click_pos):
+                calls.append((track_id, click_pos))
+                return pix, b"preview-crop"
+
+            def explode_late_thumbnail(*_args, **_kwargs):
+                raise AssertionError("thumbnail was recomputed after dialog accept")
+
+            def accept_with_name(dialog):
+                for edit in dialog.findChildren(QLineEdit):
+                    edit.setText("Alice")
+                return QDialog.DialogCode.Accepted
+
+            monkeypatch.setattr(tile, "_enrollment_preview_and_thumbnail", preview_and_thumb)
+            monkeypatch.setattr(tile, "_enrollment_thumbnail_png", explode_late_thumbnail)
+            monkeypatch.setattr(QDialog, "exec", accept_with_name)
+
+            tile._open_assign_dialog(7, None)
+
+            assert calls == [(7, None)]
+            assert client.enrolled == [(("cam-1", "Alice", 7), {"thumbnail": b"preview-crop"})]
+        finally:
+            tile.deleteLater()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

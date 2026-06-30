@@ -265,6 +265,7 @@ class TestCameraWorker:
         )
         worker.start()
         try:
+
             def _latest_frame():
                 result = reader.latest()
                 if result is not None:
@@ -313,6 +314,7 @@ class TestCameraWorker:
         )
         worker.start()
         try:
+
             def _best_fps() -> float:
                 with lock:
                     if received:
@@ -470,6 +472,7 @@ class TestCameraWorker:
         assert worker._tracking_enabled is False  # no target, tracking off
         worker.start()
         try:
+
             def _latest_tracks():
                 with lock:
                     for m in received:
@@ -615,6 +618,7 @@ class TestCameraWorker:
         )
         worker.start()
         try:
+
             def _quality_seen() -> bool:
                 res_ok = drop_ok = False
                 with lock:
@@ -1498,6 +1502,7 @@ class TestSupervisorRouting:
 
         sup.start(staged=True, progress=lambda **_kw: None)
         try:
+
             def _workers_released():
                 workers = list(sup._workers.values())
                 if workers and all(

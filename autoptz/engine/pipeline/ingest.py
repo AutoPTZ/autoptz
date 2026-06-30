@@ -1312,9 +1312,7 @@ class NDIAdapter(SourceAdapter):
         self._total_audio_frames = perf.get("total_audio", self._total_audio_frames)
         self._dropped_audio_frames = perf.get("dropped_audio", self._dropped_audio_frames)
         self._total_metadata_frames = perf.get("total_metadata", self._total_metadata_frames)
-        self._dropped_metadata_frames = perf.get(
-            "dropped_metadata", self._dropped_metadata_frames
-        )
+        self._dropped_metadata_frames = perf.get("dropped_metadata", self._dropped_metadata_frames)
 
     @staticmethod
     def _as_int(value: object) -> int | None:
@@ -1375,9 +1373,7 @@ class NDIAdapter(SourceAdapter):
                 continue
             video = self._field_int(data, "video_frames", "video", "video_frames_queue")
             audio = self._field_int(data, "audio_frames", "audio", "audio_frames_queue")
-            meta = self._field_int(
-                data, "metadata_frames", "metadata", "metadata_frames_queue"
-            )
+            meta = self._field_int(data, "metadata_frames", "metadata", "metadata_frames_queue")
             if video is not None or audio is not None or meta is not None:
                 return (
                     video if video is not None else -1,

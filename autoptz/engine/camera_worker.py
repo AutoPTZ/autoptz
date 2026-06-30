@@ -1499,9 +1499,7 @@ class CameraWorker:
         ):
             fh = max(1, int(frame.shape[0]))
             usable = self._target_box_usable_for_ptz(target, frame)
-            box_h_frac = (
-                (float(target.bbox.y2) - float(target.bbox.y1)) / fh if usable else 0.0
-            )
+            box_h_frac = (float(target.bbox.y2) - float(target.bbox.y1)) / fh if usable else 0.0
             occluded = usable and self._target_box_collapsed(box_h_frac)
             if usable and not occluded:
                 err, height = self._track_error(target, frame, now, tracks=tracks)
@@ -1517,7 +1515,9 @@ class CameraWorker:
                 # visible) is not a trustworthy aim — coast (track_active=False) so
                 # the controller holds instead of chasing it onto the legs/last-known
                 # partial position, and resumes when the subject reappears in full.
-                self._publish_ptz(ctrl, err, vel, height, track_active=active, now=now, log_label="auto")
+                self._publish_ptz(
+                    ctrl, err, vel, height, track_active=active, now=now, log_label="auto"
+                )
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s ptz auto step failed", self.camera_id, exc_info=True)
         else:
@@ -2167,7 +2167,9 @@ class CameraWorker:
             if self._jump_candidate_confirmed(target, now):
                 self._store_trusted_target(target, now)
                 return
-            self._mark_target_ambiguous(target, now=now, reason="blocked" if crowded else "bbox_jump")
+            self._mark_target_ambiguous(
+                target, now=now, reason="blocked" if crowded else "bbox_jump"
+            )
             return
 
         if crowded and jumped:
@@ -4787,8 +4789,7 @@ class CameraWorker:
                     state="ambiguous",
                     headline="Target jumped - holding position",
                     detail=(
-                        f"Holding {label}'s last trusted framing while confirming "
-                        "the new box."
+                        f"Holding {label}'s last trusted framing while confirming the new box."
                     ),
                     action="holding",
                     remaining_s=remaining,

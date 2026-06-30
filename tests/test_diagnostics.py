@@ -190,6 +190,7 @@ class TestWorkerPopulatesLatency:
         )
         worker.start()
         try:
+
             def _best_latency() -> float:
                 with lock:
                     if received:

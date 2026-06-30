@@ -140,7 +140,11 @@ class _MarkRampChart(QWidget):
 
             painter.fillRect(self.rect(), QColor(T.CURRENT.surface))
             painter.setPen(QPen(QColor(T.CURRENT.text), 1))
-            painter.drawText(QRect(pad, pad, max(1, w - 2 * pad), 18), Qt.AlignmentFlag.AlignLeft, "Min FPS")
+            painter.drawText(
+                QRect(pad, pad, max(1, w - 2 * pad), 18),
+                Qt.AlignmentFlag.AlignLeft,
+                "Min delivered FPS",
+            )
             summary = self._summary_text()
             painter.setPen(QPen(QColor(T.CURRENT.subtext), 1))
             painter.drawText(
@@ -218,7 +222,7 @@ class _MarkRampChart(QWidget):
 
     def _summary_text(self) -> str:
         if not self._steps:
-            return "target line | steady drops fail"
+            return "target fps + zero steady drops required"
         step = self._steps[-1]
         steady = int(getattr(step, "steady_state_app_induced_drops", 0) or 0)
         allowed = int(getattr(step, "source_mutation_allowed_drops", 0) or 0)
@@ -306,6 +310,7 @@ class MarkWindow(MainWindow):
             # No right-click tile context menu in the demo: the viewer must not be
             # able to remove cameras / retarget the throwaway Mark engine.
             context_menu_enabled=False,
+            source_discovery_enabled=False,
         )
         self.setWindowTitle("AutoPTZ Mark")  # NO version (lives in About)
         # Fix 1 (live theme toggle in Mark): the global ThemeController (app.py) is
@@ -389,7 +394,7 @@ class MarkWindow(MainWindow):
         helpm.addAction(_action(self, "About AutoPTZ Mark", self._show_about_mark))
         helpm.addSeparator()
         # A second, always-visible path to the deliberate Return / Quit choice
-        # (the primary one is the control panel's "Exit Mark…" button).
+        # (the primary one is the control panel's "Exit Mark" button).
         helpm.addAction(_action(self, "Exit AutoPTZ Mark…", self._request_exit))
 
     def _build_appearance_menu(self, view: Any) -> None:
@@ -453,7 +458,7 @@ class MarkWindow(MainWindow):
         card_col = QVBoxLayout(chart_card)
         card_col.setContentsMargins(0, 0, 0, 0)
         card_col.setSpacing(0)
-        chart_title = QLabel("PERFORMANCE RAMP")
+        chart_title = QLabel("FPS BY CAMERA COUNT")
         chart_title.setObjectName("chartTitle")
         card_col.addWidget(chart_title)
         card_col.addWidget(self._chart)

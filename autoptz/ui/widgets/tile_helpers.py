@@ -177,17 +177,30 @@ def _select_enrollment_face_bbox(
             * (float(b.get("y2", 0.0)) - float(b.get("y1", 0.0))),
         )
 
-    def score(box: dict[str, float]) -> tuple[int, float, float]:
-        x, y = click
-        inside = _norm_bbox_contains(box, x, y)
-        cx = (float(box.get("x1", 0.0)) + float(box.get("x2", 0.0))) * 0.5
-        cy = (float(box.get("y1", 0.0)) + float(box.get("y2", 0.0))) * 0.5
-        area = (float(box.get("x2", 0.0)) - float(box.get("x1", 0.0))) * (
+    def area(box: dict[str, float]) -> float:
+        return (float(box.get("x2", 0.0)) - float(box.get("x1", 0.0))) * (
             float(box.get("y2", 0.0)) - float(box.get("y1", 0.0))
         )
-        return (0 if inside else 1, (cx - x) ** 2 + (cy - y) ** 2, -area)
 
-    return min(candidates, key=score)
+    x, y = click
+    clicked = [box for box in candidates if _norm_bbox_contains(box, x, y)]
+    if clicked:
+        return max(clicked, key=area)
+
+    # A body-click inside the selected person box should enroll that person's
+    # head, not the nearest/largest stray face elsewhere inside a noisy person
+    # bbox. Prefer faces whose center sits in the track's expected head region.
+    head = _head_bbox(track_box)
+
+    def center_in(box: dict[str, float], region: dict[str, float]) -> bool:
+        cx = (float(box.get("x1", 0.0)) + float(box.get("x2", 0.0))) * 0.5
+        cy = (float(box.get("y1", 0.0)) + float(box.get("y2", 0.0))) * 0.5
+        return _norm_bbox_contains(region, cx, cy)
+
+    head_candidates = [box for box in candidates if center_in(box, head)]
+    if head_candidates:
+        return max(head_candidates, key=area)
+    return max(candidates, key=area)
 
 
 def _rect_close(a: QRectF, b: QRectF) -> bool:

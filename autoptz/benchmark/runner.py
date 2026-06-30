@@ -514,7 +514,9 @@ def _quality_app_induced_drops(quality: dict[str, dict]) -> int:
     return total
 
 
-def _source_mutation_snapshot(reader: Callable[[], dict[str, object] | None] | None) -> dict[str, object]:
+def _source_mutation_snapshot(
+    reader: Callable[[], dict[str, object] | None] | None,
+) -> dict[str, object]:
     """Read source-mutation accounting for the just-sampled step.
 
     The reader reports drops that happened during an explicit add/remove-source

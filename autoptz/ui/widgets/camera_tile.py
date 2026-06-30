@@ -1546,7 +1546,7 @@ class CameraTile(QWidget):
         dlg = QDialog(self)
         dlg.setWindowTitle("Name this person")
         lay = QVBoxLayout(dlg)
-        preview = self._enrollment_preview_pixmap(track_id, click_pos)
+        preview, thumbnail = self._enrollment_preview_and_thumbnail(track_id, click_pos)
         if preview is not None:
             img = QLabel(dlg)
             img.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1588,7 +1588,6 @@ class CameraTile(QWidget):
             return
         identity_id = combo.currentData() or ""
         click = self._normalized_video_point(click_pos) if click_pos is not None else None
-        thumbnail = self._enrollment_thumbnail_png(track_id, click_pos)
         try:
             if identity_id:
                 if click is not None:
@@ -1635,6 +1634,33 @@ class CameraTile(QWidget):
         click_pos: QPointF | None,
     ) -> QPixmap | None:
         """Return a current face crop, falling back to upper-body track crop."""
+        preview, _thumbnail = self._enrollment_preview_and_thumbnail(track_id, click_pos)
+        return preview
+
+    def _enrollment_preview_and_thumbnail(
+        self,
+        track_id: int,
+        click_pos: QPointF | None,
+    ) -> tuple[QPixmap | None, bytes | None]:
+        crop = self._enrollment_crop_qimage(track_id, click_pos)
+        if crop is None or crop.isNull():
+            return None, None
+        pix = QPixmap.fromImage(crop)
+        preview = None
+        if not pix.isNull():
+            preview = pix.scaled(
+                T.fs(300),
+                T.fs(190),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        return preview, self._thumbnail_png_from_crop(crop)
+
+    def _enrollment_crop_qimage(
+        self,
+        track_id: int,
+        click_pos: QPointF | None,
+    ) -> Any | None:
         img = self._frames.latest_qimage(self.camera_id) if self._frames else None
         if img is None or img.isNull():
             return None
@@ -1649,29 +1675,27 @@ class CameraTile(QWidget):
         face_box = self._face_bbox_for_preview(rec, track_box, click)
         # No detected face → frame the head region, not the whole person/frame.
         crop_box = face_box or _head_bbox(track_box)
-        return self._crop_preview(img, crop_box, pad=0.28 if face_box else 0.18)
+        return self._crop_qimage(img, crop_box, pad=0.28 if face_box else 0.18)
 
     def _enrollment_thumbnail_png(
         self,
         track_id: int,
         click_pos: QPointF | None,
     ) -> bytes | None:
-        img = self._frames.latest_qimage(self.camera_id) if self._frames else None
-        if img is None or img.isNull():
-            return None
-        rec = self._record()
-        if rec is None:
-            return None
-        track = next((t for t in _tracks(rec) if t.get("track_id") == track_id), None)
-        if track is None:
-            return None
-        click = self._normalized_video_point(click_pos)
-        track_box = track.get("bbox", {})
-        face_box = self._face_bbox_for_preview(rec, track_box, click)
-        crop_box = face_box or _head_bbox(track_box)
-        crop = self._crop_qimage(img, crop_box, pad=0.28 if face_box else 0.18, max_side=220)
+        crop = self._enrollment_crop_qimage(track_id, click_pos)
+        return self._thumbnail_png_from_crop(crop)
+
+    def _thumbnail_png_from_crop(self, crop: Any | None) -> bytes | None:
         if crop is None or crop.isNull():
             return None
+        side = max(crop.width(), crop.height())
+        if side > 220:
+            crop = crop.scaled(
+                220,
+                220,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         data = QByteArray()
         buf = QBuffer(data)
         if not buf.open(QIODevice.OpenModeFlag.WriteOnly):

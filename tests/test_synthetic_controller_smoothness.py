@@ -62,4 +62,3 @@ def test_no_sign_flip_jitter_at_steady_state() -> None:
     for a, b in zip(tail, tail[1:], strict=False):
         if abs(a) > 1e-3 and abs(b) > 1e-3:
             assert math.copysign(1.0, a) == math.copysign(1.0, b)
-

@@ -189,11 +189,11 @@ def _step(cameras: int, *, with_quality: bool = True, ttfa_none_idx: int = -1) -
         min_fps=min(per_camera_fps),
         mean_fps=sum(per_camera_fps) / len(per_camera_fps),
         per_camera_fps=per_camera_fps,
-            sustained=True,
-            app_induced_drops=0,
-            steady_state_app_induced_drops=0,
-            per_camera_quality=quality,
-        )
+        sustained=True,
+        app_induced_drops=0,
+        steady_state_app_induced_drops=0,
+        per_camera_quality=quality,
+    )
 
 
 def _two_step_result() -> BenchmarkResult:
