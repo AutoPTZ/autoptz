@@ -661,3 +661,28 @@ class TestRuntimeServicesAccelVerdict:
         rows = worker._runtime_services()  # must not raise
         det_row = next(r for r in rows if r.key == "detector")
         assert det_row.confidence == ""
+
+    def test_face_row_failed_when_recognizer_unavailable(self) -> None:
+        """A built-but-disabled recognizer must not look active in diagnostics."""
+        import types
+
+        worker = self._make_worker_with_pool(pool=None)
+        worker._face = types.SimpleNamespace(
+            recognizer=types.SimpleNamespace(
+                available=False,
+                last_error="ImportError: simulated insightface failure",
+            ),
+            service=object(),
+        )
+
+        services = worker._runtime_services()
+        face = next(row for row in services if row.key == "face")
+        assert face.enabled is True
+        assert face.active is False
+        assert face.state == "failed"
+        assert "insightface failure" in face.detail
+
+        timings = worker._stage_timings()
+        stage = next(row for row in timings if row.key == "face")
+        assert stage.status == "failed"
+        assert "insightface failure" in stage.detail

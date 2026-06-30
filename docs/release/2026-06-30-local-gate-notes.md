@@ -70,8 +70,10 @@ sources.
   Windows build, including visible face boxes and saved crop/embedding match.
   The local code now covers the previously mismatched crop-space path where the
   preview thumbnail used cropped-preview coordinates but the worker interpreted
-  the click as full-frame coordinates; real Windows GUI validation is still
-  required.
+  the click as full-frame coordinates. Runtime diagnostics also now mark the
+  Face service/stage as `failed` with the recognizer `last_error` when InsightFace
+  or its model pack does not load, instead of reporting Face as active while no
+  boxes can be drawn. Real Windows GUI validation is still required.
 - The updater checksum lookup now treats Intel macOS asset aliases
   (`macos-intel`, `macos-x64`, `macos-x86_64`) as the same artifact name for
   manifest lookup while still requiring the downloaded file's SHA-256 to match.

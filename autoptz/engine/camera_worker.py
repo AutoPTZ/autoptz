@@ -4910,6 +4910,17 @@ class CameraWorker:
         age = time.monotonic() - self._stage_last_t.get(key, 0.0)
         return "active" if age <= _STAGE_FRESH_S else "stale"
 
+    def _face_recognizer_available(self) -> bool:
+        face = self._face
+        recognizer = getattr(face, "recognizer", None) if face is not None else None
+        return bool(recognizer is not None and getattr(recognizer, "available", False))
+
+    def _face_unavailable_detail(self) -> str:
+        face = self._face
+        recognizer = getattr(face, "recognizer", None) if face is not None else None
+        detail = getattr(recognizer, "last_error", None) if recognizer is not None else None
+        return str(detail or "face recognizer unavailable")
+
     def _stage_row(
         self,
         key: str,
@@ -4951,6 +4962,8 @@ class CameraWorker:
         face_on = self._feature("face_recognition")
         pose_on = self._feature("pose")
         detect_interval = self._effective_detect_interval()
+        face_available = self._face_recognizer_available()
+        face_failed = face_on and self._face is not None and not face_available
         return [
             self._stage_row(
                 "ingest",
@@ -4981,12 +4994,17 @@ class CameraWorker:
             self._stage_row(
                 "face",
                 "Face",
-                status=self._stage_status(
-                    "face",
-                    enabled=face_on,
-                    available=self._face is not None,
+                status=(
+                    "failed"
+                    if face_failed
+                    else self._stage_status(
+                        "face",
+                        enabled=face_on,
+                        available=face_available,
+                    )
                 ),
                 cadence=f"{1.0 / _FACE_INTERVAL_S:.0f} Hz",
+                detail=self._face_unavailable_detail() if face_failed else "",
             ),
             self._stage_row(
                 "pose",
@@ -5033,6 +5051,12 @@ class CameraWorker:
         det_enabled = self._feature("detection")
         det_available = self._detect is not None
         det_failed = det_enabled and not det_available and bool(detector_error)
+        face_enabled = self._feature("face_recognition")
+        face_available = self._face_recognizer_available()
+        face_failed = face_enabled and self._face is not None and not face_available
+        face_detail = (
+            self._face_unavailable_detail() if face_failed else "recognition and identity reacquire"
+        )
         # Base detail for the detector row; append the accel summary when available.
         if det_failed:
             det_detail = detector_error
@@ -5073,15 +5097,19 @@ class CameraWorker:
             RuntimeServiceInfo(
                 key="face",
                 name="Face",
-                configured="on" if self._feature("face_recognition") else "off",
-                enabled=self._feature("face_recognition"),
-                active=bool(self._feature("face_recognition") and self._face is not None),
-                state=self._stage_status(
-                    "face",
-                    enabled=self._feature("face_recognition"),
-                    available=self._face is not None,
+                configured="on" if face_enabled else "off",
+                enabled=face_enabled,
+                active=bool(face_enabled and face_available),
+                state=(
+                    "failed"
+                    if face_failed
+                    else self._stage_status(
+                        "face",
+                        enabled=face_enabled,
+                        available=face_available,
+                    )
                 ),
-                detail="recognition and identity reacquire",
+                detail=face_detail,
             ),
             self._pose_service_row(pool),
             RuntimeServiceInfo(
