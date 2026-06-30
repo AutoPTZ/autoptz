@@ -129,7 +129,9 @@ _CSV_HEADER = [
     "ndi_dropped_metadata_frames",
     "ndi_connections",
     "ndi_fourcc",
+    "ndi_buffer_ms",
     "ndi_conversion_ms",
+    "ndi_copy_ms",
     "step_app_induced_drops",
     "steady_state_app_induced_drops",
     "source_mutation_events",
@@ -173,7 +175,9 @@ def _quality(*, ttfa: float | None = 0.5) -> dict[str, object]:
         "ndi_dropped_metadata_frames": 0,
         "ndi_connections": 1,
         "ndi_fourcc": "",
+        "ndi_buffer_ms": 0.0,
         "ndi_conversion_ms": 0.0,
+        "ndi_copy_ms": 0.0,
     }
 
 
@@ -253,7 +257,9 @@ class TestSaveCsv:
         assert step1[1]["ndi_dropped_metadata_frames"] == "0"
         assert step1[1]["ndi_connections"] == "1"
         assert step1[1]["ndi_fourcc"] == ""
+        assert step1[1]["ndi_buffer_ms"] == "0.0"
         assert step1[1]["ndi_conversion_ms"] == "0.0"
+        assert step1[1]["ndi_copy_ms"] == "0.0"
         assert step1[1]["step_app_induced_drops"] == "0"
         assert step1[1]["steady_state_app_induced_drops"] == "0"
         assert step1[1]["source_mutation_events"] == "0"

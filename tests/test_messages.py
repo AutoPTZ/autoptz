@@ -131,7 +131,9 @@ class TestTelemetryMsg:
         assert msg.ndi_dropped_video_frames == 0
         assert msg.ndi_connections == -1
         assert msg.ndi_fourcc == ""
+        assert msg.ndi_buffer_ms == 0.0
         assert msg.ndi_conversion_ms == 0.0
+        assert msg.ndi_copy_ms == 0.0
 
     def test_delivery_metrics_round_trip(self) -> None:
         msg = TelemetryMsg(
@@ -154,7 +156,9 @@ class TestTelemetryMsg:
             ndi_dropped_metadata_frames=1,
             ndi_connections=1,
             ndi_fourcc="UYVY",
+            ndi_buffer_ms=0.35,
             ndi_conversion_ms=1.25,
+            ndi_copy_ms=0.15,
         )
         restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
         assert restored.frames_delivered == 900
@@ -174,7 +178,9 @@ class TestTelemetryMsg:
         assert restored.ndi_dropped_metadata_frames == 1
         assert restored.ndi_connections == 1
         assert restored.ndi_fourcc == "UYVY"
+        assert restored.ndi_buffer_ms == pytest.approx(0.35)
         assert restored.ndi_conversion_ms == pytest.approx(1.25)
+        assert restored.ndi_copy_ms == pytest.approx(0.15)
 
     def test_latency_breakdown_default_zero(self) -> None:
         # Phase 0b: true end-to-end latency decomposition.

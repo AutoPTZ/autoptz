@@ -78,8 +78,9 @@ Implementation consequences for 2.2:
 - The 8-stream gate measures **app-induced capture drops**, not detector skips.
   Inference cadence may be reduced on CPU-only hosts, but capture must still
   drain every source except during add/remove-source transitions.
-- NDI capture must expose actual FourCC, conversion time, delivered fps,
-  duplicate/stale counts, and receiver/backend counters in `SourceHealth`.
+- NDI capture must expose actual FourCC, SDK buffer handoff time, format
+  conversion time, final contiguous-copy time, delivered fps, duplicate/stale
+  counts, and receiver/backend counters in `SourceHealth`.
   Native NDI performance counters (`total_*` / `dropped_*`) are not equivalent to
   AutoPTZ's `frames_dropped_est`: native dropped frames mean the receiver had
   frames available that the app did not dequeue fast enough, while the estimate

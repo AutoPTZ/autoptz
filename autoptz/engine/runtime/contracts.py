@@ -53,7 +53,9 @@ class SourceHealth:
     delivered_fps: float = 0.0
     duplicate_frames: int = 0
     stale_frames: int = 0
+    buffer_ms: float = 0.0
     conversion_ms: float = 0.0
+    copy_ms: float = 0.0
     app_induced_drops: int = 0
     backend_counters: dict[str, float | int | str] = field(default_factory=dict)
 

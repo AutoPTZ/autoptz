@@ -770,7 +770,9 @@ class TestNDIReadFrame:
         assert adapter._color_format_pref == "fastest"
         metrics = adapter.delivery_metrics()
         assert metrics["ndi_fourcc"] == "UYVY"
+        assert metrics["ndi_buffer_ms"] >= 0.0
         assert metrics["ndi_conversion_ms"] >= 0.0
+        assert metrics["ndi_copy_ms"] >= 0.0
 
     def test_unsupported_native_format_self_heals_to_bgra(self) -> None:
         buf = np.full(_H * _W * 4, 128, dtype=np.uint8)  # 16-bit P216 layout
@@ -1011,7 +1013,9 @@ class TestBaseAdapterDeliveryMetrics:
             "ndi_dropped_metadata_frames": 0,
             "ndi_connections": -1,
             "ndi_fourcc": "",
+            "ndi_buffer_ms": 0.0,
             "ndi_conversion_ms": 0.0,
+            "ndi_copy_ms": 0.0,
         }
 
 

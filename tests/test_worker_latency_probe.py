@@ -46,7 +46,9 @@ class TestFrameSourceDeliveryPassthrough:
                     "ndi_dropped_video_frames": 1,
                     "ndi_connections": 1,
                     "ndi_fourcc": "UYVY",
+                    "ndi_buffer_ms": 0.2,
                     "ndi_conversion_ms": 0.9,
+                    "ndi_copy_ms": 0.1,
                 }
 
         src = cw._AdapterFrameSource(_Adapter())
@@ -102,7 +104,9 @@ def test_emit_telemetry_includes_delivery_fields() -> None:
             "ndi_dropped_metadata_frames": 0,
             "ndi_connections": 1,
             "ndi_fourcc": "UYVY",
+            "ndi_buffer_ms": 0.4,
             "ndi_conversion_ms": 1.4,
+            "ndi_copy_ms": 0.2,
         }
     )
     captured: list[TelemetryMsg] = []
@@ -128,7 +132,9 @@ def test_emit_telemetry_includes_delivery_fields() -> None:
     assert msg.ndi_dropped_metadata_frames == 0
     assert msg.ndi_connections == 1
     assert msg.ndi_fourcc == "UYVY"
+    assert msg.ndi_buffer_ms == 0.4
     assert msg.ndi_conversion_ms == 1.4
+    assert msg.ndi_copy_ms == 0.2
 
 
 def test_emit_telemetry_falls_back_to_worker_counters() -> None:
@@ -155,7 +161,9 @@ def test_emit_telemetry_falls_back_to_worker_counters() -> None:
     assert msg.ndi_dropped_video_frames == 0
     assert msg.ndi_connections == -1
     assert msg.ndi_fourcc == ""
+    assert msg.ndi_buffer_ms == 0.0
     assert msg.ndi_conversion_ms == 0.0
+    assert msg.ndi_copy_ms == 0.0
 
 
 # ── Feature 0b: true end-to-end latency probe ──────────────────────────────────

@@ -1057,7 +1057,9 @@ def _telemetry(
     ndi_dropped_metadata_frames: int = 0,
     ndi_connections: int = -1,
     ndi_fourcc: str = "",
+    ndi_buffer_ms: float = 0.0,
     ndi_conversion_ms: float = 0.0,
+    ndi_copy_ms: float = 0.0,
 ):
     """A minimal TelemetryMsg carrying one (optionally target) track for a camera."""
     from autoptz.engine.runtime.messages import BBox, TelemetryMsg, TrackInfo
@@ -1084,7 +1086,9 @@ def _telemetry(
         ndi_dropped_metadata_frames=ndi_dropped_metadata_frames,
         ndi_connections=ndi_connections,
         ndi_fourcc=ndi_fourcc,
+        ndi_buffer_ms=ndi_buffer_ms,
         ndi_conversion_ms=ndi_conversion_ms,
+        ndi_copy_ms=ndi_copy_ms,
         tracks=[
             TrackInfo(
                 track_id=7,
@@ -1149,7 +1153,9 @@ def test_telemetry_then_step_carries_source_health(qtapp) -> None:
                 ndi_dropped_video_frames=2,
                 ndi_connections=1,
                 ndi_fourcc="UYVY",
+                ndi_buffer_ms=0.5,
                 ndi_conversion_ms=1.25,
+                ndi_copy_ms=0.2,
             )
         )
         step = StepResult(
@@ -1170,7 +1176,9 @@ def test_telemetry_then_step_carries_source_health(qtapp) -> None:
         assert q["ndi_dropped_video_frames"] == 2
         assert q["ndi_connections"] == 1
         assert q["ndi_fourcc"] == "UYVY"
+        assert q["ndi_buffer_ms"] == 0.5
         assert q["ndi_conversion_ms"] == 1.25
+        assert q["ndi_copy_ms"] == 0.2
     finally:
         win.deleteLater()
 

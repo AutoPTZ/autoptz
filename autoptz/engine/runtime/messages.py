@@ -261,7 +261,9 @@ class TelemetryMsg(BaseModel):
     ndi_dropped_metadata_frames: int = 0
     ndi_connections: int = -1
     ndi_fourcc: str = ""
+    ndi_buffer_ms: float = 0.0
     ndi_conversion_ms: float = 0.0
+    ndi_copy_ms: float = 0.0
     # True once at least one real frame has been read + pushed to the preview shm.
     # The UI gates its "No Signal" overlay on this (not on fps, which lags a full
     # second, nor on the preview Image load, which can latch on a placeholder).

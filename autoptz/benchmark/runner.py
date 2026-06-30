@@ -74,7 +74,9 @@ class QualityMetrics:
     ndi_dropped_metadata_frames: int
     ndi_connections: int
     ndi_fourcc: str
+    ndi_buffer_ms: float
     ndi_conversion_ms: float
+    ndi_copy_ms: float
 
     def to_dict(self) -> dict[str, object]:
         """JSON-friendly dict.  ``time_to_first_acquire_s`` is ``None`` (→ JSON
@@ -109,7 +111,9 @@ class QualityMetrics:
             "ndi_dropped_metadata_frames": self.ndi_dropped_metadata_frames,
             "ndi_connections": self.ndi_connections,
             "ndi_fourcc": self.ndi_fourcc,
+            "ndi_buffer_ms": round(self.ndi_buffer_ms, 3),
             "ndi_conversion_ms": round(self.ndi_conversion_ms, 3),
+            "ndi_copy_ms": round(self.ndi_copy_ms, 3),
         }
 
 
@@ -169,8 +173,12 @@ class PerCameraQualityAccumulator:
         self._ndi_dropped_metadata_frames = 0
         self._ndi_connections = -1
         self._ndi_fourcc = ""
+        self._ndi_buffer_ms_sum = 0.0
+        self._ndi_buffer_ms_samples = 0
         self._ndi_conversion_ms_sum = 0.0
         self._ndi_conversion_ms_samples = 0
+        self._ndi_copy_ms_sum = 0.0
+        self._ndi_copy_ms_samples = 0
 
     @staticmethod
     def _find_target(msg: Any) -> Any | None:
@@ -281,10 +289,20 @@ class PerCameraQualityAccumulator:
         if fourcc:
             self._ndi_fourcc = fourcc
 
+        buffer_ms = float(getattr(msg, "ndi_buffer_ms", 0.0) or 0.0)
+        if buffer_ms > 0.0:
+            self._ndi_buffer_ms_sum += buffer_ms
+            self._ndi_buffer_ms_samples += 1
+
         conversion_ms = float(getattr(msg, "ndi_conversion_ms", 0.0) or 0.0)
         if conversion_ms > 0.0:
             self._ndi_conversion_ms_sum += conversion_ms
             self._ndi_conversion_ms_samples += 1
+
+        copy_ms = float(getattr(msg, "ndi_copy_ms", 0.0) or 0.0)
+        if copy_ms > 0.0:
+            self._ndi_copy_ms_sum += copy_ms
+            self._ndi_copy_ms_samples += 1
 
         target = self._find_target(msg)
         held = target is not None and not getattr(target, "lost", False)
@@ -342,6 +360,16 @@ class PerCameraQualityAccumulator:
             return self._ndi_conversion_ms_sum / self._ndi_conversion_ms_samples
         return 0.0
 
+    def _observed_ndi_buffer_ms(self) -> float:
+        if self._ndi_buffer_ms_samples > 0:
+            return self._ndi_buffer_ms_sum / self._ndi_buffer_ms_samples
+        return 0.0
+
+    def _observed_ndi_copy_ms(self) -> float:
+        if self._ndi_copy_ms_samples > 0:
+            return self._ndi_copy_ms_sum / self._ndi_copy_ms_samples
+        return 0.0
+
     def finalize(self) -> QualityMetrics:
         fps = self._observed_fps()
         per_frame_s = (1.0 / fps) if fps > 0.0 else 0.0
@@ -386,7 +414,9 @@ class PerCameraQualityAccumulator:
             ndi_dropped_metadata_frames=self._ndi_dropped_metadata_frames,
             ndi_connections=self._ndi_connections,
             ndi_fourcc=self._ndi_fourcc,
+            ndi_buffer_ms=self._observed_ndi_buffer_ms(),
             ndi_conversion_ms=self._observed_ndi_conversion_ms(),
+            ndi_copy_ms=self._observed_ndi_copy_ms(),
         )
 
 

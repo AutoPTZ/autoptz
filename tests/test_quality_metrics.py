@@ -48,7 +48,9 @@ def _msg(
     ndi_dropped_metadata_frames: int = 0,
     ndi_connections: int = -1,
     ndi_fourcc: str = "",
+    ndi_buffer_ms: float = 0.0,
     ndi_conversion_ms: float = 0.0,
+    ndi_copy_ms: float = 0.0,
 ) -> TelemetryMsg:
     return TelemetryMsg(
         camera_id="cam-a",
@@ -72,7 +74,9 @@ def _msg(
         ndi_dropped_metadata_frames=ndi_dropped_metadata_frames,
         ndi_connections=ndi_connections,
         ndi_fourcc=ndi_fourcc,
+        ndi_buffer_ms=ndi_buffer_ms,
         ndi_conversion_ms=ndi_conversion_ms,
+        ndi_copy_ms=ndi_copy_ms,
         tracks=tracks or [],
     )
 
@@ -308,7 +312,9 @@ class TestSourceHealthMetrics:
                 ndi_dropped_video_frames=1,
                 ndi_connections=1,
                 ndi_fourcc="uyvy",
+                ndi_buffer_ms=0.25,
                 ndi_conversion_ms=1.0,
+                ndi_copy_ms=0.1,
             )
         )
         acc.on_telemetry(
@@ -333,7 +339,9 @@ class TestSourceHealthMetrics:
                 ndi_dropped_metadata_frames=0,
                 ndi_connections=1,
                 ndi_fourcc="UYVY",
+                ndi_buffer_ms=0.75,
                 ndi_conversion_ms=2.0,
+                ndi_copy_ms=0.3,
             )
         )
 
@@ -356,7 +364,9 @@ class TestSourceHealthMetrics:
         assert q.ndi_dropped_metadata_frames == 0
         assert q.ndi_connections == 1
         assert q.ndi_fourcc == "UYVY"
+        assert q.ndi_buffer_ms == 0.5
         assert q.ndi_conversion_ms == 1.5
+        assert q.ndi_copy_ms == 0.2
 
 
 class TestQualityMetricsToDict:
@@ -399,7 +409,9 @@ class TestQualityMetricsToDict:
             "ndi_dropped_metadata_frames",
             "ndi_connections",
             "ndi_fourcc",
+            "ndi_buffer_ms",
             "ndi_conversion_ms",
+            "ndi_copy_ms",
         ):
             assert key in round_tripped
 

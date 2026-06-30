@@ -50,6 +50,8 @@ class TestCameraRecordPhase0:
         assert rec.ndi_dropped_video_frames == 0
         assert rec.ndi_connections == -1
         assert rec.ndi_conversion_ms == 0.0
+        assert rec.ndi_buffer_ms == 0.0
+        assert rec.ndi_copy_ms == 0.0
         assert rec.end_to_end_ms == 0.0
         assert rec.capture_age_ms == 0.0
         assert rec.command_send_ms == 0.0
@@ -74,7 +76,9 @@ class TestCameraRecordPhase0:
             ndi_dropped_video_frames=5,
             ndi_connections=1,
             ndi_fourcc="UYVY",
+            ndi_buffer_ms=0.5,
             ndi_conversion_ms=1.75,
+            ndi_copy_ms=0.25,
             capture_age_ms=40.0,
             command_send_ms=5.0,
             actuation_estimate_ms=80.0,
@@ -93,7 +97,9 @@ class TestCameraRecordPhase0:
         assert rec.ndi_dropped_video_frames == 5
         assert rec.ndi_connections == 1
         assert rec.ndi_fourcc == "UYVY"
+        assert rec.ndi_buffer_ms == pytest.approx(0.5)
         assert rec.ndi_conversion_ms == pytest.approx(1.75)
+        assert rec.ndi_copy_ms == pytest.approx(0.25)
         assert rec.capture_age_ms == pytest.approx(40.0)
         assert rec.command_send_ms == pytest.approx(5.0)
         assert rec.actuation_estimate_ms == pytest.approx(80.0)
@@ -233,15 +239,32 @@ class TestCameraInfoPanelPhase0:
         assert _text(panel2, "NDI queue depth") == "4"
 
     def test_ndi_format_and_conversion_rows_are_conditional(self, qtapp) -> None:
-        panel = _panel_for(qtapp, _telemetry(ndi_fourcc="", ndi_conversion_ms=0.0))
+        panel = _panel_for(
+            qtapp,
+            _telemetry(ndi_fourcc="", ndi_buffer_ms=0.0, ndi_conversion_ms=0.0, ndi_copy_ms=0.0),
+        )
         assert _visible(panel, "NDI format") is False
+        assert _visible(panel, "NDI buffer") is False
         assert _visible(panel, "NDI conversion") is False
+        assert _visible(panel, "NDI copy") is False
 
-        panel2 = _panel_for(qtapp, _telemetry(ndi_fourcc="UYVY", ndi_conversion_ms=1.234))
+        panel2 = _panel_for(
+            qtapp,
+            _telemetry(
+                ndi_fourcc="UYVY",
+                ndi_buffer_ms=0.456,
+                ndi_conversion_ms=1.234,
+                ndi_copy_ms=0.178,
+            ),
+        )
         assert _visible(panel2, "NDI format") is True
         assert _text(panel2, "NDI format") == "UYVY"
+        assert _visible(panel2, "NDI buffer") is True
+        assert _text(panel2, "NDI buffer") == "0.46 ms"
         assert _visible(panel2, "NDI conversion") is True
         assert _text(panel2, "NDI conversion") == "1.23 ms"
+        assert _visible(panel2, "NDI copy") is True
+        assert _text(panel2, "NDI copy") == "0.18 ms"
 
     def test_end_to_end_latency_row_shown_when_probed(self, qtapp) -> None:
         panel = _panel_for(qtapp, _telemetry(end_to_end_ms=125.4))

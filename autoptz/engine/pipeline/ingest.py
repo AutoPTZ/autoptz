@@ -197,7 +197,9 @@ class SourceAdapter(ABC):
             "ndi_dropped_metadata_frames": 0,
             "ndi_connections": -1,
             "ndi_fourcc": "",
+            "ndi_buffer_ms": 0.0,
             "ndi_conversion_ms": 0.0,
+            "ndi_copy_ms": 0.0,
         }
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -1053,7 +1055,9 @@ class NDIAdapter(SourceAdapter):
         self._dropped_metadata_frames = 0
         self._ndi_connections = -1
         self._last_fourcc = ""
+        self._buffer_ms = 0.0
         self._conversion_ms = 0.0
+        self._copy_ms = 0.0
         self._duplicate_frames = 0
         self._stale_frames = 0
         self._last_source_stamp: object | None = None
@@ -1080,7 +1084,9 @@ class NDIAdapter(SourceAdapter):
             self._dropped_metadata_frames = 0
             self._ndi_connections = -1
             self._last_fourcc = ""
+            self._buffer_ms = 0.0
             self._conversion_ms = 0.0
+            self._copy_ms = 0.0
             self._duplicate_frames = 0
             self._stale_frames = 0
             self._last_source_stamp = None
@@ -1190,10 +1196,12 @@ class NDIAdapter(SourceAdapter):
             if w <= 0 or h <= 0:
                 return None
 
+            t_buffer = time.perf_counter()
             data = vf.get_array()  # type: ignore[union-attr]
             if data is None or len(data) == 0:
                 return None
             arr: NDArray[np.uint8] = np.asarray(data, dtype=np.uint8).reshape(-1)
+            buffer_ms = (time.perf_counter() - t_buffer) * 1000.0
 
             # Dispatch on the actual FourCC so the native ("fastest") receive path
             # is correct for whatever the SDK hands back, not just BGRA.
@@ -1202,13 +1210,18 @@ class NDIAdapter(SourceAdapter):
             bgr = _ndi_frame_to_bgr(arr, fourcc, h, w)
             conversion_ms = (time.perf_counter() - t_convert) * 1000.0
             if bgr is not None:
+                t_copy = time.perf_counter()
+                out = np.ascontiguousarray(bgr)
+                copy_ms = (time.perf_counter() - t_copy) * 1000.0
                 self._note_delivered(
                     vf,
                     fourcc=fourcc,
+                    buffer_ms=buffer_ms,
                     conversion_ms=conversion_ms,
+                    copy_ms=copy_ms,
                     source_stamp=_ndi_source_stamp(vf),
                 )
-                return np.ascontiguousarray(bgr)
+                return out
 
             # Unsupported native format (16-bit P216/PA16) on the fastest path:
             # self-heal by flipping to the universal BGRA format so the next
@@ -1233,7 +1246,9 @@ class NDIAdapter(SourceAdapter):
         vf: object,
         *,
         fourcc: str,
+        buffer_ms: float,
         conversion_ms: float,
+        copy_ms: float,
         source_stamp: object | None,
     ) -> None:
         """Account one delivered frame and roll the 1.0 s drop-estimate window.
@@ -1248,7 +1263,9 @@ class NDIAdapter(SourceAdapter):
         with self._status_lock:
             self._delivered += 1
             self._last_fourcc = str(fourcc or "").upper()
+            self._buffer_ms = float(buffer_ms)
             self._conversion_ms = float(conversion_ms)
+            self._copy_ms = float(copy_ms)
             self._maybe_probe_sdk_telemetry(now)
             # Advertised source rate (guarded) → peak-delivered fallback.
             adv = 0.0
@@ -1508,7 +1525,9 @@ class NDIAdapter(SourceAdapter):
                 "ndi_dropped_metadata_frames": int(self._dropped_metadata_frames),
                 "ndi_connections": int(self._ndi_connections),
                 "ndi_fourcc": str(self._last_fourcc),
+                "ndi_buffer_ms": float(self._buffer_ms),
                 "ndi_conversion_ms": float(self._conversion_ms),
+                "ndi_copy_ms": float(self._copy_ms),
             }
 
     def _close(self) -> None:

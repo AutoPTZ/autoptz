@@ -166,7 +166,9 @@ _CSV_HEADER: list[str] = [
     "ndi_dropped_metadata_frames",
     "ndi_connections",
     "ndi_fourcc",
+    "ndi_buffer_ms",
     "ndi_conversion_ms",
+    "ndi_copy_ms",
     "step_app_induced_drops",
     "steady_state_app_induced_drops",
     "source_mutation_events",
@@ -208,7 +210,9 @@ _QUALITY_COLUMNS: list[str] = [
     "ndi_dropped_metadata_frames",
     "ndi_connections",
     "ndi_fourcc",
+    "ndi_buffer_ms",
     "ndi_conversion_ms",
+    "ndi_copy_ms",
 ]
 
 

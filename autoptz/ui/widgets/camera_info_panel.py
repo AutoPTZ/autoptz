@@ -118,7 +118,9 @@ class CameraInfoPanel(QWidget):
                 "NDI connections",
                 "NDI queue depth",
                 "NDI format",
+                "NDI buffer",
                 "NDI conversion",
+                "NDI copy",
             ],
         ),
         (
@@ -370,11 +372,21 @@ class CameraInfoPanel(QWidget):
         self._set_row_visible("NDI format", bool(fourcc))
         if fourcc:
             self._set("NDI format", fourcc)
+        buffer_ms = float(getattr(rec, "ndi_buffer_ms", 0.0) or 0.0)
+        show_buffer = buffer_ms > 0.0
+        self._set_row_visible("NDI buffer", show_buffer)
+        if show_buffer:
+            self._set("NDI buffer", f"{buffer_ms:.2f} ms")
         conversion_ms = float(getattr(rec, "ndi_conversion_ms", 0.0) or 0.0)
         show_conversion = conversion_ms > 0.0
         self._set_row_visible("NDI conversion", show_conversion)
         if show_conversion:
             self._set("NDI conversion", f"{conversion_ms:.2f} ms")
+        copy_ms = float(getattr(rec, "ndi_copy_ms", 0.0) or 0.0)
+        show_copy = copy_ms > 0.0
+        self._set_row_visible("NDI copy", show_copy)
+        if show_copy:
+            self._set("NDI copy", f"{copy_ms:.2f} ms")
 
         target_fps = float(getattr(tel, "target_fps", 0.0) or src.get("fps", 30.0) or 30.0)
         budget_ms = float(getattr(tel, "frame_budget_ms", 0.0) or (1000.0 / max(1.0, target_fps)))

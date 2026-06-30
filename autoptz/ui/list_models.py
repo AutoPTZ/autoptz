@@ -194,11 +194,25 @@ class CameraRecord:
         return str(getattr(self.telemetry, "ndi_fourcc", "") or "")
 
     @property
+    def ndi_buffer_ms(self) -> float:
+        """Most recent NDI SDK-buffer to numpy-array wall time in milliseconds."""
+        if not self.telemetry:
+            return 0.0
+        return float(getattr(self.telemetry, "ndi_buffer_ms", 0.0) or 0.0)
+
+    @property
     def ndi_conversion_ms(self) -> float:
         """Most recent NDI frame conversion wall time in milliseconds."""
         if not self.telemetry:
             return 0.0
         return float(getattr(self.telemetry, "ndi_conversion_ms", 0.0) or 0.0)
+
+    @property
+    def ndi_copy_ms(self) -> float:
+        """Most recent NDI contiguous-copy wall time in milliseconds."""
+        if not self.telemetry:
+            return 0.0
+        return float(getattr(self.telemetry, "ndi_copy_ms", 0.0) or 0.0)
 
     # ── Phase 0 end-to-end latency decomposition ──────────────────────────────
 
