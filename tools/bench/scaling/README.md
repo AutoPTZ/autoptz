@@ -49,7 +49,9 @@ For the 2.2 release gate, `drops_steady_window` is the same value as
 `app_induced_drops_steady_window`. `source_drop_est_steady_window` and
 `ndi_dropped_video_steady_window` are still emitted because they help diagnose source
 pacing, NDI SDK queue loss, and conversion/copy regressions, but they are not the
-same as app-induced capture drops.
+same as app-induced capture drops. `source_drop_est_*` is intentionally conservative:
+normal 29-30 fps receiver jitter is treated as pacing noise, while sustained collapse
+well below the advertised source rate is counted.
 
 ## Measured result — detection VERIFIED alive (Apple Silicon, yolo11s, NDI 1080p30)
 

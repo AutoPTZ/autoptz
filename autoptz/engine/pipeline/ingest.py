@@ -47,10 +47,33 @@ log = logging.getLogger(__name__)
 # Off by default so the field stays empty (zero payload/overhead) for normal runs.
 _MARK_GT_ENV = "AUTOPTZ_MARK_GT"
 _NDI_SDK_TELEMETRY_PROBE_INTERVAL_S = 1.0
+_NDI_DROP_EST_WINDOW_S = 5.0
+_NDI_DROP_EST_TOLERANCE_FPS = 1.5
+_NDI_DROP_EST_TOLERANCE_RATIO = 0.15
 
 
 def _mark_gt_enabled() -> bool:
     return os.environ.get(_MARK_GT_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _ndi_source_drop_estimate(source_fps: float, delivered_fps: float, dt_s: float) -> int:
+    """Estimate source-side NDI drops only for severe sustained shortfall.
+
+    NDI FrameSync is latest-frame based: a receiver that wakes a little late can
+    report 29-30 fps with jitter even when neither AutoPTZ nor the SDK dropped a
+    frame. Treat small gaps as pacing jitter, and reserve this estimate for the
+    collapse class that matters to the 8-stream gate.
+    """
+    source = max(0.0, float(source_fps))
+    delivered = max(0.0, float(delivered_fps))
+    dt = max(0.0, float(dt_s))
+    if source <= 0.0 or delivered <= 0.0 or dt <= 0.0:
+        return 0
+    gap_fps = source - delivered
+    allowed_gap_fps = max(_NDI_DROP_EST_TOLERANCE_FPS, source * _NDI_DROP_EST_TOLERANCE_RATIO)
+    if gap_fps <= allowed_gap_fps:
+        return 0
+    return max(0, int(round(gap_fps * dt)))
 
 
 # ── Optional-dependency probes (lazy, cached) ──────────────────────────────────
@@ -174,8 +197,8 @@ class SourceAdapter(ABC):
         """Per-source frame-delivery telemetry (Phase 0a).
 
         No-op default — only :class:`NDIAdapter` tracks real values (NDI's
-        FrameSync never signals "no new frame", so drops are *estimated* from
-        ``source_fps`` vs ``delivered_fps`` over a rolling window).  Every other
+        FrameSync never signals "no new frame", so severe source-vs-delivered
+        shortfall is estimated over a smoothed rolling window).  Every other
         adapter has direct frame-miss accounting already, so it returns the
         zero/unknown defaults here.
         """
@@ -1035,9 +1058,10 @@ class NDIAdapter(SourceAdapter):
 
         # ── Phase 0a: per-source frame-drop + queue telemetry ─────────────────
         # FrameSync ALWAYS hands back the latest frame (never "no new frame"), so
-        # true drops can't be read directly.  Estimate them over a rolling 1.0 s
-        # window from ``source_fps`` (advertised, or peak-delivered fallback) vs
-        # ``delivered_fps``.  Guarded by the inherited ``_status_lock``.
+        # true drops can't be read directly.  Estimate only severe sustained
+        # shortfall over a smoothed rolling window from ``source_fps``
+        # (advertised, or peak-delivered fallback) vs ``delivered_fps``.  Guarded
+        # by the inherited ``_status_lock``.
         self._delivered = 0  # frames delivered this rolling window
         self._win_t0 = 0.0  # monotonic start of the current window
         self._win_delivered0 = 0  # cumulative delivered at window start
@@ -1251,13 +1275,14 @@ class NDIAdapter(SourceAdapter):
         copy_ms: float,
         source_stamp: object | None,
     ) -> None:
-        """Account one delivered frame and roll the 1.0 s drop-estimate window.
+        """Account one delivered frame and roll the smoothed drop-estimate window.
 
         ``source_fps`` prefers the source's advertised ``frame_rate_N/frame_rate_D``
         (guarded), else falls back to the *peak* delivered fps observed so far.
-        Drops are accrued only when the source-vs-delivered shortfall exceeds half
-        a frame, so per-window jitter doesn't manufacture phantom drops.  All
-        writes are under the inherited status lock; never raises.
+        Drops are accrued only when source-vs-delivered shortfall is severe enough
+        to represent a sustained receiver/source mismatch rather than normal
+        scheduler jitter.  All writes are under the inherited status lock; never
+        raises.
         """
         now = time.monotonic()
         with self._status_lock:
@@ -1300,17 +1325,18 @@ class NDIAdapter(SourceAdapter):
                 self._win_delivered0 = self._delivered
                 return
             dt = now - self._win_t0
-            if dt < 1.0:
+            if dt < _NDI_DROP_EST_WINDOW_S:
                 return
             delivered = self._delivered - self._win_delivered0
             self._delivered_fps = delivered / dt if dt > 0 else 0.0
 
             self._source_fps = max(self._source_fps, self._delivered_fps)
 
-            expected = self._source_fps * dt
-            shortfall = expected - delivered
-            if shortfall > 0.5:
-                self._frames_dropped_est += int(round(shortfall))
+            self._frames_dropped_est += _ndi_source_drop_estimate(
+                self._source_fps,
+                self._delivered_fps,
+                dt,
+            )
 
             # Reset the window.
             self._win_t0 = now

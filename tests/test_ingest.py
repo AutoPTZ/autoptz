@@ -787,12 +787,14 @@ class TestNDIReadFrame:
 
 
 class TestNDIDeliveryMetrics:
-    """NDIAdapter estimates source-vs-delivered drops over a rolling 1.0 s window.
+    """NDIAdapter estimates source-vs-delivered drops over a smoothed window.
 
     FrameSync ALWAYS returns the latest frame (never "no new frame") so true
-    drops aren't directly observable — they're estimated from ``source_fps`` vs
-    ``delivered_fps`` over the window.  These tests drive a fake monotonic clock
-    and a real (non-None) frame so only the rolling-window math is exercised.
+    drops aren't directly observable. AutoPTZ counts only severe sustained
+    ``source_fps`` vs ``delivered_fps`` shortfall so normal scheduler jitter does
+    not manufacture a failed source-drop artifact. These tests drive a fake
+    monotonic clock and a real (non-None) frame so only the rolling-window math is
+    exercised.
     """
 
     def _adapter(self, fourcc: str = "BGRA") -> NDIAdapter:
@@ -808,8 +810,8 @@ class TestNDIDeliveryMetrics:
         adapter._receiver = MagicMock()
         return adapter
 
-    def test_drop_estimate_accrues_when_delivered_below_source(self) -> None:
-        """Source advertises 30 fps but we only deliver 20 in the window → ~10 drops."""
+    def test_drop_estimate_accrues_when_sustained_collapse_below_source(self) -> None:
+        """Source advertises 30 fps but we only deliver 20 fps → ~50 drops in 5 s."""
         adapter = self._adapter()
         # Advertise 30 fps so source_fps > delivered_fps.
         adapter._video_frame.frame_rate_N = 30
@@ -817,15 +819,15 @@ class TestNDIDeliveryMetrics:
 
         clock = {"t": 100.0}
         with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
-            # Deliver 20 frames, then trip the 1.0 s window boundary.
-            for _ in range(20):
+            # Deliver 20 fps over the 5 s window, then trip the window boundary.
+            for _ in range(100):
                 assert adapter._read_frame() is not None
-            clock["t"] += 1.0
-            assert adapter._read_frame() is not None  # 21st delivered, window computed
+            clock["t"] += 5.0
+            assert adapter._read_frame() is not None  # window computed
 
         m = adapter.delivery_metrics()
         assert m["source_fps"] >= 29.0
-        assert 8 <= m["frames_dropped_est"] <= 12
+        assert 45 <= m["frames_dropped_est"] <= 55
 
     def test_no_false_drops_when_keeping_up(self) -> None:
         """Delivering at the advertised rate accrues no drops."""
@@ -835,12 +837,29 @@ class TestNDIDeliveryMetrics:
 
         clock = {"t": 200.0}
         with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
-            for _ in range(30):
+            for _ in range(150):
                 adapter._read_frame()
-            clock["t"] += 1.0
+            clock["t"] += 5.0
             adapter._read_frame()
 
         assert adapter.delivery_metrics()["frames_dropped_est"] == 0
+
+    def test_no_false_drops_for_normal_receiver_pacing_jitter(self) -> None:
+        """29.6 fps against a 30 fps NDI source is jitter, not a source drop."""
+        adapter = self._adapter()
+        adapter._video_frame.frame_rate_N = 30
+        adapter._video_frame.frame_rate_D = 1
+
+        clock = {"t": 210.0}
+        with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
+            for _ in range(148):
+                adapter._read_frame()
+            clock["t"] += 5.0
+            adapter._read_frame()
+
+        m = adapter.delivery_metrics()
+        assert 29.4 <= m["delivered_fps"] <= 29.8
+        assert m["frames_dropped_est"] == 0
 
     def test_source_fps_peak_fallback_when_rate_not_advertised(self) -> None:
         """With no advertised rate, source_fps falls back to the peak delivered fps."""
@@ -853,13 +872,13 @@ class TestNDIDeliveryMetrics:
 
         clock = {"t": 300.0}
         with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
-            for _ in range(25):
+            for _ in range(125):
                 adapter._read_frame()
-            clock["t"] += 1.0
+            clock["t"] += 5.0
             adapter._read_frame()
 
         m = adapter.delivery_metrics()
-        # Peak delivered ≈ 25 fps over the 1.0 s window.
+        # Peak delivered ≈ 25 fps over the smoothed window.
         assert m["source_fps"] >= 24.0
         assert m["delivered_fps"] >= 24.0
 

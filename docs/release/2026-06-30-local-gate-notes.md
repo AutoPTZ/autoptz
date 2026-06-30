@@ -16,6 +16,7 @@ artifacts.
 | `artifacts/2026-06-30-8x1080p30-full-model-server-30min.json` | `full` | labs model server | 30 min | 29.7 | 0 | 42.1 ms | 50.3% | 3734 MB |
 | `artifacts/2026-06-30-8x1080p30-pose-default-60s.json` | `pose_follow` | production shared model | 60 s | 30.0 | 0 | 41.6 ms | 32.7% | 2256 MB |
 | `artifacts/2026-06-30-8x1080p30-pose-unified-60s.json` | `pose_follow` | unified pose flag | 60 s | 30.0 | 0 | 41.6 ms | 32.6% | 2244 MB |
+| `artifacts/2026-06-30-8x1080p30-streams-drop-estimator-smoke.json` | `streams` | production shared model | 60 s | 30.0 | 0 | 41.5 ms | 6.6% | 1988 MB |
 
 Sender confirmation for all local batches was `30.0 fps` on all eight fake NDI
 sources.
@@ -38,10 +39,13 @@ sources.
   and latency on this synthetic run, but did not improve latency/fps and raised
   median detector time from 20.4 ms to 23.0 ms. It still needs real tracking
   quality artifacts before promotion.
-- Source-side `source_drop_est_*` remains noisy: NDI SDK dropped-video counters
-  stayed at zero and app-induced drops stayed at zero, but the local receiver
-  still reported source-drop estimates. Treat that as an accounting/source-pacing
-  triage item, not as a proven app-induced capture miss.
+- Source-side `source_drop_est_*` in the full/simple/pose artifacts was captured
+  before the conservative source-drop estimator landed, so those values overstate
+  normal receiver pacing jitter. NDI SDK dropped-video counters and app-induced
+  drops stayed at zero. The post-fix streams smoke held 30.0 delivered fps with
+  zero app-induced drops, zero NDI dropped-video, and zero source-drop estimate.
+  Re-run the long fake-NDI artifacts after this fix before using
+  `source_drop_est_*` for source-pacing triage.
 
 ## Remaining Release Gates
 

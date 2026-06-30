@@ -111,7 +111,7 @@ class CameraRecord:
 
     @property
     def frames_dropped_est(self) -> int:
-        """Estimated frames the source produced but the receiver missed."""
+        """Conservative estimate of severe source-vs-receiver delivery misses."""
         if not self.telemetry:
             return 0
         return int(getattr(self.telemetry, "frames_dropped_est", 0))

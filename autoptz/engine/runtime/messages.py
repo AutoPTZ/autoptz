@@ -239,10 +239,11 @@ class TelemetryMsg(BaseModel):
     command_send_ms: float = 0.0
     actuation_estimate_ms: float = 0.0
     end_to_end_ms: float = 0.0
-    # Phase 0a — per-source frame-delivery telemetry.  ``frames_dropped_est`` is an
-    # ESTIMATE of frames the source produced but the receiver did not deliver,
-    # computed from ``source_fps`` vs ``delivered_fps`` over a rolling window (NDI's
-    # FrameSync never signals "no new frame", so true drops can't be read directly).
+    # Phase 0a — per-source frame-delivery telemetry.  ``frames_dropped_est`` is a
+    # conservative ESTIMATE of frames the source produced but the receiver did not
+    # deliver, computed only for severe sustained ``source_fps`` vs
+    # ``delivered_fps`` shortfall (NDI's FrameSync never signals "no new frame",
+    # so true drops can't be read directly).
     # ``ndi_queue_depth`` is -1 when the SDK exposes no queue (the common case).
     frames_delivered: int = 0
     frames_dropped_est: int = 0
