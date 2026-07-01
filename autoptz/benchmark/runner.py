@@ -660,8 +660,7 @@ class BenchmarkRunner:
                 source_mutation_drop_grace_s,
             ) = _drop_accounting(quality, mutation)
             sustained = (
-                min_fps >= self._floor - self._fps_tolerance
-                and steady_state_app_induced_drops == 0
+                min_fps >= self._floor - self._fps_tolerance and steady_state_app_induced_drops == 0
             )
             step = StepResult(
                 cameras=cameras,
