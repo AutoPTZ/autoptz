@@ -1,9 +1,10 @@
-"""Curated experimental AUTOPTZ_* flags + experimental TrackingConfig defaults.
+"""Curated dev/benchmark AUTOPTZ_* flags + TrackingConfig defaults.
 
-Single source of truth shared by the Experimental Features dialog (to build the
-rows) and :func:`autoptz.engine.supervisor.Supervisor._apply_experimental_env`
-(to publish the chosen values into ``os.environ`` before workers spawn).  Adding
-a flag here automatically exposes it in the UI and applies it at engine start.
+Single source of truth for env values that may be persisted by dev tools and
+then published by :func:`autoptz.engine.supervisor.Supervisor._apply_experimental_env`
+before workers spawn.  The normal product UI does not expose this inventory; a
+flag listed here remains a dev/benchmark control until release artifacts justify
+promoting it to an automatic default or deleting it.
 
 Each ``default`` is the value that means "engine default" — when the persisted
 selection equals it, the supervisor leaves the env var UNSET so the existing
@@ -18,7 +19,7 @@ from typing import Literal
 
 @dataclass(frozen=True)
 class ExperimentalFlag:
-    """One toggle-able experimental env flag surfaced in the UI."""
+    """One managed experimental env flag for dev/benchmark tools."""
 
     env_key: str
     label: str
@@ -65,32 +66,6 @@ EXPERIMENTAL_FLAGS: tuple[ExperimentalFlag, ...] = (
             "Drive PTZ commands from a dedicated background loop instead of "
             "inline on the inference thread, to keep aim latency steady under "
             "load. Experimental — validate on real cameras before relying on it."
-        ),
-        default="0",
-        kind="bool",
-        choices=(),
-        restart_required=True,
-    ),
-    ExperimentalFlag(
-        env_key="AUTOPTZ_PROCESS_PER_CAMERA",
-        label="One process per camera",
-        description=(
-            "Run each camera worker in its own OS process to sidestep the Python "
-            "GIL. Big win at a few cameras, but each child duplicates the full model "
-            "set so it does NOT scale (heavy RAM, collapses at ~16). Off by default."
-        ),
-        default="0",
-        kind="bool",
-        choices=(),
-        restart_required=True,
-    ),
-    ExperimentalFlag(
-        env_key="AUTOPTZ_MODEL_SERVER",
-        label="Shared model-server (scalable)",
-        description=(
-            "Run each camera in its own process AND share ONE detector via a model-"
-            "server process — escapes the GIL without the per-process RAM cliff. "
-            "Validated to scale to 16 NDI cameras. Off by default; experimental."
         ),
         default="0",
         kind="bool",

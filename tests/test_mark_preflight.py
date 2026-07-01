@@ -27,22 +27,31 @@ class TestPreflight:
 
         dlg = MarkPreflightDialog(defaults=MarkSession())
         s = dlg.session()
-        assert s.profile in ("full", "streams")
+        assert s.profile in ("simple_follow", "pose_follow", "full", "streams")
         # Default source is the bundled clip (real people) unless NDI was chosen.
         assert s.source == "clip"
         assert s.floor_fps in (24.0, 30.0)
-        assert s.max_cameras in (1, 2, 4, 8, 12, 16)
+        assert s.max_cameras in (1, 2, 4, 6, 8, 12, 16)
         assert s.dwell_s in (5.0, 10.0, 15.0, 20.0)
         assert s.resolution in ("720p", "1080p", "4k")
         assert s.model in ("auto", "nano", "small", "medium")
         # The MarkSession() defaults flow straight through the dialog.
         assert s.source == "clip"
+        assert s.profile == "simple_follow"
         assert s.floor_fps == 30.0
         assert s.max_cameras == 4
         assert s.dwell_s == 10.0
         assert s.resolution == "1080p"
         assert s.model == "small"
         assert ndi_sim_available() or s.source != "ndi"
+        dlg.deleteLater()
+
+    def test_pose_profile_round_trip(self, qtapp) -> None:
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession(profile="pose_follow"))
+        s = dlg.session()
+        assert s.profile == "pose_follow"
         dlg.deleteLater()
 
     def test_defaults_round_trip_non_default(self, qtapp) -> None:
@@ -112,8 +121,7 @@ class TestPreflight:
         max_keys = {dlg._max_combo.itemData(i) for i in range(dlg._max_combo.count())}
         fps_keys = {dlg._fps_combo.itemData(i) for i in range(dlg._fps_combo.count())}
         step_keys = {dlg._step_combo.itemData(i) for i in range(dlg._step_combo.count())}
-        # Max cameras offers 1/2/4/8/12/16, default 4.
-        assert {1, 2, 4, 8, 12, 16} <= max_keys
+        assert max_keys == {1, 2, 4, 6, 8, 12, 16}
         assert dlg._max_combo.currentData() == 4
         # Target FPS offers 24/30, default 30.
         assert {24.0, 30.0} <= fps_keys

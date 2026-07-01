@@ -111,7 +111,7 @@ class CameraRecord:
 
     @property
     def frames_dropped_est(self) -> int:
-        """Estimated frames the source produced but the receiver missed."""
+        """Conservative estimate of severe source-vs-receiver delivery misses."""
         if not self.telemetry:
             return 0
         return int(getattr(self.telemetry, "frames_dropped_est", 0))
@@ -131,11 +131,88 @@ class CameraRecord:
         return float(getattr(self.telemetry, "source_fps", 0.0))
 
     @property
+    def duplicate_frames(self) -> int:
+        """Frames with a repeated source timestamp/timecode."""
+        if not self.telemetry:
+            return 0
+        return int(getattr(self.telemetry, "duplicate_frames", 0))
+
+    @property
+    def stale_frames(self) -> int:
+        """Repeated source frames that stayed frozen past the source cadence."""
+        if not self.telemetry:
+            return 0
+        return int(getattr(self.telemetry, "stale_frames", 0))
+
+    @property
+    def ndi_queue_audio(self) -> int:
+        """Pending NDI audio queue depth; -1 when unavailable."""
+        if not self.telemetry:
+            return -1
+        return int(getattr(self.telemetry, "ndi_queue_audio", -1))
+
+    @property
+    def ndi_queue_metadata(self) -> int:
+        """Pending NDI metadata queue depth; -1 when unavailable."""
+        if not self.telemetry:
+            return -1
+        return int(getattr(self.telemetry, "ndi_queue_metadata", -1))
+
+    @property
+    def ndi_total_video_frames(self) -> int:
+        """Native NDI receiver total video frames counter."""
+        if not self.telemetry:
+            return 0
+        return int(getattr(self.telemetry, "ndi_total_video_frames", 0))
+
+    @property
+    def ndi_dropped_video_frames(self) -> int:
+        """Native NDI receiver dropped video frames counter."""
+        if not self.telemetry:
+            return 0
+        return int(getattr(self.telemetry, "ndi_dropped_video_frames", 0))
+
+    @property
+    def ndi_connections(self) -> int:
+        """NDI receiver source connection count; -1 when unavailable."""
+        if not self.telemetry:
+            return -1
+        return int(getattr(self.telemetry, "ndi_connections", -1))
+
+    @property
     def ndi_queue_depth(self) -> int:
         """Pending receive-queue depth; -1 when the source exposes no queue."""
         if not self.telemetry:
             return -1
         return int(getattr(self.telemetry, "ndi_queue_depth", -1))
+
+    @property
+    def ndi_fourcc(self) -> str:
+        """Actual NDI frame FourCC last delivered by the receiver."""
+        if not self.telemetry:
+            return ""
+        return str(getattr(self.telemetry, "ndi_fourcc", "") or "")
+
+    @property
+    def ndi_buffer_ms(self) -> float:
+        """Most recent NDI SDK-buffer to numpy-array wall time in milliseconds."""
+        if not self.telemetry:
+            return 0.0
+        return float(getattr(self.telemetry, "ndi_buffer_ms", 0.0) or 0.0)
+
+    @property
+    def ndi_conversion_ms(self) -> float:
+        """Most recent NDI frame conversion wall time in milliseconds."""
+        if not self.telemetry:
+            return 0.0
+        return float(getattr(self.telemetry, "ndi_conversion_ms", 0.0) or 0.0)
+
+    @property
+    def ndi_copy_ms(self) -> float:
+        """Most recent NDI contiguous-copy wall time in milliseconds."""
+        if not self.telemetry:
+            return 0.0
+        return float(getattr(self.telemetry, "ndi_copy_ms", 0.0) or 0.0)
 
     # ── Phase 0 end-to-end latency decomposition ──────────────────────────────
 

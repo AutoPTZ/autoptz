@@ -18,14 +18,16 @@ Per-camera commands are honoured between ticks:
 ``ptzNudge(pan, tilt, zoom)`` (drives the PTZ controller/backend if one is
 configured; otherwise a safe no-op), and ``updateConfig(CameraConfig)``.
 
-Threading model is per-thread today (capture + inference); process-per-camera is
-the future hardening step (see ``supervisor.py``).
+Production runs camera workers on threads in this process. The only process
+boundary retained for 2.2 validation is the explicit model-server candidate, where
+camera children delegate detector inference to one shared server.
 """
 
 from __future__ import annotations
 
 import functools
 import logging
+import math
 import threading
 import time
 from collections import deque
@@ -281,6 +283,9 @@ _TARGET_AMBIGUOUS_HOLD_S = 0.75
 _TARGET_JUMP_MIN_PX = 80.0
 _TARGET_JUMP_SCALE = 0.75
 _TARGET_JUMP_IOU = 0.12
+_TARGET_JUMP_CONFIRM_FRAMES = 2
+_TARGET_JUMP_CONFIRM_WINDOW_S = 0.45
+_TARGET_JUMP_CONFIRM_IOU = 0.50
 _TARGET_OVERLAP_IOU = 0.08
 _TARGET_CLOSE_Y_OVERLAP = 0.45
 _TARGET_CLOSE_GAP_FRAC = 0.18
@@ -302,6 +307,11 @@ _IDENTITY_TARGET_CONFIRM = 2
 # subject covered by something) rather than the subject simply walking away.
 _OCCLUSION_COLLAPSE_FRAC = 0.55
 _OCCLUSION_REF_ALPHA = 0.10  # how fast the healthy-height reference tracks a gradual change
+_BBOX_SHAPE_STABLE_IOU_MIN = 0.35
+_BBOX_SHAPE_CHANGE_FRAC = 0.20
+_BBOX_AIM_JUMP_MIN_PX = 12.0
+_BBOX_AIM_JUMP_SCALE = 0.10
+_BBOX_SHAPE_BLEND = 0.25
 
 # EMA weight for the pose-derived aim point: lower = smoother/laggier.  Light
 # smoothing so noisy keypoint regression doesn't jitter the framing.
@@ -331,9 +341,24 @@ class _TargetLockState:
     trusted_confidence: float = 0.0
     trusted_aim: tuple[float, float] | None = None
     trusted_t: float = 0.0
+    previous_trusted_bbox: BBox | None = None
+    previous_trusted_t: float = 0.0
     status: str = "idle"
     reason: str = ""
     ambiguous_until: float = 0.0
+    suspect_track_id: int | None = None
+    suspect_bbox: BBox | None = None
+    suspect_t: float = 0.0
+    suspect_count: int = 0
+
+
+@dataclass(frozen=True)
+class _FramingEvidence:
+    """A PTZ framing target derived from detector, pose, or stabilized fallback."""
+
+    aim: tuple[float, float]
+    subject_height: float
+    source: str
 
 
 # Frame-source abstraction, fps pacing, and source construction live in
@@ -436,7 +461,6 @@ class CameraWorker:
         self._last_faces_t = 0.0
         self._last_face_track_ids: set[int] = set()
         self._last_faces_frame_id = 0
-        self._last_faces_emitted_frame_id = -1
         # Identity the operator asked us to follow ("track when found"); single
         # target per camera — supersedes an explicit track id when its identity
         # is detected on a live track.
@@ -1475,17 +1499,25 @@ class CameraWorker:
             and tracking_on
         ):
             fh = max(1, int(frame.shape[0]))
-            box_h_frac = (float(target.bbox.y2) - float(target.bbox.y1)) / fh
-            occluded = self._target_box_collapsed(box_h_frac)
-            err, height = self._track_error(target, frame, now, tracks=tracks)
-            vel = self._estimate_aim_velocity(err, now)
+            usable = self._target_box_usable_for_ptz(target, frame)
+            box_h_frac = (float(target.bbox.y2) - float(target.bbox.y1)) / fh if usable else 0.0
+            occluded = usable and self._target_box_collapsed(box_h_frac)
+            if usable and not occluded:
+                err, height = self._track_error(target, frame, now, tracks=tracks)
+                vel = self._estimate_aim_velocity(err, now)
+                active = True
+            else:
+                # Bad/partial boxes are not evidence.  Do not update aim velocity
+                # from them; tell the controller to hold/stop until a fresh target
+                # box is usable again.
+                err, height, vel, active = (0.0, 0.0), 0.0, (0.0, 0.0), False
             try:
                 # A box that suddenly collapsed (occlusion → only a partial body
                 # visible) is not a trustworthy aim — coast (track_active=False) so
                 # the controller holds instead of chasing it onto the legs/last-known
                 # partial position, and resumes when the subject reappears in full.
                 self._publish_ptz(
-                    ctrl, err, vel, height, track_active=not occluded, now=now, log_label="auto"
+                    ctrl, err, vel, height, track_active=active, now=now, log_label="auto"
                 )
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s ptz auto step failed", self.camera_id, exc_info=True)
@@ -1669,6 +1701,42 @@ class CameraWorker:
         self._target_h_ref = ref + _OCCLUSION_REF_ALPHA * (h - ref)
         return False
 
+    def _target_box_usable_for_ptz(
+        self,
+        target: TrackInfo,
+        frame: NDArray[np.uint8],
+    ) -> bool:
+        """True when the target bbox is fresh enough and sane enough to steer PTZ.
+
+        Bounding boxes are still the universal fallback, but they are weak control
+        evidence.  Degenerate, off-frame, tiny, non-finite, or explicitly held
+        boxes are treated as "no fresh target" so a detector/tracker glitch cannot
+        produce a corrective PTZ move.
+        """
+        if getattr(target, "lost", False):
+            return False
+        if getattr(target, "aim_source", "") == "held":
+            return False
+        h, w = frame.shape[:2]
+        if w <= 0 or h <= 0:
+            return False
+        bb = target.bbox
+        vals = (bb.x1, bb.y1, bb.x2, bb.y2)
+        if not all(math.isfinite(float(v)) for v in vals):
+            return False
+        bw = float(bb.x2 - bb.x1)
+        bh = float(bb.y2 - bb.y1)
+        if bw < 2.0 or bh < 2.0:
+            return False
+        ix1 = max(0.0, float(bb.x1))
+        iy1 = max(0.0, float(bb.y1))
+        ix2 = min(float(w), float(bb.x2))
+        iy2 = min(float(h), float(bb.y2))
+        if (ix2 - ix1) < 2.0 or (iy2 - iy1) < 2.0:
+            return False
+        min_frac = float(getattr(self.config.tracking, "min_detection_size_frac", 0.0) or 0.0)
+        return (bh / max(1.0, float(h))) >= min_frac
+
     @staticmethod
     def _bbox_area(bb: BBox) -> float:
         return max(0.0, float(bb.x2 - bb.x1)) * max(0.0, float(bb.y2 - bb.y1))
@@ -1701,6 +1769,54 @@ class CameraWorker:
             return float(a.x1 - b.x2)
         return 0.0
 
+    def _stabilize_bbox_framing_evidence(
+        self,
+        evidence: _FramingEvidence,
+        track: TrackInfo,
+        frame: NDArray[np.uint8],
+    ) -> _FramingEvidence:
+        """Dampen bbox-only framing changes caused by shape noise, not motion.
+
+        Detector boxes are useful because they give us the subject envelope, but
+        they are a weak PTZ target.  A raised arm, partial occlusion, or detector
+        crop jitter can move the bbox-derived aim even when the person has not
+        actually moved.  When the same locked target still overlaps its previous
+        box, large bbox-size changes are blended against the last trusted aim so
+        PTZ follows the person rather than the box geometry.
+        """
+        lock = self._target_lock
+        prev = lock.previous_trusted_bbox
+        trusted_aim = lock.trusted_aim
+        if prev is None or trusted_aim is None:
+            return evidence
+        cur = track.bbox
+        if self._bbox_iou(prev, cur) < _BBOX_SHAPE_STABLE_IOU_MIN:
+            return evidence
+
+        prev_w = max(1.0, float(prev.x2 - prev.x1))
+        prev_h = max(1.0, float(prev.y2 - prev.y1))
+        cur_w = max(1.0, float(cur.x2 - cur.x1))
+        cur_h = max(1.0, float(cur.y2 - cur.y1))
+        size_change = max(abs(cur_w - prev_w) / prev_w, abs(cur_h - prev_h) / prev_h)
+        if size_change < _BBOX_SHAPE_CHANGE_FRAC:
+            return evidence
+
+        ax, ay = evidence.aim
+        px, py = trusted_aim
+        aim_jump = ((ax - px) ** 2 + (ay - py) ** 2) ** 0.5
+        min_extent = max(1.0, min(cur_w, cur_h))
+        if aim_jump < max(_BBOX_AIM_JUMP_MIN_PX, min_extent * _BBOX_AIM_JUMP_SCALE):
+            return evidence
+
+        frame_h = max(1.0, float(frame.shape[0]))
+        prev_height = max(0.0, min(1.0, prev_h / frame_h))
+        blend = _BBOX_SHAPE_BLEND
+        return _FramingEvidence(
+            aim=(px * (1.0 - blend) + ax * blend, py * (1.0 - blend) + ay * blend),
+            subject_height=prev_height * (1.0 - blend) + evidence.subject_height * blend,
+            source="bbox_stable",
+        )
+
     def _sync_target_flags(self, tracks: list[TrackInfo]) -> None:
         """Make TrackInfo.is_target reflect the current committed target id."""
         for t in tracks:
@@ -1720,6 +1836,12 @@ class CameraWorker:
 
     def _store_trusted_target(self, target: TrackInfo, now: float) -> None:
         lock = self._target_lock
+        if lock.trusted_bbox is not None and lock.trusted_track_id == target.track_id:
+            lock.previous_trusted_bbox = lock.trusted_bbox.model_copy()
+            lock.previous_trusted_t = lock.trusted_t
+        else:
+            lock.previous_trusted_bbox = None
+            lock.previous_trusted_t = 0.0
         lock.trusted_track_id = target.track_id
         lock.trusted_bbox = target.bbox.model_copy()
         lock.trusted_identity = target.identity
@@ -1728,6 +1850,10 @@ class CameraWorker:
         lock.trusted_t = now
         lock.status = "locked"
         lock.reason = ""
+        lock.suspect_track_id = None
+        lock.suspect_bbox = None
+        lock.suspect_t = 0.0
+        lock.suspect_count = 0
 
     def _target_bbox_jumped(self, target: TrackInfo) -> bool:
         prev = self._target_lock.trusted_bbox
@@ -1741,6 +1867,29 @@ class CameraWorker:
         cur_diag = max(1.0, ((cur.x2 - cur.x1) ** 2 + (cur.y2 - cur.y1) ** 2) ** 0.5)
         limit = max(_TARGET_JUMP_MIN_PX, min(prev_diag, cur_diag) * _TARGET_JUMP_SCALE)
         return jump > limit and self._bbox_iou(prev, cur) < _TARGET_JUMP_IOU
+
+    def _jump_candidate_confirmed(self, target: TrackInfo, now: float) -> bool:
+        """Require repeated evidence before accepting a low-overlap bbox jump.
+
+        A single detector/tracker teleport is the classic PTZ over-correction
+        trigger.  Two consecutive frames at roughly the same new box are accepted
+        as real motion; until then the target is held at the last trusted box.
+        """
+        lock = self._target_lock
+        same_track = lock.suspect_track_id == target.track_id
+        recent = (now - lock.suspect_t) <= _TARGET_JUMP_CONFIRM_WINDOW_S
+        same_box = (
+            lock.suspect_bbox is not None
+            and self._bbox_iou(lock.suspect_bbox, target.bbox) >= _TARGET_JUMP_CONFIRM_IOU
+        )
+        if same_track and recent and same_box:
+            lock.suspect_count += 1
+        else:
+            lock.suspect_track_id = target.track_id
+            lock.suspect_bbox = target.bbox.model_copy()
+            lock.suspect_count = 1
+        lock.suspect_t = now
+        return lock.suspect_count >= _TARGET_JUMP_CONFIRM_FRAMES
 
     def _target_crowded(self, target: TrackInfo, tracks: list[TrackInfo]) -> bool:
         tb = target.bbox
@@ -1981,6 +2130,17 @@ class CameraWorker:
             return
         if target.lost:
             return
+        if frame is not None and not self._target_box_usable_for_ptz(target, frame):
+            # A malformed/tiny/held box is not target evidence. Do not let it
+            # refresh the trusted lock, otherwise the next missing-target hold can
+            # freeze to a bad box and the PTZ layer has to fight stale geometry.
+            if self._target_lock.trusted_bbox is not None:
+                self._mark_target_ambiguous(target, now=now, reason="bbox_unusable")
+            else:
+                target.lost = True
+                self._target_lock.status = "pending"
+                self._target_lock.reason = "bbox_unusable"
+            return
 
         # ── flag-gated associator path (OFF by default) ──────────────────────────
         if getattr(self.config.tracking, "use_target_associator", False):
@@ -2003,7 +2163,17 @@ class CameraWorker:
         # they move away too quickly" bug.  Crowd disambiguation still defers to
         # pose when the body keypoints vouch for the same person.
         crowded = self._target_crowded(target, tracks)
-        if crowded and self._target_bbox_jumped(target):
+        jumped = self._target_bbox_jumped(target)
+        if jumped and not self._target_pose_trusted(target, frame, now, tracks):
+            if self._jump_candidate_confirmed(target, now):
+                self._store_trusted_target(target, now)
+                return
+            self._mark_target_ambiguous(
+                target, now=now, reason="blocked" if crowded else "bbox_jump"
+            )
+            return
+
+        if crowded and jumped:
             if self._target_pose_trusted(target, frame, now, tracks):
                 self._store_trusted_target(target, now)
                 return
@@ -2232,6 +2402,11 @@ class CameraWorker:
         ax, ay = ax_bbox, ay_bbox
         subject_height = bbox_height
         aim_source = "bbox"
+        evidence = _FramingEvidence(
+            aim=(float(ax), float(ay)),
+            subject_height=float(subject_height),
+            source=aim_source,
+        )
 
         # ── pose anchor (landmark-precise) FUSED with the bbox by confidence ─────
         # No hard switch: the dot rides the body when pose is strong and leans on
@@ -2252,6 +2427,16 @@ class CameraWorker:
                 subject_height = (
                     torso_height if (ignore_arms and torso_height > 0.0) else bbox_height
                 )
+                evidence = _FramingEvidence(
+                    aim=(float(ax), float(ay)),
+                    subject_height=float(subject_height),
+                    source=aim_source,
+                )
+            if evidence.source == "bbox" and track.is_target:
+                evidence = self._stabilize_bbox_framing_evidence(evidence, track, frame)
+            ax, ay = evidence.aim
+            subject_height = evidence.subject_height
+            aim_source = evidence.source
             # Smooth the fused point: stable when still, snappy on a Frame-on change.
             ax, ay = self._smooth_aim((ax, ay), track, framing_name, float(max(w, h)))
 
@@ -3921,7 +4106,6 @@ class CameraWorker:
         self._last_faces_t = 0.0
         self._last_face_track_ids = set()
         self._last_faces_frame_id = 0
-        self._last_faces_emitted_frame_id = -1
 
     def _expire_face_overlay(
         self,
@@ -3943,13 +4127,6 @@ class CameraWorker:
     def _fresh_faces_for_telemetry(self, tracks: list[TrackInfo]) -> list[FaceBox]:
         """Return only fresh face boxes for the current live tracks."""
         self._expire_face_overlay(time.monotonic(), tracks)
-        tracks_frame_id = self._last_tracks_frame_id or self._last_faces_frame_id
-        if self._last_faces_frame_id != tracks_frame_id:
-            self._clear_face_overlay()
-            return []
-        if self._last_faces_emitted_frame_id == self._last_faces_frame_id:
-            return []
-        self._last_faces_emitted_frame_id = self._last_faces_frame_id
         return list(self._last_faces)
 
     @_appearance_guarded
@@ -4192,6 +4369,27 @@ class CameraWorker:
                     best_d, best = d, t
         return best
 
+    def _enroll_click_frame_point(
+        self,
+        click_norm: tuple[float, float] | None,
+        frame_w: int,
+        frame_h: int,
+    ) -> tuple[float, float] | None:
+        """Map a UI enrollment click from preview space back to full-frame pixels."""
+        if click_norm is None:
+            return None
+        nx = max(0.0, min(1.0, float(click_norm[0])))
+        ny = max(0.0, min(1.0, float(click_norm[1])))
+        crop = self._last_digital_crop_rect
+        if crop is not None:
+            cx, cy, cw, ch = crop
+            if cw > 0 and ch > 0:
+                return (
+                    max(0.0, min(float(frame_w), float(cx) + nx * float(cw))),
+                    max(0.0, min(float(frame_h), float(cy) + ny * float(ch))),
+                )
+        return (nx * max(1, frame_w), ny * max(1, frame_h))
+
     def _face_for_pending_enroll(
         self,
         frame: NDArray[np.uint8],
@@ -4202,48 +4400,58 @@ class CameraWorker:
     ) -> Any | None:
         """Pick the face to enroll for a pending clicked track.
 
-        If the UI provided a click point, choose the face under that point or
-        nearest to it within the requested track. Without a click point, use the
-        largest face in that track as a stable fallback.
+        If the UI provided a click point, choose the face under that point.  If
+        the click was a body click inside the requested track, prefer faces in
+        the track's expected head region.  This mirrors the UI preview logic so
+        the embedding crop the worker later saves is the same person the dialog
+        showed, not merely the nearest false-positive face to the click.
         """
         target_track = next((t for t in tracks if t.track_id == track_id), None)
-        candidates = []
+        if target_track is None or getattr(target_track, "lost", False):
+            return None
+        h, w = frame.shape[:2]
+        click_px = self._enroll_click_frame_point(click_norm, w, h)
+        px, py = click_px if click_px is not None else (None, None)
+
+        def _area(obs: Any) -> float:
+            x1, y1, x2, y2 = obs.bbox
+            return max(0.0, float(x2 - x1)) * max(0.0, float(y2 - y1))
+
+        def _contains(box: Any, x: float, y: float) -> bool:
+            x1, y1, x2, y2 = box
+            return float(x1) <= x <= float(x2) and float(y1) <= y <= float(y2)
+
+        tb = target_track.bbox
+        track_box = (float(tb.x1), float(tb.y1), float(tb.x2), float(tb.y2))
+        track_click = px is not None and py is not None and _contains(track_box, px, py)
+        candidates: list[Any] = []
+        clicked: list[Any] = []
         for obs in observations:
             tr = self._track_for_face(obs, tracks)
             if tr is not None and tr.track_id == track_id and not getattr(tr, "lost", False):
                 candidates.append(obs)
-                continue
-            if click_norm is None or target_track is None or getattr(target_track, "lost", False):
-                continue
-            h, w = frame.shape[:2]
-            px = click_norm[0] * max(1, w)
-            py = click_norm[1] * max(1, h)
-            x1, y1, x2, y2 = obs.bbox
-            if (
-                target_track.bbox.x1 <= px <= target_track.bbox.x2
-                and target_track.bbox.y1 <= py <= target_track.bbox.y2
-                and x1 <= px <= x2
-                and y1 <= py <= y2
-            ):
-                candidates.append(obs)
+            if track_click and px is not None and py is not None and _contains(obs.bbox, px, py):
+                if obs not in candidates:
+                    candidates.append(obs)
+                clicked.append(obs)
         if not candidates:
             return None
+        if clicked:
+            return max(clicked, key=_area)
         if click_norm is None:
-            return max(candidates, key=lambda o: (o.bbox[2] - o.bbox[0]) * (o.bbox[3] - o.bbox[1]))
+            return max(candidates, key=_area)
 
-        h, w = frame.shape[:2]
-        px = click_norm[0] * max(1, w)
-        py = click_norm[1] * max(1, h)
+        x1, y1, x2, y2 = track_box
+        cx = (x1 + x2) * 0.5
+        half_w = (x2 - x1) * 0.35
+        head = (cx - half_w, y1, cx + half_w, y1 + (y2 - y1) * 0.30)
 
-        def score(obs: Any) -> tuple[int, float]:
-            x1, y1, x2, y2 = obs.bbox
-            inside = x1 <= px <= x2 and y1 <= py <= y2
-            cx = (x1 + x2) * 0.5
-            cy = (y1 + y2) * 0.5
-            d2 = (cx - px) ** 2 + (cy - py) ** 2
-            return (0 if inside else 1, d2)
+        def _center_in_head(obs: Any) -> bool:
+            ox1, oy1, ox2, oy2 = obs.bbox
+            return _contains(head, (ox1 + ox2) * 0.5, (oy1 + oy2) * 0.5)
 
-        return min(candidates, key=score)
+        head_candidates = [obs for obs in candidates if _center_in_head(obs)]
+        return max(head_candidates or candidates, key=_area)
 
     def _maybe_harvest(
         self,
@@ -4608,6 +4816,17 @@ class CameraWorker:
 
         if self._target_lock.status == "ambiguous":
             remaining = max(0.0, self._target_lock.ambiguous_until - now, coast_remaining)
+            if self._target_lock.reason == "bbox_jump":
+                return TrackingStatusInfo(
+                    state="ambiguous",
+                    headline="Target jumped - holding position",
+                    detail=(
+                        f"Holding {label}'s last trusted framing while confirming the new box."
+                    ),
+                    action="holding",
+                    remaining_s=remaining,
+                    severity="warning",
+                )
             return TrackingStatusInfo(
                 state="ambiguous",
                 headline="Target blocked",
@@ -4691,6 +4910,17 @@ class CameraWorker:
         age = time.monotonic() - self._stage_last_t.get(key, 0.0)
         return "active" if age <= _STAGE_FRESH_S else "stale"
 
+    def _face_recognizer_available(self) -> bool:
+        face = self._face
+        recognizer = getattr(face, "recognizer", None) if face is not None else None
+        return bool(recognizer is not None and getattr(recognizer, "available", False))
+
+    def _face_unavailable_detail(self) -> str:
+        face = self._face
+        recognizer = getattr(face, "recognizer", None) if face is not None else None
+        detail = getattr(recognizer, "last_error", None) if recognizer is not None else None
+        return str(detail or "face recognizer unavailable")
+
     def _stage_row(
         self,
         key: str,
@@ -4732,6 +4962,8 @@ class CameraWorker:
         face_on = self._feature("face_recognition")
         pose_on = self._feature("pose")
         detect_interval = self._effective_detect_interval()
+        face_available = self._face_recognizer_available()
+        face_failed = face_on and self._face is not None and not face_available
         return [
             self._stage_row(
                 "ingest",
@@ -4762,12 +4994,17 @@ class CameraWorker:
             self._stage_row(
                 "face",
                 "Face",
-                status=self._stage_status(
-                    "face",
-                    enabled=face_on,
-                    available=self._face is not None,
+                status=(
+                    "failed"
+                    if face_failed
+                    else self._stage_status(
+                        "face",
+                        enabled=face_on,
+                        available=face_available,
+                    )
                 ),
                 cadence=f"{1.0 / _FACE_INTERVAL_S:.0f} Hz",
+                detail=self._face_unavailable_detail() if face_failed else "",
             ),
             self._stage_row(
                 "pose",
@@ -4814,6 +5051,12 @@ class CameraWorker:
         det_enabled = self._feature("detection")
         det_available = self._detect is not None
         det_failed = det_enabled and not det_available and bool(detector_error)
+        face_enabled = self._feature("face_recognition")
+        face_available = self._face_recognizer_available()
+        face_failed = face_enabled and self._face is not None and not face_available
+        face_detail = (
+            self._face_unavailable_detail() if face_failed else "recognition and identity reacquire"
+        )
         # Base detail for the detector row; append the accel summary when available.
         if det_failed:
             det_detail = detector_error
@@ -4854,15 +5097,19 @@ class CameraWorker:
             RuntimeServiceInfo(
                 key="face",
                 name="Face",
-                configured="on" if self._feature("face_recognition") else "off",
-                enabled=self._feature("face_recognition"),
-                active=bool(self._feature("face_recognition") and self._face is not None),
-                state=self._stage_status(
-                    "face",
-                    enabled=self._feature("face_recognition"),
-                    available=self._face is not None,
+                configured="on" if face_enabled else "off",
+                enabled=face_enabled,
+                active=bool(face_enabled and face_available),
+                state=(
+                    "failed"
+                    if face_failed
+                    else self._stage_status(
+                        "face",
+                        enabled=face_enabled,
+                        available=face_available,
+                    )
                 ),
-                detail="recognition and identity reacquire",
+                detail=face_detail,
             ),
             self._pose_service_row(pool),
             RuntimeServiceInfo(
@@ -5081,7 +5328,22 @@ class CameraWorker:
             frames_dropped_est=int(dm.get("frames_dropped_est", 0)),
             delivered_fps=float(dm.get("delivered_fps", self._fps)),
             source_fps=float(dm.get("source_fps", 0.0)),
+            duplicate_frames=int(dm.get("duplicate_frames", 0)),
+            stale_frames=int(dm.get("stale_frames", 0)),
             ndi_queue_depth=int(dm.get("ndi_queue_depth", -1)),
+            ndi_queue_audio=int(dm.get("ndi_queue_audio", -1)),
+            ndi_queue_metadata=int(dm.get("ndi_queue_metadata", -1)),
+            ndi_total_video_frames=int(dm.get("ndi_total_video_frames", 0)),
+            ndi_dropped_video_frames=int(dm.get("ndi_dropped_video_frames", 0)),
+            ndi_total_audio_frames=int(dm.get("ndi_total_audio_frames", 0)),
+            ndi_dropped_audio_frames=int(dm.get("ndi_dropped_audio_frames", 0)),
+            ndi_total_metadata_frames=int(dm.get("ndi_total_metadata_frames", 0)),
+            ndi_dropped_metadata_frames=int(dm.get("ndi_dropped_metadata_frames", 0)),
+            ndi_connections=int(dm.get("ndi_connections", -1)),
+            ndi_fourcc=str(dm.get("ndi_fourcc", "") or ""),
+            ndi_buffer_ms=float(dm.get("ndi_buffer_ms", 0.0) or 0.0),
+            ndi_conversion_ms=float(dm.get("ndi_conversion_ms", 0.0) or 0.0),
+            ndi_copy_ms=float(dm.get("ndi_copy_ms", 0.0) or 0.0),
             streaming=self._frame_w > 0,
             source_fps_cap=self._source_fps_cap(),
             target_fps=self._target_fps(),
@@ -5128,7 +5390,7 @@ class CameraWorker:
             return 0.0
         return float(cap) if cap else 0.0
 
-    def _delivery_metrics(self) -> dict[str, float | int]:
+    def _delivery_metrics(self) -> dict[str, float | int | str]:
         """Per-source frame-delivery telemetry from the running frame source.
 
         Empty ``{}`` when no source, no method, or it raises — the caller then

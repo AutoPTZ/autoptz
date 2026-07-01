@@ -33,10 +33,11 @@ import dataclasses
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QMetaObject, Qt, Signal, Slot
+from PySide6.QtCore import QMetaObject, QRect, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
@@ -49,7 +50,7 @@ from PySide6.QtWidgets import (
 )
 
 from autoptz.benchmark.profiles import get_profile
-from autoptz.benchmark.runner import BenchmarkResult, StepResult
+from autoptz.benchmark.runner import BenchmarkResult, StepResult, _quality_app_induced_drops
 from autoptz.ui import theme as T
 from autoptz.ui.mark_session import MarkSession
 from autoptz.ui.widgets.camera_wall import CameraWall
@@ -59,6 +60,8 @@ from autoptz.ui.widgets.mark_control_panel import MarkControlPanel
 from autoptz.ui.widgets.mark_details_panel import MarkDetailsPanel
 
 log = logging.getLogger(__name__)
+
+_SOURCE_MUTATION_DROP_GRACE_S = 2.0
 
 
 def _no_autostart() -> bool:
@@ -78,6 +81,26 @@ def _no_autostart() -> bool:
     )
 
 
+def _result_with_recomputed_gate(result: BenchmarkResult) -> BenchmarkResult:
+    """Recompute summary fields from enriched GUI steps after drop gates."""
+    if not result.steps:
+        return result
+    sustained_cameras = 0
+    min_fps_at_sustained = 0.0
+    for step in result.steps:
+        if not step.sustained:
+            break
+        sustained_cameras = int(step.cameras)
+        min_fps_at_sustained = float(step.min_fps)
+    score = round(sustained_cameras * (min_fps_at_sustained / 30.0) * result.weight, 2)
+    return dataclasses.replace(
+        result,
+        sustained_cameras=sustained_cameras,
+        min_fps_at_sustained=min_fps_at_sustained,
+        score=score,
+    )
+
+
 class _MarkRampChart(QWidget):
     """A small QPainter line chart: x = camera count, y = min fps per step.
 
@@ -91,7 +114,14 @@ class _MarkRampChart(QWidget):
         self.setObjectName("markChart")
         self._steps: list[StepResult] = []
         self._floor: float = 24.0
-        self.setMinimumHeight(140)
+        self.setMinimumHeight(168)
+        self.setToolTip(
+            "Minimum delivered FPS by camera count. Points pass only when they meet the "
+            "target FPS and report zero steady-state app-induced capture drops. Drops "
+            "during explicit source add/remove transitions are reported separately."
+        )
+        self.setAccessibleName("AutoPTZ Mark performance chart")
+        self.setAccessibleDescription(self.toolTip())
 
     def set_steps(self, steps: list[StepResult], floor: float) -> None:
         self._steps = list(steps)
@@ -104,11 +134,24 @@ class _MarkRampChart(QWidget):
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             w = self.width()
             h = self.height()
-            pad = 10
-            x0, y0 = pad, pad
-            x1, y1 = max(pad + 1, w - pad), max(pad + 1, h - pad)
+            pad = 12
+            x0, y0 = pad, pad + 26
+            x1, y1 = max(pad + 1, w - pad), max(pad + 1, h - pad - 16)
 
             painter.fillRect(self.rect(), QColor(T.CURRENT.surface))
+            painter.setPen(QPen(QColor(T.CURRENT.text), 1))
+            painter.drawText(
+                QRect(pad, pad, max(1, w - 2 * pad), 18),
+                Qt.AlignmentFlag.AlignLeft,
+                "Min delivered FPS",
+            )
+            summary = self._summary_text()
+            painter.setPen(QPen(QColor(T.CURRENT.subtext), 1))
+            painter.drawText(
+                QRect(pad, pad, max(1, w - 2 * pad), 18),
+                Qt.AlignmentFlag.AlignRight,
+                summary,
+            )
 
             # Vertical scale: 0 .. max(observed fps, floor) * 1.15 headroom.
             observed = [s.min_fps for s in self._steps] + [self._floor]
@@ -129,6 +172,11 @@ class _MarkRampChart(QWidget):
             painter.setPen(floor_pen)
             fy = fps_y(self._floor)
             painter.drawLine(x0, int(fy), x1, int(fy))
+            painter.drawText(
+                QRect(x0 + 4, int(fy) - 18, max(1, x1 - x0 - 8), 16),
+                Qt.AlignmentFlag.AlignRight,
+                f"target {self._floor:.0f} fps",
+            )
 
             n = len(self._steps)
             if n == 0:
@@ -156,8 +204,33 @@ class _MarkRampChart(QWidget):
                 painter.setPen(QPen(color, 1))
                 px, py = step_x(i), fps_y(s.min_fps)
                 painter.drawEllipse(int(px) - 3, int(py) - 3, 6, 6)
+                if n <= 8:
+                    painter.setPen(QPen(QColor(T.CURRENT.subtext), 1))
+                    painter.drawText(
+                        QRect(int(px) - 18, int(y1) + 2, 36, 14),
+                        Qt.AlignmentFlag.AlignCenter,
+                        str(int(s.cameras)),
+                    )
+            painter.setPen(QPen(QColor(T.CURRENT.subtext), 1))
+            painter.drawText(
+                QRect(x0, int(y1) + 2, max(1, x1 - x0), 14),
+                Qt.AlignmentFlag.AlignRight,
+                "cameras",
+            )
         finally:
             painter.end()
+
+    def _summary_text(self) -> str:
+        if not self._steps:
+            return "target fps + zero steady drops required"
+        step = self._steps[-1]
+        steady = int(getattr(step, "steady_state_app_induced_drops", 0) or 0)
+        allowed = int(getattr(step, "source_mutation_allowed_drops", 0) or 0)
+        drop_text = "0 steady drops" if steady == 0 else f"{steady} steady drops"
+        if allowed:
+            drop_text = f"{drop_text} (+{allowed} source-change)"
+        verdict = "pass" if step.sustained else "fail"
+        return f"{int(step.cameras)} cam | min {step.min_fps:.1f} fps | {drop_text} | {verdict}"
 
 
 class MarkWindow(MainWindow):
@@ -198,6 +271,10 @@ class MarkWindow(MainWindow):
         # maps camera id -> GroundTruthComparator (accumulated across the whole run
         # and finalized on _on_finished).  ``_gt`` is None when GT is inactive.
         self._quality: dict[str, Any] = {}
+        self._source_mutation_quality: dict[str, Any] = {}
+        self._source_mutation_events = 0
+        self._source_mutation_allowed_drops = 0
+        self._source_mutation_grace_until = 0.0
         self._gt: dict[str, Any] | None = {} if self._gt_active() else None
         self._gt_summary: dict[str, dict] = {}
         # Completion (Area 2): on a finished ramp, prompt a Save-As dialog.  Tests
@@ -233,6 +310,7 @@ class MarkWindow(MainWindow):
             # No right-click tile context menu in the demo: the viewer must not be
             # able to remove cameras / retarget the throwaway Mark engine.
             context_menu_enabled=False,
+            source_discovery_enabled=False,
         )
         self.setWindowTitle("AutoPTZ Mark")  # NO version (lives in About)
         # Fix 1 (live theme toggle in Mark): the global ThemeController (app.py) is
@@ -316,7 +394,7 @@ class MarkWindow(MainWindow):
         helpm.addAction(_action(self, "About AutoPTZ Mark", self._show_about_mark))
         helpm.addSeparator()
         # A second, always-visible path to the deliberate Return / Quit choice
-        # (the primary one is the control panel's "Exit Mark…" button).
+        # (the primary one is the control panel's "Exit Mark" button).
         helpm.addAction(_action(self, "Exit AutoPTZ Mark…", self._request_exit))
 
     def _build_appearance_menu(self, view: Any) -> None:
@@ -380,7 +458,7 @@ class MarkWindow(MainWindow):
         card_col = QVBoxLayout(chart_card)
         card_col.setContentsMargins(0, 0, 0, 0)
         card_col.setSpacing(0)
-        chart_title = QLabel("PERFORMANCE RAMP")
+        chart_title = QLabel("FPS BY CAMERA COUNT")
         chart_title.setObjectName("chartTitle")
         card_col.addWidget(chart_title)
         card_col.addWidget(self._chart)
@@ -452,10 +530,18 @@ class MarkWindow(MainWindow):
         cid = getattr(msg, "camera_id", None)
         if cid is None:
             return
-        acc = self._quality.get(cid)
+        target_quality = self._quality
+        now = time.monotonic()
+        if self._source_mutation_grace_until > 0.0:
+            if now <= self._source_mutation_grace_until:
+                target_quality = self._source_mutation_quality
+            else:
+                self._close_source_mutation_grace()
+
+        acc = target_quality.get(cid)
         if acc is None:
             acc = PerCameraQualityAccumulator(self._session.target_fps())
-            self._quality[cid] = acc
+            target_quality[cid] = acc
         acc.on_telemetry(msg)
 
         if self._gt is not None:
@@ -493,7 +579,7 @@ class MarkWindow(MainWindow):
         if not _no_autostart():
             self._engine.start()
             # Auto-track a (seeded) target per camera so Center Stage visibly engages
-            # on the full profile; a no-op for the streams (no-inference) profile.
+            # on tracking-enabled profiles; a no-op for streams (no inference).
             self._engine.auto_track_targets(seed=0xA17)
 
     def showEvent(self, event: Any) -> None:  # noqa: N802
@@ -548,6 +634,39 @@ class MarkWindow(MainWindow):
             self._controller.stop()
             self._controls.set_verdict("Stopping…")
 
+    def _quality_drops(self, quality: dict[str, Any]) -> int:
+        finalized = {cid: acc.finalize().to_dict() for cid, acc in quality.items()}
+        return _quality_app_induced_drops(finalized)
+
+    def _begin_source_mutation_grace(self) -> None:
+        """Start the add/remove-source grace bucket for Mark drop accounting."""
+        if self._quality:
+            self._source_mutation_allowed_drops += self._quality_drops(self._quality)
+            self._quality = {}
+        self._source_mutation_events += 1
+        self._source_mutation_grace_until = max(
+            self._source_mutation_grace_until,
+            time.monotonic() + _SOURCE_MUTATION_DROP_GRACE_S,
+        )
+
+    def _cancel_source_mutation_grace_if_empty(self) -> None:
+        """Undo a grace window opened for a no-op grow at the camera cap."""
+        if self._source_mutation_quality:
+            return
+        self._source_mutation_events = max(0, self._source_mutation_events - 1)
+        if self._source_mutation_events == 0:
+            self._source_mutation_allowed_drops = 0
+            self._source_mutation_grace_until = 0.0
+
+    def _close_source_mutation_grace(self) -> None:
+        """Move finished source-mutation telemetry into the allowed-drop bucket."""
+        if self._source_mutation_quality:
+            self._source_mutation_allowed_drops += self._quality_drops(
+                self._source_mutation_quality
+            )
+            self._source_mutation_quality = {}
+        self._source_mutation_grace_until = 0.0
+
     @Slot()
     def _grow_one_slot(self) -> None:
         """Add the next fake camera ON THE GUI THREAD.
@@ -556,10 +675,14 @@ class MarkWindow(MainWindow):
         thread; the ramp's worker thread posts this slot and waits on the event.
         """
         try:
+            self._begin_source_mutation_grace()
             self._grow_result = self._engine.add_next_camera()
+            if self._grow_result is None:
+                self._cancel_source_mutation_grace_if_empty()
         except Exception:  # noqa: BLE001
             log.exception("Mark add_next_camera failed")
             self._grow_result = None
+            self._cancel_source_mutation_grace_if_empty()
         finally:
             self._grow_event.set()
 
@@ -575,7 +698,15 @@ class MarkWindow(MainWindow):
         from PySide6.QtCore import QThread
 
         if QThread.currentThread() is self.thread():
-            return self._engine.add_next_camera()
+            self._begin_source_mutation_grace()
+            try:
+                cid = self._engine.add_next_camera()
+            except Exception:  # noqa: BLE001
+                self._cancel_source_mutation_grace_if_empty()
+                raise
+            if cid is None:
+                self._cancel_source_mutation_grace_if_empty()
+            return cid
         self._grow_event.clear()
         self._grow_result = None
         QMetaObject.invokeMethod(self, "_grow_one_slot", Qt.ConnectionType.QueuedConnection)
@@ -654,10 +785,30 @@ class MarkWindow(MainWindow):
         # StepResult with {cid: QualityMetrics dict} BEFORE forwarding to the chart /
         # persistence, then RESET the accumulators so the next step starts clean (no
         # double-feeding / carryover between steps).
+        self._close_source_mutation_grace()
         quality = {cid: acc.finalize().to_dict() for cid, acc in self._quality.items()}
-        if quality:
-            step = dataclasses.replace(step, per_camera_quality=quality)
+        steady_app_drops = _quality_app_induced_drops(quality)
+        mutation_events = self._source_mutation_events
+        mutation_allowed = self._source_mutation_allowed_drops
+        if quality or mutation_events or mutation_allowed:
+            app_drops = steady_app_drops + mutation_allowed
+            step = dataclasses.replace(
+                step,
+                per_camera_quality=quality,
+                app_induced_drops=app_drops,
+                steady_state_app_induced_drops=steady_app_drops,
+                source_mutation_events=mutation_events,
+                source_mutation_allowed_drops=mutation_allowed,
+                source_mutation_drop_grace_s=(
+                    _SOURCE_MUTATION_DROP_GRACE_S if mutation_events else 0.0
+                ),
+                sustained=step.sustained and steady_app_drops == 0,
+            )
         self._quality = {}
+        self._source_mutation_quality = {}
+        self._source_mutation_events = 0
+        self._source_mutation_allowed_drops = 0
+        self._source_mutation_grace_until = 0.0
         self._chart._steps.append(step)
         self._chart.set_steps(self._chart._steps, self._effective_floor())
         # The ramp grew the wall this step; re-target so any newly added camera also
@@ -680,20 +831,23 @@ class MarkWindow(MainWindow):
         steps = (
             enriched if (enriched and len(enriched) == len(result.steps)) else list(result.steps)
         )
-        result = dataclasses.replace(
-            result,
-            steps=steps,
-            scene_clip_id=(
-                self._session.clip_info().id if self._session.is_clip() else self._session.source
-            ),
-            ground_truth=gt_summary,
+        result = _result_with_recomputed_gate(
+            dataclasses.replace(
+                result,
+                steps=steps,
+                scene_clip_id=(
+                    self._session.clip_info().id
+                    if self._session.is_clip()
+                    else self._session.source
+                ),
+                ground_truth=gt_summary,
+            )
         )
         self._result = result
         self._teardown_controller()
         self._controls.set_running(False)
-        # Color steps against the SAME discounted floor the ramp graded with (the
-        # chart's pass line), not result.floor_fps mixed with the raw target — so
-        # green dots sit above the line and red below.
+        # Color steps against the same exact floor the ramp graded with so green
+        # dots sit above the line and red below.
         self._chart.set_steps(list(result.steps) or self._chart._steps, self._effective_floor())
         # The finished verdict: the human rating word + the transparent score math
         # (e.g. "Good — 2 cam × 28/30 fps × 1.0 weight = 1.87").  final=True highlights
@@ -882,13 +1036,10 @@ class MarkWindow(MainWindow):
             log.debug("could not open results folder", exc_info=True)
 
     def _effective_floor(self) -> float:
-        """The DISCOUNTED pass floor the ramp actually grades against.
+        """The exact pass floor the ramp grades against.
 
-        Mark grades a camera as sustaining at ``target × _MARK_SUSTAIN_RATIO`` (the
-        capped sources can't hit the raw target exactly — see
-        :class:`MarkRampController`).  The chart's pass line must use THIS threshold
-        so green (sustained) dots sit above the line and red (fail) below; using the
-        raw target would put passing-but-capped steps below the line.
+        The chart's pass line must match :class:`MarkRampController` so green
+        (sustained) dots sit above the same threshold used by the release JSON.
         """
         from autoptz.ui.mark_runner import MarkRampController
 

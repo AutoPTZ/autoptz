@@ -26,7 +26,8 @@ device is missing (it always keeps live preview).
 - **Identity-gated tracking** — click a person to target them; optional face
   recognition + appearance ReID re-bind the right person after occlusions.
 - **Smooth PTZ control** — motion prediction, one-euro smoothing, PD + velocity
-  feed-forward, an adjustable framing "safe zone", auto-zoom, and loss recovery.
+  feed-forward, an internal framing quiet zone, fixed zoom by default, and
+  hold-on-loss behavior.
 - **Runs anywhere, fast** — ONNX Runtime picks the best accelerator per platform
   (Apple CoreML, NVIDIA TensorRT/CUDA, Windows DirectML, Intel OpenVINO, CPU)
   with per-EP tuning (FP16, persistent TensorRT engine cache, full graph

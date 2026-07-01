@@ -512,16 +512,17 @@ class TestControllerStateMachine:
         ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, False, t=0.05)
         assert ctrl.state == ControllerState.COASTING
 
-    def test_coast_sends_last_velocity(self) -> None:
+    def test_loss_holds_instead_of_sending_last_velocity(self) -> None:
         backend = MockBackend()
         ctrl = PTZController(backend, _cfg(kp=0.6), coast_window_ms=500)
         # track once to get a non-zero command
         ctrl.step((0.5, 0.0), (0.0, 0.0), 0.45, True, t=0.0)
         prev_calls = len(backend.velocity_calls)
-        # lose target → coast
-        ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, False, t=0.05)
-        # the coast tick should send (a non-trivially-different) command
+        pan, tilt, zoom = ctrl.step((0.0, 0.0), (0.0, 0.0), 0.0, False, t=0.05)
+        # Lost target evidence must not continue a stale pan/tilt command.
+        assert (pan, tilt, zoom) == pytest.approx((0.0, 0.0, 0.0), abs=1e-9)
         assert len(backend.velocity_calls) >= prev_calls
+        assert backend.velocity_calls[-1] == pytest.approx((0.0, 0.0, 0.0), abs=1e-9)
 
     def test_coast_expires_to_searching(self) -> None:
         backend = MockBackend()
@@ -658,7 +659,6 @@ class TestControllerThread:
         backend = MockBackend()
         ctrl = PTZController(backend, _cfg(), rate_hz=50.0)
         ctrl.start()
-        time.sleep(0.05)
         ctrl.stop()
         assert backend.stop_count >= 1
 
@@ -689,17 +689,16 @@ class TestControllerThread:
         assert ctrl._thread is not None
         ctrl.stop()
 
-    def test_thread_delivers_commands(self) -> None:
+    def test_thread_delivers_commands(self, wait_until) -> None:
         backend = MockBackend()
         ctrl = PTZController(backend, _cfg(kp=0.6), rate_hz=50.0)
         ctrl.start()
         ctrl.update((0.5, 0.0), (0.0, 0.0), 0.45, True)
-        # Poll until the worker thread delivers rather than sleeping a fixed window:
-        # at 50 Hz a tick is ~20 ms, but a loaded CI runner can stall the thread, so
-        # a fixed 0.1 s sleep flakes. Allow a generous ceiling; return as soon as ready.
-        deadline = time.monotonic() + 2.0
-        while not backend.velocity_calls and time.monotonic() < deadline:
-            time.sleep(0.01)
+        wait_until(
+            lambda: backend.velocity_calls,
+            timeout=2.0,
+            message="PTZ controller thread did not deliver a velocity command",
+        )
         ctrl.stop()
         assert len(backend.velocity_calls) >= 1
 
@@ -727,22 +726,24 @@ class TestControllerPumpHeartbeat:
         ctrl = PTZController(MockBackend(), _cfg(), rate_hz=1000.0)
         assert ctrl._heartbeat_stale_s == pytest.approx(ctrl_mod_floor())
 
-    def test_thread_drives_from_update(self) -> None:
+    def test_thread_drives_from_update(self, wait_until) -> None:
         """With start(), a fresh update(track_active=True) makes the loop drive."""
         backend = MockBackend()
         ctrl = PTZController(backend, _cfg(kp=0.6), rate_hz=50.0)
         ctrl.start()
         try:
             ctrl.update((0.5, 0.0), (0.0, 0.0), 0.45, True)
-            deadline = time.monotonic() + 2.0
-            while not backend.velocity_calls and time.monotonic() < deadline:
-                time.sleep(0.01)
+            wait_until(
+                lambda: backend.velocity_calls,
+                timeout=2.0,
+                message="loop did not drive backend from update()",
+            )
             assert backend.velocity_calls, "loop did not drive backend from update()"
             assert ctrl.state == ControllerState.TRACKING
         finally:
             ctrl.stop()
 
-    def test_stale_feed_halts_camera(self) -> None:
+    def test_stale_feed_halts_camera(self, wait_until) -> None:
         """Withholding update() past the stale threshold makes the loop stop()."""
         backend = MockBackend()
         # Short threshold so the test is quick but still well above a tick period.
@@ -751,15 +752,19 @@ class TestControllerPumpHeartbeat:
         ctrl.start()
         try:
             ctrl.update((0.5, 0.0), (0.0, 0.0), 0.45, True)
-            deadline = time.monotonic() + 2.0
-            while not backend.velocity_calls and time.monotonic() < deadline:
-                time.sleep(0.01)
+            wait_until(
+                lambda: backend.velocity_calls,
+                timeout=2.0,
+                message="loop never started driving",
+            )
             assert backend.velocity_calls, "loop never started driving"
             stops_before = backend.stop_count
             # Now go quiet: no further update() — the loop must halt and drop to IDLE.
-            deadline = time.monotonic() + 2.0
-            while ctrl.state != ControllerState.IDLE and time.monotonic() < deadline:
-                time.sleep(0.01)
+            wait_until(
+                lambda: ctrl.state == ControllerState.IDLE,
+                timeout=2.0,
+                message="stale feed did not halt the controller",
+            )
             assert ctrl.state == ControllerState.IDLE, "stale feed did not halt the controller"
             assert backend.stop_count > stops_before, "stale feed did not send a backend stop"
         finally:
@@ -790,7 +795,7 @@ class TestControllerPumpHeartbeat:
         assert ctrl._last_update_t == pytest.approx(456.0)
         assert ctrl._payload.seq == seq_before, "manual hold must not alter the payload"
 
-    def test_manual_hold_prevents_heartbeat_stop(self) -> None:
+    def test_manual_hold_prevents_heartbeat_stop(self, wait_until) -> None:
         """I1: refreshing via note_manual_hold() each tick during a held nudge
         keeps the background loop from halting the camera as 'stale'."""
         backend = MockBackend()
@@ -800,9 +805,11 @@ class TestControllerPumpHeartbeat:
         try:
             # Drive once so we're TRACKING (the only state the heartbeat guards).
             ctrl.update((0.5, 0.0), (0.0, 0.0), 0.45, True)
-            deadline = time.monotonic() + 2.0
-            while not backend.velocity_calls and time.monotonic() < deadline:
-                time.sleep(0.01)
+            wait_until(
+                lambda: backend.velocity_calls,
+                timeout=2.0,
+                message="loop never started driving",
+            )
             assert ctrl.state == ControllerState.TRACKING
 
             # Now simulate a held manual nudge: no update() for well past the stale
@@ -994,7 +1001,7 @@ class TestLatencyLead:
             aim_smoothing=0.0,
             lead_time_s=0.0,
             lead_time_auto=True,
-            safe_zone_enabled=False,  # otherwise the framing box swallows the lead
+            safe_zone_enabled=False,  # otherwise the internal deadband swallows the lead
         )
         lo = PTZController(b_lo, cfg)
         hi = PTZController(b_hi, cfg)
@@ -1014,6 +1021,42 @@ class TestLatencyLead:
         assert ctrl._loop_latency_s <= 0.8
         ctrl.set_loop_latency(-5.0)
         assert ctrl._loop_latency_s == 0.0
+
+
+class TestAdaptiveCatchUp:
+    def _steady_pan(
+        self,
+        *,
+        velocity: tuple[float, float] = (0.0, 0.0),
+        latency_s: float = 0.0,
+    ) -> float:
+        ctrl = PTZController(
+            MockBackend(),
+            _cfg(
+                kp=0.5,
+                kd=0.0,
+                kv=0.0,
+                catch_up_speed=0.8,
+                aim_smoothing=0.0,
+                safe_zone_enabled=False,
+                max_accel=0.0,
+            ),
+        )
+        ctrl.set_loop_latency(latency_s)
+        pan = 0.0
+        for i in range(6):
+            pan, _, _ = ctrl.step((0.12, 0.0), velocity, 0.45, True, t=i * 0.05)
+        return abs(pan)
+
+    def test_velocity_urgency_increases_command_for_same_error(self) -> None:
+        slow = self._steady_pan(velocity=(0.0, 0.0))
+        fast = self._steady_pan(velocity=(2.0, 0.0))
+        assert fast > slow
+
+    def test_latency_urgency_increases_command_for_same_error(self) -> None:
+        low = self._steady_pan(latency_s=0.0)
+        high = self._steady_pan(latency_s=0.35)
+        assert high > low
 
 
 class TestSlewRateLimit:

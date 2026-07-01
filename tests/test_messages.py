@@ -122,7 +122,18 @@ class TestTelemetryMsg:
         assert msg.frames_dropped_est == 0
         assert msg.delivered_fps == 0.0
         assert msg.source_fps == 0.0
+        assert msg.duplicate_frames == 0
+        assert msg.stale_frames == 0
         assert msg.ndi_queue_depth == -1
+        assert msg.ndi_queue_audio == -1
+        assert msg.ndi_queue_metadata == -1
+        assert msg.ndi_total_video_frames == 0
+        assert msg.ndi_dropped_video_frames == 0
+        assert msg.ndi_connections == -1
+        assert msg.ndi_fourcc == ""
+        assert msg.ndi_buffer_ms == 0.0
+        assert msg.ndi_conversion_ms == 0.0
+        assert msg.ndi_copy_ms == 0.0
 
     def test_delivery_metrics_round_trip(self) -> None:
         msg = TelemetryMsg(
@@ -132,14 +143,44 @@ class TestTelemetryMsg:
             frames_dropped_est=42,
             delivered_fps=28.5,
             source_fps=30.0,
+            duplicate_frames=6,
+            stale_frames=2,
             ndi_queue_depth=3,
+            ndi_queue_audio=1,
+            ndi_queue_metadata=0,
+            ndi_total_video_frames=900,
+            ndi_dropped_video_frames=4,
+            ndi_total_audio_frames=901,
+            ndi_dropped_audio_frames=0,
+            ndi_total_metadata_frames=12,
+            ndi_dropped_metadata_frames=1,
+            ndi_connections=1,
+            ndi_fourcc="UYVY",
+            ndi_buffer_ms=0.35,
+            ndi_conversion_ms=1.25,
+            ndi_copy_ms=0.15,
         )
         restored = TelemetryMsg.from_msgpack(msg.to_msgpack())
         assert restored.frames_delivered == 900
         assert restored.frames_dropped_est == 42
         assert restored.delivered_fps == pytest.approx(28.5)
         assert restored.source_fps == pytest.approx(30.0)
+        assert restored.duplicate_frames == 6
+        assert restored.stale_frames == 2
         assert restored.ndi_queue_depth == 3
+        assert restored.ndi_queue_audio == 1
+        assert restored.ndi_queue_metadata == 0
+        assert restored.ndi_total_video_frames == 900
+        assert restored.ndi_dropped_video_frames == 4
+        assert restored.ndi_total_audio_frames == 901
+        assert restored.ndi_dropped_audio_frames == 0
+        assert restored.ndi_total_metadata_frames == 12
+        assert restored.ndi_dropped_metadata_frames == 1
+        assert restored.ndi_connections == 1
+        assert restored.ndi_fourcc == "UYVY"
+        assert restored.ndi_buffer_ms == pytest.approx(0.35)
+        assert restored.ndi_conversion_ms == pytest.approx(1.25)
+        assert restored.ndi_copy_ms == pytest.approx(0.15)
 
     def test_latency_breakdown_default_zero(self) -> None:
         # Phase 0b: true end-to-end latency decomposition.

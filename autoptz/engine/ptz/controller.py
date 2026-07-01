@@ -6,8 +6,8 @@ Pipeline per tick:
 
   zoom: subject_height error → PD with hysteresis → backend zoom component
 
-Coast-on-loss: when track_active goes False, hold last velocity for
-coast_window_ms, then stop and enter SEARCHING state.
+Hold-on-loss: when target evidence goes stale or untrusted, stop pan/tilt
+immediately while keeping warm reacquire state for a short coast window.
 """
 
 from __future__ import annotations
@@ -166,24 +166,31 @@ def _shape(x: float) -> float:
     return math.copysign(abs(x) ** _POWER, x) if x != 0.0 else 0.0
 
 
-# Dynamic catch-up speed: the per-axis speed ceiling is scaled by 1 + gain·strength·
-# min(1, |error|/ref), so the camera speeds up the further the subject is from the
-# target framing and eases back to the configured speed near centre.
+# Dynamic catch-up speed: the per-axis speed ceiling is scaled by urgency from
+# position error, target velocity, and measured loop latency, so the camera speeds
+# up when the subject is far away, moving quickly, or the pipeline is lagging, then
+# eases back near the setpoint.
 _DYN_GAIN = 1.5  # max extra-speed multiplier at full strength + far error (→ up to 2.5×)
 _DYN_E_REF = 0.6  # aim error (fraction of half-frame) at which the boost saturates
+_DYN_V_REF = 1.5  # error-units/sec at which motion urgency saturates
+_DYN_LATENCY_REF_S = 0.30  # loop latency at which lag urgency saturates
 
 
-def _catch_up_boost(error: float, strength: float) -> float:
-    """Error-proportional speed multiplier (``>= 1.0``).
+def _catch_up_boost(error: float, velocity: float, latency_s: float, strength: float) -> float:
+    """Adaptive speed multiplier (``>= 1.0``).
 
-    ``error`` is the normalized aim error toward the setpoint (0 at centre, ~1 at
-    the frame edge); ``strength`` is the user's catch-up control in ``[0, 1]``
-    (0 disables → always ``1.0``).  Saturates at ``_DYN_E_REF`` so a far subject
-    gets full catch-up speed without the boost running away.
+    ``error`` is normalized aim error toward the setpoint; ``velocity`` is the
+    ego-corrected target motion in error-units/sec; ``latency_s`` is measured loop
+    delay.  The largest urgency wins, so a small but fast-moving subject still gets
+    enough speed to avoid lag while a centered, still subject remains calm.
     """
     if strength <= 0.0:
         return 1.0
-    return 1.0 + _DYN_GAIN * strength * min(1.0, abs(error) / _DYN_E_REF)
+    e = min(1.0, abs(error) / _DYN_E_REF)
+    v = min(1.0, abs(velocity) / _DYN_V_REF)
+    lag = min(1.0, max(0.0, latency_s) / _DYN_LATENCY_REF_S)
+    urgency = max(e, 0.65 * v, 0.55 * lag)
+    return 1.0 + _DYN_GAIN * strength * urgency
 
 
 def _zone_norm(dx: float, dy: float, hw: float, hh: float, roundness: float) -> float:
@@ -702,8 +709,8 @@ class PTZController:
                 if t - self._coast_start >= self._coast_window_s:
                     self._state = ControllerState.SEARCHING
                     self._search_start = t
-                    # Stop the inherited pan/tilt drift; SEARCHING then zooms out
-                    # to widen the view and re-find the subject (below).
+                    # Stop the held pan/tilt command; SEARCHING may optionally
+                    # zoom out to widen the view and re-find the subject (below).
                     try:
                         self._backend.stop()
                     except Exception:
@@ -715,7 +722,10 @@ class PTZController:
             pan_cmd, tilt_cmd = self._pd_step(p, t)
             zoom_cmd = self._zoom_step(p.subject_height) if cfg.auto_zoom else 0.0
         elif self._state == ControllerState.COASTING:
-            pan_cmd, tilt_cmd = self._coast_pan, self._coast_tilt
+            # Lost/untrusted target evidence must never keep moving the head.  The
+            # previous command is retained only in the slew state so a brief
+            # false-negative can warm-reacquire without a visible cold ramp.
+            pan_cmd = tilt_cmd = 0.0
             zoom_cmd = 0.0
         elif self._state == ControllerState.SEARCHING:
             # Loss recovery: hold pan/tilt still and gently zoom OUT for a window
@@ -820,8 +830,8 @@ class PTZController:
         #    from the setpoint the camera speeds up to catch the subject; near it
         #    the boost is ~1 so centred framing stays smooth and precise.
         catch = float(getattr(cfg, "catch_up_speed", 0.0))
-        pan_cap = cfg.max_pan_speed * _catch_up_boost(ex_f, catch)
-        tilt_cap = cfg.max_tilt_speed * _catch_up_boost(ey_f, catch)
+        pan_cap = cfg.max_pan_speed * _catch_up_boost(ex_f, vx, self._loop_latency_s, catch)
+        tilt_cap = cfg.max_tilt_speed * _catch_up_boost(ey_f, vy, self._loop_latency_s, catch)
         pan_cmd = _shape(_clamp(pan_raw * pan_cap, -1.0, 1.0))
         tilt_cmd = _shape(_clamp(tilt_raw * tilt_cap, -1.0, 1.0))
 

@@ -228,7 +228,7 @@ def _install_fake_detect_stack(monkeypatch):
 
 
 class TestCameraWorker:
-    def test_writes_frames_to_shm_and_emits_telemetry(self, qapp) -> None:
+    def test_writes_frames_to_shm_and_emits_telemetry(self, qapp, wait_until) -> None:
         """Frames land in shm and telemetry reaches the callback.
 
         We inject a ShmWriter the *test* owns (and read it via a ShmReader
@@ -265,15 +265,20 @@ class TestCameraWorker:
         )
         worker.start()
         try:
-            frame = None
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
+
+            def _latest_frame():
                 result = reader.latest()
                 if result is not None:
                     _hdr, frame = result
-                    break
-                time.sleep(0.02)
-            assert frame is not None, "no frame landed in shm"
+                    return frame
+                return None
+
+            frame = wait_until(
+                _latest_frame,
+                timeout=5.0,
+                interval=0.02,
+                message="no frame landed in shm",
+            )
             assert frame.shape == (_PREVIEW_H, _PREVIEW_W, 3)
             assert int(frame.mean()) == 123  # the fake's solid colour
         finally:
@@ -290,7 +295,7 @@ class TestCameraWorker:
         # live-preview-only path: no model → empty tracks, still valid telemetry
         assert isinstance(msg.tracks, list)
 
-    def test_fps_becomes_positive(self, qapp) -> None:
+    def test_fps_becomes_positive(self, qapp, wait_until) -> None:
         from autoptz.engine.camera_worker import CameraWorker
 
         received = []
@@ -309,20 +314,24 @@ class TestCameraWorker:
         )
         worker.start()
         try:
-            deadline = time.monotonic() + 3.0
-            best = 0.0
-            while time.monotonic() < deadline:
+
+            def _best_fps() -> float:
                 with lock:
                     if received:
-                        best = max(best, received[-1].fps)
-                if best > 0.0:
-                    break
-                time.sleep(0.05)
+                        return max(m.fps for m in received)
+                return 0.0
+
+            best = wait_until(
+                _best_fps,
+                timeout=3.0,
+                interval=0.05,
+                message="fps never became positive with a live source",
+            )
             assert best > 0.0, "fps never became positive with a live source"
         finally:
             worker.stop()
 
-    def test_stop_is_idempotent_and_releases_source(self, qapp) -> None:
+    def test_stop_is_idempotent_and_releases_source(self, qapp, wait_until) -> None:
         from autoptz.engine.camera_worker import CameraWorker
 
         src = FakeFrameSource()
@@ -333,13 +342,13 @@ class TestCameraWorker:
             frame_source=src,
         )
         worker.start()
-        time.sleep(0.1)
+        wait_until(lambda: src.opened, timeout=2.0, message="worker did not open source")
         worker.stop()
         worker.stop()  # idempotent — must not raise
         assert worker.is_running is False
         assert src.closed is True
 
-    def test_failed_source_emits_error_telemetry_no_crash(self, qapp) -> None:
+    def test_failed_source_emits_error_telemetry_no_crash(self, qapp, wait_until) -> None:
         from autoptz.engine.camera_worker import CameraWorker
         from autoptz.engine.runtime.messages import HealthState
 
@@ -358,12 +367,12 @@ class TestCameraWorker:
         )
         worker.start()
         try:
-            deadline = time.monotonic() + 3.0
-            while time.monotonic() < deadline:
-                with lock:
-                    if received:
-                        break
-                time.sleep(0.02)
+            wait_until(
+                lambda: received,
+                timeout=3.0,
+                interval=0.02,
+                message="no telemetry emitted on failed source",
+            )
             with lock:
                 assert received, "no telemetry emitted on failed source"
                 states = {m.health.state for m in received}
@@ -431,7 +440,9 @@ class TestCameraWorker:
         assert worker._target_track_id == 2
         assert worker._reid.reset_calls == 1
 
-    def test_detection_runs_with_engine_on_and_no_target(self, qapp, monkeypatch) -> None:
+    def test_detection_runs_with_engine_on_and_no_target(
+        self, qapp, monkeypatch, wait_until
+    ) -> None:
         """Detection + tracks must appear when the engine is on even with NO target.
 
         Regression: detection used to be gated on ``_tracking_enabled`` (which
@@ -461,24 +472,29 @@ class TestCameraWorker:
         assert worker._tracking_enabled is False  # no target, tracking off
         worker.start()
         try:
-            deadline = time.monotonic() + 3.0
-            tracks = []
-            while time.monotonic() < deadline:
+
+            def _latest_tracks():
                 with lock:
                     for m in received:
                         if m.tracks:
-                            tracks = m.tracks
-                            break
-                if tracks:
-                    break
-                time.sleep(0.02)
+                            return m.tracks
+                return []
+
+            tracks = wait_until(
+                _latest_tracks,
+                timeout=3.0,
+                interval=0.02,
+                message="no tracks emitted even though a detector is loaded",
+            )
             assert det.calls > 0, "detector was never run despite engine being on"
             assert tracks, "no tracks emitted even though a detector is loaded"
             assert tracks[0].is_target is False  # detection without a follow-target
         finally:
             worker.stop()
 
-    def test_disabling_detection_feature_releases_detector(self, qapp, monkeypatch) -> None:
+    def test_disabling_detection_feature_releases_detector(
+        self, qapp, monkeypatch, wait_until
+    ) -> None:
         """Turning the detection feature off frees the detector; on rebuilds it.
 
         Regression for "models not unloaded": disabling a subsystem must drop the
@@ -497,30 +513,39 @@ class TestCameraWorker:
         )
         worker.start()
         try:
-            deadline = time.monotonic() + 3.0
-            while worker._detect is None and time.monotonic() < deadline:
-                time.sleep(0.02)
-            assert worker._detect is not None
-            while det.calls == 0 and time.monotonic() < deadline:
-                time.sleep(0.02)
-            assert det.calls > 0
+            wait_until(
+                lambda: worker._detect is not None,
+                timeout=3.0,
+                interval=0.02,
+                message="detector was not built",
+            )
+            wait_until(
+                lambda: det.calls > 0,
+                timeout=3.0,
+                interval=0.02,
+                message="detector was never called",
+            )
 
             # Disable detection → lifecycle drops the worker's detector reference.
             worker.set_features({"detection": False})
-            deadline = time.monotonic() + 3.0
-            while worker._detect is not None and time.monotonic() < deadline:
-                time.sleep(0.02)
-            assert worker._detect is None, "detector not released after disabling detection"
+            wait_until(
+                lambda: worker._detect is None,
+                timeout=3.0,
+                interval=0.02,
+                message="detector not released after disabling detection",
+            )
             calls_when_off = det.calls
             time.sleep(0.2)
             assert det.calls == calls_when_off, "detector still running while disabled"
 
             # Re-enable → lifecycle rebuilds the detector stack.
             worker.set_features({"detection": True})
-            deadline = time.monotonic() + 3.0
-            while worker._detect is None and time.monotonic() < deadline:
-                time.sleep(0.02)
-            assert worker._detect is not None, "detector not rebuilt after re-enabling"
+            wait_until(
+                lambda: worker._detect is not None,
+                timeout=3.0,
+                interval=0.02,
+                message="detector not rebuilt after re-enabling",
+            )
         finally:
             worker.stop()
 
@@ -553,7 +578,7 @@ class TestCameraWorker:
         assert worker._resolve_detect_stack() is None
         assert calls["n"] == 0, "per-worker downloading build ran despite a pool being present"
 
-    def test_telemetry_reports_resolution_and_dropped_frames(self, qapp) -> None:
+    def test_telemetry_reports_resolution_and_dropped_frames(self, qapp, wait_until) -> None:
         """Width/height come from the source frame; dropped counts read() misses."""
         from autoptz.engine.camera_worker import CameraWorker
 
@@ -593,24 +618,32 @@ class TestCameraWorker:
         )
         worker.start()
         try:
-            deadline = time.monotonic() + 3.0
-            res_ok = drop_ok = False
-            while time.monotonic() < deadline:
+
+            def _quality_seen() -> bool:
+                res_ok = drop_ok = False
                 with lock:
                     for m in received:
                         if m.width == 640 and m.height == 480:
                             res_ok = True
                         if m.dropped_frames > 0:
                             drop_ok = True
-                if res_ok and drop_ok:
-                    break
-                time.sleep(0.02)
+                return res_ok and drop_ok
+
+            wait_until(
+                _quality_seen,
+                timeout=3.0,
+                interval=0.02,
+                message="telemetry never reported resolution and dropped frame count",
+            )
+            with lock:
+                res_ok = any(m.width == 640 and m.height == 480 for m in received)
+                drop_ok = any(m.dropped_frames > 0 for m in received)
             assert res_ok, "telemetry never reported source resolution 640x480"
             assert drop_ok, "telemetry never counted a dropped frame"
         finally:
             worker.stop()
 
-    def test_reclaims_leaked_shm_segment(self, qapp) -> None:
+    def test_reclaims_leaked_shm_segment(self, qapp, wait_until) -> None:
         """A stale segment from a crashed run is reclaimed, not fatal."""
         import uuid
         from multiprocessing import resource_tracker
@@ -647,26 +680,28 @@ class TestCameraWorker:
         worker.start()
         try:
             # Worker should have reclaimed the orphan and produced a live region.
-            reader = None
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
+            def _open_reader_with_frame():
                 try:
                     candidate = ShmReader(shm_name, _PREVIEW_H, _PREVIEW_W)
                 except Exception:
-                    time.sleep(0.05)
-                    continue
+                    return None
                 if candidate.latest() is not None:
-                    reader = candidate
-                    break
+                    return candidate
                 candidate.close()
-                time.sleep(0.05)
-            assert reader is not None, "worker did not reclaim leaked segment"
+                return None
+
+            reader = wait_until(
+                _open_reader_with_frame,
+                timeout=5.0,
+                interval=0.05,
+                message="worker did not reclaim leaked segment",
+            )
             reader.close()
         finally:
             worker.stop()
         _cleanup_shm(shm_name)
 
-    def test_ptz_nudge_drives_injected_backend(self, qapp, monkeypatch) -> None:
+    def test_ptz_nudge_drives_injected_backend(self, qapp, monkeypatch, wait_until) -> None:
         from autoptz.engine import camera_worker as cw
         from autoptz.engine.camera_worker import CameraWorker
 
@@ -699,9 +734,12 @@ class TestCameraWorker:
         worker.start()
         try:
             worker.ptz_nudge(0.7, 0.0, 0.0)
-            deadline = time.monotonic() + 2.0
-            while time.monotonic() < deadline and not backend.moves:
-                time.sleep(0.02)
+            wait_until(
+                lambda: backend.moves,
+                timeout=2.0,
+                interval=0.02,
+                message="ptz nudge did not reach the backend",
+            )
             assert backend.moves, "ptz nudge did not reach the backend"
             assert backend.moves[0][0] == pytest.approx(0.7)
         finally:
@@ -850,6 +888,33 @@ class TestPtzPumpFlag:
         worker._drive_ptz_auto([], None, now)
         assert ctrl.manual_holds == 0, "OFF mode must not call note_manual_hold"
 
+    def test_unusable_bbox_publishes_idle_not_tracking(self, monkeypatch) -> None:
+        from autoptz.engine.runtime.messages import BBox, TrackInfo
+
+        worker, ctrl = self._worker(monkeypatch, pump=False)
+        worker._tracking_enabled = True
+        worker._target_track_id = 7
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        valid = TrackInfo(
+            track_id=7,
+            bbox=BBox(x1=100, y1=100, x2=220, y2=360),
+            confidence=0.9,
+        )
+        worker._apply_target_lock([valid], frame, now=1.0)
+        ctrl.steps.clear()
+
+        tiny = TrackInfo(
+            track_id=7,
+            bbox=BBox(x1=500, y1=20, x2=510, y2=30),
+            confidence=0.9,
+        )
+        worker._apply_target_lock([tiny], frame, now=1.1)
+        worker._drive_ptz_auto([tiny], frame, now=1.1)
+
+        assert ctrl.steps
+        assert ctrl.steps[-1][3] is False
+
 
 class _ThreadedSpyController:
     """Spy controller with a real daemon loop, like the production controller.
@@ -917,7 +982,7 @@ class TestPtzRebuildLifecycle:
         )
         return worker
 
-    def test_rebuild_stops_old_controller_before_new_starts(self, monkeypatch) -> None:
+    def test_rebuild_stops_old_controller_before_new_starts(self, monkeypatch, wait_until) -> None:
         _ThreadedSpyController._events = []
         old = _ThreadedSpyController("old")
         worker = self._worker(monkeypatch, pump=True, old_ctrl=old)
@@ -954,9 +1019,11 @@ class TestPtzRebuildLifecycle:
         # No thread leak: the old loop is gone; the new spy's loop is the only add.
         new.stop()
         # Allow the joined threads to fully retire before counting.
-        deadline = time.monotonic() + 2.0
-        while threading.active_count() > before and time.monotonic() < deadline:
-            time.sleep(0.01)
+        wait_until(
+            lambda: threading.active_count() <= before,
+            timeout=2.0,
+            message="rebuild leaked a controller loop thread",
+        )
         assert threading.active_count() <= before, "rebuild leaked a controller loop thread"
 
     def test_rebuild_off_mode_does_not_stop_controller(self, monkeypatch) -> None:
@@ -1105,6 +1172,47 @@ class TestTrackErrorAimRegion:
         assert trk.aim_x == pytest.approx(50.0)
         assert trk.aim_y == pytest.approx(38.0)
         assert trk.aim_source == "bbox"
+
+    def test_bbox_shape_change_is_stabilized_for_ptz_framing(self) -> None:
+        from autoptz.engine.runtime.messages import BBox
+
+        frame = np.zeros((1000, 1000, 3), dtype=np.uint8)
+        w = self._worker("full_body")
+        w._features["pose"] = False
+        trk = self._track(350, 200, 550, 800)  # raw bbox aim x=450
+        trk.is_target = True
+        w._target_track_id = trk.track_id
+        w._target_lock.previous_trusted_bbox = BBox(x1=450, y1=200, x2=550, y2=800)
+        w._target_lock.trusted_aim = (500.0, 500.0)
+
+        (ex, ey), height = w._track_error(trk, frame, now=10.0)
+
+        assert trk.aim_source == "bbox_stable"
+        assert trk.aim_x == pytest.approx(487.5)
+        assert trk.aim_y == pytest.approx(500.0)
+        assert ex == pytest.approx(-0.025)
+        assert ey == pytest.approx(0.0)
+        assert height == pytest.approx(0.6)
+
+    def test_bbox_motion_without_overlap_is_not_shape_stabilized(self) -> None:
+        from autoptz.engine.runtime.messages import BBox
+
+        frame = np.zeros((1000, 1000, 3), dtype=np.uint8)
+        w = self._worker("full_body")
+        w._features["pose"] = False
+        trk = self._track(650, 200, 750, 800)  # real move to the right
+        trk.is_target = True
+        w._target_track_id = trk.track_id
+        w._target_lock.previous_trusted_bbox = BBox(x1=450, y1=200, x2=550, y2=800)
+        w._target_lock.trusted_aim = (500.0, 500.0)
+
+        (ex, ey), height = w._track_error(trk, frame, now=10.0)
+
+        assert trk.aim_source == "bbox"
+        assert trk.aim_x == pytest.approx(700.0)
+        assert ex == pytest.approx(0.4)
+        assert ey == pytest.approx(0.0)
+        assert height == pytest.approx(0.6)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1332,7 +1440,7 @@ class TestSupervisorRouting:
         )
         assert Supervisor._adaptive_startup_concurrency() == 1
 
-    def test_staged_start_reports_progress_and_spawns(self, qapp, monkeypatch) -> None:
+    def test_staged_start_reports_progress_and_spawns(self, qapp, monkeypatch, wait_until) -> None:
         client = _make_client(qapp)
         client.addCamera("usb://0", "A")
         client.addCamera("usb://1", "B")
@@ -1345,9 +1453,11 @@ class TestSupervisorRouting:
 
         sup.start(staged=True, progress=lambda **kw: events.append(kw))
         try:
-            deadline = time.monotonic() + 2.0
-            while sup.worker_count < 2 and time.monotonic() < deadline:
-                time.sleep(0.01)
+            wait_until(
+                lambda: sup.worker_count == 2 and any(e.get("phase") == "Ready" for e in events),
+                timeout=2.0,
+                message="staged supervisor start did not spawn all workers and report Ready",
+            )
             assert sup.worker_count == 2
             phases = [e.get("phase") for e in events]
             assert "Opening cameras" in phases
@@ -1355,7 +1465,9 @@ class TestSupervisorRouting:
         finally:
             sup.stop()
 
-    def test_staged_start_releases_inference_without_forced_warmup(self, qapp, monkeypatch) -> None:
+    def test_staged_start_releases_inference_without_forced_warmup(
+        self, qapp, monkeypatch, wait_until
+    ) -> None:
         client = _make_client(qapp)
         client.addCamera("usb://0", "A")
         client.addCamera("usb://1", "B")
@@ -1390,15 +1502,20 @@ class TestSupervisorRouting:
 
         sup.start(staged=True, progress=lambda **_kw: None)
         try:
-            deadline = time.monotonic() + 2.0
-            workers = []
-            while time.monotonic() < deadline:
+
+            def _workers_released():
                 workers = list(sup._workers.values())
                 if workers and all(
                     w.inference_paused and w.inference_paused[-1] is False for w in workers
                 ):
-                    break
-                time.sleep(0.01)
+                    return workers
+                return []
+
+            workers = wait_until(
+                _workers_released,
+                timeout=2.0,
+                message="staged supervisor start did not release inference",
+            )
             assert events[:2] == [
                 f"start:{client.cameraModel.camera_ids()[0]}",
                 f"start:{client.cameraModel.camera_ids()[1]}",
@@ -1627,6 +1744,17 @@ class TestTelemetryThreadSafety:
         cid = c.addCamera("usb://0", "X")
         c.drain_commands()
 
+        queued: list[TelemetryMsg] = []
+
+        class _QueuedSignal:
+            def emit(self, msg: TelemetryMsg) -> None:
+                queued.append(msg)
+
+        # Avoid spinning Qt's native dispatcher in the mixed suite. The production
+        # signal is already connected as QueuedConnection; this test pins the
+        # thread branch and verifies the owning-thread slot separately.
+        c._telemetryArrived = _QueuedSignal()
+
         def worker_push():
             c.push_telemetry(TelemetryMsg(camera_id=cid, seq=1, fps=42.0))
 
@@ -1634,15 +1762,12 @@ class TestTelemetryThreadSafety:
         t.start()
         t.join()
 
-        # Off-thread push is queued: model not updated until the event loop runs.
+        # Off-thread push is queued: model not updated inline.
         assert c.get_camera(cid).fps == pytest.approx(0.0)
+        assert [msg.camera_id for msg in queued] == [cid]
 
-        qapp.processEvents()
-        # After processing the queued event, the model reflects the update.
-        deadline = time.monotonic() + 2.0
-        while c.get_camera(cid).fps == 0.0 and time.monotonic() < deadline:
-            qapp.processEvents()
-            time.sleep(0.01)
+        # The queued signal targets this slot on the owning Qt thread in production.
+        c._on_telemetry_main(queued[0])
         assert c.get_camera(cid).fps == pytest.approx(42.0)
 
     def test_push_from_owning_thread_applies_synchronously(self, qapp) -> None:

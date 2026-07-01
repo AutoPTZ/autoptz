@@ -6,6 +6,59 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.0-rc9] — 2026-06-30
+
+> Pre-release for testing. Headline: an **AutoPTZ 2.2 reliability overhaul** plus
+> two fixes validated by driving the real AutoPTZ Mark GUI over **8×1080p30 NDI**.
+> On an M4 Pro that run holds **all 8 cameras at ~30 fps with zero app-induced
+> capture drops** (≈38% system headroom). Two bugs are fixed: Mark's ramp no longer
+> reports a healthy 8-camera NDI run as "1 camera" (it graded against a zero-jitter
+> 30.0 floor, which normal 29.8 fps NDI jitter — with zero dropped frames — always
+> tripped), and the tracker no longer collapses its lost-track window at startup
+> (which caused id-switches / PTZ "bounce" after the briefest occlusion).
+> **Please validate on your machine and cameras.**
+
+### Added
+
+- **AutoPTZ Mark NDI reliability gates and per-source evidence.** Mark's NDI path
+  now fails preflight loudly when a fake source can't be resolved, samples NDI
+  buffer/conversion/copy cost and queue/drop counters (sampled, not per-frame),
+  classifies add/remove-source churn under a source-mutation drop grace so it is
+  never folded into the steady-state pass/fail bucket, and reports a conservative
+  per-source drop estimate distinct from app-induced capture drops.
+
+### Changed
+
+- **Persisted services restore exactly as saved on startup/restart.** Stale queued
+  commands from a previous stopped session can no longer override the persisted
+  service map when the engine comes back online.
+- **Simplified experimental surfaces.** Research switches are dev/benchmark inputs
+  only; the visible center safe-zone overlay was removed (the hidden anti-bobbing
+  deadband remains). The failed-face-recognizer state is now surfaced in the
+  Services panel instead of failing silently.
+- Enrollment clicks are mapped through the active crop, and Intel macOS DMG
+  checksum aliases are accepted by the update-integrity manifest.
+
+### Fixed
+
+- **Mark NDI grading tolerates sub-fps jitter.** A real "30 fps" NDI source reads
+  29.7–29.9 fps with **zero** dropped frames (rolling-fps estimate + source pacing
+  noise). The ramp graded each step against a hard `min_fps ≥ target` floor, so it
+  stopped at the first step and reported an 8-camera run that dropped nothing as "1
+  camera sustained". Grading now allows a 1.0 fps jitter tolerance; the zero-drops
+  gate stays strict, the score (which weights min fps) is unchanged, and genuine
+  under-delivery still fails. Real Mark GUI: 8×1080p30 NDI now reports **8/8
+  cameras sustained, 0 app-induced drops**.
+- **Tracker lost-track window no longer collapses at startup.** The BoT-SORT
+  tracker is built lazily on the first frame, when ingest fps is still unmeasured,
+  which froze its lost-track survival (`max_time_lost`) to **0** for the whole
+  session — any single missed detection dropped the track and the reappearing
+  person got a new id (id-switch / target-loss / PTZ "bounce" after the briefest
+  occlusion). The creation rate is now floored to a sane default so lost tracks
+  survive the intended ~1.5 s coast and are re-associated on reappearance.
+- Target lock no longer refreshes off unusable boxes; bbox framing is stabilized
+  against sharp shape changes; Mark teardown and enrollment crops are stabilized.
+
 ## [2.2.0-rc8] — 2026-06-29
 
 > Pre-release for testing. Headline: the **scalable shared model-server**

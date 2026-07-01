@@ -82,6 +82,16 @@ def verify_sha256(path: Path, expected_hex: str) -> bool:
     return h.hexdigest().lower() == expected_hex.strip().lower()
 
 
+def _checksum_name_key(name: str) -> str:
+    """Normalize release-asset aliases that describe the same platform build."""
+    key = Path(str(name).replace("\\", "/")).name.strip().lower()
+    for token in ("macos-intel", "macos-x64", "macos-amd64"):
+        key = key.replace(token, "macos-x86_64")
+    for token in ("macos-aarch64", "macos-apple-silicon", "macos-silicon"):
+        key = key.replace(token, "macos-arm64")
+    return key
+
+
 def _find_checksum_asset(
     asset_name: str,
     assets: tuple[tuple[str, str], ...],
@@ -98,6 +108,11 @@ def _find_checksum_asset(
     for name, url in assets:
         if name.lower() == sidecar:
             return name, url
+    asset_key = _checksum_name_key(asset_name)
+    for name, url in assets:
+        name_lower = name.lower()
+        if name_lower.endswith(".sha256") and _checksum_name_key(name_lower[:-7]) == asset_key:
+            return name, url
     # 2. Aggregate manifest: "SHA256SUMS" or "sha256sums"
     for name, url in assets:
         if name.lower() in ("sha256sums", "sha256sums.txt"):
@@ -112,6 +127,7 @@ def _parse_sha256sums(content: str, asset_name: str) -> str | None:
     If the file is a single-line sidecar (just the hash), returns that directly.
     """
     name_lower = asset_name.lower()
+    name_key = _checksum_name_key(asset_name)
     for line in content.splitlines():
         line = line.strip()
         if not line:
@@ -121,7 +137,14 @@ def _parse_sha256sums(content: str, asset_name: str) -> str | None:
             # Single-line sidecar: the entire content is the hash.
             return parts[0].lower()
         digest, fname = parts[0], parts[1].lstrip("* \t")
-        if fname.lower() == name_lower:
+        fname_lower = fname.lower()
+        basename_lower = fname.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if (
+            fname_lower == name_lower
+            or basename_lower == name_lower
+            or _checksum_name_key(fname) == name_key
+            or _checksum_name_key(basename_lower) == name_key
+        ):
             return digest.lower()
     return None
 

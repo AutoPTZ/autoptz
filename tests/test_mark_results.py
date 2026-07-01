@@ -111,6 +111,33 @@ _CSV_HEADER = [
     "target_hold_pct",
     "mean_target_confidence",
     "dropped_frames",
+    "app_induced_drops",
+    "frames_delivered",
+    "frames_dropped_est",
+    "delivered_fps",
+    "source_fps",
+    "duplicate_frames",
+    "stale_frames",
+    "ndi_queue_depth",
+    "ndi_queue_audio",
+    "ndi_queue_metadata",
+    "ndi_total_video_frames",
+    "ndi_dropped_video_frames",
+    "ndi_total_audio_frames",
+    "ndi_dropped_audio_frames",
+    "ndi_total_metadata_frames",
+    "ndi_dropped_metadata_frames",
+    "ndi_connections",
+    "ndi_fourcc",
+    "ndi_buffer_ms",
+    "ndi_conversion_ms",
+    "ndi_copy_ms",
+    "step_app_induced_drops",
+    "steady_state_app_induced_drops",
+    "source_mutation_events",
+    "source_mutation_allowed_drops",
+    "source_mutation_drop_grace_s",
+    "drop_policy",
     "gt_miss_rate",
     "gt_id_switch_rate",
     "gt_motp",
@@ -130,6 +157,27 @@ def _quality(*, ttfa: float | None = 0.5) -> dict[str, object]:
         "mean_target_confidence": 0.9123,
         "fps": 30.0,
         "dropped_frames": 3,
+        "app_induced_drops": 0,
+        "frames_delivered": 900,
+        "frames_dropped_est": 0,
+        "delivered_fps": 30.0,
+        "source_fps": 30.0,
+        "duplicate_frames": 0,
+        "stale_frames": 0,
+        "ndi_queue_depth": -1,
+        "ndi_queue_audio": -1,
+        "ndi_queue_metadata": -1,
+        "ndi_total_video_frames": 900,
+        "ndi_dropped_video_frames": 0,
+        "ndi_total_audio_frames": 900,
+        "ndi_dropped_audio_frames": 0,
+        "ndi_total_metadata_frames": 3,
+        "ndi_dropped_metadata_frames": 0,
+        "ndi_connections": 1,
+        "ndi_fourcc": "",
+        "ndi_buffer_ms": 0.0,
+        "ndi_conversion_ms": 0.0,
+        "ndi_copy_ms": 0.0,
     }
 
 
@@ -146,6 +194,8 @@ def _step(cameras: int, *, with_quality: bool = True, ttfa_none_idx: int = -1) -
         mean_fps=sum(per_camera_fps) / len(per_camera_fps),
         per_camera_fps=per_camera_fps,
         sustained=True,
+        app_induced_drops=0,
+        steady_state_app_induced_drops=0,
         per_camera_quality=quality,
     )
 
@@ -189,6 +239,33 @@ class TestSaveCsv:
         assert step1[1]["target_hold_pct"] == "87.5"
         assert step1[1]["id_switch_count"] == "2"
         assert step1[1]["dropped_frames"] == "3"
+        assert step1[1]["app_induced_drops"] == "0"
+        assert step1[1]["frames_delivered"] == "900"
+        assert step1[1]["frames_dropped_est"] == "0"
+        assert step1[1]["delivered_fps"] == "30.0"
+        assert step1[1]["source_fps"] == "30.0"
+        assert step1[1]["duplicate_frames"] == "0"
+        assert step1[1]["stale_frames"] == "0"
+        assert step1[1]["ndi_queue_depth"] == "-1"
+        assert step1[1]["ndi_queue_audio"] == "-1"
+        assert step1[1]["ndi_queue_metadata"] == "-1"
+        assert step1[1]["ndi_total_video_frames"] == "900"
+        assert step1[1]["ndi_dropped_video_frames"] == "0"
+        assert step1[1]["ndi_total_audio_frames"] == "900"
+        assert step1[1]["ndi_dropped_audio_frames"] == "0"
+        assert step1[1]["ndi_total_metadata_frames"] == "3"
+        assert step1[1]["ndi_dropped_metadata_frames"] == "0"
+        assert step1[1]["ndi_connections"] == "1"
+        assert step1[1]["ndi_fourcc"] == ""
+        assert step1[1]["ndi_buffer_ms"] == "0.0"
+        assert step1[1]["ndi_conversion_ms"] == "0.0"
+        assert step1[1]["ndi_copy_ms"] == "0.0"
+        assert step1[1]["step_app_induced_drops"] == "0"
+        assert step1[1]["steady_state_app_induced_drops"] == "0"
+        assert step1[1]["source_mutation_events"] == "0"
+        assert step1[1]["source_mutation_allowed_drops"] == "0"
+        assert step1[1]["source_mutation_drop_grace_s"] == "0.0"
+        assert step1[1]["drop_policy"] == "steady_state_zero_source_mutation_grace_only"
         # Step 1, camera 0 has a real ttfa.
         assert step1[0]["time_to_first_acquire_s"] == "0.5"
 
@@ -248,3 +325,37 @@ class TestSaveCsv:
         # store is accepted (kept signature-compatible) and does not break the write.
         path = save_mark_result_csv([_two_step_result()], tmp_path / "mark.csv", store=store)
         assert path.exists()
+
+    def test_step_drop_accounting_columns_are_exported(self, tmp_path) -> None:
+        step = StepResult(
+            cameras=1,
+            min_fps=30.0,
+            mean_fps=30.0,
+            per_camera_fps=[30.0],
+            sustained=True,
+            app_induced_drops=4,
+            steady_state_app_induced_drops=0,
+            source_mutation_events=1,
+            source_mutation_allowed_drops=4,
+            source_mutation_drop_grace_s=2.0,
+            per_camera_quality={"cam-1": _quality()},
+        )
+        result = BenchmarkResult(
+            profile="full",
+            weight=1.0,
+            floor_fps=30.0,
+            max_cameras=1,
+            sustained_cameras=1,
+            min_fps_at_sustained=30.0,
+            score=1.0,
+            steps=[step],
+        )
+        path = save_mark_result_csv([result], tmp_path / "mark.csv")
+        with path.open(newline="", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        assert rows[0]["app_induced_drops"] == "0"
+        assert rows[0]["step_app_induced_drops"] == "4"
+        assert rows[0]["steady_state_app_induced_drops"] == "0"
+        assert rows[0]["source_mutation_events"] == "1"
+        assert rows[0]["source_mutation_allowed_drops"] == "4"
+        assert rows[0]["source_mutation_drop_grace_s"] == "2.0"

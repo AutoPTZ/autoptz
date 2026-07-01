@@ -83,5 +83,5 @@ def test_resolve_full_name_matches_hostname_prefixed() -> None:
         _resolve_full_name("AutoPTZ Mark Cam 2", discovered) == "PRINCES-MBP (AutoPTZ Mark Cam 2)"
     )
     assert _resolve_full_name("X", ["X"]) == "X"  # exact (no prefix) still matches
-    # Not yet discovered → None (caller falls back to the short name).
+    # Not yet discovered → None (non-strict callers may fall back; Mark uses strict preflight).
     assert _resolve_full_name("AutoPTZ Mark Cam 3", discovered) is None

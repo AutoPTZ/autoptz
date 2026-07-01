@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 
 import numpy as np
 import PySide6  # noqa: F401
@@ -107,6 +106,7 @@ class TestFaceStatusModelPresence:
         row = diag.face_status()
         assert row["state"] == "warn"
         assert "model" in row["detail"].lower()
+        assert str(tmp_path) in row["detail"]
 
     def test_ok_when_model_weights_present(self, monkeypatch, tmp_path) -> None:
         from autoptz.engine.runtime import diagnostics as diag
@@ -116,7 +116,16 @@ class TestFaceStatusModelPresence:
         models.mkdir(parents=True)
         (models / "det_10g.onnx").write_bytes(b"x")
         monkeypatch.setenv("INSIGHTFACE_HOME", str(tmp_path))
-        assert diag.face_status()["state"] == "ok"
+        row = diag.face_status()
+        assert row["state"] == "ok"
+        assert str(models) in row["detail"]
+
+    def test_optional_components_face_path_uses_resolved_root(self, monkeypatch, tmp_path) -> None:
+        from autoptz.engine.runtime import diagnostics as diag
+
+        monkeypatch.setenv("INSIGHTFACE_HOME", str(tmp_path))
+        face = next(row for row in diag.optional_components() if row["key"] == "face")
+        assert face["path"] == str(tmp_path / "models")
 
     def test_off_when_package_absent(self, monkeypatch) -> None:
         from autoptz.engine.runtime import diagnostics as diag
@@ -166,7 +175,7 @@ class _FakeSource:
 
 
 class TestWorkerPopulatesLatency:
-    def test_latency_ms_becomes_positive(self, qapp) -> None:
+    def test_latency_ms_becomes_positive(self, qapp, wait_until) -> None:
         from autoptz.config.models import CameraConfig, SourceConfig
         from autoptz.engine.camera_worker import CameraWorker
 
@@ -191,15 +200,19 @@ class TestWorkerPopulatesLatency:
         )
         worker.start()
         try:
-            deadline = time.monotonic() + 3.0
-            best = 0.0
-            while time.monotonic() < deadline:
+
+            def _best_latency() -> float:
                 with lock:
                     if received:
-                        best = max(best, received[-1].latency_ms)
-                if best > 0.0:
-                    break
-                time.sleep(0.02)
+                        return max(m.latency_ms for m in received)
+                return 0.0
+
+            best = wait_until(
+                _best_latency,
+                timeout=3.0,
+                interval=0.02,
+                message="latency_ms never became positive with a live source",
+            )
             assert best > 0.0, "latency_ms never became positive with a live source"
         finally:
             worker.stop()
@@ -648,3 +661,28 @@ class TestRuntimeServicesAccelVerdict:
         rows = worker._runtime_services()  # must not raise
         det_row = next(r for r in rows if r.key == "detector")
         assert det_row.confidence == ""
+
+    def test_face_row_failed_when_recognizer_unavailable(self) -> None:
+        """A built-but-disabled recognizer must not look active in diagnostics."""
+        import types
+
+        worker = self._make_worker_with_pool(pool=None)
+        worker._face = types.SimpleNamespace(
+            recognizer=types.SimpleNamespace(
+                available=False,
+                last_error="ImportError: simulated insightface failure",
+            ),
+            service=object(),
+        )
+
+        services = worker._runtime_services()
+        face = next(row for row in services if row.key == "face")
+        assert face.enabled is True
+        assert face.active is False
+        assert face.state == "failed"
+        assert "insightface failure" in face.detail
+
+        timings = worker._stage_timings()
+        stage = next(row for row in timings if row.key == "face")
+        assert stage.status == "failed"
+        assert "insightface failure" in stage.detail

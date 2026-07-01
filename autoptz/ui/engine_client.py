@@ -396,6 +396,10 @@ class EngineClient(QObject):
             total=len(self._model.camera_ids()),
             missing=self._missing_optional_components(promptable_only=True),
         )
+        # Drop stale feature-sync commands from a prior stopped-engine toggle.
+        # Startup must be governed by the persisted feature map below, not an old
+        # queued SetFeaturesCmd that happens to drain after workers come online.
+        self._queue_feature_sync(enqueue=False)
         # Seed the supervisor with the persisted feature switches BEFORE it spawns
         # workers, so a disabled service is never built at spin-up (the worker
         # gates model construction on these flags).  Without priming, workers
@@ -443,7 +447,7 @@ class EngineClient(QObject):
         # suspenders alongside prime_features, and the source of truth for any
         # worker that spawned before priming).
         try:
-            self._enqueue(SetFeaturesCmd(camera_id=None, features=self.features()))
+            self._queue_feature_sync(enqueue=True)
         except Exception:  # noqa: BLE001
             log.debug("initial SetFeaturesCmd enqueue failed", exc_info=True)
         self.engineStateChanged.emit()
@@ -577,11 +581,12 @@ class EngineClient(QObject):
 
     # ── on-video overlays (operator toggles) ────────────────────────────────────
 
-    # Default visibility for each overlay layer; detection boxes on, the heavier
-    # diagnostic layers off until the operator asks for them.
+    # Default visibility for each overlay layer. Detection and face boxes are on so
+    # users can see the two visual recognition paths without hunting for hidden
+    # debug toggles; pose/prediction stay off.
     _OVERLAY_DEFAULTS = {
         "detection": True,
-        "faces": False,
+        "faces": True,
         "pose": False,
         "prediction": False,
     }
@@ -713,9 +718,8 @@ class EngineClient(QObject):
         """Deep-merge *patch* into the camera's current config, then apply it.
 
         A convenience over :meth:`updateCameraConfig` for callers that only touch
-        a few nested keys (e.g. the tile dragging the framing box updates just
-        ``{"ptz": {"safe_zone_w": ..., "safe_zone_h": ...}}``) without having to
-        round-trip and rebuild the whole config dict themselves.
+        a few nested keys (for example Mark enabling profile defaults) without
+        having to round-trip and rebuild the whole config dict themselves.
         """
         cfg = self.getCameraConfig(camera_id)
         if not cfg:
@@ -1011,6 +1015,20 @@ class EngineClient(QObject):
         except Exception:  # noqa: BLE001
             log.debug("persist feature overrides failed", exc_info=True)
 
+    def _queue_feature_sync(self, *, enqueue: bool) -> None:
+        """Replace any pending feature command with the current feature map.
+
+        Feature switches are startup-critical: a stale queued ``SetFeaturesCmd``
+        can turn a service back off after a restart even though persisted settings
+        say it is on.  Treat feature sync as last-writer-wins, not append-only.
+        """
+        with self._lock:
+            self._cmd_queue = deque(
+                cmd for cmd in self._cmd_queue if not isinstance(cmd, SetFeaturesCmd)
+            )
+            if enqueue:
+                self._cmd_queue.append(SetFeaturesCmd(camera_id=None, features=self.features()))
+
     @Slot(result="QVariant")
     def features(self) -> dict[str, bool]:
         """Return the persisted ML-subsystem switches (all default True).
@@ -1036,7 +1054,7 @@ class EngineClient(QObject):
         feats[name] = bool(enabled)
         self._features = feats
         self._persist_features()
-        self._enqueue(SetFeaturesCmd(camera_id=None, features=feats))
+        self._queue_feature_sync(enqueue=self._engine_running)
         self.featuresChanged.emit()
 
     @Slot()
@@ -1046,8 +1064,7 @@ class EngineClient(QObject):
         changed = feats != self._features
         self._features = feats
         self._persist_features()
-        if self._engine_running:
-            self._enqueue(SetFeaturesCmd(camera_id=None, features=feats))
+        self._queue_feature_sync(enqueue=self._engine_running)
         if changed:
             self.featuresChanged.emit()
 
@@ -1368,6 +1385,7 @@ class EngineClient(QObject):
         track_id: int,
         click_x: float | None = None,
         click_y: float | None = None,
+        thumbnail: bytes | None = None,
     ) -> None:
         """Register a new identity and send enrollment command to engine."""
         from autoptz.config.models import IdentityRecord
@@ -1377,14 +1395,21 @@ class EngineClient(QObject):
             return
 
         identity_id = str(uuid.uuid4())
-        identity = IdentityRecord(id=identity_id, name=identity_name.strip())
+        photos = [thumbnail] if thumbnail else []
+        identity = IdentityRecord(
+            id=identity_id,
+            name=identity_name.strip(),
+            thumbnail=thumbnail,
+            thumbnails=photos,
+        )
 
         # Prefer the live gallery (it owns persistence); else store directly.
         if self._identity_service is not None:
             try:
-                self._identity_service.enroll(
+                identity = self._identity_service.enroll(
                     identity_name.strip(),
                     None,
+                    thumbnail=thumbnail,
                     identity_id=identity_id,
                 )
             except Exception:  # noqa: BLE001
@@ -1417,6 +1442,7 @@ class EngineClient(QObject):
         track_id: int,
         click_x: float | None = None,
         click_y: float | None = None,
+        thumbnail: bytes | None = None,
     ) -> None:
         """Bind a clicked track's face to an EXISTING identity (click-to-assign).
 
@@ -1430,6 +1456,29 @@ class EngineClient(QObject):
             if ident.get("id") == identity_id:
                 name = ident.get("name", "")
                 break
+        if thumbnail:
+            updated = None
+            if self._identity_service is not None:
+                try:
+                    if self._identity_service.add_photo(identity_id, thumbnail):
+                        updated = self._identity_service.get(identity_id)
+                except Exception:  # noqa: BLE001
+                    log.debug("identity_service.add_photo(assign) failed", exc_info=True)
+            if updated is None:
+                rec = self._identity_model.get(identity_id)
+                if rec is not None:
+                    photos = (list(getattr(rec, "thumbnails", []) or []) + [thumbnail])[-8:]
+                    updated = rec.model_copy(
+                        update={
+                            "thumbnail": getattr(rec, "thumbnail", None) or thumbnail,
+                            "thumbnails": photos,
+                        }
+                    )
+                    if self._store:
+                        self._store.save_identity(updated)
+            if updated is not None:
+                self._identity_model.update_identity(updated)
+                self.identitiesChanged.emit()
         self._enqueue(
             EnrollIdentityCmd(
                 camera_id=camera_id,

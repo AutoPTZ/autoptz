@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 
@@ -26,7 +24,25 @@ def _main(qtapp):
     from autoptz.ui.widgets.main_window import MainWindow
 
     client = EngineClient()
-    return MainWindow(client, frame_source=ShmFrameSource())
+    return MainWindow(client, frame_source=ShmFrameSource(), source_discovery_enabled=False)
+
+
+class _FeatureSupervisor:
+    active_ep = "CPU"
+    is_running = False
+
+    def __init__(self) -> None:
+        self.primed: dict[str, bool] | None = None
+
+    def prime_features(self, features: dict[str, bool]) -> None:
+        self.primed = dict(features)
+
+    def start(self, *, staged: bool = False, progress=None, run_pump: bool = False) -> None:
+        del staged, progress, run_pump
+        self.is_running = True
+
+    def stop(self) -> None:
+        self.is_running = False
 
 
 class _FakeDlg:
@@ -109,6 +125,65 @@ def test_quit_choice_quits_app(qtapp, monkeypatch) -> None:
     assert quit_called["n"] == 1
 
 
+def test_quit_choice_tears_down_active_mark_run_once(qtapp, monkeypatch) -> None:
+    """Quit from Mark while a ramp is active must stop pump/controller/engine once."""
+    from PySide6.QtWidgets import QApplication
+
+    import autoptz.ui.widgets.main_window as mw
+
+    class _Pump:
+        def __init__(self, events: list[str]) -> None:
+            self.events = events
+
+        def stop(self) -> None:
+            self.events.append("pump.stop")
+
+    class _Controller:
+        def __init__(self, events: list[str]) -> None:
+            self.events = events
+
+        def stop(self) -> None:
+            self.events.append("controller.stop")
+
+        def wait(self, timeout_ms: int) -> bool:
+            self.events.append(f"controller.wait:{timeout_ms}")
+            return True
+
+    win = _main(qtapp)
+    monkeypatch.setattr(mw, "MarkPreflightDialog", _FakeDlg, raising=False)
+    quit_called = {"n": 0}
+    monkeypatch.setattr(QApplication, "quit", lambda *a: quit_called.__setitem__("n", 1))
+    win._start_mark()
+    mark = win._mark_window
+    assert mark is not None
+
+    events: list[str] = []
+    mark._pump = _Pump(events)
+    mark._controller = _Controller(events)
+    monkeypatch.setattr(mark._engine, "stop", lambda: events.append("engine.stop"))
+
+    mark.request_quit()
+
+    assert quit_called["n"] == 1
+    assert win._mark_window is None
+    assert mark._torn_down is True
+    assert events == [
+        "pump.stop",
+        "controller.stop",
+        "controller.wait:5000",
+        "engine.stop",
+    ]
+
+    mark.close()
+    mark._on_app_about_to_quit()
+    assert events == [
+        "pump.stop",
+        "controller.stop",
+        "controller.wait:5000",
+        "engine.stop",
+    ]
+
+
 def test_os_close_routes_through_return(qtapp, monkeypatch) -> None:
     import autoptz.ui.widgets.main_window as mw
 
@@ -161,10 +236,27 @@ def test_engine_resumes_if_was_running(qtapp, monkeypatch) -> None:
     assert started["n"] == 1  # resumed on return
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Windows-only Qt event-loop fd flake in headless MarkWindow show/close; covered on macOS/Linux + live",
-)
+def test_mark_return_restores_current_service_state(qtapp) -> None:
+    from autoptz.engine.runtime.messages import SetFeaturesCmd
+
+    win = _main(qtapp)
+    sup = _FeatureSupervisor()
+    win._client.set_supervisor(sup)
+    win._client.setFeatureEnabled("pose", False)
+    win._client.resetFeatureOverrides()
+
+    win._engine_was_running = True
+    win._mark_window = None
+    win._exit_mark_mode(quit_app=False)
+
+    feature_cmds = [cmd for cmd in win._client.drain_commands() if isinstance(cmd, SetFeaturesCmd)]
+    assert sup.primed is not None
+    assert sup.primed["pose"] is True
+    assert len(feature_cmds) == 1
+    assert feature_cmds[0].features["pose"] is True
+    win.deleteLater()
+
+
 def test_main_close_quits_app(qtapp, monkeypatch) -> None:
     """Closing the visible MainWindow (no Mark swap) terminates the app.
 
@@ -239,6 +331,7 @@ def test_app_run_sets_no_quit_on_last_window_closed(qtapp, monkeypatch) -> None:
     import autoptz.ui.app as app_mod
 
     monkeypatch.setattr(QApplication, "exec", lambda self: 0)
+    monkeypatch.setattr(QApplication, "processEvents", lambda self, *a, **k: None)
     monkeypatch.setattr(app_mod, "_build_main_window", lambda *a, **k: _Win())
     app_mod.run([])
     assert QApplication.instance().quitOnLastWindowClosed() is False

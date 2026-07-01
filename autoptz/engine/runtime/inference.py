@@ -271,13 +271,11 @@ def _provider_options(ep: EP, prefs: HardwarePrefs | None) -> dict[str, object]:
             "MLComputeUnits": _coreml_compute_units(),
         }
         # ModelCacheDirectory persists the compiled MLProgram so the slow first
-        # compile is one-time per machine — BUT in a *spawned* child process
-        # (process-per-camera) the CoreML EP fails to build with it set
-        # ("Failed to create model URL from path"), which forced a CPU fallback /
-        # bare re-compile and was a big reason process-per-camera "had no benefit".
-        # Omit the on-disk cache in that mode: the child still runs on the ANE/GPU,
-        # it just recompiles its MLProgram each start (the cache is incompatible
-        # with spawn). The shared in-process path keeps the cache.
+        # compile is one-time per machine — BUT spawned model-server camera
+        # children can fail the CoreML EP with it set ("Failed to create model URL
+        # from path"). Omit the on-disk cache in that process mode: the child
+        # still runs on the ANE/GPU, it just recompiles its MLProgram each start.
+        # The shared in-process path keeps the cache.
         from autoptz.engine.runtime.flags import env_process_per_camera
 
         if not env_process_per_camera():

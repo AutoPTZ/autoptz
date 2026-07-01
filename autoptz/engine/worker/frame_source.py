@@ -139,7 +139,7 @@ class _AdapterFrameSource:
         except Exception:  # noqa: BLE001
             return None
 
-    def delivery_metrics(self) -> dict[str, float | int]:
+    def delivery_metrics(self) -> dict[str, float | int | str]:
         """Pass through the adapter's per-source frame-delivery telemetry.
 
         Returns ``{}`` when the wrapped adapter predates the method (older fakes

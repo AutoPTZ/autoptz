@@ -8,7 +8,6 @@ thread, the off-switch works, and the shared target-state lock is re-entrant.
 from __future__ import annotations
 
 import threading
-import time
 
 import numpy as np
 
@@ -106,10 +105,14 @@ def test_target_lock_is_reentrant() -> None:
     assert w._target_track_id == 42
 
 
-def test_stop_is_idempotent() -> None:
+def test_stop_is_idempotent(wait_until) -> None:
     w = _worker()
     w._start_appearance_thread()
-    time.sleep(0.05)
+    wait_until(
+        lambda: w._appearance_thread is not None,
+        timeout=1.0,
+        message="appearance thread was not created",
+    )
     w._stop_event.set()
     w._stop_appearance_thread()
     w._stop_appearance_thread()  # second call is a no-op

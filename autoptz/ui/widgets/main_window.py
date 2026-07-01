@@ -40,7 +40,6 @@ from autoptz.ui.widgets.camera_wall import CameraWall
 from autoptz.ui.widgets.common import on_theme_changed
 from autoptz.ui.widgets.dialogs import (
     AboutDialog,
-    ExperimentalFeaturesDialog,
     ModelManagerDialog,
     NetworkCameraDialog,
 )
@@ -76,6 +75,7 @@ class MainWindow(QMainWindow):
         parent: QWidget | None = None,
         *,
         context_menu_enabled: bool = True,
+        source_discovery_enabled: bool = True,
     ) -> None:
         super().__init__(parent)
         self._client = client
@@ -85,6 +85,7 @@ class MainWindow(QMainWindow):
         # Right-click tile context menu gate, threaded to the CameraWall.  AutoPTZ
         # Mark passes False (no camera-mutation menu in the demo); the app keeps it.
         self._context_menu_enabled = bool(context_menu_enabled)
+        self._source_discovery_enabled = bool(source_discovery_enabled)
         self._docks: dict[str, QDockWidget] = {}
         self._selected_camera: str = ""
         self._shown_optional_setup_prompt = False
@@ -154,8 +155,9 @@ class MainWindow(QMainWindow):
         # when first opened (deferred to the event loop).
         from PySide6.QtCore import QTimer
 
-        QTimer.singleShot(0, self._refresh_usb_async)
-        QTimer.singleShot(0, self._refresh_ndi_async)
+        if self._source_discovery_enabled:
+            QTimer.singleShot(0, self._refresh_usb_async)
+            QTimer.singleShot(0, self._refresh_ndi_async)
 
         # Keep the USB cache hot in the background so plugging/unplugging a camera
         # is reflected the FIRST time the menu is opened — previously the menu showed
@@ -164,7 +166,11 @@ class MainWindow(QMainWindow):
         # devices without opening them); the cross-platform fallback opens each device,
         # which is too costly to poll, so there we keep the on-open refresh.
         self._usb_poll_timer: QTimer | None = None
-        if self._should_poll_usb() and _safe(lambda: self._client.usbEnumerationCheap(), False):
+        if (
+            self._source_discovery_enabled
+            and self._should_poll_usb()
+            and _safe(lambda: self._client.usbEnumerationCheap(), False)
+        ):
             self._usb_poll_timer = QTimer(self)
             self._usb_poll_timer.setInterval(3000)
             self._usb_poll_timer.timeout.connect(self._refresh_usb_async)
@@ -452,7 +458,7 @@ class MainWindow(QMainWindow):
             ),
         ):
             act = QAction(label, self, checkable=True)
-            act.setChecked(bool(cur.get(key, key == "detection")))
+            act.setChecked(bool(cur.get(key, key in {"detection", "faces"})))
             act.setToolTip(tip)
             act.toggled.connect(lambda on, k=key: self._client.setOverlay(k, on))
             overlays.addAction(act)
@@ -520,14 +526,6 @@ class MainWindow(QMainWindow):
                 "Run AutoPTZ Mark…",
                 self._start_mark,
                 tip="Benchmark this machine with simulated cameras (3DMark-style).",
-            )
-        )
-        helpm.addAction(
-            _action(
-                self,
-                "Experimental Features…",
-                self._show_experimental,
-                tip="Toggle experimental engine flags and new-camera tracking defaults.",
             )
         )
         helpm.addAction(_action(self, "About AutoPTZ", self._show_about))
@@ -646,15 +644,16 @@ class MainWindow(QMainWindow):
             act.toggled.connect(lambda checked, d=dev: self._toggle_usb_camera(d, checked))
             usb.addAction(act)
         usb.addSeparator()
-        usb.addAction(
-            _action(
-                self,
-                "Rescan",
-                self._rescan_usb,
-                tip="Re-probe connected USB cameras.",
+        if self._source_discovery_enabled:
+            usb.addAction(
+                _action(
+                    self,
+                    "Rescan",
+                    self._rescan_usb,
+                    tip="Re-probe connected USB cameras.",
+                )
             )
-        )
-        self._refresh_usb_async()
+            self._refresh_usb_async()
 
         menu.addSeparator()
         ndi = menu.addMenu("NDI Sources")
@@ -685,17 +684,18 @@ class MainWindow(QMainWindow):
                 )
                 act.toggled.connect(lambda checked, s=src: self._toggle_ndi_camera(s, checked))
                 ndi.addAction(act)
-            ndi.addSeparator()
-            ndi.addAction(
-                _action(
-                    self,
-                    "Rescan",
-                    self._rescan_ndi,
-                    tip="Re-scan the network for NDI sources.",
+            if self._source_discovery_enabled:
+                ndi.addSeparator()
+                ndi.addAction(
+                    _action(
+                        self,
+                        "Rescan",
+                        self._rescan_ndi,
+                        tip="Re-scan the network for NDI sources.",
+                    )
                 )
-            )
-            # Refresh the cache in the background so the next open is current.
-            self._refresh_ndi_async()
+                # Refresh the cache in the background so the next open is current.
+                self._refresh_ndi_async()
 
         menu.addSeparator()
         menu.addAction(
@@ -864,9 +864,6 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         AboutDialog(self._client, self).exec()
-
-    def _show_experimental(self) -> None:
-        ExperimentalFeaturesDialog(self._client, self).exec()
 
     def _start_mark(self) -> None:
         """Help → Run AutoPTZ Mark…: confirm (it will SUSPEND AutoPTZ), then swap.

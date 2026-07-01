@@ -40,6 +40,10 @@ class _FakeSupervisor:
     def __init__(self) -> None:
         self.events: list[str] = []
         self.is_running = False
+        self.primed_features: dict[str, bool] | None = None
+
+    def prime_features(self, features: dict[str, bool]) -> None:
+        self.primed_features = dict(features)
 
     def start(self) -> None:
         self.events.append("start")
@@ -73,6 +77,40 @@ class TestRestartEngine:
         client.restartEngine()  # was never running
         assert sup.events == ["start"]
         assert client.engineRunning is True
+
+    def test_feature_reset_while_stopped_cannot_replay_stale_service_off(self, qapp, store) -> None:
+        from autoptz.engine.runtime.messages import SetFeaturesCmd
+
+        client = _client(store=store)
+        client.setFeatureEnabled("pose", False)
+        client.resetFeatureOverrides()
+        assert client.features()["pose"] is True
+
+        sup = _FakeSupervisor()
+        client.set_supervisor(sup)
+        client.startEngine()
+
+        feature_cmds = [cmd for cmd in client.drain_commands() if isinstance(cmd, SetFeaturesCmd)]
+        assert sup.primed_features is not None
+        assert sup.primed_features["pose"] is True
+        assert len(feature_cmds) == 1
+        assert feature_cmds[0].features["pose"] is True
+
+    def test_feature_toggles_coalesce_to_latest_running_state(self, qapp, store) -> None:
+        from autoptz.engine.runtime.messages import SetFeaturesCmd
+
+        client = _client(store=store)
+        sup = _FakeSupervisor()
+        client.set_supervisor(sup)
+        client.startEngine()
+        client.drain_commands()  # initial startup sync
+
+        client.setFeatureEnabled("pose", False)
+        client.setFeatureEnabled("pose", True)
+
+        feature_cmds = [cmd for cmd in client.drain_commands() if isinstance(cmd, SetFeaturesCmd)]
+        assert len(feature_cmds) == 1
+        assert feature_cmds[0].features["pose"] is True
 
 
 # ── getSetting / setSetting ───────────────────────────────────────────────────

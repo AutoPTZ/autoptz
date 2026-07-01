@@ -11,7 +11,6 @@ memory segments that are explicitly cleaned up.
 from __future__ import annotations
 
 import sys
-import time
 import types
 import uuid
 
@@ -111,7 +110,7 @@ class TestHasNewFrame:
 class TestSelfHealingFrameSource:
     """The blank-preview regression, now guarding ``frames.ShmFrameSource``."""
 
-    def test_serves_real_frame_after_writer_appears_post_attach(self) -> None:
+    def test_serves_real_frame_after_writer_appears_post_attach(self, wait_until) -> None:
         """attach() BEFORE the writer exists → real frame served once it does.
 
         This is the exact ordering that produced the navy-screen bug: the source
@@ -141,15 +140,18 @@ class TestSelfHealingFrameSource:
             writer.push(frame)
 
             # 3. The source lazily opens the reader and serves the real frame.
-            real = None
-            deadline = time.monotonic() + 2.0
-            while time.monotonic() < deadline:
+            def _read_real_frame():
                 img = src.latest_qimage(cid)
                 if img is not None and img.width() == w and img.height() == h:
-                    real = img
-                    break
-                time.sleep(0.02)
-            assert real is not None, "frame source never served the real frame"
+                    return img
+                return None
+
+            real = wait_until(
+                _read_real_frame,
+                timeout=2.0,
+                interval=0.02,
+                message="frame source never served the real frame",
+            )
             px = real.pixelColor(w // 2, h // 2)
             assert px.red() == 200 and px.green() == 200 and px.blue() == 200
         finally:

@@ -27,6 +27,7 @@ from autoptz.benchmark.profiles import BenchmarkProfile
 log = logging.getLogger(__name__)
 
 _NOMINAL_FPS = 30.0  # score normaliser: sustained fps / 30 fps target
+_DROP_POLICY = "steady_state_zero_source_mutation_grace_only"
 
 
 # ── engine-reported tracking quality ──────────────────────────────────────────
@@ -55,6 +56,27 @@ class QualityMetrics:
     mean_target_confidence: float
     fps: float
     dropped_frames: int
+    app_induced_drops: int
+    frames_delivered: int
+    frames_dropped_est: int
+    delivered_fps: float
+    source_fps: float
+    duplicate_frames: int
+    stale_frames: int
+    ndi_queue_depth: int
+    ndi_queue_audio: int
+    ndi_queue_metadata: int
+    ndi_total_video_frames: int
+    ndi_dropped_video_frames: int
+    ndi_total_audio_frames: int
+    ndi_dropped_audio_frames: int
+    ndi_total_metadata_frames: int
+    ndi_dropped_metadata_frames: int
+    ndi_connections: int
+    ndi_fourcc: str
+    ndi_buffer_ms: float
+    ndi_conversion_ms: float
+    ndi_copy_ms: float
 
     def to_dict(self) -> dict[str, object]:
         """JSON-friendly dict.  ``time_to_first_acquire_s`` is ``None`` (→ JSON
@@ -71,6 +93,27 @@ class QualityMetrics:
             "mean_target_confidence": round(self.mean_target_confidence, 4),
             "fps": round(self.fps, 2),
             "dropped_frames": self.dropped_frames,
+            "app_induced_drops": self.app_induced_drops,
+            "frames_delivered": self.frames_delivered,
+            "frames_dropped_est": self.frames_dropped_est,
+            "delivered_fps": round(self.delivered_fps, 2),
+            "source_fps": round(self.source_fps, 2),
+            "duplicate_frames": self.duplicate_frames,
+            "stale_frames": self.stale_frames,
+            "ndi_queue_depth": self.ndi_queue_depth,
+            "ndi_queue_audio": self.ndi_queue_audio,
+            "ndi_queue_metadata": self.ndi_queue_metadata,
+            "ndi_total_video_frames": self.ndi_total_video_frames,
+            "ndi_dropped_video_frames": self.ndi_dropped_video_frames,
+            "ndi_total_audio_frames": self.ndi_total_audio_frames,
+            "ndi_dropped_audio_frames": self.ndi_dropped_audio_frames,
+            "ndi_total_metadata_frames": self.ndi_total_metadata_frames,
+            "ndi_dropped_metadata_frames": self.ndi_dropped_metadata_frames,
+            "ndi_connections": self.ndi_connections,
+            "ndi_fourcc": self.ndi_fourcc,
+            "ndi_buffer_ms": round(self.ndi_buffer_ms, 3),
+            "ndi_conversion_ms": round(self.ndi_conversion_ms, 3),
+            "ndi_copy_ms": round(self.ndi_copy_ms, 3),
         }
 
 
@@ -108,6 +151,34 @@ class PerCameraQualityAccumulator:
         self._fps_sum = 0.0
         self._fps_samples = 0
         self._dropped_frames = 0
+        self._initial_dropped_frames: int | None = None
+        self._app_induced_drops = 0
+        # Source-health telemetry, preserved in the Mark JSON artifact.
+        self._frames_delivered = 0
+        self._frames_dropped_est = 0
+        self._delivered_fps_sum = 0.0
+        self._delivered_fps_samples = 0
+        self._source_fps_sum = 0.0
+        self._source_fps_samples = 0
+        self._duplicate_frames = 0
+        self._stale_frames = 0
+        self._ndi_queue_depth = -1
+        self._ndi_queue_audio = -1
+        self._ndi_queue_metadata = -1
+        self._ndi_total_video_frames = 0
+        self._ndi_dropped_video_frames = 0
+        self._ndi_total_audio_frames = 0
+        self._ndi_dropped_audio_frames = 0
+        self._ndi_total_metadata_frames = 0
+        self._ndi_dropped_metadata_frames = 0
+        self._ndi_connections = -1
+        self._ndi_fourcc = ""
+        self._ndi_buffer_ms_sum = 0.0
+        self._ndi_buffer_ms_samples = 0
+        self._ndi_conversion_ms_sum = 0.0
+        self._ndi_conversion_ms_samples = 0
+        self._ndi_copy_ms_sum = 0.0
+        self._ndi_copy_ms_samples = 0
 
     @staticmethod
     def _find_target(msg: Any) -> Any | None:
@@ -136,9 +207,102 @@ class PerCameraQualityAccumulator:
         drops = getattr(msg, "dropped_frames", None)
         if drops is not None:
             try:
-                self._dropped_frames = int(drops)
+                current_drops = max(0, int(drops))
+            except (TypeError, ValueError):
+                current_drops = None
+            if current_drops is not None:
+                self._dropped_frames = current_drops
+                if self._initial_dropped_frames is None:
+                    self._initial_dropped_frames = current_drops
+                if current_drops >= self._initial_dropped_frames:
+                    delta = current_drops - self._initial_dropped_frames
+                else:
+                    # Counter reset during the sample window; treat the new value
+                    # as drops observed after reset rather than hiding it.
+                    delta = current_drops
+                    self._initial_dropped_frames = 0
+                self._app_induced_drops = max(self._app_induced_drops, delta)
+
+        delivered = getattr(msg, "frames_delivered", None)
+        if delivered is not None:
+            try:
+                self._frames_delivered = max(0, int(delivered))
             except (TypeError, ValueError):
                 pass
+
+        dropped_est = getattr(msg, "frames_dropped_est", None)
+        if dropped_est is not None:
+            try:
+                self._frames_dropped_est = max(0, int(dropped_est))
+            except (TypeError, ValueError):
+                pass
+
+        delivered_fps = float(getattr(msg, "delivered_fps", 0.0) or 0.0)
+        if delivered_fps > 0.0:
+            self._delivered_fps_sum += delivered_fps
+            self._delivered_fps_samples += 1
+
+        source_fps = float(getattr(msg, "source_fps", 0.0) or 0.0)
+        if source_fps > 0.0:
+            self._source_fps_sum += source_fps
+            self._source_fps_samples += 1
+
+        duplicate_frames = getattr(msg, "duplicate_frames", None)
+        if duplicate_frames is not None:
+            try:
+                self._duplicate_frames = max(0, int(duplicate_frames))
+            except (TypeError, ValueError):
+                pass
+
+        stale_frames = getattr(msg, "stale_frames", None)
+        if stale_frames is not None:
+            try:
+                self._stale_frames = max(0, int(stale_frames))
+            except (TypeError, ValueError):
+                pass
+
+        queue_depth = getattr(msg, "ndi_queue_depth", None)
+        if queue_depth is not None:
+            try:
+                self._ndi_queue_depth = int(queue_depth)
+            except (TypeError, ValueError):
+                pass
+
+        for attr, name, default in (
+            ("_ndi_queue_audio", "ndi_queue_audio", -1),
+            ("_ndi_queue_metadata", "ndi_queue_metadata", -1),
+            ("_ndi_total_video_frames", "ndi_total_video_frames", 0),
+            ("_ndi_dropped_video_frames", "ndi_dropped_video_frames", 0),
+            ("_ndi_total_audio_frames", "ndi_total_audio_frames", 0),
+            ("_ndi_dropped_audio_frames", "ndi_dropped_audio_frames", 0),
+            ("_ndi_total_metadata_frames", "ndi_total_metadata_frames", 0),
+            ("_ndi_dropped_metadata_frames", "ndi_dropped_metadata_frames", 0),
+            ("_ndi_connections", "ndi_connections", -1),
+        ):
+            raw = getattr(msg, name, default)
+            try:
+                setattr(self, attr, int(raw))
+            except (TypeError, ValueError):
+                pass
+
+        fourcc = str(getattr(msg, "ndi_fourcc", "") or "").upper()
+        if fourcc:
+            self._ndi_fourcc = fourcc
+
+        buffer_ms = float(getattr(msg, "ndi_buffer_ms", 0.0) or 0.0)
+        if buffer_ms > 0.0:
+            self._ndi_buffer_ms_sum += buffer_ms
+            self._ndi_buffer_ms_samples += 1
+
+        conversion_ms = float(getattr(msg, "ndi_conversion_ms", 0.0) or 0.0)
+        if conversion_ms > 0.0:
+            self._ndi_conversion_ms_sum += conversion_ms
+            self._ndi_conversion_ms_samples += 1
+
+        copy_ms = float(getattr(msg, "ndi_copy_ms", 0.0) or 0.0)
+        if copy_ms > 0.0:
+            self._ndi_copy_ms_sum += copy_ms
+            self._ndi_copy_ms_samples += 1
 
         target = self._find_target(msg)
         held = target is not None and not getattr(target, "lost", False)
@@ -181,6 +345,31 @@ class PerCameraQualityAccumulator:
             return self._fps_sum / self._fps_samples
         return self._fps_hint
 
+    def _observed_delivered_fps(self) -> float:
+        if self._delivered_fps_samples > 0:
+            return self._delivered_fps_sum / self._delivered_fps_samples
+        return 0.0
+
+    def _observed_source_fps(self) -> float:
+        if self._source_fps_samples > 0:
+            return self._source_fps_sum / self._source_fps_samples
+        return 0.0
+
+    def _observed_ndi_conversion_ms(self) -> float:
+        if self._ndi_conversion_ms_samples > 0:
+            return self._ndi_conversion_ms_sum / self._ndi_conversion_ms_samples
+        return 0.0
+
+    def _observed_ndi_buffer_ms(self) -> float:
+        if self._ndi_buffer_ms_samples > 0:
+            return self._ndi_buffer_ms_sum / self._ndi_buffer_ms_samples
+        return 0.0
+
+    def _observed_ndi_copy_ms(self) -> float:
+        if self._ndi_copy_ms_samples > 0:
+            return self._ndi_copy_ms_sum / self._ndi_copy_ms_samples
+        return 0.0
+
     def finalize(self) -> QualityMetrics:
         fps = self._observed_fps()
         per_frame_s = (1.0 / fps) if fps > 0.0 else 0.0
@@ -207,6 +396,27 @@ class PerCameraQualityAccumulator:
             mean_target_confidence=mean_conf,
             fps=fps,
             dropped_frames=self._dropped_frames,
+            app_induced_drops=self._app_induced_drops,
+            frames_delivered=self._frames_delivered,
+            frames_dropped_est=self._frames_dropped_est,
+            delivered_fps=self._observed_delivered_fps(),
+            source_fps=self._observed_source_fps(),
+            duplicate_frames=self._duplicate_frames,
+            stale_frames=self._stale_frames,
+            ndi_queue_depth=self._ndi_queue_depth,
+            ndi_queue_audio=self._ndi_queue_audio,
+            ndi_queue_metadata=self._ndi_queue_metadata,
+            ndi_total_video_frames=self._ndi_total_video_frames,
+            ndi_dropped_video_frames=self._ndi_dropped_video_frames,
+            ndi_total_audio_frames=self._ndi_total_audio_frames,
+            ndi_dropped_audio_frames=self._ndi_dropped_audio_frames,
+            ndi_total_metadata_frames=self._ndi_total_metadata_frames,
+            ndi_dropped_metadata_frames=self._ndi_dropped_metadata_frames,
+            ndi_connections=self._ndi_connections,
+            ndi_fourcc=self._ndi_fourcc,
+            ndi_buffer_ms=self._observed_ndi_buffer_ms(),
+            ndi_conversion_ms=self._observed_ndi_conversion_ms(),
+            ndi_copy_ms=self._observed_ndi_copy_ms(),
         )
 
 
@@ -219,10 +429,35 @@ class StepResult:
     mean_fps: float
     per_camera_fps: list[float] = field(default_factory=list)
     sustained: bool = False
+    # Raw drops observed around this step. Release gating uses
+    # ``steady_state_app_induced_drops`` so add/remove-source churn can be reported
+    # separately instead of hidden or treated as a steady-state capture failure.
+    app_induced_drops: int = 0
+    steady_state_app_induced_drops: int | None = None
+    source_mutation_events: int = 0
+    source_mutation_allowed_drops: int = 0
+    source_mutation_drop_grace_s: float = 0.0
+    drop_policy: str = _DROP_POLICY
     # Engine-reported tracking quality keyed by camera id ({cid: QualityMetrics
     # dict}).  Empty when no quality reader is wired (e.g. the math-only unit
     # tests or the GUI/adopted path before Slice 5).
     per_camera_quality: dict[str, dict] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        total = max(0, int(self.app_induced_drops or 0))
+        allowed = max(0, int(self.source_mutation_allowed_drops or 0))
+        events = max(0, int(self.source_mutation_events or 0))
+        grace = max(0.0, float(self.source_mutation_drop_grace_s or 0.0))
+        if self.steady_state_app_induced_drops is None:
+            steady = max(0, total - allowed)
+        else:
+            steady = max(0, int(self.steady_state_app_induced_drops or 0))
+        object.__setattr__(self, "app_induced_drops", total)
+        object.__setattr__(self, "steady_state_app_induced_drops", steady)
+        object.__setattr__(self, "source_mutation_events", events)
+        object.__setattr__(self, "source_mutation_allowed_drops", allowed)
+        object.__setattr__(self, "source_mutation_drop_grace_s", grace)
+        object.__setattr__(self, "drop_policy", str(self.drop_policy or _DROP_POLICY))
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -231,6 +466,12 @@ class StepResult:
             "mean_fps": round(self.mean_fps, 2),
             "per_camera_fps": [round(f, 2) for f in self.per_camera_fps],
             "sustained": self.sustained,
+            "app_induced_drops": self.app_induced_drops,
+            "steady_state_app_induced_drops": int(self.steady_state_app_induced_drops or 0),
+            "source_mutation_events": self.source_mutation_events,
+            "source_mutation_allowed_drops": self.source_mutation_allowed_drops,
+            "source_mutation_drop_grace_s": round(self.source_mutation_drop_grace_s, 3),
+            "drop_policy": self.drop_policy,
             "per_camera_quality": self.per_camera_quality,
         }
 
@@ -246,6 +487,10 @@ class BenchmarkResult:
     sustained_cameras: int
     min_fps_at_sustained: float
     score: float
+    profile_description: str = ""
+    profile_features: dict[str, bool] = field(default_factory=dict)
+    experimental_flags: dict[str, str] = field(default_factory=dict)
+    drop_policy: str = _DROP_POLICY
     steps: list[StepResult] = field(default_factory=list)
     # The Mark scene this ramp ran (CLIP_LIBRARY id), for the result/CSV context.
     scene_clip_id: str = ""
@@ -256,6 +501,10 @@ class BenchmarkResult:
     def to_dict(self) -> dict[str, object]:
         return {
             "profile": self.profile,
+            "profile_description": self.profile_description,
+            "profile_features": dict(self.profile_features),
+            "experimental_flags": dict(self.experimental_flags),
+            "drop_policy": self.drop_policy,
             "weight": self.weight,
             "floor_fps": self.floor_fps,
             "max_cameras": self.max_cameras,
@@ -275,6 +524,79 @@ class BenchmarkResult:
         )
 
 
+def _quality_app_induced_drops(quality: dict[str, dict]) -> int:
+    """Return measured app-induced drops across one quality snapshot.
+
+    Newer quality snapshots expose ``app_induced_drops`` as a per-window delta.
+    Older/external snapshots may only carry ``dropped_frames``; for those, treat a
+    positive cumulative value as a drop signal rather than accidentally passing an
+    unhealthy run.
+    """
+    total = 0
+    for row in quality.values():
+        if not isinstance(row, dict):
+            continue
+        raw = row.get("app_induced_drops", row.get("dropped_frames", 0))
+        try:
+            total += max(0, int(raw or 0))
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _source_mutation_snapshot(
+    reader: Callable[[], dict[str, object] | None] | None,
+) -> dict[str, object]:
+    """Read source-mutation accounting for the just-sampled step.
+
+    The reader reports drops that happened during an explicit add/remove-source
+    transition outside the steady measurement window. They are preserved in the
+    artifact but do not fail the steady-state capture gate.
+    """
+    if reader is None:
+        return {}
+    try:
+        raw = reader() or {}
+    except Exception:  # noqa: BLE001 — accounting must never abort the ramp
+        log.debug("benchmark source_mutation_reader failed", exc_info=True)
+        return {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _drop_accounting(
+    quality: dict[str, dict],
+    source_mutation: dict[str, object] | None = None,
+) -> tuple[int, int, int, int, float]:
+    """Return ``(total, steady, events, allowed, grace_s)`` for a step."""
+    steady = _quality_app_induced_drops(quality)
+    mutation = source_mutation or {}
+    try:
+        allowed = max(0, int(mutation.get("source_mutation_allowed_drops", 0) or 0))
+    except (TypeError, ValueError):
+        allowed = 0
+    try:
+        events = max(0, int(mutation.get("source_mutation_events", 0) or 0))
+    except (TypeError, ValueError):
+        events = 0
+    try:
+        grace_s = max(0.0, float(mutation.get("source_mutation_drop_grace_s", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        grace_s = 0.0
+    total = steady + allowed
+    return total, steady, events, allowed, grace_s
+
+
+def _experimental_flag_snapshot() -> dict[str, str]:
+    """Capture managed experimental env flags for reproducible Mark artifacts."""
+    import os
+
+    try:
+        from autoptz.engine.runtime.experimental_flags import EXPERIMENTAL_FLAGS
+    except Exception:  # noqa: BLE001
+        return {}
+    return {flag.env_key: os.environ.get(flag.env_key, flag.default) for flag in EXPERIMENTAL_FLAGS}
+
+
 class BenchmarkRunner:
     """Ramp synthetic cameras until the min sustained fps drops below the floor."""
 
@@ -288,9 +610,18 @@ class BenchmarkRunner:
         sample_fn: Callable[[int], list[float]],
         on_step: Callable[[StepResult], None] | None = None,
         quality_reader: Callable[[], dict[str, dict]] | None = None,
+        source_mutation_reader: Callable[[], dict[str, object] | None] | None = None,
+        fps_tolerance: float = 0.0,
     ) -> None:
         self._profile = profile
         self._floor = float(floor_fps)
+        # Sub-fps jitter tolerance subtracted from the floor in the sustained check.
+        # A real "N fps" source delivers a few tenths below nominal (rolling-fps
+        # estimate + source pacing noise) while dropping ZERO frames; without this a
+        # hard floor fails a perfectly healthy step on jitter alone.  The DROPS gate
+        # stays strict, the reported floor is unchanged, and genuine under-delivery
+        # (well below the floor) still fails.  Default 0.0 keeps the CLI/exact path.
+        self._fps_tolerance = max(0.0, float(fps_tolerance))
         self._max_cameras = max(1, int(max_cameras))
         self._dwell_s = max(0.0, float(dwell_s))
         self._sample_fn = sample_fn
@@ -299,6 +630,7 @@ class BenchmarkRunner:
         # headless sampler stashes it on ``last_quality``).  None -> no quality in
         # the step results (math-only tests / adopted GUI path before Slice 5).
         self._quality_reader = quality_reader
+        self._source_mutation_reader = source_mutation_reader
 
     def run(self) -> BenchmarkResult:
         steps: list[StepResult] = []
@@ -313,19 +645,34 @@ class BenchmarkRunner:
             else:
                 min_fps = 0.0
                 mean_fps = 0.0
-            sustained = min_fps >= self._floor
             quality: dict[str, dict] = {}
             if self._quality_reader is not None:
                 try:
                     quality = dict(self._quality_reader() or {})
                 except Exception:  # noqa: BLE001 — quality is best-effort, never aborts the ramp
                     log.debug("benchmark quality_reader failed", exc_info=True)
+            mutation = _source_mutation_snapshot(self._source_mutation_reader)
+            (
+                app_induced_drops,
+                steady_state_app_induced_drops,
+                source_mutation_events,
+                source_mutation_allowed_drops,
+                source_mutation_drop_grace_s,
+            ) = _drop_accounting(quality, mutation)
+            sustained = (
+                min_fps >= self._floor - self._fps_tolerance and steady_state_app_induced_drops == 0
+            )
             step = StepResult(
                 cameras=cameras,
                 min_fps=min_fps,
                 mean_fps=mean_fps,
                 per_camera_fps=per_camera,
                 sustained=sustained,
+                app_induced_drops=app_induced_drops,
+                steady_state_app_induced_drops=steady_state_app_induced_drops,
+                source_mutation_events=source_mutation_events,
+                source_mutation_allowed_drops=source_mutation_allowed_drops,
+                source_mutation_drop_grace_s=source_mutation_drop_grace_s,
                 per_camera_quality=quality,
             )
             steps.append(step)
@@ -346,6 +693,10 @@ class BenchmarkRunner:
         )
         return BenchmarkResult(
             profile=self._profile.name,
+            profile_description=self._profile.description,
+            profile_features=dict(self._profile.features),
+            experimental_flags=_experimental_flag_snapshot(),
+            drop_policy=_DROP_POLICY,
             weight=self._profile.weight,
             floor_fps=self._floor,
             max_cameras=self._max_cameras,
@@ -510,6 +861,24 @@ class _SupervisorSampler:
         # is expected to register it on the model AND spawn its worker (the Mark
         # factory's ``add_next_camera``).  None → no growth (fixed pre-added set).
         self._on_grow = on_grow
+        self._cancel_event: Any | None = None
+
+    def set_cancel_event(self, event: Any | None) -> None:
+        """Let the GUI controller interrupt warmup/dwell sleeps during teardown."""
+        self._cancel_event = event
+
+    def _cancelled(self) -> bool:
+        event = self._cancel_event
+        return bool(event is not None and event.is_set())
+
+    def _wait(self, seconds: float) -> bool:
+        """Wait up to *seconds*; return True when cancellation was requested."""
+        seconds = max(0.0, float(seconds))
+        event = self._cancel_event
+        if event is not None:
+            return bool(event.wait(seconds))
+        time.sleep(seconds)
+        return False
 
     @staticmethod
     def _drain_events() -> None:
@@ -531,8 +900,7 @@ class _SupervisorSampler:
         while len(self._cameras) < n:
             self._cameras.append(_add_synthetic_camera(self._client, len(self._cameras)))
 
-    @staticmethod
-    def _dwell_observe(dwell_s: float) -> None:
+    def _dwell_observe(self, dwell_s: float) -> None:
         """Sleep the dwell while the external (GUI) pump drives the supervisor.
 
         Used by the adopted path: the Mark window's QTimer ticks the supervisor and
@@ -540,7 +908,7 @@ class _SupervisorSampler:
         reading fps.  ``dwell_s == 0`` (tests) yields a single short settle so any
         already-queued telemetry has a chance to land.
         """
-        time.sleep(max(0.0, dwell_s) if dwell_s > 0.0 else 0.01)
+        self._wait(max(0.0, dwell_s) if dwell_s > 0.0 else 0.01)
 
     def _warmup(
         self,
@@ -566,15 +934,16 @@ class _SupervisorSampler:
         if self._warmed:
             return
         deadline = time.monotonic() + max(0.0, timeout_s)
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not self._cancelled():
             cams = self._cameras
             if cams:
                 fps = [reader(self._client, cid) for cid in cams]
                 if fps and min(fps) >= min_fps:
                     break
-            time.sleep(max(0.0, poll_s))
+            if self._wait(poll_s):
+                break
         # Let the rolling fps average settle to steady state before the first dwell.
-        time.sleep(max(0.0, settle_s))
+        self._wait(settle_s)
         self._warmed = True
 
     def sample(
@@ -592,7 +961,7 @@ class _SupervisorSampler:
             # (the wall started at 1).  ``on_grow`` adds the next synthetic/NDI camera
             # on the SAME client + supervisor and spawns its worker.
             if self._on_grow is not None:
-                while len(self._cameras) < n:
+                while len(self._cameras) < n and not self._cancelled():
                     cid = self._on_grow()
                     if cid is None:
                         break  # hit the camera cap
@@ -635,14 +1004,19 @@ class _SupervisorSampler:
 
             deadline = time.monotonic() + max(0.0, dwell_s)
             ticks = 0
-            while ticks < max_ticks and (ticks == 0 or time.monotonic() < deadline):
+            while (
+                ticks < max_ticks
+                and (ticks == 0 or time.monotonic() < deadline)
+                and not self._cancelled()
+            ):
                 self._sup.tick()
                 # Deliver any telemetry the worker thread queued onto this thread so
                 # the model's fps reflects live frames (no-op for synchronous fakes).
                 self._drain_events()
                 ticks += 1
                 if tick_sleep_s > 0.0:
-                    time.sleep(tick_sleep_s)
+                    if self._wait(tick_sleep_s):
+                        break
             # Final drain so the last queued telemetry lands before we read fps.
             self._drain_events()
         finally:

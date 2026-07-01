@@ -1,0 +1,28 @@
+{
+  "N": 8,
+  "profile": "streams",
+  "discovered": 8,
+  "app_cpu_median": 7.9,
+  "app_cpu_max": 10.7,
+  "sys_cpu_median": 29.7,
+  "app_mem_mb": 297.0,
+  "fps_median_per_cam": 30.0,
+  "delivered_fps_median": 30.0,
+  "drops_steady_window": 0,
+  "app_induced_drops_steady_window": 0,
+  "app_induced_drops_per_s_steady": 0.0,
+  "source_drop_est_steady_window": 13274,
+  "source_drop_est_per_s_steady": 7.5,
+  "ndi_dropped_video_steady_window": 0,
+  "e2e_ms_median": 41.5,
+  "ndi_fourccs": [
+    "UYVA"
+  ],
+  "ndi_buffer_ms_median": 0.4,
+  "ndi_conversion_ms_median": 1.1,
+  "ndi_copy_ms_median": 0.0,
+  "detect_ms_median": 0.0,
+  "detect_active_pct": 0.0,
+  "stall_s_max": 0.0,
+  "cams_reporting": 8
+}

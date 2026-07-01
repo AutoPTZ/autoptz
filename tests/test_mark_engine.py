@@ -618,6 +618,7 @@ class _RecFleet:
     """A recording stand-in for MarkNDIFleet (cyndilib absent in CI/.venv)."""
 
     calls: list[dict] = []
+    full_name_calls: list[dict] = []
 
     def __init__(self, n, *, width, height, fps=30.0, frame_source=None):
         type(self).calls.append(
@@ -631,7 +632,8 @@ class _RecFleet:
         )
         self._n = n
 
-    def full_names(self, **_kwargs):
+    def full_names(self, **kwargs):
+        type(self).full_name_calls.append(dict(kwargs))
         return [f"HOST (AutoPTZ Mark Cam {i + 1})" for i in range(self._n)]
 
     def open(self):
@@ -649,6 +651,7 @@ def _patch_ndi_fleet(monkeypatch):
     from autoptz.benchmark import ndi_sim
 
     _RecFleet.calls = []
+    _RecFleet.full_name_calls = []
     monkeypatch.setattr(ndi_sim, "ndi_sim_available", lambda: True)
     monkeypatch.setattr(ndi_sim, "MarkNDIFleet", _RecFleet)
     # The first ndi:// camera is registered on the client during setup; keep the
@@ -676,6 +679,7 @@ def test_ndi_fleet_built_with_clip_variant_frame_source(monkeypatch):
     )
     try:
         assert _RecFleet.calls, "the NDI fleet was never built"
+        assert _RecFleet.full_name_calls[-1] == {"strict": True}
         call = _RecFleet.calls[-1]
         # Built at the chosen resolution and fed the resolved clip variant.
         assert call["frame_source"] == cached
@@ -755,40 +759,48 @@ def test_factory_owns_a_frame_source():
         eng.stop()
 
 
-def test_provider_attach_detach_wired_to_frame_source(qapp):
+def test_provider_attach_detach_wired_to_frame_source(qapp, wait_until):
     """The isolated client's provider attach/detach drive the factory's frame source.
 
     Mirrors app.py's wiring (~304-311): providerAttachRequested(cid,shm,w,h) →
     frames.attach(cid,shm,h,w) and providerDetachRequested → frames.detach, both
     queued.  Without this the Mark wall never reads the synthetic workers' shm.
     """
-    from PySide6.QtCore import QCoreApplication
-
     eng, _ = _factory()
     try:
         frames = eng.frame_source
         # Emit an attach on the isolated client; QueuedConnection delivers on pump.
         eng.client.providerAttachRequested.emit("cam-1", "cam_abc_preview", 1280, 720)
-        QCoreApplication.instance().processEvents()
-        assert frames.is_known("cam-1")
+        wait_until(
+            lambda: frames.is_known("cam-1"),
+            timeout=2.0,
+            message="provider attach signal was not delivered",
+            pump_qt=True,
+        )
         # The h/w order is honored (attach takes height,width; signal carries w,h).
         shm_name, height, width = frames._intents["cam-1"]
         assert (shm_name, height, width) == ("cam_abc_preview", 720, 1280)
         # Detach removes it.
         eng.client.providerDetachRequested.emit("cam-1")
-        QCoreApplication.instance().processEvents()
-        assert not frames.is_known("cam-1")
+        wait_until(
+            lambda: not frames.is_known("cam-1"),
+            timeout=2.0,
+            message="provider detach signal was not delivered",
+            pump_qt=True,
+        )
     finally:
         eng.stop()
 
 
-def test_stop_detaches_frame_source(qapp):
-    from PySide6.QtCore import QCoreApplication
-
+def test_stop_detaches_frame_source(qapp, wait_until):
     eng, _ = _factory()
     eng.client.providerAttachRequested.emit("cam-9", "cam_xyz_preview", 1280, 720)
-    QCoreApplication.instance().processEvents()
-    assert eng.frame_source.is_known("cam-9")
+    wait_until(
+        lambda: eng.frame_source.is_known("cam-9"),
+        timeout=2.0,
+        message="provider attach signal was not delivered",
+        pump_qt=True,
+    )
     eng.stop()
     # Teardown releases every reader/intent so the discarded session leaks nothing.
     assert not eng.frame_source.is_known("cam-9")

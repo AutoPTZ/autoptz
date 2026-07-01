@@ -39,14 +39,18 @@ def test_expected_flags_inventoried() -> None:
         "AUTOPTZ_UNIFIED_POSE",
         "AUTOPTZ_ASYNC_APPEARANCE",
         "AUTOPTZ_PTZ_PUMP",
-        "AUTOPTZ_PROCESS_PER_CAMERA",
         "AUTOPTZ_REID_DEVICE",
         "AUTOPTZ_COREML_UNITS",
         "AUTOPTZ_NDI_COLOR_FORMAT",
         "AUTOPTZ_PTZ_SERIAL_AUTOPROBE",
         "AUTOPTZ_TRUE_LATENCY_LEAD",
-        "AUTOPTZ_MODEL_SERVER",
     }
+
+
+def test_process_scaling_flags_are_not_in_normal_experimental_ui() -> None:
+    keys = {f.env_key for f in EXPERIMENTAL_FLAGS}
+    assert "AUTOPTZ_PROCESS_PER_CAMERA" not in keys
+    assert "AUTOPTZ_MODEL_SERVER" not in keys
 
 
 def test_true_latency_lead_flag_registered() -> None:

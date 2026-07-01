@@ -255,6 +255,34 @@ class TestSupervisorSampler:
         finally:
             sampler.close()
 
+    def test_adopted_sampler_dwell_is_cancelable(self, qapp) -> None:
+        """Closing Mark mid-test must not block on the full current dwell window."""
+        from autoptz.ui.engine_client import EngineClient
+
+        waits: list[float] = []
+
+        class _AlreadyCancelled:
+            def is_set(self) -> bool:
+                return True
+
+            def wait(self, seconds: float) -> bool:
+                waits.append(seconds)
+                return True
+
+        sampler = _SupervisorSampler(
+            get_profile("full"),
+            client=EngineClient(),
+            supervisor=object(),
+            cameras=["cam-cancel"],
+            adopted_started=True,
+        )
+        sampler.set_cancel_event(_AlreadyCancelled())
+        fps = sampler.sample(1, dwell_s=10.0, max_ticks=1000, tick_sleep_s=0.1)
+
+        assert fps == [0.0]
+        assert waits  # warmup settle and/or dwell used the cancelable wait path.
+        assert max(waits) <= 10.0
+
     def test_adopted_sampler_grows_cameras_progressively(self, qapp) -> None:
         """An ADOPTED sampler with an ``on_grow`` hook adds cameras ONE AT A TIME.
 
@@ -449,8 +477,10 @@ class TestRunBenchmarkWiring:
 
 
 class TestJsonOutput:
-    def test_run_benchmark_writes_json(self, qapp, tmp_path, capsys) -> None:
+    def test_run_benchmark_writes_json(self, qapp, tmp_path, capsys, monkeypatch) -> None:
         from autoptz.engine.supervisor import Supervisor
+
+        monkeypatch.setenv("AUTOPTZ_UNIFIED_POSE", "1")
 
         def factory(client, store):
             return Supervisor(client, store=store, worker_factory=_FakeSamplerWorker)
@@ -478,6 +508,16 @@ class TestJsonOutput:
 
         data = json.loads(out.read_text())
         assert data["profile"] == "full"
+        assert "face + pose + ReID" in data["profile_description"]
+        assert data["profile_features"] == {
+            "detection": True,
+            "tracking": True,
+            "face_recognition": True,
+            "pose": True,
+            "reid": True,
+        }
+        assert data["experimental_flags"]["AUTOPTZ_UNIFIED_POSE"] == "1"
+        assert "AUTOPTZ_NDI_COLOR_FORMAT" in data["experimental_flags"]
         assert data["weight"] == 1.0
         assert data["sustained_cameras"] == 2
         assert data["score"] == 2.0  # 2 * (30/30) * 1.0

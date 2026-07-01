@@ -3,8 +3,8 @@
 The widget paints the latest shared-memory
 frame in ``paintEvent`` (Qt double-buffers widget painting, so there is no
 flicker and no crossfade needed) and draws the broadcast HUD on top: a name
-pill, an fps/health chip, detection boxes, the target-lock reticle, a tracking
-dead-zone, and status banners.
+pill, an fps/health chip, detection boxes, the target-lock reticle, and status
+banners.
 
 It reads per-frame state directly from the :class:`CameraListModel` record
 (``fps``, ``health``, ``streaming``, ``tracks``) and the :class:`ShmFrameSource`.
@@ -24,7 +24,7 @@ import logging
 import time
 from typing import Any
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -53,11 +53,11 @@ from autoptz.ui.widgets.tile_helpers import (  # re-exported for back-compat
     _format_target_button_label,
     _head_bbox,
     _ignore_arms,
-    _norm_bbox_contains,
+    _norm_bbox_contains,  # noqa: F401  re-exported for tests/back-compat
     _pose,
     _rect_close,
     _rect_jump,
-    _snap_center_axis,
+    _select_enrollment_face_bbox,
     _tracking_enabled,
     _tracking_status,
     _tracks,
@@ -68,34 +68,6 @@ from autoptz.ui.widgets.tile_helpers import (  # re-exported for back-compat
 log = logging.getLogger(__name__)
 
 _NUDGE_SPEED = 0.65
-
-# Framing-box editing: handle hit radius (px) and clamp on the half-extents
-# (fraction of the half-frame) so the box can't collapse or fill the frame.
-_FB_HANDLE_HIT = 11.0
-_FB_MIN = 0.03
-_FB_MAX = 0.9
-# The 8 resize handles, as (name, x-sign, y-sign) where sign ∈ {-1,0,1} relative
-# to the box centre.  Corners drive both axes; edges drive one.
-_FB_HANDLES = (
-    ("nw", -1, -1),
-    ("n", 0, -1),
-    ("ne", 1, -1),
-    ("e", 1, 0),
-    ("se", 1, 1),
-    ("s", 0, 1),
-    ("sw", -1, 1),
-    ("w", -1, 0),
-)
-_FB_CURSORS = {
-    "nw": Qt.CursorShape.SizeFDiagCursor,
-    "se": Qt.CursorShape.SizeFDiagCursor,
-    "ne": Qt.CursorShape.SizeBDiagCursor,
-    "sw": Qt.CursorShape.SizeBDiagCursor,
-    "n": Qt.CursorShape.SizeVerCursor,
-    "s": Qt.CursorShape.SizeVerCursor,
-    "e": Qt.CursorShape.SizeHorCursor,
-    "w": Qt.CursorShape.SizeHorCursor,
-}
 
 # COCO-17 skeleton edges (pairs of keypoint indices) for the pose overlay.
 _POSE_EDGES = (
@@ -172,13 +144,6 @@ class CameraTile(QWidget):
         self._context_menu_enabled = bool(context_menu_enabled)
         self._selected = False
         self._painted_rect = QRectF()  # where the video is drawn (overlay mapping)
-        # Framing-box drag state: the handle being dragged ("nw".."e"/None) and a
-        # live (half_w, half_h) override applied while dragging (committed to the
-        # camera config on release).
-        self._fb_drag: str | None = None
-        self._fb_live: tuple[float, float] | None = None
-        self._fb_center_live: tuple[float, float] | None = None
-        self._fb_move_offset: tuple[float, float] | None = None
         self._empty_press_pos: QPointF | None = None
         self._empty_press_global: object | None = None
         self._reorder_dragging = False
@@ -608,7 +573,6 @@ class CameraTile(QWidget):
 
         # HUD overlays (only meaningful once we have a frame/telemetry)
         if rec is not None:
-            self._paint_framing_box(p, rec)
             self._paint_tracks(p, rec)
             self._paint_name_pill(p, rec)
             self._paint_fps_chip(p, rec)
@@ -662,195 +626,6 @@ class CameraTile(QWidget):
             p.drawLine(QPointF(cx, cy), QPointF(cx + dx * length, cy))
             p.drawLine(QPointF(cx, cy), QPointF(cx, cy + dy * length))
         p.restore()
-
-    # ── framing box (adjustable PTZ dead-zone) ───────────────────────────────────
-
-    def _framing_extents(self, rec: Any) -> tuple[float, float] | None:
-        """Return the framing box's (half_w, half_h) fractions, or None if off.
-
-        While a drag is in progress the live override is returned so the box
-        tracks the pointer before the change is committed to the config.
-        """
-        cfg = getattr(rec, "camera_config", None)
-        ptz = getattr(cfg, "ptz", None) if cfg is not None else None
-        if ptz is None or not getattr(ptz, "safe_zone_enabled", False):
-            return None
-        if self._fb_live is not None:
-            return self._fb_live
-        return (float(getattr(ptz, "safe_zone_w", 0.15)), float(getattr(ptz, "safe_zone_h", 0.22)))
-
-    def _framing_center(self, rec: Any) -> tuple[float, float]:
-        """Return the framing-box centre offset in controller error coordinates."""
-        if self._fb_center_live is not None:
-            return self._fb_center_live
-        cfg = getattr(rec, "camera_config", None)
-        ptz = getattr(cfg, "ptz", None) if cfg is not None else None
-        if ptz is None:
-            return (0.0, 0.0)
-        try:
-            x = max(-0.9, min(0.9, float(getattr(ptz, "safe_zone_x", 0.0))))
-            y = max(-0.9, min(0.9, float(getattr(ptz, "safe_zone_y", 0.0))))
-            return (x, y)
-        except Exception:  # noqa: BLE001
-            return (0.0, 0.0)
-
-    def _framing_box_rect(self, rec: Any) -> QRectF | None:
-        """The framing box in widget pixels (centred on the painted video)."""
-        ext = self._framing_extents(rec)
-        r = self._painted_rect
-        if ext is None or r.width() < 8 or r.height() < 8:
-            return None
-        hw, hh = ext
-        half_w = hw * r.width() / 2.0
-        half_h = hh * r.height() / 2.0
-        off_x, off_y = self._framing_center(rec)
-        cx = r.center().x() + off_x * (r.width() / 2.0)
-        cy = r.center().y() - off_y * (r.height() / 2.0)
-        return QRectF(cx - half_w, cy - half_h, 2 * half_w, 2 * half_h)
-
-    def _framing_handle_points(self, box: QRectF) -> dict[str, QPointF]:
-        """Map each resize-handle name to its centre point on *box*."""
-        cx, cy = box.center().x(), box.center().y()
-        pts: dict[str, QPointF] = {}
-        for name, sx, sy in _FB_HANDLES:
-            x = cx + sx * box.width() / 2.0
-            y = cy + sy * box.height() / 2.0
-            pts[name] = QPointF(x, y)
-        return pts
-
-    def _framing_handle_at(self, pos: QPointF, rec: Any) -> str | None:
-        """Return the framing handle under *pos* (only when the tile is selected)."""
-        if not self._selected:
-            return None
-        box = self._framing_box_rect(rec)
-        if box is None:
-            return None
-        for name, pt in self._framing_handle_points(box).items():
-            if abs(pt.x() - pos.x()) <= _FB_HANDLE_HIT and abs(pt.y() - pos.y()) <= _FB_HANDLE_HIT:
-                return name
-        return None
-
-    def _framing_move_hit(self, pos: QPointF, rec: Any) -> bool:
-        """Return True when *pos* can drag-move the selected framing box."""
-        if not self._selected:
-            return False
-        box = self._framing_box_rect(rec)
-        return bool(box is not None and box.contains(pos))
-
-    def _framing_roundness(self, rec: Any) -> float:
-        cfg = getattr(rec, "camera_config", None)
-        ptz = getattr(cfg, "ptz", None) if cfg is not None else None
-        try:
-            return max(0.0, min(1.0, float(getattr(ptz, "safe_zone_roundness", 1.0))))
-        except Exception:  # noqa: BLE001
-            return 1.0
-
-    def _draw_framing_shape(self, p: QPainter, box: QRectF, roundness: float) -> None:
-        """Draw the framing region as a rectangle…oval per *roundness* (0…1)."""
-        if roundness >= 0.99:
-            p.drawEllipse(box)
-        else:
-            rad = roundness * min(box.width(), box.height()) / 2.0
-            p.drawRoundedRect(box, rad, rad)
-
-    def _paint_framing_box(self, p: QPainter, rec: Any) -> None:
-        """Draw the adjustable framing region (PTZ dead-zone) over the video.
-
-        Read straight from the camera config — no telemetry plumbing.  A subtle
-        dashed outline (rectangle…oval by ``safe_zone_roundness``) plus a centre
-        "+" crosshair marking the aim reference point; when the tile is selected,
-        a brighter outline + grab handles so the operator can resize it to keep
-        the subject framed.
-        """
-        box = self._framing_box_rect(rec)
-        if box is None:
-            return
-        roundness = self._framing_roundness(rec)
-        p.save()
-        editing = self._selected
-        col = QColor(T.TARGET) if editing else QColor(255, 255, 255, 130)
-        pen = QPen(col, 1.6, Qt.PenStyle.DashLine)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        self._draw_framing_shape(p, box, roundness)
-        # Centre "+" crosshair — the reference point the PTZ keeps the subject on.
-        cx, cy = box.center().x(), box.center().y()
-        p.setPen(QPen(col, 1.4))
-        p.drawLine(QPointF(cx - 7, cy), QPointF(cx + 7, cy))
-        p.drawLine(QPointF(cx, cy - 7), QPointF(cx, cy + 7))
-        if editing:
-            # Solid square grab handles at corners + edge midpoints.
-            p.setPen(QPen(QColor(T.TARGET), 1))
-            p.setBrush(QColor(T.TARGET))
-            hs = 3.0
-            for pt in self._framing_handle_points(box).values():
-                p.drawRect(QRectF(pt.x() - hs, pt.y() - hs, 2 * hs, 2 * hs))
-        p.restore()
-
-    def _resize_framing(self, handle: str, pos: QPointF) -> None:
-        """Update the live box extents from a handle drag."""
-        r = self._painted_rect
-        if r.width() < 8 or r.height() < 8:
-            return
-        rec = self._record()
-        box = self._framing_box_rect(rec)
-        if box is None:
-            return
-        cx, cy = box.center().x(), box.center().y()
-        cur = self._fb_live or (0.15, 0.22)
-        hw, hh = cur
-        if "e" in handle or "w" in handle:
-            hw = abs(pos.x() - cx) / (r.width() / 2.0)
-        if "n" in handle or "s" in handle:
-            hh = abs(pos.y() - cy) / (r.height() / 2.0)
-        hw = max(_FB_MIN, min(_FB_MAX, hw))
-        hh = max(_FB_MIN, min(_FB_MAX, hh))
-        self._fb_live = (hw, hh)
-        self.update()
-
-    def _move_framing(self, pos: QPointF) -> None:
-        """Move the framing box centre, clamped inside the painted video."""
-        r = self._painted_rect
-        if r.width() < 8 or r.height() < 8:
-            return
-        hw, hh = self._fb_live or self._framing_extents(self._record()) or (0.15, 0.22)
-        off_x, off_y = self._fb_move_offset or (0.0, 0.0)
-        center = QPointF(pos.x() + off_x, pos.y() + off_y)
-        x = (center.x() - r.center().x()) / (r.width() / 2.0)
-        y = -((center.y() - r.center().y()) / (r.height() / 2.0))
-        x = max(-1.0 + hw, min(1.0 - hw, x))
-        y = max(-1.0 + hh, min(1.0 - hh, y))
-        x = _snap_center_axis(x)
-        y = _snap_center_axis(y)
-        self._fb_center_live = (x, y)
-        self.update()
-
-    def _commit_framing(self) -> None:
-        """Persist the dragged box extents to the camera config (once, on release)."""
-        if self._fb_live is None and self._fb_center_live is None:
-            return
-        rec = self._record()
-        hw, hh = self._fb_live or self._framing_extents(rec) or (0.15, 0.22)
-        cx, cy = self._fb_center_live or self._framing_center(rec)
-        cx, cy = _snap_center_axis(cx), _snap_center_axis(cy)
-        try:
-            self._client.updateCameraConfigPatch(
-                self.camera_id,
-                {
-                    "ptz": {
-                        "safe_zone_x": round(cx, 4),
-                        "safe_zone_y": round(cy, 4),
-                        "safe_zone_w": round(hw, 4),
-                        "safe_zone_h": round(hh, 4),
-                    }
-                },
-            )
-        except Exception:  # noqa: BLE001
-            log.debug("framing-box persist failed", exc_info=True)
-        self._fb_drag = None
-        self._fb_live = None
-        self._fb_center_live = None
-        self._fb_move_offset = None
 
     def _map_bbox(self, bbox: dict[str, float]) -> QRectF:
         """Normalized (0–1) bbox → widget pixels within the painted video rect."""
@@ -1013,7 +788,7 @@ class CameraTile(QWidget):
         try:
             return self._client.overlays()
         except Exception:  # noqa: BLE001
-            return {"detection": True, "faces": False, "pose": False, "prediction": False}
+            return {"detection": True, "faces": True, "pose": False, "prediction": False}
 
     def _on_overlays_changed(self) -> None:
         self._overlays = self._read_overlays()
@@ -1418,31 +1193,7 @@ class CameraTile(QWidget):
         self._empty_press_pos = None
         self._empty_press_global = None
         self._reorder_dragging = False
-        self._fb_move_offset = None
         if event.button() == Qt.MouseButton.LeftButton:
-            # Grabbing a framing-box handle (only when this tile is selected and
-            # the press lands on a handle) starts a resize and takes priority over
-            # box/background clicks so dragging never fires target selection.
-            handle = self._framing_handle_at(event.position(), self._record())
-            if handle is not None:
-                self._fb_drag = handle
-                self._fb_live = self._framing_extents(self._record())
-                self._fb_center_live = self._framing_center(self._record())
-                event.accept()
-                return
-            if self._framing_move_hit(event.position(), self._record()):
-                self._fb_drag = "move"
-                self._fb_live = self._framing_extents(self._record())
-                self._fb_center_live = self._framing_center(self._record())
-                box = self._framing_box_rect(self._record())
-                if box is not None:
-                    self._fb_move_offset = (
-                        box.center().x() - event.position().x(),
-                        box.center().y() - event.position().y(),
-                    )
-                self.setCursor(Qt.CursorShape.ClosedHandCursor)
-                event.accept()
-                return
             track_id, is_target = self._hit_test_track(event.position())
             if track_id is not None:
                 # Person clicks always select the camera. Clicking the current
@@ -1470,13 +1221,6 @@ class CameraTile(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         pos = event.position()
-        if self._fb_drag is not None:
-            if self._fb_drag == "move":
-                self._move_framing(pos)
-            else:
-                self._resize_framing(self._fb_drag, pos)
-            event.accept()
-            return
         if self._empty_press_pos is not None:
             dx = pos.x() - self._empty_press_pos.x()
             dy = pos.y() - self._empty_press_pos.y()
@@ -1488,22 +1232,10 @@ class CameraTile(QWidget):
                 self.reorderDragMoved.emit(self.camera_id, event.globalPosition().toPoint())
                 event.accept()
                 return
-        # Hover feedback: a resize cursor over a framing handle (when editable).
-        handle = self._framing_handle_at(pos, self._record())
-        if handle is not None:
-            self.setCursor(_FB_CURSORS.get(handle, Qt.CursorShape.SizeAllCursor))
-        elif self._framing_move_hit(pos, self._record()):
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
-        else:
-            self.unsetCursor()
+        self.unsetCursor()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if self._fb_drag is not None and event.button() == Qt.MouseButton.LeftButton:
-            self._commit_framing()
-            self.unsetCursor()
-            event.accept()
-            return
         if self._empty_press_pos is not None and event.button() == Qt.MouseButton.LeftButton:
             if self._reorder_dragging:
                 self.reorderDragFinished.emit(self.camera_id, event.globalPosition().toPoint())
@@ -1545,7 +1277,7 @@ class CameraTile(QWidget):
         dlg = QDialog(self)
         dlg.setWindowTitle("Name this person")
         lay = QVBoxLayout(dlg)
-        preview = self._enrollment_preview_pixmap(track_id, click_pos)
+        preview, thumbnail = self._enrollment_preview_and_thumbnail(track_id, click_pos)
         if preview is not None:
             img = QLabel(dlg)
             img.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1596,9 +1328,15 @@ class CameraTile(QWidget):
                         track_id,
                         click[0],
                         click[1],
+                        thumbnail,
                     )
                 else:
-                    self._client.assignTrackToIdentity(self.camera_id, identity_id, track_id)
+                    self._client.assignTrackToIdentity(
+                        self.camera_id,
+                        identity_id,
+                        track_id,
+                        thumbnail=thumbnail,
+                    )
             else:
                 nm = name.text().strip()
                 if nm:
@@ -1609,9 +1347,15 @@ class CameraTile(QWidget):
                             track_id,
                             click[0],
                             click[1],
+                            thumbnail,
                         )
                     else:
-                        self._client.enrollIdentity(self.camera_id, nm, track_id)
+                        self._client.enrollIdentity(
+                            self.camera_id,
+                            nm,
+                            track_id,
+                            thumbnail=thumbnail,
+                        )
         except Exception:  # noqa: BLE001
             log.debug("assign identity failed", exc_info=True)
 
@@ -1621,6 +1365,33 @@ class CameraTile(QWidget):
         click_pos: QPointF | None,
     ) -> QPixmap | None:
         """Return a current face crop, falling back to upper-body track crop."""
+        preview, _thumbnail = self._enrollment_preview_and_thumbnail(track_id, click_pos)
+        return preview
+
+    def _enrollment_preview_and_thumbnail(
+        self,
+        track_id: int,
+        click_pos: QPointF | None,
+    ) -> tuple[QPixmap | None, bytes | None]:
+        crop = self._enrollment_crop_qimage(track_id, click_pos)
+        if crop is None or crop.isNull():
+            return None, None
+        pix = QPixmap.fromImage(crop)
+        preview = None
+        if not pix.isNull():
+            preview = pix.scaled(
+                T.fs(300),
+                T.fs(190),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        return preview, self._thumbnail_png_from_crop(crop)
+
+    def _enrollment_crop_qimage(
+        self,
+        track_id: int,
+        click_pos: QPointF | None,
+    ) -> Any | None:
         img = self._frames.latest_qimage(self.camera_id) if self._frames else None
         if img is None or img.isNull():
             return None
@@ -1635,7 +1406,37 @@ class CameraTile(QWidget):
         face_box = self._face_bbox_for_preview(rec, track_box, click)
         # No detected face → frame the head region, not the whole person/frame.
         crop_box = face_box or _head_bbox(track_box)
-        return self._crop_preview(img, crop_box, pad=0.28 if face_box else 0.18)
+        return self._crop_qimage(img, crop_box, pad=0.28 if face_box else 0.18)
+
+    def _enrollment_thumbnail_png(
+        self,
+        track_id: int,
+        click_pos: QPointF | None,
+    ) -> bytes | None:
+        crop = self._enrollment_crop_qimage(track_id, click_pos)
+        return self._thumbnail_png_from_crop(crop)
+
+    def _thumbnail_png_from_crop(self, crop: Any | None) -> bytes | None:
+        if crop is None or crop.isNull():
+            return None
+        side = max(crop.width(), crop.height())
+        if side > 220:
+            crop = crop.scaled(
+                220,
+                220,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        data = QByteArray()
+        buf = QBuffer(data)
+        if not buf.open(QIODevice.OpenModeFlag.WriteOnly):
+            return None
+        try:
+            if not crop.save(buf, "PNG"):
+                return None
+            return bytes(data)
+        finally:
+            buf.close()
 
     def _face_bbox_for_preview(
         self,
@@ -1643,39 +1444,16 @@ class CameraTile(QWidget):
         track_box: dict[str, float],
         click: tuple[float, float] | None,
     ) -> dict[str, float] | None:
-        candidates = []
-        for face in _faces(rec):
-            box = face.get("bbox", {})
-            cx = (float(box.get("x1", 0.0)) + float(box.get("x2", 0.0))) * 0.5
-            cy = (float(box.get("y1", 0.0)) + float(box.get("y2", 0.0))) * 0.5
-            if not _norm_bbox_contains(track_box, cx, cy):
-                continue
-            candidates.append(box)
-        if not candidates:
-            return None
-        if click is None:
-            return max(
-                candidates,
-                key=lambda b: (b.get("x2", 0.0) - b.get("x1", 0.0))
-                * (b.get("y2", 0.0) - b.get("y1", 0.0)),
-            )
+        return _select_enrollment_face_bbox(_faces(rec), track_box, click)
 
-        def score(box: dict[str, float]) -> tuple[int, float]:
-            x, y = click
-            inside = _norm_bbox_contains(box, x, y)
-            cx = (float(box.get("x1", 0.0)) + float(box.get("x2", 0.0))) * 0.5
-            cy = (float(box.get("y1", 0.0)) + float(box.get("y2", 0.0))) * 0.5
-            return (0 if inside else 1, (cx - x) ** 2 + (cy - y) ** 2)
-
-        return min(candidates, key=score)
-
-    def _crop_preview(
+    def _crop_qimage(
         self,
         img: Any,
         bbox: dict[str, float],
         *,
         pad: float,
-    ) -> QPixmap | None:
+        max_side: int | None = None,
+    ) -> Any | None:
         w, h = img.width(), img.height()
         x1 = float(bbox.get("x1", 0.0)) * w
         y1 = float(bbox.get("y1", 0.0)) * h
@@ -1690,7 +1468,29 @@ class CameraTile(QWidget):
         y2 = min(h, int(round(y2 + bh * pad)))
         if x2 <= x1 or y2 <= y1:
             return None
-        pix = QPixmap.fromImage(img.copy(x1, y1, x2 - x1, y2 - y1))
+        crop = img.copy(x1, y1, x2 - x1, y2 - y1)
+        if max_side is not None:
+            side = max(crop.width(), crop.height())
+            if side > max_side:
+                crop = crop.scaled(
+                    max_side,
+                    max_side,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+        return crop
+
+    def _crop_preview(
+        self,
+        img: Any,
+        bbox: dict[str, float],
+        *,
+        pad: float,
+    ) -> QPixmap | None:
+        crop = self._crop_qimage(img, bbox, pad=pad)
+        if crop is None or crop.isNull():
+            return None
+        pix = QPixmap.fromImage(crop)
         if pix.isNull():
             return None
         return pix.scaled(

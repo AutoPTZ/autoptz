@@ -253,13 +253,13 @@ class TestUSBAdapterReconnect:
         ):
             adapter.start()
             # Wait for the capture thread to observe the stall and reconnect.
-            reopened.wait(timeout=3.0)
+            assert reopened.wait(timeout=3.0), "capture thread did not reconnect after stall"
             adapter.stop()
 
         # Should have opened at least twice (initial + after stall)
         assert len(open_calls) >= 2, f"Expected >= 2 open calls, got {open_calls}"
 
-    def test_status_transitions(self) -> None:
+    def test_status_transitions(self, wait_until) -> None:
         """Status goes RUNNING after a successful open."""
         opened = threading.Event()
 
@@ -282,13 +282,12 @@ class TestUSBAdapterReconnect:
             patch.object(USBAdapter, "_close", lambda self: None),
         ):
             adapter.start()
-            opened.wait(timeout=2.0)
-            # Poll until a frame has actually been read (which implies RUNNING)
-            # rather than sleeping a fixed window, which flakes when a loaded CI
-            # runner stalls the adapter thread.
-            deadline = time.monotonic() + 2.0
-            while adapter.status.frames_total <= 0 and time.monotonic() < deadline:
-                time.sleep(0.01)
+            assert opened.wait(timeout=2.0), "adapter did not call _open"
+            wait_until(
+                lambda: adapter.status.frames_total > 0,
+                timeout=2.0,
+                message="adapter did not deliver a frame",
+            )
             status = adapter.status
             adapter.stop()
 
@@ -307,7 +306,6 @@ class TestUSBAdapterReconnect:
         adapter = USBAdapter("cam-fail", source=0, stall_timeout=5.0)
         with patch.object(USBAdapter, "_open", fake_open):
             adapter.start()
-            time.sleep(0.05)
             adapter.stop()
 
         assert adapter.status.state == AdapterState.STOPPED
@@ -375,7 +373,7 @@ class TestRTSPAdapterCV2Fallback:
         cap.release.assert_called_once()
         assert adapter._cap is None
 
-    def test_stall_triggers_reconnect(self) -> None:
+    def test_stall_triggers_reconnect(self, wait_until) -> None:
         open_count = 0
 
         def fake_open(self: RTSPAdapter) -> bool:
@@ -406,11 +404,11 @@ class TestRTSPAdapterCV2Fallback:
             patch.object(RTSPAdapter, "_close", lambda self: None),
         ):
             adapter.start()
-            # Poll for the stall-triggered reconnect (≥2 opens) instead of a fixed
-            # 1 s sleep, which flakes when a loaded CI runner is slow to reconnect.
-            deadline = time.monotonic() + 3.0
-            while open_count < 2 and time.monotonic() < deadline:
-                time.sleep(0.01)
+            wait_until(
+                lambda: open_count >= 2,
+                timeout=3.0,
+                message="stall-triggered reconnect did not reopen the RTSP adapter",
+            )
             adapter.stop()
 
         assert open_count >= 2, f"Expected ≥ 2 opens after stall, got {open_count}"
@@ -770,6 +768,11 @@ class TestNDIReadFrame:
         assert out.shape == (_H, _W, 3)
         # Supported format must NOT trip the fallback.
         assert adapter._color_format_pref == "fastest"
+        metrics = adapter.delivery_metrics()
+        assert metrics["ndi_fourcc"] == "UYVY"
+        assert metrics["ndi_buffer_ms"] >= 0.0
+        assert metrics["ndi_conversion_ms"] >= 0.0
+        assert metrics["ndi_copy_ms"] >= 0.0
 
     def test_unsupported_native_format_self_heals_to_bgra(self) -> None:
         buf = np.full(_H * _W * 4, 128, dtype=np.uint8)  # 16-bit P216 layout
@@ -784,12 +787,14 @@ class TestNDIReadFrame:
 
 
 class TestNDIDeliveryMetrics:
-    """NDIAdapter estimates source-vs-delivered drops over a rolling 1.0 s window.
+    """NDIAdapter estimates source-vs-delivered drops over a smoothed window.
 
     FrameSync ALWAYS returns the latest frame (never "no new frame") so true
-    drops aren't directly observable — they're estimated from ``source_fps`` vs
-    ``delivered_fps`` over the window.  These tests drive a fake monotonic clock
-    and a real (non-None) frame so only the rolling-window math is exercised.
+    drops aren't directly observable. AutoPTZ counts only severe sustained
+    ``source_fps`` vs ``delivered_fps`` shortfall so normal scheduler jitter does
+    not manufacture a failed source-drop artifact. These tests drive a fake
+    monotonic clock and a real (non-None) frame so only the rolling-window math is
+    exercised.
     """
 
     def _adapter(self, fourcc: str = "BGRA") -> NDIAdapter:
@@ -805,8 +810,8 @@ class TestNDIDeliveryMetrics:
         adapter._receiver = MagicMock()
         return adapter
 
-    def test_drop_estimate_accrues_when_delivered_below_source(self) -> None:
-        """Source advertises 30 fps but we only deliver 20 in the window → ~10 drops."""
+    def test_drop_estimate_accrues_when_sustained_collapse_below_source(self) -> None:
+        """Source advertises 30 fps but we only deliver 20 fps → ~50 drops in 5 s."""
         adapter = self._adapter()
         # Advertise 30 fps so source_fps > delivered_fps.
         adapter._video_frame.frame_rate_N = 30
@@ -814,15 +819,15 @@ class TestNDIDeliveryMetrics:
 
         clock = {"t": 100.0}
         with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
-            # Deliver 20 frames, then trip the 1.0 s window boundary.
-            for _ in range(20):
+            # Deliver 20 fps over the 5 s window, then trip the window boundary.
+            for _ in range(100):
                 assert adapter._read_frame() is not None
-            clock["t"] += 1.0
-            assert adapter._read_frame() is not None  # 21st delivered, window computed
+            clock["t"] += 5.0
+            assert adapter._read_frame() is not None  # window computed
 
         m = adapter.delivery_metrics()
         assert m["source_fps"] >= 29.0
-        assert 8 <= m["frames_dropped_est"] <= 12
+        assert 45 <= m["frames_dropped_est"] <= 55
 
     def test_no_false_drops_when_keeping_up(self) -> None:
         """Delivering at the advertised rate accrues no drops."""
@@ -832,12 +837,29 @@ class TestNDIDeliveryMetrics:
 
         clock = {"t": 200.0}
         with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
-            for _ in range(30):
+            for _ in range(150):
                 adapter._read_frame()
-            clock["t"] += 1.0
+            clock["t"] += 5.0
             adapter._read_frame()
 
         assert adapter.delivery_metrics()["frames_dropped_est"] == 0
+
+    def test_no_false_drops_for_normal_receiver_pacing_jitter(self) -> None:
+        """29.6 fps against a 30 fps NDI source is jitter, not a source drop."""
+        adapter = self._adapter()
+        adapter._video_frame.frame_rate_N = 30
+        adapter._video_frame.frame_rate_D = 1
+
+        clock = {"t": 210.0}
+        with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
+            for _ in range(148):
+                adapter._read_frame()
+            clock["t"] += 5.0
+            adapter._read_frame()
+
+        m = adapter.delivery_metrics()
+        assert 29.4 <= m["delivered_fps"] <= 29.8
+        assert m["frames_dropped_est"] == 0
 
     def test_source_fps_peak_fallback_when_rate_not_advertised(self) -> None:
         """With no advertised rate, source_fps falls back to the peak delivered fps."""
@@ -850,13 +872,13 @@ class TestNDIDeliveryMetrics:
 
         clock = {"t": 300.0}
         with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
-            for _ in range(25):
+            for _ in range(125):
                 adapter._read_frame()
-            clock["t"] += 1.0
+            clock["t"] += 5.0
             adapter._read_frame()
 
         m = adapter.delivery_metrics()
-        # Peak delivered ≈ 25 fps over the 1.0 s window.
+        # Peak delivered ≈ 25 fps over the smoothed window.
         assert m["source_fps"] >= 24.0
         assert m["delivered_fps"] >= 24.0
 
@@ -865,6 +887,21 @@ class TestNDIDeliveryMetrics:
         adapter._receiver.get_queue_depth = MagicMock(return_value=3)
         adapter._read_frame()
         assert adapter.delivery_metrics()["ndi_queue_depth"] == 3
+
+    def test_structured_queue_probe_returns_audio_metadata_values(self) -> None:
+        adapter = self._adapter()
+        adapter._receiver.get_queue = MagicMock(
+            return_value={
+                "video_frames": 3,
+                "audio_frames": 1,
+                "metadata_frames": 0,
+            }
+        )
+        adapter._read_frame()
+        m = adapter.delivery_metrics()
+        assert m["ndi_queue_depth"] == 3
+        assert m["ndi_queue_audio"] == 1
+        assert m["ndi_queue_metadata"] == 0
 
     def test_queue_probe_is_minus_one_when_probe_raises(self) -> None:
         adapter = self._adapter()
@@ -875,6 +912,81 @@ class TestNDIDeliveryMetrics:
         adapter._receiver.frame_sync = MagicMock(spec=["capture_video"])
         adapter._read_frame()
         assert adapter.delivery_metrics()["ndi_queue_depth"] == -1
+
+    def test_native_performance_and_connection_counters_when_exposed(self) -> None:
+        adapter = self._adapter()
+        total = types.SimpleNamespace(video_frames=100, audio_frames=80, metadata_frames=5)
+        dropped = types.SimpleNamespace(video_frames=2, audio_frames=1, metadata_frames=0)
+        adapter._receiver.get_performance = MagicMock(return_value=(total, dropped))
+        adapter._receiver.get_no_connections = MagicMock(return_value=1)
+        adapter._read_frame()
+        m = adapter.delivery_metrics()
+        assert m["ndi_total_video_frames"] == 100
+        assert m["ndi_dropped_video_frames"] == 2
+        assert m["ndi_total_audio_frames"] == 80
+        assert m["ndi_dropped_audio_frames"] == 1
+        assert m["ndi_total_metadata_frames"] == 5
+        assert m["ndi_dropped_metadata_frames"] == 0
+        assert m["ndi_connections"] == 1
+
+    def test_sdk_telemetry_is_sampled_not_polled_per_frame(self) -> None:
+        adapter = self._adapter()
+        total1 = types.SimpleNamespace(video_frames=100, audio_frames=80, metadata_frames=5)
+        dropped1 = types.SimpleNamespace(video_frames=2, audio_frames=1, metadata_frames=0)
+        total2 = types.SimpleNamespace(video_frames=140, audio_frames=100, metadata_frames=8)
+        dropped2 = types.SimpleNamespace(video_frames=3, audio_frames=1, metadata_frames=0)
+        adapter._receiver.get_queue_depth = MagicMock(side_effect=[2, 4])
+        adapter._receiver.get_performance = MagicMock(
+            side_effect=[(total1, dropped1), (total2, dropped2)]
+        )
+        adapter._receiver.get_no_connections = MagicMock(side_effect=[1, 2])
+
+        clock = {"t": 100.0}
+        with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
+            adapter._read_frame()
+            clock["t"] += 0.5
+            adapter._read_frame()
+            m = adapter.delivery_metrics()
+            assert m["ndi_queue_depth"] == 2
+            assert m["ndi_total_video_frames"] == 100
+            assert m["ndi_connections"] == 1
+            assert adapter._receiver.get_queue_depth.call_count == 1
+            assert adapter._receiver.get_performance.call_count == 1
+            assert adapter._receiver.get_no_connections.call_count == 1
+
+            clock["t"] += 0.51
+            adapter._read_frame()
+
+        m = adapter.delivery_metrics()
+        assert m["ndi_queue_depth"] == 4
+        assert m["ndi_total_video_frames"] == 140
+        assert m["ndi_dropped_video_frames"] == 3
+        assert m["ndi_connections"] == 2
+        assert adapter._receiver.get_queue_depth.call_count == 2
+        assert adapter._receiver.get_performance.call_count == 2
+        assert adapter._receiver.get_no_connections.call_count == 2
+
+    def test_repeated_source_stamp_counts_duplicate_and_stale(self) -> None:
+        """FrameSync repeats become visible when the NDI stamp does not advance."""
+        adapter = self._adapter()
+        adapter._video_frame.frame_rate_N = 30
+        adapter._video_frame.frame_rate_D = 1
+        adapter._video_frame.timecode = 100
+
+        clock = {"t": 500.0}
+        with patch("autoptz.engine.pipeline.ingest.time.monotonic", lambda: clock["t"]):
+            adapter._read_frame()
+            clock["t"] += 0.02
+            adapter._read_frame()
+            clock["t"] += 0.11
+            adapter._read_frame()
+            adapter._video_frame.timecode = 101
+            clock["t"] += 0.02
+            adapter._read_frame()
+
+        m = adapter.delivery_metrics()
+        assert m["duplicate_frames"] == 2
+        assert m["stale_frames"] == 1
 
     def test_counters_reset_on_reconnect(self) -> None:
         """_open/_close reset the rolling-window state so a reconnect starts clean."""
@@ -907,7 +1019,22 @@ class TestBaseAdapterDeliveryMetrics:
             "frames_dropped_est": 0,
             "delivered_fps": 0.0,
             "source_fps": 0.0,
+            "duplicate_frames": 0,
+            "stale_frames": 0,
             "ndi_queue_depth": -1,
+            "ndi_queue_audio": -1,
+            "ndi_queue_metadata": -1,
+            "ndi_total_video_frames": 0,
+            "ndi_dropped_video_frames": 0,
+            "ndi_total_audio_frames": 0,
+            "ndi_dropped_audio_frames": 0,
+            "ndi_total_metadata_frames": 0,
+            "ndi_dropped_metadata_frames": 0,
+            "ndi_connections": -1,
+            "ndi_fourcc": "",
+            "ndi_buffer_ms": 0.0,
+            "ndi_conversion_ms": 0.0,
+            "ndi_copy_ms": 0.0,
         }
 
 

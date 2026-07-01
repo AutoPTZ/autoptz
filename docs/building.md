@@ -115,12 +115,13 @@ variables → Actions). Release CI requires all of them:
 
 #### macOS architectures in CI
 
-The release workflow builds arm64 on `macos-14` and x86_64 on `macos-15-intel`.
+The release workflow builds arm64 on `macos-14` and x86_64 on `macos-26-intel`.
 They intentionally stay separate because a universal2 PyInstaller bundle would
 require every bundled native dependency (`onnxruntime`, OpenCV, PySide/Qt, Python
-extensions, etc.) to be universal too. The arm64 artifact gates the main release;
-the Intel artifact is best-effort and is attached to the same GitHub Release when
-the Intel runner finishes.
+extensions, etc.) to be universal too. Both macOS artifacts gate the main
+release. Publishing waits for arm64, x86_64, Windows, and Linux to succeed before
+generating `SHA256SUMS`, so every uploaded installer has a checksum entry in the
+same manifest.
 
 ## Windows → `.exe` + installer
 

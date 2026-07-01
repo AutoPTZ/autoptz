@@ -1,10 +1,11 @@
 # Multi-camera streaming/scaling benchmark
 
-Reproduces the A/B that decided the **shared model-server** architecture
+Reproduces the A/B for the **shared model-server** architecture candidate
 (`AUTOPTZ_MODEL_SERVER`). It drives the *real* `Supervisor` + engine over N
 independent NDI sources at 1080p30 and reports delivered fps, steady-state
-frame-drops, end-to-end latency, and App/System CPU + RAM — so threaded vs
-per-process vs model-server can be compared on the axes that matter for
+app-induced drops, source/SDK drop counters, NDI FourCC/copy/convert cost,
+end-to-end latency, and App/System CPU + RAM — so threaded vs
+model-server can be compared on the axes that matter for
 tracking smoothness (latency) and scale (CPU/RAM at high camera counts).
 
 ## Pieces
@@ -25,16 +26,13 @@ receiver's mode is chosen by env var:
 python tools/bench/scaling/ndi_sender.py 16 1920 1080 30 90 &
 python tools/bench/scaling/ndi_receiver.py 16 full 18 16
 
-# one-process-per-camera
-AUTOPTZ_PROCESS_PER_CAMERA=1 python tools/bench/scaling/ndi_receiver.py 16 full 18 60
-
-# shared model-server (the scalable one)
+# shared model-server candidate
 AUTOPTZ_MODEL_SERVER=1 python tools/bench/scaling/ndi_receiver.py 16 full 18 40
 ```
 
-`ndi_receiver.py <N> <profile> <run_s> <warmup_s>` — `profile` is `full`
-(detect+track+control) or `streams` (ingest only). Give per-process / model-
-server runs a longer warmup; spawned children load models before steady state.
+`ndi_receiver.py <N> <profile> <run_s> <warmup_s> [json_path]` — `profile` is `full`
+(detect+track+control) or `streams` (ingest only). Give model-server runs a
+longer warmup; spawned children load models before steady state.
 
 ## Measure detection health, not just capture
 
@@ -46,6 +44,14 @@ bug where readers never attach) still shows great fps/latency. The first model-s
 benchmark looked perfect (30 fps, 48 ms) while `served=0`: it was measuring capture
 with detection dead. Trust `served/s > 0` (or `detect_active_pct ≈ 100`) as the proof
 detection actually ran.
+
+For the 2.2 release gate, `drops_steady_window` is the same value as
+`app_induced_drops_steady_window`. `source_drop_est_steady_window` and
+`ndi_dropped_video_steady_window` are still emitted because they help diagnose source
+pacing, NDI SDK queue loss, and conversion/copy regressions, but they are not the
+same as app-induced capture drops. `source_drop_est_*` is intentionally conservative:
+normal 29-30 fps receiver jitter is treated as pacing noise, while sustained collapse
+well below the advertised source rate is counted.
 
 ## Measured result — detection VERIFIED alive (Apple Silicon, yolo11s, NDI 1080p30)
 

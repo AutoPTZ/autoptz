@@ -134,10 +134,10 @@ def face_status() -> dict[str, str]:
             "face",
             "Face recognition",
             "warn",
-            f"insightface installed but model {model!r} not downloaded "
-            "(needs network on first run) · manual click-to-track still works",
+            f"insightface installed but model {model!r} was not found at {model_dir} "
+            "· run tools.fetch_models or use a build with the bundled face pack",
         )
-    return _entry("face", "Face recognition", "ok", "insightface SCRFD + ArcFace")
+    return _entry("face", "Face recognition", "ok", f"insightface SCRFD + ArcFace · {model_dir}")
 
 
 def pose_status() -> dict[str, str]:
@@ -229,18 +229,26 @@ def optional_components() -> list[dict[str, str]]:
     )
 
     face = face_status()
+    try:
+        from autoptz.engine.pipeline.identify import insightface_root  # noqa: PLC0415
+
+        face_path = str(Path(insightface_root()) / "models")
+    except Exception:  # noqa: BLE001
+        face_path = str(Path.home() / ".insightface" / "models")
     rows.append(
         {
             **face,
             "source": "insightface buffalo_l (SCRFD + ArcFace)",
             "size": "face model pack",
-            "path": str(Path.home() / ".insightface" / "models"),
+            "path": face_path,
             "why": "Named-person confirmation and face identity matching.",
             "managed": (
-                "Managed by the insightface upstream cache; AutoPTZ never deletes the "
-                "files but unloads face recognition from memory when its feature is off."
+                "Loaded from INSIGHTFACE_HOME, the bundled AutoPTZ model pack, the "
+                "AutoPTZ model cache, or the upstream insightface cache. AutoPTZ "
+                "never deletes these files but unloads face recognition from memory "
+                "when its feature is off."
             ),
-            "network": "insightface may download its model pack on first prepare.",
+            "network": "tools.fetch_models can prefetch the pack for offline installers.",
         }
     )
     return rows
@@ -271,8 +279,8 @@ _PROC: Any | None = None
 _PRIMED = False
 
 # Child processes whose CPU/RAM belong to the app's real footprint but live outside
-# this PID: the experimental process-per-camera workers (one OS process per camera)
-# and the go2rtc helper.  ``cpu_percent`` state lives on each psutil.Process object,
+# this PID: model-server camera children and the go2rtc helper. ``cpu_percent``
+# state lives on each psutil.Process object,
 # so we cache + prime them once and reuse the SAME instances across polls — sampling
 # only the GUI PID made "App CPU" undercount badly ("not accounting for the new
 # process").  Keyed by pid; pruned as children die.
@@ -422,9 +430,9 @@ def system_metrics() -> dict[str, Any]:
         out["cpu_percent"] = round(float(psutil.cpu_percent(interval=None)), 1)
         vm = psutil.virtual_memory()
         out["mem_percent"] = round(float(vm.percent), 1)
-        # "App CPU/Mem" spans the whole app process tree, not just this PID: the
-        # experimental process-per-camera workers (and go2rtc) run in their OWN
-        # processes, so sampling only os.getpid() made App CPU read tiny while the
+        # "App CPU/Mem" spans the whole app process tree, not just this PID:
+        # model-server camera children (and go2rtc) run in their OWN processes, so
+        # sampling only os.getpid() made App CPU read tiny while the
         # machine was busy.  Sum the GUI process + its live descendants.
         # Process CPU can exceed 100% across cores; normalise to the whole machine.
         app_cpu = float(_PROC.cpu_percent(interval=None)) + _app_tree_cpu(_PROC)

@@ -79,6 +79,10 @@ class _LockedFace:
     def threshold(self) -> float:
         return float(getattr(self._recognizer, "threshold", 0.0))
 
+    @property
+    def last_error(self) -> str | None:
+        return getattr(self._recognizer, "last_error", None)
+
     def detect(self, frame: NDArray[np.uint8]) -> list[Any]:
         with self._lock:
             return self._recognizer.detect(frame)

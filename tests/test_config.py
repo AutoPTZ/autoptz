@@ -7,7 +7,6 @@ side-effects and no hardware needed.
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 
 import pytest
@@ -166,8 +165,8 @@ class TestModels:
         assert ptz.soft_limits is not None
         assert ptz.soft_limits.pan_min == -0.5
 
-    def test_framing_box_defaults_on(self) -> None:
-        """New cameras show the framing box so the dead-zone is visible/adjustable."""
+    def test_safe_zone_defaults_on(self) -> None:
+        """New cameras keep the internal dead-zone enabled."""
         ptz = PTZConfig()
         assert ptz.safe_zone_enabled is True
         assert ptz.safe_zone_x == 0.0
@@ -175,14 +174,14 @@ class TestModels:
         assert ptz.safe_zone_w == 0.15
         assert ptz.safe_zone_h == 0.22
 
-    def test_framing_box_center_is_configurable(self) -> None:
-        """The framing box can move away from dead centre."""
+    def test_safe_zone_center_is_configurable(self) -> None:
+        """Legacy configs can still validate a non-centered quiet zone."""
         ptz = PTZConfig(safe_zone_x=0.25, safe_zone_y=-0.2)
         assert ptz.safe_zone_x == 0.25
         assert ptz.safe_zone_y == -0.2
 
-    def test_framing_roundness_defaults_to_oval(self) -> None:
-        """The framing region defaults to a full oval (roundness 1.0)."""
+    def test_safe_zone_roundness_defaults_to_oval(self) -> None:
+        """The internal quiet-zone shape defaults to a full oval (roundness 1.0)."""
         assert PTZConfig().safe_zone_roundness == 1.0
         ptz = PTZConfig.model_validate({"safe_zone_roundness": 0.0})
         assert ptz.safe_zone_roundness == 0.0
@@ -401,12 +400,16 @@ class TestIdentityStore:
 
 
 class TestDebounce:
-    def test_debounced_write_eventually_persists(self, tmp_path: Path, cam: CameraConfig) -> None:
+    def test_debounced_write_eventually_persists(
+        self, tmp_path: Path, cam: CameraConfig, wait_until
+    ) -> None:
         store = ConfigStore(db_path=tmp_path / "db.db", debounce_s=0.1)
         store.save_camera_debounced(cam)
-        # Before debounce fires: may or may not be persisted yet (implementation-dependent)
-        time.sleep(0.25)  # well past the 0.1 s window
-        cameras = store.load_cameras()
+        cameras = wait_until(
+            lambda: store.load_cameras(),
+            timeout=1.0,
+            message="debounced camera write did not persist",
+        )
         store.close()
         assert len(cameras) == 1
         assert cameras[0].id == cam.id

@@ -16,6 +16,7 @@ import os
 import sys
 from typing import Any
 
+from autoptz.benchmark.profiles import PROFILES
 from autoptz.logsetup import install_console_logging
 
 # Coloured console logging (level + per-camera tint; TTY-gated, no-op when piped).
@@ -155,9 +156,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--benchmark-profile",
-        default="full",
-        choices=["full", "streams"],
-        help="Benchmark profile: 'full' (all inference) or 'streams' (capture only).",
+        default="simple_follow",
+        choices=sorted(PROFILES),
+        help=(
+            "Benchmark profile: simple_follow, pose_follow, full, or streams "
+            "(default: simple_follow)."
+        ),
     )
     parser.add_argument(
         "--benchmark-duration",
@@ -181,11 +185,6 @@ def main() -> None:
         "--benchmark-json",
         default=None,
         help="Write the AutoPTZ Mark report as JSON to this path.",
-    )
-    parser.add_argument(
-        "--mark",
-        action="store_true",
-        help="Deprecated: AutoPTZ Mark now opens in-process from Help → Run AutoPTZ Mark….",
     )
     args = parser.parse_args()
 
@@ -212,12 +211,6 @@ def main() -> None:
                 json_path=args.benchmark_json,
             )
         )
-
-    if args.mark:
-        # Deprecated shim: AutoPTZ Mark is now an in-process swap reached from
-        # Help → Run AutoPTZ Mark…, so --mark just launches the normal app (no
-        # subprocess relaunch).
-        logger.warning("--mark is deprecated; use Help → Run AutoPTZ Mark… (in-process).")
 
     # Default: launch the UI
     from autoptz.ui.app import run

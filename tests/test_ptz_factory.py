@@ -525,13 +525,17 @@ def _worker(camera_id="ptzcam0xabcd", *, ptz_backend=None, ptz_controller=None, 
         ),
         target=TargetConfig(mode=mode),
     )
-    return CameraWorker(
+    worker = CameraWorker(
         camera_id,
         cfg,
         lambda m: None,
         ptz_backend=ptz_backend,
         ptz_controller=ptz_controller,
     )
+    # These tests assert synchronous backend commands. Keep them independent of
+    # any process-wide AUTOPTZ_PTZ_PUMP state left by other focused suites.
+    worker._ptz_pump = False
+    return worker
 
 
 class TestWorkerManualNudge:
@@ -574,7 +578,7 @@ class TestWorkerAutoControl:
         # bbox centered well right of frame center (w=1000) → ex>0 → pan right>0
         frame = np.zeros((720, 1000, 3), dtype=np.uint8)
         tracks = [_track(7, _bbox(800, 300, 900, 500))]
-        w._drive_ptz_auto(tracks, frame, now=0.0)
+        w._drive_ptz_auto(tracks, frame, now=time.monotonic())
         assert backend.moves, "auto control sent no command"
         pan = backend.moves[-1][0]
         assert pan > 0.0, f"expected pan right (>0), got {pan}"
@@ -584,7 +588,7 @@ class TestWorkerAutoControl:
         w = self._ctrl_worker(backend)
         frame = np.zeros((720, 1000, 3), dtype=np.uint8)
         tracks = [_track(7, _bbox(50, 300, 150, 500))]  # far left → ex<0
-        w._drive_ptz_auto(tracks, frame, now=0.0)
+        w._drive_ptz_auto(tracks, frame, now=time.monotonic())
         assert backend.moves
         assert backend.moves[-1][0] < 0.0
 
@@ -594,7 +598,7 @@ class TestWorkerAutoControl:
         frame = np.zeros((1000, 1000, 3), dtype=np.uint8)
         # bbox center well below frame center → image-y large → tilt down (<0)
         tracks = [_track(7, _bbox(450, 800, 550, 950))]
-        w._drive_ptz_auto(tracks, frame, now=0.0)
+        w._drive_ptz_auto(tracks, frame, now=time.monotonic())
         assert backend.moves
         assert backend.moves[-1][1] < 0.0
 
@@ -628,17 +632,17 @@ class TestWorkerAutoControl:
         frame = np.zeros((720, 1000, 3), dtype=np.uint8)
 
         # Acquire then lose the target → controller coasts → searches → stops.
-        w._drive_ptz_auto([_track(7, _bbox(800, 300, 900, 500))], frame, now=0.0)
-        w._drive_ptz_auto([], frame, now=0.1)  # lost → coast
-        w._drive_ptz_auto([], frame, now=0.2)  # coast window 0 → searching/stop
+        now = time.monotonic()
+        w._drive_ptz_auto([_track(7, _bbox(800, 300, 900, 500))], frame, now=now)
+        w._drive_ptz_auto([], frame, now=now + 0.1)  # lost → coast
+        w._drive_ptz_auto([], frame, now=now + 0.2)  # coast window 0 → searching/stop
         assert w._ptz.state in (ControllerState.SEARCHING, ControllerState.COASTING)
 
 
 class TestWorkerTargetLock:
-    def test_lone_target_jump_keeps_following(self) -> None:
-        # A lone subject that moves fast is NOT ambiguous — the camera keeps
-        # following it (freezing on a lone fast mover was the "tracking keeps
-        # blocking itself when they move away" bug).
+    def test_lone_target_jump_waits_for_confirmation(self) -> None:
+        # A single low-overlap bbox teleport is not enough evidence to move PTZ.
+        # The second consistent box confirms real motion and gets accepted.
         w = _worker()
         w._target_track_id = 7
         frame = np.zeros((720, 1000, 3), dtype=np.uint8)
@@ -648,11 +652,16 @@ class TestWorkerTargetLock:
         jumped = [_track(7, _bbox(650, 100, 770, 420))]
         w._apply_target_lock(jumped, frame, now=0.1)
 
-        assert jumped[0].lost is False
+        assert jumped[0].lost is True
+        assert w._target_lock.status == "ambiguous"
+        assert w._tracking_status_info(jumped, 0.1).headline == "Target jumped - holding position"
+
+        confirmed = [_track(7, _bbox(655, 100, 775, 420))]
+        w._apply_target_lock(confirmed, frame, now=0.2)
         assert w._target_lock.status == "locked"
         # Trusted box follows the subject to its new position.
         assert w._target_lock.trusted_bbox is not None
-        assert w._target_lock.trusted_bbox.x1 == pytest.approx(650)
+        assert w._target_lock.trusted_bbox.x1 == pytest.approx(655)
 
     def test_crowded_target_jump_is_marked_ambiguous(self) -> None:
         # Ambiguity requires BOTH crowding and a low-overlap jump (a real

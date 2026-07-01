@@ -24,8 +24,15 @@ def test_parent_is_gone_detects_reparenting() -> None:
 
 
 def test_install_parent_death_watchdog_starts_daemon_thread() -> None:
-    # Long poll so the watchdog never actually fires os._exit during the test.
-    _install_parent_death_watchdog(poll_s=999.0)
-    threads = [t for t in threading.enumerate() if t.name == "parent-death-watchdog"]
-    assert threads, "watchdog thread not started"
-    assert threads[0].daemon, "watchdog must be a daemon thread"
+    # Long poll so the watchdog never fires os._exit during the test; the stop
+    # event keeps the unit test from leaking an infinite daemon into later Qt tests.
+    stop = threading.Event()
+    thread = _install_parent_death_watchdog(poll_s=999.0, stop_event=stop)
+    try:
+        threads = [t for t in threading.enumerate() if t.name == "parent-death-watchdog"]
+        assert thread in threads, "watchdog thread not started"
+        assert thread.daemon, "watchdog must be a daemon thread"
+    finally:
+        stop.set()
+        thread.join(timeout=1.0)
+    assert not thread.is_alive()

@@ -1,9 +1,16 @@
 # Architecture
 
-AutoPTZ runs the Qt Widgets UI and a per-camera worker (two threads each:
-capture + inference) in one process today; the UI never blocks on inference and
-workers never touch Qt. They talk over typed messages + shared-memory frames, so
-moving workers to their own processes later is a localized change.
+AutoPTZ 2.2 targets one production runtime: the Qt Widgets UI plus supervised
+camera workers using shared model ownership, source-agnostic latest-wins frames,
+and fixed-zoom tracking by default. The UI never blocks on capture, inference, or
+PTZ I/O, and workers never touch Qt.
+
+The standalone process-per-camera/model-per-child experiment is retired: the
+`AUTOPTZ_PROCESS_PER_CAMERA` env var is ignored and the supervisor will not spawn
+camera children unless the shared model-server queues are live. `AUTOPTZ_MODEL_SERVER`
+remains an explicit release-gated architecture candidate, not a normal product
+mode. See `docs/engineering/retired-experiments.md` and
+`docs/release/2.2.0-reliability-gates.md` before promoting or deleting it.
 
 ```
 ┌────────────────────────── UI process (PySide6, GUI thread) ──────────────────────────┐
@@ -17,7 +24,7 @@ moving workers to their own processes later is a localized change.
 ┌────────┴───────────────────── Supervisor (owns + supervises workers) ──────────────────┐
 │  start() → applies hardware prefs to env → starts one CameraWorker per camera           │
 └────────┬───────────────────────────────────────────────────────────────────────────────┘
-         ▼  (two threads per camera, in-process)
+         ▼  (capture + inference/control threads per camera; shared model ownership)
 ┌────────────────────────────── CameraWorker ─────────────────────────────────────────────┐
 │  capture thread:  FrameSource.read() → SHM preview → hand newest frame to inference       │
 │  inference thread: detect → track → reID recover → pose → aim → PTZ controller → backend  │
@@ -62,7 +69,7 @@ BGR frame
   live-preview-only and logs an actionable one-time message.
 - **Hardware prefs reach workers via environment** (`AUTOPTZ_FORCE_EP`,
   `AUTOPTZ_PRECISION`, `AUTOPTZ_ORT_INTRA_THREADS`), set by the supervisor and
-  read by `inference.prefs_from_env()` — worker threads read them in-process (a
-  future process-per-camera build would inherit them).
+  read by `inference.prefs_from_env()` — production worker threads read them
+  in-process, and explicit Labs process modes inherit them.
 - **EP selection is centralized** in `engine/runtime/inference.py`; see
   [Performance](performance.md).

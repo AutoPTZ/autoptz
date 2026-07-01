@@ -1,4 +1,4 @@
-"""Tests for the experimental opt-in process-per-camera mode.
+"""Tests for the model-server process-worker infrastructure.
 
 Covers the IPC/lifecycle plumbing that CAN be validated without a real camera or
 models: WorkerSpec pickle-safety, the supervisor-side handle proxying method calls
@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import pickle
-import time
 import uuid
 
 from autoptz.config.models import CameraConfig, SourceConfig
@@ -66,11 +65,19 @@ class TestWorkerSpec:
 class TestEnabledFlag:
     def test_disabled_by_default(self, monkeypatch) -> None:
         monkeypatch.delenv("AUTOPTZ_PROCESS_PER_CAMERA", raising=False)
+        monkeypatch.delenv("AUTOPTZ_MODEL_SERVER", raising=False)
         assert process_per_camera_enabled() is False
 
-    def test_enabled_by_env(self, monkeypatch) -> None:
+    def test_standalone_process_flag_is_retired(self, monkeypatch) -> None:
         for val in ("1", "true", "on", "YES"):
             monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", val)
+            monkeypatch.delenv("AUTOPTZ_MODEL_SERVER", raising=False)
+            assert process_per_camera_enabled() is False
+
+    def test_model_server_enables_process_workers(self, monkeypatch) -> None:
+        for val in ("1", "true", "on", "YES"):
+            monkeypatch.delenv("AUTOPTZ_PROCESS_PER_CAMERA", raising=False)
+            monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", val)
             assert process_per_camera_enabled() is True
 
 
@@ -88,11 +95,12 @@ class TestRelayIdentityLockFree:
         return sup
 
     def test_relay_is_noop_when_disabled(self, qapp, monkeypatch) -> None:
-        """With AUTOPTZ_PROCESS_PER_CAMERA unset the relay returns immediately without
+        """With process workers disabled the relay returns immediately without
         touching any worker, confirming the lock-free early-return path."""
         from unittest.mock import MagicMock, patch
 
         monkeypatch.delenv("AUTOPTZ_PROCESS_PER_CAMERA", raising=False)
+        monkeypatch.delenv("AUTOPTZ_MODEL_SERVER", raising=False)
         sup = self._make_supervisor(qapp)
 
         # Add a fake process worker so we can confirm it is never called.
@@ -113,9 +121,9 @@ class TestRelayIdentityLockFree:
         fake_worker.ingest_identity.assert_not_called()
 
     def test_relay_skips_threaded_workers(self, qapp, monkeypatch) -> None:
-        """Even if process-per-camera is enabled, threaded CameraWorkers are skipped
+        """Even if model-server process mode is enabled, threaded CameraWorkers are skipped
         (they have no ``_is_process_worker`` flag) — relay is a structural no-op for them."""
-        monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+        monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
         sup = self._make_supervisor(qapp)
 
         # Install a fake threaded worker (no _is_process_worker attr).
@@ -140,7 +148,7 @@ class TestChildIdentityWiring:
     """``spec.db_path`` crosses the process boundary as a str; identity init must
     rebuild a ``ConfigStore`` from a Path, not the raw str (which crashed the child's
     identity gallery with ``'str' object has no attribute 'parent'`` → faces/reid
-    silently dead in process-per-camera mode)."""
+    silently dead in spawned camera processes)."""
 
     def test_builds_configstore_with_path_not_str(self, monkeypatch) -> None:
         from pathlib import Path
@@ -467,8 +475,8 @@ class TestIdentityRelay:
         from autoptz.engine.supervisor import Supervisor
         from autoptz.ui.engine_client import EngineClient
 
-        # Process-per-camera must be enabled so the relay's early-return guard passes.
-        monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+        # Model-server mode uses process workers, so the relay's early-return guard passes.
+        monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
 
         ingested: dict[str, list[str]] = {}
 
@@ -572,18 +580,19 @@ class TestMakeWorkerGuidance:
         from autoptz.engine.supervisor import Supervisor
         from autoptz.ui.engine_client import EngineClient
 
-        monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
+        monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
         client = EngineClient()
         cids = [client.addCamera("usb://0", f"Guide{i}") for i in range(4)]
         client.drain_commands()
         sup = Supervisor(client, store=None)  # default factory -> process path is eligible
+        sup._infer_req_q = object()
+        sup._infer_resp_qs = {cids[0]: object()}
 
         with caplog.at_level(logging.INFO):
             sup._make_worker(cids[0], _config(cids[0]))
-        assert any(
-            "gil" in r.message.lower() or "process-per-camera" in r.message.lower()
-            for r in caplog.records
-        ), "expected a GIL-relief guidance log at >=4 cameras"
+        assert any("model-server process mode" in r.message.lower() for r in caplog.records), (
+            "expected a model-server process guidance log at >=4 cameras"
+        )
 
 
 class TestChildLogging:
@@ -609,7 +618,7 @@ class TestEndToEndSpawn:
     """Spawn a real child process with a synthetic source (no camera, no models):
     frames must reach shared memory and telemetry must flow back, then stop cleanly."""
 
-    def test_child_delivers_frames_and_telemetry_then_stops(self) -> None:
+    def test_child_delivers_frames_and_telemetry_then_stops(self, wait_until) -> None:
         from autoptz.engine.camera_worker import _PREVIEW_H, _PREVIEW_W
         from autoptz.engine.process_worker import run_camera_process
         from autoptz.engine.runtime.shm import ShmReader
@@ -650,18 +659,25 @@ class TestEndToEndSpawn:
 
             # A real frame should land in the child's shm preview ring.
             reader = None
-            frame = None
-            deadline = time.monotonic() + 15.0
-            while time.monotonic() < deadline and frame is None:
+
+            def _latest_child_frame():
+                nonlocal reader
                 try:
                     if reader is None:
                         reader = ShmReader(shm_name, _PREVIEW_H, _PREVIEW_W)
                     result = reader.latest()
                     if result is not None:
-                        frame = result[1]
+                        return result[1]
                 except Exception:
                     reader = None
-                time.sleep(0.1)
+                return None
+
+            frame = wait_until(
+                _latest_child_frame,
+                timeout=15.0,
+                interval=0.1,
+                message="no frame reached shared memory from the child process",
+            )
             assert frame is not None, "no frame reached shared memory from the child process"
             assert frame.shape == (_PREVIEW_H, _PREVIEW_W, 3)
             assert int(frame.mean()) == 123  # the synthetic source's solid colour

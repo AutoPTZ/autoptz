@@ -868,7 +868,7 @@ class TestWorkerAutoHarvest:
         w._last_faces_t = time.monotonic() - 1.0
         assert w._fresh_faces_for_telemetry([track]) == []
 
-    def test_face_overlay_publishes_once_per_inference_frame(self):
+    def test_face_overlay_publishes_while_fresh(self):
         service, _ = _make_service()
         emb = _vec(613)
         service.enroll("Alice", emb)
@@ -881,7 +881,23 @@ class TestWorkerAutoHarvest:
         w._maybe_identify(_gray(22), [track], now=time.monotonic())
 
         assert len(w._fresh_faces_for_telemetry([track])) == 1
-        assert w._fresh_faces_for_telemetry([track]) == []
+        assert len(w._fresh_faces_for_telemetry([track])) == 1
+
+    def test_face_overlay_survives_newer_track_frame_until_ttl(self):
+        service, _ = _make_service()
+        emb = _vec(615)
+        service.enroll("Alice", emb)
+        app = _FakeApp([_FakeFace((280, 180, 380, 320), emb)])
+        rec = FaceRecognizer(_app=app, match_threshold=0.4)
+        w = self._worker(service, rec, [])
+        track = _StubTrack(7, (250, 150, 400, 460))
+        w._current_inference_frame_id = 12
+        w._last_tracks_frame_id = 12
+        w._maybe_identify(_gray(22), [track], now=time.monotonic())
+
+        w._last_tracks_frame_id = 13
+
+        assert len(w._fresh_faces_for_telemetry([track])) == 1
 
     def test_pending_enroll_uses_clicked_face_not_first_face(self):
         service, _ = _make_service()
@@ -901,6 +917,55 @@ class TestWorkerAutoHarvest:
         # face in detector order would be enrolled instead.
         w._apply_command("enroll_track", (7, ident.id, "Alice", (390 / 640, 295 / 480)))
         w._maybe_identify(_gray(22), [track], now=220.0)
+        assert service.best_score(ident.id, target_emb) == pytest.approx(1.0, abs=1e-5)
+        assert service.best_score(ident.id, wrong_emb) < 0.5
+
+    def test_pending_enroll_body_click_prefers_head_region_face(self):
+        service, _ = _make_service()
+        target_emb = _vec(616)
+        wrong_emb = _vec(617)
+        ident = service.enroll("Alice", None, identity_id="id-body-click")
+        app = _FakeApp(
+            [
+                # Larger false-positive lower in the body box. This used to win
+                # because the worker scored nearest-to-click after a body click.
+                _FakeFace((250, 310, 430, 390), wrong_emb),
+                _FakeFace((300, 155, 390, 230), target_emb),
+            ]
+        )
+        rec = FaceRecognizer(_app=app, match_threshold=0.99)
+        w = self._worker(service, rec, [])
+        track = _StubTrack(7, (240, 140, 450, 430))
+
+        w._apply_command("enroll_track", (7, ident.id, "Alice", (0.50, 0.82)))
+        w._maybe_identify(_gray(23), [track], now=221.0)
+
+        assert service.best_score(ident.id, target_emb) == pytest.approx(1.0, abs=1e-5)
+        assert service.best_score(ident.id, wrong_emb) < 0.5
+
+    def test_pending_enroll_click_maps_active_digital_crop_to_full_frame(self):
+        service, _ = _make_service()
+        target_emb = _vec(618)
+        wrong_emb = _vec(619)
+        ident = service.enroll("Alice", None, identity_id="id-cropped-click")
+        app = _FakeApp(
+            [
+                # Larger head-region face that would win if the cropped-preview
+                # click were interpreted directly as full-frame normalized coords.
+                _FakeFace((195, 180, 300, 270), wrong_emb),
+                _FakeFace((315, 205, 365, 255), target_emb),
+            ]
+        )
+        rec = FaceRecognizer(_app=app, match_threshold=0.99)
+        w = self._worker(service, rec, [])
+        w._last_digital_crop_rect = (80, 40, 320, 320)
+        track = _StubTrack(7, (170, 150, 430, 450))
+
+        # The UI click is normalized in the cropped preview. It maps through the
+        # active crop to full-frame point (340, 230), inside the smaller target face.
+        w._apply_command("enroll_track", (7, ident.id, "Alice", (0.8125, 0.59375)))
+        w._maybe_identify(_gray(24), [track], now=222.0)
+
         assert service.best_score(ident.id, target_emb) == pytest.approx(1.0, abs=1e-5)
         assert service.best_score(ident.id, wrong_emb) < 0.5
 

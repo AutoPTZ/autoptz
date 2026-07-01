@@ -41,6 +41,17 @@ class TestCameraRecordPhase0:
         assert rec.frames_dropped_est == 0
         assert rec.delivered_fps == 0.0
         assert rec.source_fps == 0.0
+        assert rec.duplicate_frames == 0
+        assert rec.stale_frames == 0
+        assert rec.ndi_fourcc == ""
+        assert rec.ndi_queue_audio == -1
+        assert rec.ndi_queue_metadata == -1
+        assert rec.ndi_total_video_frames == 0
+        assert rec.ndi_dropped_video_frames == 0
+        assert rec.ndi_connections == -1
+        assert rec.ndi_conversion_ms == 0.0
+        assert rec.ndi_buffer_ms == 0.0
+        assert rec.ndi_copy_ms == 0.0
         assert rec.end_to_end_ms == 0.0
         assert rec.capture_age_ms == 0.0
         assert rec.command_send_ms == 0.0
@@ -56,7 +67,18 @@ class TestCameraRecordPhase0:
             frames_dropped_est=12,
             delivered_fps=29.5,
             source_fps=30.0,
+            duplicate_frames=8,
+            stale_frames=2,
             ndi_queue_depth=3,
+            ndi_queue_audio=1,
+            ndi_queue_metadata=0,
+            ndi_total_video_frames=900,
+            ndi_dropped_video_frames=5,
+            ndi_connections=1,
+            ndi_fourcc="UYVY",
+            ndi_buffer_ms=0.5,
+            ndi_conversion_ms=1.75,
+            ndi_copy_ms=0.25,
             capture_age_ms=40.0,
             command_send_ms=5.0,
             actuation_estimate_ms=80.0,
@@ -66,7 +88,18 @@ class TestCameraRecordPhase0:
         assert rec.frames_dropped_est == 12
         assert rec.delivered_fps == pytest.approx(29.5)
         assert rec.source_fps == pytest.approx(30.0)
+        assert rec.duplicate_frames == 8
+        assert rec.stale_frames == 2
         assert rec.ndi_queue_depth == 3
+        assert rec.ndi_queue_audio == 1
+        assert rec.ndi_queue_metadata == 0
+        assert rec.ndi_total_video_frames == 900
+        assert rec.ndi_dropped_video_frames == 5
+        assert rec.ndi_connections == 1
+        assert rec.ndi_fourcc == "UYVY"
+        assert rec.ndi_buffer_ms == pytest.approx(0.5)
+        assert rec.ndi_conversion_ms == pytest.approx(1.75)
+        assert rec.ndi_copy_ms == pytest.approx(0.25)
         assert rec.capture_age_ms == pytest.approx(40.0)
         assert rec.command_send_ms == pytest.approx(5.0)
         assert rec.actuation_estimate_ms == pytest.approx(80.0)
@@ -165,6 +198,32 @@ class TestCameraInfoPanelPhase0:
         panel = _panel_for(qtapp, _telemetry(delivered_fps=0.0, source_fps=0.0))
         assert _visible(panel, "Delivered / source") is False
 
+    def test_duplicate_stale_row_is_conditional(self, qtapp) -> None:
+        panel = _panel_for(qtapp, _telemetry(duplicate_frames=0, stale_frames=0))
+        assert _visible(panel, "Duplicate / stale") is False
+
+        panel2 = _panel_for(qtapp, _telemetry(duplicate_frames=8, stale_frames=2))
+        assert _visible(panel2, "Duplicate / stale") is True
+        assert _text(panel2, "Duplicate / stale") == "8 / 2"
+
+    def test_ndi_receiver_rows_are_conditional(self, qtapp) -> None:
+        panel = _panel_for(qtapp, _telemetry())
+        assert _visible(panel, "NDI recv drops") is False
+        assert _visible(panel, "NDI connections") is False
+
+        panel2 = _panel_for(
+            qtapp,
+            _telemetry(
+                ndi_total_video_frames=900,
+                ndi_dropped_video_frames=3,
+                ndi_connections=1,
+            ),
+        )
+        assert _visible(panel2, "NDI recv drops") is True
+        assert _text(panel2, "NDI recv drops") == "3 / 900"
+        assert _visible(panel2, "NDI connections") is True
+        assert _text(panel2, "NDI connections") == "1"
+
     def test_ndi_queue_row_hidden_when_unavailable(self, qtapp) -> None:
         # -1 == no queue exposed; the row must NOT show a confusing "-1".
         panel = _panel_for(qtapp, _telemetry(ndi_queue_depth=-1))
@@ -178,6 +237,34 @@ class TestCameraInfoPanelPhase0:
         panel2 = _panel_for(qtapp, _telemetry(ndi_queue_depth=4))
         assert _visible(panel2, "NDI queue depth") is True
         assert _text(panel2, "NDI queue depth") == "4"
+
+    def test_ndi_format_and_conversion_rows_are_conditional(self, qtapp) -> None:
+        panel = _panel_for(
+            qtapp,
+            _telemetry(ndi_fourcc="", ndi_buffer_ms=0.0, ndi_conversion_ms=0.0, ndi_copy_ms=0.0),
+        )
+        assert _visible(panel, "NDI format") is False
+        assert _visible(panel, "NDI buffer") is False
+        assert _visible(panel, "NDI conversion") is False
+        assert _visible(panel, "NDI copy") is False
+
+        panel2 = _panel_for(
+            qtapp,
+            _telemetry(
+                ndi_fourcc="UYVY",
+                ndi_buffer_ms=0.456,
+                ndi_conversion_ms=1.234,
+                ndi_copy_ms=0.178,
+            ),
+        )
+        assert _visible(panel2, "NDI format") is True
+        assert _text(panel2, "NDI format") == "UYVY"
+        assert _visible(panel2, "NDI buffer") is True
+        assert _text(panel2, "NDI buffer") == "0.46 ms"
+        assert _visible(panel2, "NDI conversion") is True
+        assert _text(panel2, "NDI conversion") == "1.23 ms"
+        assert _visible(panel2, "NDI copy") is True
+        assert _text(panel2, "NDI copy") == "0.18 ms"
 
     def test_end_to_end_latency_row_shown_when_probed(self, qtapp) -> None:
         panel = _panel_for(qtapp, _telemetry(end_to_end_ms=125.4))

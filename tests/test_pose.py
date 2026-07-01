@@ -88,7 +88,8 @@ class TestPoseEstimatorRespectsModelSize:
         # model's declared input size, or every run() raises and pose goes dark.
         session = _FakeSession([1, 3, 640, 640])
         pe = PoseEstimator(_session=session)
-        frame = (np.random.rand(720, 1280, 3) * 255).astype(np.uint8)
+        rng = np.random.default_rng(1234)
+        frame = (rng.random((720, 1280, 3)) * 255).astype(np.uint8)
         kps = pe.estimate(frame, (500.0, 200.0, 760.0, 680.0))
         assert session.fed_hw == (640, 640)
         assert kps is not None and len(kps) == 17
@@ -96,7 +97,8 @@ class TestPoseEstimatorRespectsModelSize:
     def test_dynamic_model_uses_constructor_size(self) -> None:
         session = _FakeSession([1, 3, "h", "w"])
         pe = PoseEstimator(_session=session, input_size=384)
-        frame = (np.random.rand(480, 640, 3) * 255).astype(np.uint8)
+        rng = np.random.default_rng(5678)
+        frame = (rng.random((480, 640, 3)) * 255).astype(np.uint8)
         pe.estimate(frame, (100.0, 50.0, 300.0, 400.0))
         assert session.fed_hw == (384, 384)
 

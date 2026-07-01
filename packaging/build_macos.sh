@@ -158,10 +158,11 @@ else
     echo "==> SKIP_INSTALL=1 — using existing venv as-is"
 fi
 
-# ── 3. pre-fetch the detector + pose models so they ship inside the app ───────
-# Bundling the YOLO11 ONNX into autoptz/models makes detection work on first
-# launch with no download / network / setup.  Best-effort: if the fetch fails the
-# app still downloads the prebuilt ONNX on demand (see engine/runtime/models.py).
+# ── 3. pre-fetch detector, pose, and face models so they ship inside the app ──
+# Bundling the YOLO11 ONNX + pose ONNX + InsightFace pack into autoptz/models
+# makes detection and face enrollment work on first launch with no download /
+# network / setup. Best-effort: detector/pose can still download on demand; a
+# missing face pack is reported in the Services panel as a warning.
 echo "==> Pre-fetching models into autoptz/models (bundled, zero-setup)"
 "${PY}" -m tools.fetch_models --cache-dir autoptz/models \
     || echo "!! model pre-fetch failed; the app will download them on first run"

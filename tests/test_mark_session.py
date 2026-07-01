@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sys
-
 from autoptz.ui.mark_session import (
     CLIP_LIBRARY,
     DEFAULT_CLIP_ID,
@@ -11,7 +9,6 @@ from autoptz.ui.mark_session import (
     clear_mark_session,
     clear_window_geometry,
     load_mark_session,
-    relaunch_argv,
     store_mark_session,
 )
 
@@ -46,14 +43,14 @@ class TestRoundTrip:
 
     def test_from_dict_defaults(self) -> None:
         s = MarkSession.from_dict({})
-        assert s.profile == "full" and s.source == "clip"
+        assert s.profile == "simple_follow" and s.source == "clip"
         # Resolution + model + ramp defaults favour a realistic-looking run.
         assert s.resolution == "1080p" and s.model == "small"
         assert s.floor_fps == 30.0 and s.max_cameras == 4 and s.dwell_s == 10.0
 
     def test_dataclass_defaults(self) -> None:
         s = MarkSession()
-        assert s.profile == "full"
+        assert s.profile == "simple_follow"
         assert s.source == "clip"
         assert s.floor_fps == 30.0
         assert s.max_cameras == 4
@@ -335,23 +332,3 @@ class TestGeometryClear:
         clear_window_geometry(store)
         assert "win_geometry" not in store.kv and "win_state" not in store.kv
         assert store.kv["other"] == 1
-
-
-class TestRelaunchArgv:
-    """``relaunch``/``relaunch_argv`` are a DEPRECATED shim now.
-
-    AutoPTZ Mark is an in-process swap (Help → Run AutoPTZ Mark…), so nothing in
-    the app calls these anymore — but the helpers stay for backward compatibility
-    and are still exercised here so the argv shape doesn't silently rot.
-    """
-
-    def test_dev_argv(self, monkeypatch) -> None:
-        monkeypatch.setattr(sys, "frozen", False, raising=False)
-        argv = relaunch_argv(mark=True)
-        assert argv[1:] == ["-m", "autoptz", "--mark"]
-        assert relaunch_argv(mark=False)[1:] == ["-m", "autoptz"]
-
-    def test_frozen_argv(self, monkeypatch) -> None:
-        monkeypatch.setattr(sys, "frozen", True, raising=False)
-        assert relaunch_argv(mark=True) == [sys.executable, "--mark"]
-        assert relaunch_argv(mark=False) == [sys.executable]

@@ -4,10 +4,8 @@ from autoptz.benchmark.runner import BenchmarkResult, StepResult
 from autoptz.ui.mark_runner import MarkRampController
 
 
-def _drive(controller, qapp):
-    """Run the controller's worker to completion, pumping the event loop."""
-    from PySide6.QtCore import QCoreApplication
-
+def _drive(controller, qapp):  # noqa: ARG001
+    """Run the controller body synchronously and collect emitted signals."""
     done: dict[str, object] = {}
     steps: list[StepResult] = []
     progress: list[tuple[int, int, float]] = []
@@ -15,14 +13,7 @@ def _drive(controller, qapp):
     controller.progress.connect(lambda s, t, e: progress.append((s, t, e)))
     controller.finished.connect(lambda r: done.setdefault("result", r))
     controller.error.connect(lambda m: done.setdefault("error", m))
-    controller.start()
-    # Pump until finished/error or a generous bound.
-    import time
-
-    deadline = time.monotonic() + 10.0
-    while "result" not in done and "error" not in done and time.monotonic() < deadline:
-        QCoreApplication.instance().processEvents()
-        time.sleep(0.005)
+    controller._run()
     return done, steps, progress
 
 
@@ -60,7 +51,7 @@ class TestRampController:
         done, steps, progress = _drive(c, qapp)
         assert "error" in done and "kaboom" in done["error"]
 
-    def test_default_factory_threads_injected_client(self, qapp) -> None:
+    def test_default_factory_threads_injected_client(self, qapp, monkeypatch) -> None:
         """The default sampler registers its synthetic cameras on the injected client.
 
         Drives the controller WITHOUT a sample_factory (so the real default
@@ -68,10 +59,12 @@ class TestRampController:
         real inference happens, and asserts the synthetic cameras land on the
         client we handed the controller (the window's CameraWall client).
         """
+        from autoptz.benchmark.runner import _SupervisorSampler
         from autoptz.engine.supervisor import Supervisor
         from autoptz.ui.engine_client import EngineClient
         from tests.test_benchmark_runner import _FakeSamplerWorker
 
+        monkeypatch.setattr(_SupervisorSampler, "_drain_events", staticmethod(lambda: None))
         injected = EngineClient()
 
         def sup_factory(client, store):
@@ -90,18 +83,10 @@ class TestRampController:
         # Cameras registered on the SAME client the window's wall is bound to.
         assert len(injected.cameraModel.camera_ids()) == 2
 
-    def test_discounts_floor_for_sustain_tolerance(self, qapp) -> None:
-        """Change B: the MARK path builds its BenchmarkRunner with a DISCOUNTED floor
-        (target × 0.85) so a camera keeping up with a fps-capped 30fps source still
-        "sustains" despite real-world per-frame overhead (it lands just under 30).
-
-        Asserted via the result's ``floor_fps`` (BenchmarkRunner records the floor it
-        ran with) and the sustain decision: at a Target of 30, a camera holding 26fps
-        must count as sustained (26 ≥ 30×0.85 = 25.5) even though 26 < 30.
-        """
+    def test_uses_exact_floor_for_release_scoring(self, qapp) -> None:
+        """Mark grades against the selected target FPS, without a hidden 85% floor."""
         from autoptz.ui.mark_runner import MarkRampController
 
-        # Every camera holds 26 fps: above the discounted floor (25.5), below 30.
         def factory():
             return lambda n: [26.0] * n
 
@@ -115,19 +100,76 @@ class TestRampController:
         done, steps, progress = _drive(c, qapp)
         assert "error" not in done, done.get("error")
         res = done["result"]
-        # The runner ran with the DISCOUNTED floor (30 × 0.85 = 25.5), not 30.
-        assert res.floor_fps == 30.0 * MarkRampController._MARK_SUSTAIN_RATIO
-        # 26 fps clears the discounted floor → both cameras sustain (would FAIL at 30).
-        assert res.sustained_cameras == 2
-        assert all(s.sustained for s in steps)
+        assert res.floor_fps == 30.0
+        assert MarkRampController._MARK_SUSTAIN_RATIO == 1.0
+        assert res.sustained_cameras == 0
+        assert len(steps) == 1
+        assert steps[0].sustained is False
 
     def test_user_target_preserved_for_display(self, qapp) -> None:
-        """The discount applies only to the runner's pass floor — the user's Target
-        stays available unchanged for display."""
+        """The user's Target stays available unchanged for display."""
         from autoptz.ui.mark_runner import MarkRampController
 
         c = MarkRampController(profile="full", floor_fps=30.0, dwell_s=0.0)
         assert c._floor == 30.0  # the user's target, undiscounted
+
+    def test_tolerates_subfps_jitter_at_target_rate(self, qapp) -> None:
+        """A real NDI source delivering 29.8 fps with ZERO drops must NOT fail the ramp.
+
+        Real "30 fps" NDI jitters a few tenths below nominal (rolling-fps estimate +
+        sender pacing noise) while dropping zero frames.  Grading must tolerate that
+        sub-fps measurement noise — the documented release gate is zero steady-state
+        app-induced drops + no fps collapse, not hitting the target to the decimal.
+        Genuine under-delivery (26 fps for a 30 target) must still fail; see
+        ``test_uses_exact_floor_for_release_scoring``.
+        """
+        from autoptz.ui.mark_runner import MarkRampController
+
+        def factory():
+            return lambda n: [29.8] * n
+
+        c = MarkRampController(
+            profile="full",
+            floor_fps=30.0,
+            max_cameras=3,
+            dwell_s=0.0,
+            sample_factory=factory,
+        )
+        done, steps, _progress = _drive(c, qapp)
+        assert "error" not in done, done.get("error")
+        res = done["result"]
+        assert res.sustained_cameras == 3
+        assert all(s.sustained for s in steps)
+
+    def test_stop_before_run_sets_sampler_cancel_event(self, qapp) -> None:
+        """A mid-run Mark exit must propagate cancellation into the active sampler."""
+        seen: dict[str, object] = {}
+
+        class _Sampler:
+            def set_cancel_event(self, event) -> None:  # noqa: ANN001
+                seen["event"] = event
+
+            def close(self) -> None:
+                seen["closed"] = True
+
+        sampler = _Sampler()
+
+        def factory():
+            def sample(_n: int) -> list[float]:
+                seen["sampled"] = True
+                return [40.0]
+
+            sample._sampler = sampler  # type: ignore[attr-defined]
+            return sample
+
+        c = MarkRampController(profile="full", max_cameras=1, dwell_s=10.0, sample_factory=factory)
+        c.stop()
+        done, _steps, _progress = _drive(c, qapp)
+
+        assert done["error"] == "cancelled"
+        assert "sampled" not in seen
+        assert seen["event"].is_set()
+        assert seen["closed"] is True
 
     def test_run_emits_finished_before_thread_quit(self, qapp) -> None:
         """The worker must emit ``finished`` BEFORE it quits the thread, so the
@@ -200,9 +242,8 @@ class TestRampController:
             dwell_s=0.0,
             sample_factory=lambda: (lambda n: [40.0] * n),
         )
-        done, steps, progress = _drive(c, qapp)
-        assert "error" not in done
+        c.start()
+        assert c.wait(2000) is True
         # Held by the controller and joinable (moveToThread → unparented thread).
         assert c._thread is not None
-        assert c.wait(2000) is True
         assert c._thread.isFinished()

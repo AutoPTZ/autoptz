@@ -224,19 +224,9 @@ class TestMacOSCameraPreflight:
 
         app_mod._start_engine_after_macos_camera_preflight(_PreflightClient(), bridge)
 
-    @pytest.mark.xfail(
-        sys.platform == "darwin",
-        reason=(
-            "pre-existing: on macOS this hits OSError(9) 'Bad file descriptor' in "
-            "qapp.processEvents() ONLY when run late in the single-process full-suite "
-            "CI (a prior test leaves Qt's event loop with a stale fd notifier); it "
-            "passes per-file. Surfaced once the headless model-prompt recursion fix "
-            "let the macOS suite run to completion. Tracked for a CI test-isolation/"
-            "sharding fix; strict=False so a per-file xpass is fine."
-        ),
-        strict=False,
-    )
-    def test_permission_result_is_delivered_on_qt_event_loop(self, monkeypatch, qapp) -> None:
+    def test_permission_result_is_delivered_on_qt_event_loop(
+        self, monkeypatch, qapp, wait_until
+    ) -> None:
         from PySide6.QtCore import QObject, Signal, Slot
 
         import autoptz.ui.app as app_mod
@@ -271,18 +261,41 @@ class TestMacOSCameraPreflight:
         handlers[0](True)
 
         assert client.starts == 0
-        qapp.processEvents()
+        wait_until(
+            lambda: client.starts == 1,
+            timeout=2.0,
+            message="macOS camera permission result was not delivered on the Qt event loop",
+            pump_qt=True,
+        )
         assert client.starts == 1
         assert client.errors == []
 
 
 class TestCameraTileFramingHelpers:
-    def test_framing_snap_threshold(self, qapp) -> None:
-        from autoptz.ui.widgets.camera_tile import _snap_center_axis
+    def test_safe_zone_has_no_normal_tile_overlay_or_editor(self, qapp) -> None:
+        from autoptz.config.models import CameraConfig, SourceConfig
+        from autoptz.ui.engine_client import CameraRecord, EngineClient
+        from autoptz.ui.widgets.camera_tile import CameraTile
 
-        assert _snap_center_axis(0.039) == 0.0
-        assert _snap_center_axis(-0.04) == 0.0
-        assert _snap_center_axis(0.041) == pytest.approx(0.041)
+        client = EngineClient()
+        cfg = CameraConfig(
+            id="cam-1",
+            name="Cam",
+            source=SourceConfig(type="synthetic", address="anim"),
+        )
+        rec = CameraRecord("cam-1", "synthetic://anim", "Cam", camera_config=cfg)
+        client.cameraModel.add_camera(rec)
+        tile = CameraTile("cam-1", client, frame_source=None)
+        try:
+            tile._selected = True
+
+            assert not hasattr(tile, "_paint_framing_box")
+            assert not hasattr(tile, "_framing_box_rect")
+            assert not hasattr(tile, "_framing_move_hit")
+            assert not hasattr(tile, "_framing_handle_at")
+            assert not hasattr(tile, "_commit_framing")
+        finally:
+            tile.deleteLater()
 
 
 class TestElideKeepingPct:
@@ -928,6 +941,7 @@ class TestEngineClient:
         db = tmp_path / "cfg.db"
         store = ConfigStore(db_path=db, debounce_s=0)
         c = EngineClient(store=store)
+        assert c.overlays()["faces"] is True
         assert c.overlays()["prediction"] is False
         c.setOverlay("prediction", True)
         assert c.overlays()["prediction"] is True
@@ -941,6 +955,40 @@ class TestEngineClient:
             assert c2.overlays()["prediction"] is True
         finally:
             store2.close()
+
+    def test_enroll_identity_persists_preview_thumbnail(self, qapp, tmp_path) -> None:
+        from autoptz.config.store import ConfigStore
+        from autoptz.ui.engine_client import EngineClient
+
+        store = ConfigStore(db_path=tmp_path / "cfg.db", debounce_s=0)
+        c = EngineClient(store=store)
+        c.enrollIdentity("cam-1", "Alice", 7, thumbnail=b"png-preview")
+
+        rec = c._identity_model.get_all()[0]
+        assert rec.name == "Alice"
+        assert rec.thumbnail == b"png-preview"
+        assert rec.thumbnails == [b"png-preview"]
+        assert store.load_identities()[0].thumbnail == b"png-preview"
+        store.close()
+
+    def test_assign_identity_adds_preview_thumbnail(self, qapp, tmp_path) -> None:
+        from autoptz.config.models import IdentityRecord
+        from autoptz.config.store import ConfigStore
+        from autoptz.ui.engine_client import EngineClient
+
+        store = ConfigStore(db_path=tmp_path / "cfg.db", debounce_s=0)
+        c = EngineClient(store=store)
+        ident = IdentityRecord(id="id-existing", name="Alice")
+        store.save_identity(ident)
+        c._identity_model.add_identity(ident)
+
+        c.assignTrackToIdentity("cam-1", "id-existing", 7, thumbnail=b"png-preview")
+
+        rec = c._identity_model.get("id-existing")
+        assert rec.thumbnail == b"png-preview"
+        assert rec.thumbnails == [b"png-preview"]
+        assert store.load_identities()[0].thumbnail == b"png-preview"
+        store.close()
 
     def test_set_target_fps_enqueues_single_fps_command(self, qapp) -> None:
         c = _client(qapp)
@@ -1178,13 +1226,12 @@ class TestShmFrameSource:
 
         assert ShmFrameSource().latest_qimage("no-such-cam") is None
 
-    def test_self_healing_reads_after_writer_appears(self) -> None:
+    def test_self_healing_reads_after_writer_appears(self, wait_until) -> None:
         """attach() BEFORE the writer exists → None until it appears, then a frame.
 
         This is the old blank-preview regression: an attach that races ahead of
         the writer's segment must still serve real frames once it shows up.
         """
-        import time
         import uuid
 
         import numpy as np
@@ -1203,15 +1250,19 @@ class TestShmFrameSource:
         try:
             writer = ShmWriter(shm_name, h, w)
             writer.push(np.full((h, w, 3), 200, dtype=np.uint8))  # BGR grey
-            real = None
-            deadline = time.monotonic() + 2.0
-            while time.monotonic() < deadline:
+
+            def _read_real_frame():
                 img = src.latest_qimage(cid)
                 if img is not None and img.width() == w and img.height() == h:
-                    real = img
-                    break
-                time.sleep(0.02)
-            assert real is not None, "frame source never served the real frame"
+                    return img
+                return None
+
+            real = wait_until(
+                _read_real_frame,
+                timeout=2.0,
+                interval=0.02,
+                message="frame source never served the real frame",
+            )
             px = real.pixelColor(w // 2, h // 2)
             assert (px.red(), px.green(), px.blue()) == (200, 200, 200)
         finally:
@@ -1330,6 +1381,150 @@ class TestCameraTileHelpers:
         box = {"x1": 0.2, "y1": 0.1, "x2": 0.8, "y2": 0.9}
         assert _norm_bbox_contains(box, 0.5, 0.5)
         assert not _norm_bbox_contains(box, 0.1, 0.5)
+
+    def test_enrollment_face_selection_prefers_clicked_face(self, qapp) -> None:
+        from autoptz.ui.widgets.tile_helpers import _select_enrollment_face_bbox
+
+        track = {"x1": 0.1, "y1": 0.1, "x2": 0.9, "y2": 0.9}
+        wrong = {"bbox": {"x1": 0.2, "y1": 0.2, "x2": 0.35, "y2": 0.35}}
+        clicked = {"bbox": {"x1": 0.55, "y1": 0.55, "x2": 0.7, "y2": 0.72}}
+
+        assert (
+            _select_enrollment_face_bbox([wrong, clicked], track, (0.62, 0.62)) == clicked["bbox"]
+        )
+
+    def test_enrollment_body_click_prefers_head_region_face(self, qapp) -> None:
+        from autoptz.ui.widgets.tile_helpers import _select_enrollment_face_bbox
+
+        track = {"x1": 0.1, "y1": 0.1, "x2": 0.9, "y2": 0.9}
+        head = {"bbox": {"x1": 0.42, "y1": 0.14, "x2": 0.58, "y2": 0.26}}
+        lower_body_stray = {"bbox": {"x1": 0.34, "y1": 0.55, "x2": 0.68, "y2": 0.70}}
+
+        assert (
+            _select_enrollment_face_bbox([lower_body_stray, head], track, (0.50, 0.82))
+            == head["bbox"]
+        )
+
+    def test_enrollment_face_selection_falls_back_to_largest_face(self, qapp) -> None:
+        from autoptz.ui.widgets.tile_helpers import _select_enrollment_face_bbox
+
+        track = {"x1": 0.1, "y1": 0.1, "x2": 0.9, "y2": 0.9}
+        small = {"bbox": {"x1": 0.2, "y1": 0.2, "x2": 0.3, "y2": 0.3}}
+        large = {"bbox": {"x1": 0.5, "y1": 0.2, "x2": 0.8, "y2": 0.5}}
+
+        assert _select_enrollment_face_bbox([small, large], track, None) == large["bbox"]
+
+    def test_enrollment_preview_crop_uses_selected_head_face(self, qapp) -> None:
+        from PySide6.QtCore import QPointF, QRectF
+        from PySide6.QtGui import QColor, QImage
+
+        from autoptz.ui.widgets.camera_tile import CameraTile
+
+        class _Frames:
+            def __init__(self, img: QImage) -> None:
+                self.img = img
+
+            def latest_qimage(self, _camera_id: str) -> QImage:
+                return self.img
+
+        class _Rec:
+            def tracks_as_list(self):
+                return [
+                    {
+                        "track_id": 7,
+                        "bbox": {"x1": 0.10, "y1": 0.10, "x2": 0.90, "y2": 0.90},
+                    }
+                ]
+
+            def faces_as_list(self):
+                return [
+                    {
+                        "bbox": {"x1": 0.34, "y1": 0.55, "x2": 0.68, "y2": 0.70},
+                    },
+                    {
+                        "bbox": {"x1": 0.42, "y1": 0.14, "x2": 0.58, "y2": 0.26},
+                    },
+                ]
+
+        class _Model:
+            def get_record(self, _camera_id: str) -> _Rec:
+                return _Rec()
+
+        class _Client:
+            cameraModel = _Model()
+
+        img = QImage(1000, 1000, QImage.Format.Format_RGB32)
+        img.fill(QColor("black"))
+        # Paint the expected head region red and the larger lower false-positive
+        # blue. The crop center should land on red after a body double-click.
+        for x in range(420, 580):
+            for y in range(140, 260):
+                img.setPixelColor(x, y, QColor("red"))
+        for x in range(340, 680):
+            for y in range(550, 700):
+                img.setPixelColor(x, y, QColor("blue"))
+
+        tile = CameraTile("cam-1", _Client(), frame_source=_Frames(img))
+        try:
+            tile._painted_rect = QRectF(0, 0, 1000, 1000)
+            crop = tile._enrollment_crop_qimage(7, QPointF(500, 820))
+
+            assert crop is not None
+            assert crop.width() < 320
+            assert crop.height() < 260
+            assert crop.pixelColor(crop.width() // 2, crop.height() // 2) == QColor("red")
+        finally:
+            tile.deleteLater()
+
+    def test_enrollment_dialog_saves_preview_thumbnail(self, qapp, monkeypatch) -> None:
+        from PySide6.QtGui import QPixmap
+        from PySide6.QtWidgets import QDialog, QLineEdit
+
+        from autoptz.ui.widgets.camera_tile import CameraTile
+
+        class _Model:
+            def get_record(self, _camera_id: str):
+                return None
+
+        class _Client:
+            def __init__(self) -> None:
+                self.cameraModel = _Model()
+                self.enrolled = []
+
+            def registeredIdentities(self):
+                return []
+
+            def enrollIdentity(self, *args, **kwargs) -> None:  # noqa: N802
+                self.enrolled.append((args, kwargs))
+
+        client = _Client()
+        tile = CameraTile("cam-1", client, frame_source=None)
+        try:
+            pix = QPixmap(12, 12)
+            calls = []
+
+            def preview_and_thumb(track_id, click_pos):
+                calls.append((track_id, click_pos))
+                return pix, b"preview-crop"
+
+            def explode_late_thumbnail(*_args, **_kwargs):
+                raise AssertionError("thumbnail was recomputed after dialog accept")
+
+            def accept_with_name(dialog):
+                for edit in dialog.findChildren(QLineEdit):
+                    edit.setText("Alice")
+                return QDialog.DialogCode.Accepted
+
+            monkeypatch.setattr(tile, "_enrollment_preview_and_thumbnail", preview_and_thumb)
+            monkeypatch.setattr(tile, "_enrollment_thumbnail_png", explode_late_thumbnail)
+            monkeypatch.setattr(QDialog, "exec", accept_with_name)
+
+            tile._open_assign_dialog(7, None)
+
+            assert calls == [(7, None)]
+            assert client.enrolled == [(("cam-1", "Alice", 7), {"thumbnail": b"preview-crop"})]
+        finally:
+            tile.deleteLater()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1558,6 +1753,58 @@ assert panel._cfg["ptz"]["vcam_out"] is True, f"expected True, got {{panel._cfg[
         result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
         assert result.returncode == 0, result.stderr or result.stdout
 
+    def test_normal_save_preserves_hidden_ptz_internals(self, tmp_path) -> None:
+        code = f"""
+import os
+import sys
+import json
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
+from autoptz.ui.widgets.properties_panel import PropertiesPanel
+app = QApplication(sys.argv[:1])
+client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+cid = client.addCamera("usb://0", "Cam")
+cfg = client.getCameraConfig(cid)
+cfg["ptz"].update({{
+    "kp": 0.33,
+    "aim_smoothing": 0.21,
+    "lead_time_s": 0.09,
+    "max_pan_speed": 0.42,
+    "max_tilt_speed": 0.43,
+    "catch_up_speed": 0.44,
+    "safe_zone_enabled": False,
+    "safe_zone_x": 0.27,
+    "safe_zone_y": -0.18,
+    "safe_zone_w": 0.31,
+    "safe_zone_h": 0.32,
+    "safe_zone_roundness": 0.45,
+}})
+client.updateCameraConfig(cid, json.dumps(cfg))
+panel = PropertiesPanel(client, frame_source=ShmFrameSource())
+panel.set_camera(cid)
+
+# Change a normal visible field; hidden controller internals must survive.
+panel._vcam_out.setChecked(True)
+panel._push()
+actual = client.getCameraConfig(cid)["ptz"]
+for key in (
+    "kp", "aim_smoothing", "lead_time_s", "max_pan_speed", "max_tilt_speed",
+    "catch_up_speed", "safe_zone_x", "safe_zone_y", "safe_zone_w",
+    "safe_zone_h", "safe_zone_roundness",
+):
+    assert actual[key] == cfg["ptz"][key], (key, actual[key], cfg["ptz"][key])
+assert actual["safe_zone_enabled"] is False
+assert actual["vcam_out"] is True
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
+        assert result.returncode == 0, result.stderr or result.stdout
+
 
 class TestExperimentalDialog:
     def test_construction_reads_state_and_apply_persists(self, tmp_path) -> None:
@@ -1616,8 +1863,8 @@ finally:
         assert result.returncode == 0, result.stderr or result.stdout
 
 
-class TestExperimentalMenu:
-    def test_experimental_action_present_and_opens_dialog(self, tmp_path) -> None:
+class TestNormalMenuSurface:
+    def test_mark_present_but_experimental_features_absent(self, tmp_path) -> None:
         code = f"""
 import os
 import sys
@@ -1630,20 +1877,14 @@ from autoptz.ui.engine_client import EngineClient
 from autoptz.ui.frames import ShmFrameSource
 from autoptz.ui.log_bridge import LogListModel
 from autoptz.ui.widgets import MainWindow
-from autoptz.ui.widgets.dialogs.experimental import ExperimentalFeaturesDialog
 
 app = QApplication(sys.argv[:1])
 client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
 win = MainWindow(client, log_model=LogListModel(), frame_source=ShmFrameSource())
 try:
     texts = [a.text() for a in win.findChildren(QAction)]
-    assert any("Experimental" in (t or "") for t in texts), texts
-
-    # Handler builds the dialog without raising; it is non-modal in the test
-    # because we never call exec(), we just verify construction via the handler.
-    dlg = ExperimentalFeaturesDialog(client, win)
-    assert dlg is not None
-    dlg.close()
+    assert any("Run AutoPTZ Mark" in (t or "") for t in texts), texts
+    assert not any("Experimental Features" in (t or "") for t in texts), texts
 finally:
     win.close()
 """

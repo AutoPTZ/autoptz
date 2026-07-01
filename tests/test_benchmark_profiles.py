@@ -22,6 +22,30 @@ def test_full_profile_enables_all_inference() -> None:
     }
 
 
+def test_simple_follow_profile_is_production_baseline() -> None:
+    prof = get_profile("simple_follow")
+    assert prof.weight == 1.0
+    assert prof.features == {
+        "detection": True,
+        "tracking": True,
+        "face_recognition": False,
+        "pose": False,
+        "reid": False,
+    }
+
+
+def test_pose_follow_isolates_pose_cost() -> None:
+    prof = get_profile("pose_follow")
+    assert prof.weight == 1.0
+    assert prof.features == {
+        "detection": True,
+        "tracking": True,
+        "face_recognition": False,
+        "pose": True,
+        "reid": False,
+    }
+
+
 def test_streams_profile_disables_all_inference() -> None:
     prof = get_profile("streams")
     assert prof.weight == 0.8
@@ -36,10 +60,12 @@ def test_streams_profile_disables_all_inference() -> None:
 
 
 def test_profiles_registry_keys() -> None:
-    assert set(PROFILES) == {"full", "streams"}
+    assert set(PROFILES) == {"simple_follow", "pose_follow", "full", "streams"}
 
 
 def test_get_profile_unknown_raises_with_valid_names() -> None:
     with pytest.raises(ValueError) as exc:
         get_profile("nope")
-    assert "full" in str(exc.value) and "streams" in str(exc.value)
+    msg = str(exc.value)
+    assert "simple_follow" in msg and "pose_follow" in msg
+    assert "full" in msg and "streams" in msg

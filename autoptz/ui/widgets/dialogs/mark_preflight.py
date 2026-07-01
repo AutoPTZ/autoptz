@@ -51,6 +51,7 @@ _MAX_CAMERA_OPTS: list[tuple[str, int]] = [
     ("1 camera", 1),
     ("2 cameras", 2),
     ("4 cameras", 4),
+    ("6 cameras", 6),
     ("8 cameras", 8),
     ("12 cameras", 12),
     ("16 cameras", 16),
@@ -167,13 +168,25 @@ class MarkPreflightDialog(QDialog):
         profile_box = QGroupBox("What to run")
         profile_col = QVBoxLayout(profile_box)
         self._profile_group = QButtonGroup(self)
+        self._simple_radio = QRadioButton("Simple Follow — find and track one person")
+        self._pose_radio = QRadioButton("Pose Follow — add pose aiming")
         self._full_radio = QRadioButton("Full — find, track, and frame people")
         self._streams_radio = QRadioButton("Streams — show video only (no tracking)")
+        self._profile_group.addButton(self._simple_radio)
+        self._profile_group.addButton(self._pose_radio)
         self._profile_group.addButton(self._full_radio)
         self._profile_group.addButton(self._streams_radio)
+        profile_col.addWidget(self._simple_radio)
+        profile_col.addWidget(self._pose_radio)
         profile_col.addWidget(self._full_radio)
         profile_col.addWidget(self._streams_radio)
-        (self._streams_radio if d.profile == "streams" else self._full_radio).setChecked(True)
+        profile_buttons = {
+            "simple_follow": self._simple_radio,
+            "pose_follow": self._pose_radio,
+            "full": self._full_radio,
+            "streams": self._streams_radio,
+        }
+        profile_buttons.get(d.profile, self._simple_radio).setChecked(True)
         col.addWidget(profile_box)
 
         # ── source ─────────────────────────────────────────────────────────────
@@ -421,7 +434,14 @@ class MarkPreflightDialog(QDialog):
             source = "ndi"
         else:
             source = "clip"
-        profile = "streams" if self._streams_radio.isChecked() else "full"
+        if self._streams_radio.isChecked():
+            profile = "streams"
+        elif self._full_radio.isChecked():
+            profile = "full"
+        elif self._pose_radio.isChecked():
+            profile = "pose_follow"
+        else:
+            profile = "simple_follow"
         return MarkSession(
             profile=profile,
             source=source,

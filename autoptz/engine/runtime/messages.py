@@ -48,7 +48,7 @@ class TrackInfo(BaseModel):
     # matches PTZ control instead of the geometric box center.
     aim_x: float | None = None
     aim_y: float | None = None
-    aim_source: str = ""  # "pose", "fused", "bbox", "silhouette", or ""
+    aim_source: str = ""  # "pose", "fused", "bbox", "bbox_stable", "silhouette", or ""
 
 
 class GroundTruthPerson(BaseModel):
@@ -239,16 +239,32 @@ class TelemetryMsg(BaseModel):
     command_send_ms: float = 0.0
     actuation_estimate_ms: float = 0.0
     end_to_end_ms: float = 0.0
-    # Phase 0a — per-source frame-delivery telemetry.  ``frames_dropped_est`` is an
-    # ESTIMATE of frames the source produced but the receiver did not deliver,
-    # computed from ``source_fps`` vs ``delivered_fps`` over a rolling window (NDI's
-    # FrameSync never signals "no new frame", so true drops can't be read directly).
+    # Phase 0a — per-source frame-delivery telemetry.  ``frames_dropped_est`` is a
+    # conservative ESTIMATE of frames the source produced but the receiver did not
+    # deliver, computed only for severe sustained ``source_fps`` vs
+    # ``delivered_fps`` shortfall (NDI's FrameSync never signals "no new frame",
+    # so true drops can't be read directly).
     # ``ndi_queue_depth`` is -1 when the SDK exposes no queue (the common case).
     frames_delivered: int = 0
     frames_dropped_est: int = 0
     delivered_fps: float = 0.0
     source_fps: float = 0.0
+    duplicate_frames: int = 0
+    stale_frames: int = 0
     ndi_queue_depth: int = -1
+    ndi_queue_audio: int = -1
+    ndi_queue_metadata: int = -1
+    ndi_total_video_frames: int = 0
+    ndi_dropped_video_frames: int = 0
+    ndi_total_audio_frames: int = 0
+    ndi_dropped_audio_frames: int = 0
+    ndi_total_metadata_frames: int = 0
+    ndi_dropped_metadata_frames: int = 0
+    ndi_connections: int = -1
+    ndi_fourcc: str = ""
+    ndi_buffer_ms: float = 0.0
+    ndi_conversion_ms: float = 0.0
+    ndi_copy_ms: float = 0.0
     # True once at least one real frame has been read + pushed to the preview shm.
     # The UI gates its "No Signal" overlay on this (not on fps, which lags a full
     # second, nor on the preview Image load, which can latch on a placeholder).
@@ -285,7 +301,7 @@ class TelemetryMsg(BaseModel):
     health: HealthInfo = Field(default_factory=HealthInfo)
 
     def to_msgpack(self) -> bytes:
-        return bytes(msgpack.packb(self.model_dump(), use_bin_type=True))
+        return bytes(msgpack.packb(self.model_dump(exclude_defaults=True), use_bin_type=True))
 
     @classmethod
     def from_msgpack(cls, data: bytes) -> Self:

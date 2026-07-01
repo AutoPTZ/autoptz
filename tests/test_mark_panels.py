@@ -1,7 +1,7 @@
 """MarkControlPanel + MarkDetailsPanel (offscreen): simplified controls + details.
 
 The control panel is trimmed to the demo essentials: a live verdict/progress
-line, a Stop button, and an "Exit Mark…" button.  The redundant Source/Cameras
+line, a Stop button, and an "Exit Mark" button.  The redundant Source/Cameras
 re-ask (set in the pre-flight) is gone — there is no Start button (the ramp
 auto-starts) and no source radios / camera spinbox.
 """
@@ -130,6 +130,8 @@ def test_control_panel_object_names(qtapp) -> None:
     assert p._verdict_label.objectName() == "markVerdict"
     assert p._stop_btn.objectName() == "markStopBtn"
     assert p._exit_btn.objectName() == "markExitBtn"
+    assert p._stop_btn.text() == "Stop Run"
+    assert p._exit_btn.text() == "Exit Mark"
     p.deleteLater()
 
 
@@ -159,8 +161,8 @@ def test_exit_button_is_prominent_secondary_styled(qtapp) -> None:
     p = MarkControlPanel()
     sheet = p._exit_btn.styleSheet().lower()
     assert sheet  # carries inline prominent styling
-    # Themed from palette tokens (border/text), so it tracks light/dark.
-    assert T.CURRENT.text.lower() in sheet or T.CURRENT.border.lower() in sheet
+    # Accent-bordered, so the grouped Mark-level action reads clearly.
+    assert T.ACCENT.name().lower() in sheet
     assert "font-weight" in sheet
     assert "padding" in sheet
     p.deleteLater()
@@ -176,7 +178,7 @@ def test_prominent_button_styling_survives_theme_flip(qtapp) -> None:
     p._restyle()  # simulate a theme flip
     assert T.DANGER.lower() in p._stop_btn.styleSheet().lower()
     exit_sheet = p._exit_btn.styleSheet().lower()
-    assert T.CURRENT.text.lower() in exit_sheet or T.CURRENT.border.lower() in exit_sheet
+    assert T.ACCENT.name().lower() in exit_sheet
     p.deleteLater()
 
 

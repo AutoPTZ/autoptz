@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -155,82 +154,6 @@ AIM_REGION_FRACTION: dict[str, float] = {
 }
 
 
-# ── Tracking Speed presets ───────────────────────────────────────────────────
-
-
-class TrackingSpeed(str, Enum):
-    """Named tracking-speed presets.
-
-    Each preset expresses a coherent set of the six PTZ tuning knobs so the
-    user can switch feel with one control instead of six sliders.  NORMAL
-    reproduces the historic PTZConfig defaults so existing behaviour is
-    unchanged when no preset is set.
-    """
-
-    CALM = "calm"
-    NORMAL = "normal"
-    FAST = "fast"
-    SPORT = "sport"
-
-
-# Six knobs driven by every preset.  NORMAL values match PTZConfig defaults
-# exactly so switching to NORMAL is a no-op on existing rigs.
-SPEED_PROFILES: dict[TrackingSpeed, dict[str, float]] = {
-    TrackingSpeed.CALM: {
-        "max_pan_speed": 0.4,
-        "max_tilt_speed": 0.4,
-        "kp": 0.35,
-        "aim_smoothing": 0.75,
-        "max_accel": 1.5,
-        "catch_up_speed": 0.3,
-    },
-    TrackingSpeed.NORMAL: {
-        "max_pan_speed": 0.7,
-        "max_tilt_speed": 0.7,
-        "kp": 0.6,
-        "aim_smoothing": 0.5,
-        "max_accel": 3.0,
-        "catch_up_speed": 0.6,
-    },
-    TrackingSpeed.FAST: {
-        "max_pan_speed": 0.85,
-        "max_tilt_speed": 0.85,
-        "kp": 0.8,
-        "aim_smoothing": 0.3,
-        "max_accel": 6.0,
-        "catch_up_speed": 0.75,
-    },
-    TrackingSpeed.SPORT: {
-        "max_pan_speed": 1.0,
-        "max_tilt_speed": 1.0,
-        "kp": 1.0,
-        "aim_smoothing": 0.15,
-        "max_accel": 12.0,
-        "catch_up_speed": 0.9,
-    },
-}
-
-
-def apply_speed_profile(cfg: PTZConfig, speed: TrackingSpeed) -> PTZConfig:
-    """Return a new frozen PTZConfig with the six preset knobs applied.
-
-    The returned config is otherwise identical to *cfg* — only the six
-    speed-profile fields (and ``tracking_speed`` for persistence/display) are
-    replaced.  The controller is never touched; it reads the individual fields.
-    """
-    p = SPEED_PROFILES[speed]
-    update: dict[str, object] = {
-        "max_pan_speed": p["max_pan_speed"],
-        "max_tilt_speed": p["max_tilt_speed"],
-        "kp": p["kp"],
-        "aim_smoothing": p["aim_smoothing"],
-        "max_accel": p["max_accel"],
-        "catch_up_speed": p["catch_up_speed"],
-        "tracking_speed": speed,
-    }
-    return cfg.model_copy(update=update)
-
-
 # ── PTZ ───────────────────────────────────────────────────────────────────────
 
 
@@ -328,19 +251,18 @@ class PTZConfig(BaseModel, frozen=True):
     # Aim smoothing 0..1 (0 = most responsive, 1 = smoothest).  Maps to the
     # one-euro filter's minimum cutoff inside the controller; 0.5 ≈ the original.
     aim_smoothing: float = Field(default=0.5, ge=0.0, le=1.0)
-    # Framing box: an adjustable rounded dead-zone around frame-centre.  While the
-    # subject stays inside the box the PTZ holds still; the camera only moves to
-    # keep them within it.  ``safe_zone_w`` / ``safe_zone_h`` are the box's
-    # half-width / half-height as a fraction of the half-frame (0.15 ≈ 15% either
-    # side of centre), drawn as a draggable, resizable overlay on the tile.  On by
-    # default so new cameras show the framing region.
+    # Framing quiet zone: a rounded dead-zone around frame-centre. While the
+    # subject stays inside the zone the PTZ holds still; beyond it, the adaptive
+    # controller eases the subject back to the zone centre. ``safe_zone_w`` /
+    # ``safe_zone_h`` are half-width / half-height as a fraction of the half-frame
+    # (0.15 ≈ 15% either side of centre). Normal UI does not draw or expose this;
+    # it is an internal anti-bobbing primitive for the controller.
     safe_zone_enabled: bool = True
     safe_zone_x: float = Field(default=0.0, ge=-0.9, le=0.9)
     safe_zone_y: float = Field(default=0.0, ge=-0.9, le=0.9)
     safe_zone_w: float = Field(default=0.15, ge=0.03, le=0.9)
     safe_zone_h: float = Field(default=0.22, ge=0.03, le=0.9)
-    # Corner roundness of the framing box, 0 = sharp rectangle … 1 = full oval.
-    # Defaults to a full oval (the framing region reads as a soft ellipse).
+    # Internal quiet-zone shape, 0 = rectangular … 1 = full oval.
     safe_zone_roundness: float = Field(default=1.0, ge=0.0, le=1.0)
     # Loss recovery: when the target is lost past the coast window, optionally
     # zoom OUT (this speed) for up to ``reacquire_window_s`` to widen the view and
@@ -349,7 +271,10 @@ class PTZConfig(BaseModel, frozen=True):
     # and waits.  Set >0 to opt into auto-widen-to-reacquire.
     loss_zoom_out: float = Field(default=0.0, ge=0.0, le=1.0)
     reacquire_window_s: float = Field(default=4.0, ge=0.0, le=30.0)
-    auto_zoom: bool = True
+    # 2.2 reliability default: hold optical/digital zoom fixed unless the user
+    # explicitly opts into automatic zooming. Pan/tilt tracking is much easier to
+    # stabilize when zoom is not also changing the image scale.
+    auto_zoom: bool = False
     zoom_framing: ZoomFraming = "upper_body"
     soft_limits: PanTiltZoomLimits | None = None
     # Ego-motion compensation: subtract the camera's *own* induced image motion
@@ -366,10 +291,6 @@ class PTZConfig(BaseModel, frozen=True):
     # Upper bound on the learned command→image gain (normalised img-vel per unit
     # command); clamps the online regression so a bad sample can't run away.
     ego_comp_gain_max: float = Field(default=8.0, ge=0.0, le=64.0)
-    # Named tracking-speed preset last applied to this config (for persistence /
-    # display in the UI).  None = user has customised one or more knobs manually
-    # without going through a preset (shown as "Custom" in the UI).
-    tracking_speed: TrackingSpeed | None = None
     # Quick-recall hardware preset slots, shown in the Properties → PTZ section as
     # label + snapshot tiles.  Maps a slot index (0-based, 0..5) to a
     # :class:`PtzPresetSlot` (label + thumbnail); an absent slot is "empty" (no

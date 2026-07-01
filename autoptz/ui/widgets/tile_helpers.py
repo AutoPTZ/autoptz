@@ -1,9 +1,9 @@
 """Pure helper functions for the camera tile (no widget state).
 
 Small, side-effect-free helpers extracted from ``camera_tile`` — context-menu
-label logic, bbox geometry, rect-jump detection, and the tile's framing-box
-snap constant — so they're easy to unit-test and the tile widget stays focused
-on painting + interaction. ``camera_tile`` re-exports these.
+label logic, bbox geometry, and rect-jump detection — so they're easy to
+unit-test and the tile widget stays focused on painting + interaction.
+``camera_tile`` re-exports these.
 """
 
 from __future__ import annotations
@@ -22,9 +22,7 @@ log = logging.getLogger(__name__)
 # Matches a trailing " 85%" token so on-video labels never elide the percentage.
 _PCT_SUFFIX = re.compile(r"\s+\d+%$")
 
-# Framing-box centre-snap threshold (fraction) and the box-jump fraction used to
-# detect a teleport vs. smooth motion. Used only by the helpers below.
-_FB_CENTER_SNAP = 0.04
+# Box-jump fraction used to detect a teleport vs. smooth motion.
 _BOX_JUMP_FRAC = 0.22
 
 
@@ -112,12 +110,6 @@ def _ignore_arms(rec: Any) -> bool:
         return True
 
 
-def _snap_center_axis(value: float) -> float:
-    """Snap a framing center axis to exact zero within the 4% threshold."""
-    value = float(value)
-    return 0.0 if abs(value) <= _FB_CENTER_SNAP else value
-
-
 def _norm_bbox_contains(box: dict[str, float], x: float, y: float) -> bool:
     return float(box.get("x1", 0.0)) <= x <= float(box.get("x2", 0.0)) and float(
         box.get("y1", 0.0)
@@ -145,6 +137,62 @@ def _head_bbox(box: dict[str, float]) -> dict[str, float]:
     cx = (x1 + x2) * 0.5
     half_w = (x2 - x1) * 0.35
     return {"x1": cx - half_w, "y1": y1, "x2": cx + half_w, "y2": y1 + (y2 - y1) * 0.30}
+
+
+def _select_enrollment_face_bbox(
+    faces: list[dict[str, Any]],
+    track_box: dict[str, float],
+    click: tuple[float, float] | None,
+) -> dict[str, float] | None:
+    """Pick the detected face that should be enrolled for a clicked person box."""
+    candidates: list[dict[str, float]] = []
+    for face in faces:
+        box = face.get("bbox", {})
+        if not isinstance(box, dict):
+            continue
+        cx = (float(box.get("x1", 0.0)) + float(box.get("x2", 0.0))) * 0.5
+        cy = (float(box.get("y1", 0.0)) + float(box.get("y2", 0.0))) * 0.5
+        in_track = _norm_bbox_contains(track_box, cx, cy)
+        click_selects_face = (
+            click is not None
+            and _norm_bbox_contains(track_box, click[0], click[1])
+            and _norm_bbox_contains(box, click[0], click[1])
+        )
+        if in_track or click_selects_face:
+            candidates.append(box)
+    if not candidates:
+        return None
+    if click is None:
+        return max(
+            candidates,
+            key=lambda b: (float(b.get("x2", 0.0)) - float(b.get("x1", 0.0)))
+            * (float(b.get("y2", 0.0)) - float(b.get("y1", 0.0))),
+        )
+
+    def area(box: dict[str, float]) -> float:
+        return (float(box.get("x2", 0.0)) - float(box.get("x1", 0.0))) * (
+            float(box.get("y2", 0.0)) - float(box.get("y1", 0.0))
+        )
+
+    x, y = click
+    clicked = [box for box in candidates if _norm_bbox_contains(box, x, y)]
+    if clicked:
+        return max(clicked, key=area)
+
+    # A body-click inside the selected person box should enroll that person's
+    # head, not the nearest/largest stray face elsewhere inside a noisy person
+    # bbox. Prefer faces whose center sits in the track's expected head region.
+    head = _head_bbox(track_box)
+
+    def center_in(box: dict[str, float], region: dict[str, float]) -> bool:
+        cx = (float(box.get("x1", 0.0)) + float(box.get("x2", 0.0))) * 0.5
+        cy = (float(box.get("y1", 0.0)) + float(box.get("y2", 0.0))) * 0.5
+        return _norm_bbox_contains(region, cx, cy)
+
+    head_candidates = [box for box in candidates if center_in(box, head)]
+    if head_candidates:
+        return max(head_candidates, key=area)
+    return max(candidates, key=area)
 
 
 def _rect_close(a: QRectF, b: QRectF) -> bool:

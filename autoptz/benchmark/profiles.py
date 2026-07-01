@@ -5,12 +5,17 @@ synthetic camera for the run and (b) a score weight.  The feature keys mirror
 ``autoptz.engine.camera_worker._DEFAULT_FEATURES`` so the same dict drops
 straight into ``Supervisor.prime_features`` / ``SetFeaturesCmd``.
 
-``full``    — the real production load: detection + tracking + face + pose +
-              center-stage all on.  Even on synthetic frames with no person, the
-              detector still runs and incurs its inference cost, so the
-              throughput number is valid without a bundled person asset.
-``streams`` — all inference OFF (capture + preview only): an upper bound on how
-              many streams the machine can ingest/paint before any ML cost.
+``simple_follow`` — the 2.2 production target: detector + tracker only. This is
+                    the first profile to compare when deciding whether optional
+                    identity/pose services are overbuilt for a deployment.
+``pose_follow``   — detector + tracker + pose. Isolates the cost of pose aiming
+                    from face recognition and appearance ReID.
+``full``          — all current vision services on: detection + tracking + face
+                    + pose + ReID. Even on synthetic frames with no person, the
+                    detector still runs and incurs its inference cost, so the
+                    throughput number is valid without a bundled person asset.
+``streams``       — all inference OFF (capture + preview only): an upper bound
+                    on how many streams the machine can ingest/paint before ML.
 """
 
 from __future__ import annotations
@@ -39,9 +44,33 @@ _ALL_OFF: dict[str, bool] = {k: False for k in _ALL_ON}
 
 
 PROFILES: dict[str, BenchmarkProfile] = {
+    "simple_follow": BenchmarkProfile(
+        name="simple_follow",
+        description="Simple Follow: detector + tracker only.",
+        features={
+            "detection": True,
+            "tracking": True,
+            "face_recognition": False,
+            "pose": False,
+            "reid": False,
+        },
+        weight=1.0,
+    ),
+    "pose_follow": BenchmarkProfile(
+        name="pose_follow",
+        description="Detector + tracker + pose aiming; face/ReID off.",
+        features={
+            "detection": True,
+            "tracking": True,
+            "face_recognition": False,
+            "pose": True,
+            "reid": False,
+        },
+        weight=1.0,
+    ),
     "full": BenchmarkProfile(
         name="full",
-        description="Detection + tracking + face + pose + center-stage (full load).",
+        description="Detection + tracking + face + pose + ReID + center-stage (full load).",
         features=dict(_ALL_ON),
         weight=1.0,
     ),

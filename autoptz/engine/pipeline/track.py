@@ -246,6 +246,27 @@ class TrackerType(str, Enum):
 # ── BoxMOT factory ────────────────────────────────────────────────────────────
 
 
+# The tracker is created lazily on the FIRST processed frame, when the ingest fps
+# is still unmeasured (frame intervals not yet timed) — the caller passes
+# ``max(1.0, fps)``, so creation fps is ~1.0 at startup.  BoT-SORT derives its
+# lost-track survival from the creation-time rate
+# (``max_time_lost = frame_rate/30 * track_buffer``), and the tracker is built ONCE
+# and never rebuilt, so a degenerate creation fps permanently collapses that window
+# to ~0 frames: any single missed detection drops the track, and the person who
+# reappears gets a NEW id (id-switch / target-loss / PTZ bounce after the briefest
+# occlusion).  So floor a not-yet-trustworthy rate to a sane default for creation;
+# the wrapper's own coast logic still tracks the real measured fps each frame.
+_TRACKER_FPS_TRUSTWORTHY = 10.0
+_TRACKER_DEFAULT_FPS = 30.0
+
+
+def _tracker_creation_fps(measured_fps: float) -> float:
+    """Floor a not-yet-measured ingest fps to a sane default for tracker creation."""
+    if measured_fps >= _TRACKER_FPS_TRUSTWORTHY:
+        return measured_fps
+    return _TRACKER_DEFAULT_FPS
+
+
 def _create_boxmot_tracker(
     tracker_type: TrackerType,
     reid_weights: Path | None,
@@ -426,14 +447,19 @@ class Tracker:
         self._fps = fps
         self._coast_max_frames = max(1, int(self._coast_window * fps))
 
-        # Lazy init now that fps is known
+        # Lazy init now that fps is known.  At startup fps is unmeasured (~0/1), so
+        # floor it to a sane default for the tracker's frozen lost-track survival
+        # window — otherwise BoT-SORT locks ``max_time_lost`` to ~0 (see
+        # ``_tracker_creation_fps``).  The wrapper's own coast (``_coast_max_frames``)
+        # keeps tracking the real measured fps each frame independently.
         if getattr(self, "_impl_pending", False) and self._impl is None:
+            create_fps = _tracker_creation_fps(fps)
             self._impl = _create_boxmot_tracker(
                 self._tracker_type,
                 self._reid_weights,
                 self._device,
-                fps,
-                self._coast_max_frames,
+                create_fps,
+                max(1, int(self._coast_window * create_fps)),
             )
             self._impl_pending = False
 

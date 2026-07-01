@@ -72,7 +72,6 @@ def _run_briefly(w: CameraWorker, seconds: float = 0.6) -> None:
         time.sleep(seconds)
     finally:
         w.stop()
-        time.sleep(0.1)
 
 
 def test_egomotion_skipped_when_tracking_off() -> None:
@@ -98,7 +97,6 @@ def test_egomotion_runs_when_tracking_on() -> None:
         )
     finally:
         w.stop()
-        time.sleep(0.1)
 
 
 def test_appearance_not_published_when_face_and_reid_off() -> None:
@@ -126,4 +124,3 @@ def test_appearance_published_when_face_on() -> None:
         )
     finally:
         w.stop()
-        time.sleep(0.1)

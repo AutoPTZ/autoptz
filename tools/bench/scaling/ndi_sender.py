@@ -78,8 +78,12 @@ for t in threads:
 time.sleep(1.0)  # let senders open
 print(f"SENDER_READY {N} senders @ {W}x{H} {FPS}fps", flush=True)
 
-time.sleep(SECONDS)
-_stop.set()
-for t in threads:
-    t.join(timeout=2.0)
-print("SENDER_ACHIEVED_FPS " + " ".join(f"{x:.1f}" for x in _achieved), flush=True)
+try:
+    time.sleep(SECONDS)
+except KeyboardInterrupt:
+    pass
+finally:
+    _stop.set()
+    for t in threads:
+        t.join(timeout=2.0)
+    print("SENDER_ACHIEVED_FPS " + " ".join(f"{x:.1f}" for x in _achieved), flush=True)
