@@ -326,6 +326,148 @@ class TestEdgeCases:
         assert len(alive) == 0
 
 
+# ── Predictive coast (LOST tracks keep moving along their last velocity) ──────
+
+
+def _moving_rows(cx_values: list[float], *, cy: float = 150.0, w: float = 40.0, h: float = 100.0):
+    """One [1,7] BoxMOT row per centre-x value, for a box of fixed size."""
+    return [
+        np.array(
+            [[cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, 1, 0.9, 0]],
+            dtype=np.float32,
+        )
+        for cx in cx_values
+    ]
+
+
+def _run_moving_then_lost(
+    tracker: Tracker,
+    impl: MagicMock,
+    cx_values: list[float],
+    lost_frames: int,
+    fps: float = 10.0,
+) -> list[list[Track]]:
+    """Feed *cx_values* active frames then *lost_frames* empty frames.
+
+    Returns the per-frame track lists for the lost frames only.
+    """
+    impl.update.side_effect = (
+        _moving_rows(cx_values) + [np.empty((0, 7), dtype=np.float32)] * lost_frames
+    )
+    for cx in cx_values:
+        tracker.update([_det(cx - 20, 100, cx + 20, 200)], FRAME, fps=fps)
+    out: list[list[Track]] = []
+    for _ in range(lost_frames):
+        out.append(tracker.update([], FRAME, fps=fps))
+    return out
+
+
+class TestPredictiveCoast:
+    """A LOST track must coast along its pre-loss velocity (damped), not freeze.
+
+    Rationale: upstream ByteTrack/BoT-SORT Kalman-predict lost tracks with the
+    positional velocity intact; emitting a frozen bbox with velocity=(0,0) was
+    the direct cause of PTZ bounce after brief occlusions.
+    """
+
+    def test_lost_track_keeps_pre_loss_velocity(self) -> None:
+        """First LOST frame reports (damped) pre-loss velocity, not zero."""
+        impl = MagicMock()
+        tracker = Tracker(_impl=impl, min_hits=1, coast_window=1.0)
+        cxs = [100.0 + 10.0 * i for i in range(8)]  # +10 px/frame
+        lost_frames = _run_moving_then_lost(tracker, impl, cxs, lost_frames=1)
+        lost = [t for t in lost_frames[0] if t.state == TrackState.LOST]
+        assert len(lost) == 1
+        vx, vy = lost[0].velocity
+        assert vx > 5.0, f"LOST velocity should carry pre-loss motion, got vx={vx}"
+        assert vx <= 10.5
+        assert abs(vy) < 1.0
+
+    def test_lost_bbox_coasts_forward(self) -> None:
+        """The LOST bbox centre keeps advancing in the direction of motion."""
+        impl = MagicMock()
+        tracker = Tracker(_impl=impl, min_hits=1, coast_window=1.0)
+        cxs = [100.0 + 10.0 * i for i in range(8)]  # last active cx = 170
+        frames = _run_moving_then_lost(tracker, impl, cxs, lost_frames=3)
+        centres = []
+        for tracks in frames:
+            (lost,) = [t for t in tracks if t.state == TrackState.LOST]
+            centres.append(lost.bbox.cx)
+        assert centres[0] > 170.0 + 2.0, f"first coast frame should advance, got {centres[0]}"
+        assert centres[0] < centres[1] < centres[2], f"coast should keep advancing: {centres}"
+        total = centres[2] - 170.0
+        assert 10.0 < total < 35.0, f"3-frame damped coast should advance 10-35px, got {total}"
+
+    def test_coast_velocity_decays(self) -> None:
+        """Coast velocity is damped toward zero (bounded drift on wrong guesses)."""
+        impl = MagicMock()
+        tracker = Tracker(_impl=impl, min_hits=1, coast_window=2.0)
+        cxs = [100.0 + 10.0 * i for i in range(8)]
+        frames = _run_moving_then_lost(tracker, impl, cxs, lost_frames=8)
+        vxs = []
+        for tracks in frames:
+            (lost,) = [t for t in tracks if t.state == TrackState.LOST]
+            vxs.append(lost.velocity[0])
+        assert vxs[-1] < vxs[0], f"velocity should decay across the coast window: {vxs}"
+        assert vxs[-1] < 3.0, f"velocity should decay to near zero, got {vxs[-1]}"
+
+    def test_stationary_lost_track_does_not_drift(self) -> None:
+        impl = MagicMock()
+        tracker = Tracker(_impl=impl, min_hits=1, coast_window=1.0)
+        cxs = [100.0] * 8  # stationary
+        frames = _run_moving_then_lost(tracker, impl, cxs, lost_frames=5)
+        for tracks in frames:
+            (lost,) = [t for t in tracks if t.state == TrackState.LOST]
+            assert abs(lost.bbox.cx - 100.0) < 1.0
+            assert abs(lost.velocity[0]) < 0.5
+
+    def test_coasted_centre_clamped_to_frame(self) -> None:
+        """Coast must not extrapolate the box centre outside the frame."""
+        impl = MagicMock()
+        tracker = Tracker(_impl=impl, min_hits=1, coast_window=3.0)
+        cxs = [560.0 + 15.0 * i for i in range(5)]  # heading for the 640px edge
+        frames = _run_moving_then_lost(tracker, impl, cxs, lost_frames=20)
+        for tracks in frames:
+            lost = [t for t in tracks if t.state == TrackState.LOST]
+            if not lost:
+                continue
+            assert lost[0].bbox.cx <= 640.0, f"coasted centre left the frame: {lost[0].bbox.cx}"
+
+    def test_coasted_box_keeps_size(self) -> None:
+        impl = MagicMock()
+        tracker = Tracker(_impl=impl, min_hits=1, coast_window=1.0)
+        cxs = [100.0 + 10.0 * i for i in range(8)]
+        frames = _run_moving_then_lost(tracker, impl, cxs, lost_frames=3)
+        for tracks in frames:
+            (lost,) = [t for t in tracks if t.state == TrackState.LOST]
+            assert (lost.bbox.x2 - lost.bbox.x1) == pytest.approx(40.0, abs=0.1)
+            assert (lost.bbox.y2 - lost.bbox.y1) == pytest.approx(100.0, abs=0.1)
+
+    def test_reacquire_after_coast_has_no_velocity_spike(self) -> None:
+        """Re-detection after a 3-frame gap must not report a gap-spanning velocity.
+
+        Without coast, prev-centre freezes at the loss point and the first
+        re-acquired frame reports the whole gap as one frame of motion
+        (~40 px/frame here) — which whips the PTZ feed-forward.
+        """
+        impl = MagicMock()
+        tracker = Tracker(_impl=impl, min_hits=1, coast_window=1.0)
+        cxs = [100.0 + 10.0 * i for i in range(8)]  # last active cx=170, v=10
+        rows = _moving_rows(cxs)
+        rows += [np.empty((0, 7), dtype=np.float32)] * 3
+        rows += _moving_rows([210.0])  # reappears where constant motion predicts
+        impl.update.side_effect = rows
+        for cx in cxs:
+            tracker.update([_det(cx - 20, 100, cx + 20, 200)], FRAME, fps=10.0)
+        for _ in range(3):
+            tracker.update([], FRAME, fps=10.0)
+        tracks = tracker.update([_det(190, 100, 230, 200)], FRAME, fps=10.0)
+        (t,) = [x for x in tracks if x.track_id == 1]
+        assert t.state == TrackState.CONFIRMED
+        assert t.velocity[0] < 25.0, f"re-acquire velocity spike: vx={t.velocity[0]}"
+        assert t.velocity[0] > 0.0
+
+
 class TestTrackerCreationFps:
     """The BoxMOT tracker is created lazily on the FIRST frame — when the ingest
     fps is still ~0 (frame intervals not yet timed).  A degenerate creation fps

@@ -378,6 +378,20 @@ class _TrackRecord:
     prev_cy: float = 0.0
     last_bbox: BBox | None = None
     last_conf: float = 0.0
+    # EMA-smoothed velocity (px/frame).  ~3-frame effective window so a single
+    # noisy detection can't dominate; this is what a LOST track coasts along.
+    vx: float = 0.0
+    vy: float = 0.0
+
+
+# Coast tuning.  Upstream ByteTrack/BoT-SORT Kalman-predict lost tracks with the
+# positional velocity intact; freezing the box and zeroing velocity (the old
+# behaviour here) meant the controller aimed at where the subject USED to be and
+# the first re-detection reported the whole occlusion gap as one frame of motion.
+# Damping bounds the drift when the guess is wrong (subject stopped behind the
+# occluder): total extra travel is ≈ half a second of pre-loss motion.
+_VELOCITY_SMOOTH_ALPHA = 0.5  # EMA weight of the newest per-frame velocity sample
+_COAST_VELOCITY_DECAY_PER_S = 0.1  # coast velocity decays to 10% after 1 s lost
 
 
 # ── Tracker ───────────────────────────────────────────────────────────────────
@@ -425,6 +439,8 @@ class Tracker:
         self._records: dict[int, _TrackRecord] = {}
         # Tracks currently in LOST state: id → (last_bbox, last_conf, frames_lost)
         self._lost: dict[int, _TrackRecord] = {}
+        # (H, W) of the last processed frame — bounds for coasted track centres.
+        self._frame_hw: tuple[int, int] | None = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -446,6 +462,9 @@ class Tracker:
         """
         self._fps = fps
         self._coast_max_frames = max(1, int(self._coast_window * fps))
+        # Frame bounds for clamping coasted (LOST) track centres.
+        if frame is not None and frame.size > 0:
+            self._frame_hw = (int(frame.shape[0]), int(frame.shape[1]))
 
         # Lazy init now that fps is known.  At startup fps is unmeasured (~0/1), so
         # floor it to a sane default for the tracker's frozen lost-track survival
@@ -519,11 +538,13 @@ class Tracker:
             bbox = BBox(x1=x1, y1=y1, x2=x2, y2=y2)
             seen_ids.add(tid)
 
+            reacquired = False
             if tid not in self._records:
                 # New track — may have been lost before (re-acquired)
                 if tid in self._lost:
                     rec = self._lost.pop(tid)
                     rec.frames_lost = 0
+                    reacquired = True
                 else:
                     # age=1: this is its first frame
                     rec = _TrackRecord(age=1, prev_cx=bbox.cx, prev_cy=bbox.cy)
@@ -535,6 +556,8 @@ class Tracker:
 
             vx = bbox.cx - rec.prev_cx
             vy = bbox.cy - rec.prev_cy
+            rec.vx = _VELOCITY_SMOOTH_ALPHA * vx + (1.0 - _VELOCITY_SMOOTH_ALPHA) * rec.vx
+            rec.vy = _VELOCITY_SMOOTH_ALPHA * vy + (1.0 - _VELOCITY_SMOOTH_ALPHA) * rec.vy
             rec.prev_cx = bbox.cx
             rec.prev_cy = bbox.cy
             rec.last_bbox = bbox
@@ -550,7 +573,10 @@ class Tracker:
                     state=state,
                     age=rec.age,
                     hits=rec.hits,
-                    velocity=(vx, vy),
+                    # On the re-acquire frame the instantaneous diff spans the whole
+                    # occlusion gap in one "frame" — report the smoothed estimate
+                    # instead so the PTZ feed-forward doesn't whip on re-detection.
+                    velocity=(rec.vx, rec.vy) if reacquired else (vx, vy),
                 )
             )
 
@@ -561,7 +587,9 @@ class Tracker:
             rec.frames_lost = 1
             self._lost[tid] = rec
 
-        # Advance coast counter; emit LOST tracks; prune REMOVED
+        # Advance coast counter; emit LOST tracks coasting along their damped
+        # pre-loss velocity; prune REMOVED.
+        decay = _COAST_VELOCITY_DECAY_PER_S ** (1.0 / max(1.0, self._fps))
         to_remove: list[int] = []
         for tid, rec in self._lost.items():
             if rec.frames_lost > self._coast_max_frames:
@@ -569,15 +597,33 @@ class Tracker:
                 continue
             rec.frames_lost += 1
             if rec.last_bbox is not None:
+                rec.vx *= decay
+                rec.vy *= decay
+                cx = rec.prev_cx + rec.vx
+                cy = rec.prev_cy + rec.vy
+                if self._frame_hw is not None:
+                    fh, fw = self._frame_hw
+                    cx = min(max(cx, 0.0), float(fw))
+                    cy = min(max(cy, 0.0), float(fh))
+                half_w = (rec.last_bbox.x2 - rec.last_bbox.x1) / 2.0
+                half_h = (rec.last_bbox.y2 - rec.last_bbox.y1) / 2.0
+                coasted = BBox(x1=cx - half_w, y1=cy - half_h, x2=cx + half_w, y2=cy + half_h)
+                # Track the coasted position so a re-detection computes its velocity
+                # against where the coast predicted the subject to be — not against
+                # the (stale) loss point — and so the next coast frame builds on
+                # this one.
+                rec.prev_cx = cx
+                rec.prev_cy = cy
+                rec.last_bbox = coasted
                 tracks_out.append(
                     Track(
                         track_id=tid,
-                        bbox=rec.last_bbox,
+                        bbox=coasted,
                         conf=rec.last_conf,
                         state=TrackState.LOST,
                         age=rec.age,
                         hits=rec.hits,
-                        velocity=(0.0, 0.0),
+                        velocity=(rec.vx, rec.vy),
                     )
                 )
 

@@ -49,3 +49,6 @@ htmlcov/
 # Superpowers planning docs / scratch — kept on disk, not tracked
 docs/superpowers/
 .superpowers/
+
+# Fable audit workspace — kept on disk, not tracked
+/fable/
