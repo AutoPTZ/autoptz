@@ -9,8 +9,10 @@ the ultralytics export, and NEVER raises — it returns ``None``
 
 from __future__ import annotations
 
+import hashlib
 import sys
 import types
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -412,6 +414,9 @@ def test_prebuilt_download_is_preferred_over_export(tmp_path, monkeypatch) -> No
     payload = b"\x00" * (300 * 1024)  # > _MIN_ONNX_BYTES (256 KiB)
 
     def fake_urlopen(url, *a, **k):
+        if url.endswith("/SHA256SUMS"):
+            # No manifest published for this release — legacy path, proceeds.
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
         assert url == "https://example.test/yolo11n.onnx"
         return _FakeHTTPResponse(payload)
 
@@ -534,6 +539,179 @@ def test_prebuilt_download_loadable_by_person_detector(tmp_path, monkeypatch) ->
 
 
 # ── cache dir resolution ──────────────────────────────────────────────────────
+
+
+# ── SHA-256 manifest verification (prebuilt downloads) ────────────────────────
+
+
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _make_urlopen(*, model_url: str, model_payload: bytes, manifest: str | None):
+    """Return a fake ``urlopen`` serving *model_url* and a sibling ``SHA256SUMS``.
+
+    ``manifest=None`` simulates a 404 (no checksum manifest published for this
+    release yet); any other string is served verbatim for the ``SHA256SUMS``
+    URL derived from *model_url*'s directory.
+    """
+    manifest_url = model_url.rsplit("/", 1)[0] + "/SHA256SUMS"
+
+    def fake_urlopen(url, *a, **k):
+        if url == model_url:
+            return _FakeHTTPResponse(model_payload)
+        if url == manifest_url:
+            if manifest is None:
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+            return _FakeHTTPResponse(manifest.encode("utf-8"))
+        raise AssertionError(f"unexpected URL: {url}")
+
+    return fake_urlopen
+
+
+def test_prebuilt_download_good_checksum_is_kept(tmp_path, monkeypatch, caplog) -> None:
+    """(a) Manifest present + entry matches → file is verified and kept."""
+    monkeypatch.delenv("AUTOPTZ_MODEL_PATH", raising=False)
+    model_url = "https://example.test/yolo11n.onnx"
+    monkeypatch.setenv("AUTOPTZ_MODEL_URL", model_url)
+    monkeypatch.setitem(sys.modules, "ultralytics", None)
+
+    payload = b"\x00" * (300 * 1024)
+    manifest = f"{_sha256_hex(payload)}  yolo11n.onnx\n"
+    fake_urlopen = _make_urlopen(model_url=model_url, model_payload=payload, manifest=manifest)
+
+    cache = tmp_path / "cache"
+    with patch("autoptz.engine.runtime.models.urllib.request.urlopen", fake_urlopen):
+        with caplog.at_level("DEBUG"):
+            mgr = ModelManager(cache_dir=cache)
+            result = mgr.ensure_detector()
+
+    onnx = cache / "yolo11n.onnx"
+    assert result == str(onnx)
+    assert onnx.is_file()
+    assert onnx.read_bytes() == payload
+
+
+def test_prebuilt_download_bad_checksum_is_deleted_and_errors(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """(b) Manifest present + mismatch → file deleted, ERROR logged, no fallback machinery."""
+    monkeypatch.delenv("AUTOPTZ_MODEL_PATH", raising=False)
+    model_url = "https://example.test/yolo11n.onnx"
+    monkeypatch.setenv("AUTOPTZ_MODEL_URL", model_url)
+    # No ultralytics → if the code fell back to export, it would return None too,
+    # so also assert the tmp/final file never lingers to prove the delete path ran.
+    monkeypatch.setitem(sys.modules, "ultralytics", None)
+
+    payload = b"\x00" * (300 * 1024)
+    wrong_hash = "0" * 64
+    manifest = f"{wrong_hash}  yolo11n.onnx\n"
+    fake_urlopen = _make_urlopen(model_url=model_url, model_payload=payload, manifest=manifest)
+
+    cache = tmp_path / "cache"
+    with patch("autoptz.engine.runtime.models.urllib.request.urlopen", fake_urlopen):
+        with caplog.at_level("ERROR"):
+            mgr = ModelManager(cache_dir=cache)
+            result = mgr.ensure_detector()
+
+    onnx = cache / "yolo11n.onnx"
+    assert result is None
+    assert not onnx.exists()
+    assert not any(p.suffix == ".part" for p in cache.glob("*.part"))
+    assert any(
+        "SHA-256" in rec.message or "checksum" in rec.message.lower() for rec in caplog.records
+    )
+
+
+def test_prebuilt_download_missing_manifest_warns_and_keeps_file(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """(c) Manifest missing (404) → WARNING logged, file kept (legacy release)."""
+    monkeypatch.delenv("AUTOPTZ_MODEL_PATH", raising=False)
+    model_url = "https://example.test/yolo11n.onnx"
+    monkeypatch.setenv("AUTOPTZ_MODEL_URL", model_url)
+    monkeypatch.setitem(sys.modules, "ultralytics", None)
+
+    payload = b"\x00" * (300 * 1024)
+    fake_urlopen = _make_urlopen(model_url=model_url, model_payload=payload, manifest=None)
+
+    cache = tmp_path / "cache"
+    with patch("autoptz.engine.runtime.models.urllib.request.urlopen", fake_urlopen):
+        with caplog.at_level("WARNING"):
+            mgr = ModelManager(cache_dir=cache)
+            result = mgr.ensure_detector()
+
+    onnx = cache / "yolo11n.onnx"
+    assert result == str(onnx)
+    assert onnx.is_file()
+    assert onnx.read_bytes() == payload
+    assert any(
+        "legacy release" in rec.message.lower() or "no checksum" in rec.message.lower()
+        for rec in caplog.records
+        if rec.levelname == "WARNING"
+    )
+
+
+def test_prebuilt_download_entry_absent_warns_and_keeps_file(tmp_path, monkeypatch, caplog) -> None:
+    """(d) Manifest present but has no entry for this file → WARNING, file kept."""
+    monkeypatch.delenv("AUTOPTZ_MODEL_PATH", raising=False)
+    model_url = "https://example.test/yolo11n.onnx"
+    monkeypatch.setenv("AUTOPTZ_MODEL_URL", model_url)
+    monkeypatch.setitem(sys.modules, "ultralytics", None)
+
+    payload = b"\x00" * (300 * 1024)
+    # Manifest published, but only lists an unrelated file.
+    manifest = f"{_sha256_hex(b'other')}  yolo11s.onnx\n"
+    fake_urlopen = _make_urlopen(model_url=model_url, model_payload=payload, manifest=manifest)
+
+    cache = tmp_path / "cache"
+    with patch("autoptz.engine.runtime.models.urllib.request.urlopen", fake_urlopen):
+        with caplog.at_level("WARNING"):
+            mgr = ModelManager(cache_dir=cache)
+            result = mgr.ensure_detector()
+
+    onnx = cache / "yolo11n.onnx"
+    assert result == str(onnx)
+    assert onnx.is_file()
+    assert onnx.read_bytes() == payload
+    assert any(rec.levelname == "WARNING" for rec in caplog.records)
+
+
+def test_fetch_models_tool_path_verifies_checksum(tmp_path, monkeypatch) -> None:
+    """(e) tools/fetch_models.py's ModelManager.ensure_app_models exercises the
+    same checksum helper — a bad checksum must not leave a bad file cached even
+    when driven through the CLI's entry point (ensure_app_models -> ensure_detector
+    -> ensure_pose, all routed through ModelManager._download_prebuilt).
+    """
+    monkeypatch.delenv("AUTOPTZ_MODEL_PATH", raising=False)
+    monkeypatch.delenv("AUTOPTZ_POSE_MODEL_PATH", raising=False)
+    monkeypatch.setenv("AUTOPTZ_MODEL_URL", "https://example.test/{stem}.onnx")
+    monkeypatch.setitem(sys.modules, "ultralytics", None)
+
+    payload = b"\x00" * (300 * 1024)
+    good_hash = _sha256_hex(payload)
+
+    def fake_urlopen(url, *a, **k):
+        if url.endswith("/SHA256SUMS"):
+            # Only yolo11n (fast tier) gets a correct entry; everything else is
+            # either wrong or absent, to prove each is verified independently.
+            manifest = f"{good_hash}  yolo11n.onnx\n{'0' * 64}  yolo11s.onnx\n"
+            return _FakeHTTPResponse(manifest.encode("utf-8"))
+        return _FakeHTTPResponse(payload)
+
+    cache = tmp_path / "cache"
+    with patch("autoptz.engine.runtime.models.urllib.request.urlopen", fake_urlopen):
+        mgr = ModelManager(cache_dir=cache)
+        rows = mgr.ensure_app_models(
+            keys=["detector_fast", "detector_balanced"], include_pose=False
+        )
+
+    by_key = {r["key"]: r for r in rows}
+    assert by_key["detector_fast"]["state"] == "ok"
+    assert (cache / "yolo11n.onnx").is_file()
+    # yolo11s.onnx had a checksum mismatch and no ultralytics fallback → failed.
+    assert by_key["detector_balanced"]["state"] == "failed"
+    assert not (cache / "yolo11s.onnx").exists()
 
 
 def test_default_cache_dir_is_under_appdata_models() -> None:

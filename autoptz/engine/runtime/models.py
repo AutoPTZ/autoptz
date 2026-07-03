@@ -31,10 +31,12 @@ export bug; see ``detect.py``).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -136,6 +138,16 @@ _DOWNLOAD_CHUNK = 1 << 16
 # error page / truncated file as a "model".
 _MIN_ONNX_BYTES = 1 << 18  # 256 KiB
 
+# Chunk size (bytes) used to hash a downloaded model without loading it whole
+# into memory.  Mirrors autoptz.update.installer.verify_sha256's approach —
+# copied rather than imported so the engine never depends on the updater
+# package (see module docstring / layering).
+_HASH_CHUNK_SIZE = 1024 * 1024
+
+# Name of the checksum manifest published next to prebuilt model assets, in
+# the same release/directory as the ``.onnx`` files themselves.
+_CHECKSUM_MANIFEST_NAME = "SHA256SUMS"
+
 # Export knobs that match what detect.py expects (see module docstring).
 _EXPORT_KWARGS = {"format": "onnx", "nms": False, "dynamic": False, "opset": 12}
 _DISABLE_EXPORT_ENV = "AUTOPTZ_NO_MODEL_EXPORT"
@@ -233,6 +245,60 @@ def bundled_models_dir() -> Path:
     download / ultralytics export still provision models on demand.
     """
     return Path(__file__).resolve().parents[2] / "models"
+
+
+def _sha256_of(path: Path) -> str:
+    """Return the lower-case hex SHA-256 digest of *path*, read in chunks.
+
+    Mirrors ``autoptz.update.installer.verify_sha256``'s chunked-hashing
+    approach (see module docstring); duplicated locally so the engine never
+    imports the updater package.
+    """
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(_HASH_CHUNK_SIZE)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest().lower()
+
+
+def _manifest_url_for(model_url: str) -> str:
+    """Return the ``SHA256SUMS`` manifest URL published next to *model_url*.
+
+    The manifest is expected in the same "directory" as the model asset —
+    i.e. the same base URL with the filename replaced.
+    """
+    base, _, _name = model_url.rpartition("/")
+    if not base:
+        return ""
+    return f"{base}/{_CHECKSUM_MANIFEST_NAME}"
+
+
+def _parse_sha256sums_manifest(content: str, filename: str) -> str | None:
+    """Extract the hex digest for *filename* from ``SHA256SUMS``-style *content*.
+
+    Expects the standard ``<hex>  <filename>`` (or single-space) format used by
+    ``sha256sum``.  Parses defensively: blank lines, extra whitespace, and a
+    leading ``*`` (binary-mode marker) are tolerated.  Returns ``None`` if the
+    file has no entry for *filename*.
+    """
+    target = filename.strip().lower()
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        digest, name = parts
+        name = name.strip().lstrip("*").strip().lower()
+        # Tolerate a manifest that lists paths ("models/yolo11n.onnx").
+        basename = name.replace("\\", "/").rsplit("/", 1)[-1]
+        if name == target or basename == target:
+            return digest.strip().lower()
+    return None
 
 
 class ModelManager:
@@ -671,6 +737,9 @@ class ModelManager:
                 )
                 return None
 
+            if not self._verify_checksum(tmp_path, url, onnx_path.name):
+                return None
+
             _replace_with_retry(tmp_path, onnx_path)
             log.info(
                 "Model ONNX ready at %s (%.1f MB, prebuilt, torch-free)",
@@ -690,6 +759,74 @@ class ModelManager:
                     tmp_path.unlink()
             except Exception:  # noqa: BLE001
                 log.debug("Could not remove temp download %s", tmp_path, exc_info=True)
+
+    def _verify_checksum(self, tmp_path: Path, model_url: str, asset_name: str) -> bool:
+        """Verify *tmp_path* against the release's ``SHA256SUMS`` manifest.
+
+        Fetched once per download from the same base URL as the model asset
+        itself.  Three outcomes:
+
+        - Manifest unreachable (404/network error) or parses to no entry for
+          *asset_name*: log a ``WARNING`` ("legacy release without
+          checksums") and return ``True`` (proceed) — hard-failing on a
+          missing manifest is deliberately deferred (see module docstring).
+        - Entry present and the digest matches: log ``DEBUG``/``INFO`` and
+          return ``True``.
+        - Entry present and the digest does NOT match: delete *tmp_path*, log
+          an ``ERROR``, and return ``False`` so the caller treats this as a
+          failed download (existing fallback machinery applies — no new
+          machinery is introduced here).
+        """
+        manifest_url = _manifest_url_for(model_url)
+        if not manifest_url:
+            log.warning(
+                "Could not derive a SHA256SUMS manifest URL from %s; "
+                "skipping integrity check for %s (legacy release without checksums).",
+                model_url,
+                asset_name,
+            )
+            return True
+
+        try:
+            with urllib.request.urlopen(manifest_url) as resp:  # noqa: S310
+                manifest_text = resp.read().decode("utf-8", errors="replace")
+        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            log.warning(
+                "No SHA256SUMS manifest found at %s (%s) — proceeding without "
+                "integrity verification for %s (legacy release without checksums).",
+                manifest_url,
+                exc,
+                asset_name,
+            )
+            return True
+
+        expected = _parse_sha256sums_manifest(manifest_text, asset_name)
+        if expected is None:
+            log.warning(
+                "SHA256SUMS manifest at %s has no entry for %s — proceeding without "
+                "integrity verification (legacy release without checksums).",
+                manifest_url,
+                asset_name,
+            )
+            return True
+
+        actual = _sha256_of(tmp_path)
+        if actual != expected:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                log.debug("Could not remove mismatched download %s", tmp_path, exc_info=True)
+            log.error(
+                "SHA-256 mismatch for %s: expected %s, got %s — download deleted, "
+                "not using this file.",
+                asset_name,
+                expected,
+                actual,
+            )
+            return False
+
+        log.info("SHA-256 verified for %s", asset_name)
+        return True
 
     def _download_and_export(self, model_pt: str, onnx_path: Path) -> str | None:
         """Download the ultralytics ``.pt`` and export it to *onnx_path*.
