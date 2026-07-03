@@ -102,6 +102,84 @@ def _tracking_status(rec: Any) -> dict[str, Any]:
         return {}
 
 
+def _quality_state(rec: Any) -> dict[str, Any]:
+    try:
+        return rec.quality_state_as_dict()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+# Engine ``tracking_status.state`` values → the state-chip vocabulary from the
+# transparency spec (idle/searching/locked/ambiguous/coasting/lost). The engine
+# emits a few extra operator-facing states ("manual", "degraded", "standby")
+# that don't have a dedicated chip color; they fold onto the nearest chip
+# semantics below so the chip never shows a blank/unknown color.
+_STATE_CHIP_COLOR_KEY = {
+    "locked": "locked",
+    "coasting": "coasting",
+    "searching": "searching",
+    "ambiguous": "ambiguous",
+    # "Standing by for reacquire" is the terminal give-up state once the coast
+    # window has elapsed with no match — the operator-facing equivalent of
+    # "lost".
+    "standby": "lost",
+    # Auto tracking is paused (manual override) or degraded (inference stall):
+    # neither is "idle", but neither is a normal tracking state either — treat
+    # as the same visual weight as coasting (amber, "something needs attention").
+    "manual": "coasting",
+    "degraded": "coasting",
+}
+
+_STATE_CHIP_TEXT = {
+    "locked": "LOCKED",
+    "coasting": "COASTING",
+    "searching": "SEARCHING",
+    "ambiguous": "AMBIGUOUS",
+    "lost": "LOST",
+}
+
+
+def _state_chip_info(rec: Any) -> dict[str, Any]:
+    """Resolve the tile's tracking-state chip: ``{visible, text, color_key}``.
+
+    Hidden whenever tracking isn't enabled for this camera (nothing to show)
+    or the engine reports "idle" (no target set yet) — matching the project
+    rule that chips are unconditional truth, not a toggleable feature.
+    """
+    hidden = {"visible": False, "text": "", "color_key": "idle"}
+    if not _tracking_enabled(rec):
+        return hidden
+    status = _tracking_status(rec)
+    state = str(status.get("state", "") or "")
+    if not state or state == "idle":
+        return hidden
+    color_key = _STATE_CHIP_COLOR_KEY.get(state, "searching")
+    text = _STATE_CHIP_TEXT.get(color_key, color_key.upper())
+    return {"visible": True, "text": text, "color_key": color_key}
+
+
+def _degradation_chip_info(rec: Any) -> dict[str, Any]:
+    """Resolve the tile's quality-degradation chip: ``{visible, text, tooltip}``.
+
+    Visible only once the effective detector cadence has actually stretched
+    past the configured value (the auto quality ladder engaged); hidden at the
+    configured cadence so the chip never claims a degradation that isn't real.
+    """
+    hidden = {"visible": False, "text": "", "tooltip": ""}
+    q = _quality_state(rec)
+    configured = int(q.get("configured_interval", 1) or 1)
+    effective = int(q.get("detect_interval", configured) or configured)
+    if configured <= 0 or effective <= configured:
+        return hidden
+    # Round down to the nearest whole multiplier (matches the ladder's ×2/×4 steps).
+    multiplier = max(2, effective // configured)
+    return {
+        "visible": True,
+        "text": f"×{multiplier}",
+        "tooltip": str(q.get("reason", "") or ""),
+    }
+
+
 def _ignore_arms(rec: Any) -> bool:
     """True when the camera's aim body mode ignores arms ("torso")."""
     try:

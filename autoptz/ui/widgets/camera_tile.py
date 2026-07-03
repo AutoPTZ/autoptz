@@ -49,6 +49,7 @@ from autoptz.ui.widgets.common import HelpBadge, animate_widget_visibility, on_t
 from autoptz.ui.widgets.tile_helpers import (  # re-exported for back-compat
     _connect,
     _context_menu_action_labels,  # noqa: F401  re-exported for tests
+    _degradation_chip_info,
     _faces,
     _format_target_button_label,
     _head_bbox,
@@ -58,6 +59,7 @@ from autoptz.ui.widgets.tile_helpers import (  # re-exported for back-compat
     _rect_close,
     _rect_jump,
     _select_enrollment_face_bbox,
+    _state_chip_info,
     _tracking_enabled,
     _tracking_status,
     _tracks,
@@ -576,6 +578,13 @@ class CameraTile(QWidget):
             self._paint_tracks(p, rec)
             self._paint_name_pill(p, rec)
             self._paint_fps_chip(p, rec)
+            # Resolved once and shared: the degradation chip's x-position depends
+            # on whether the state chip drew (same row), so it needs this result
+            # too — computing it twice per paint would double the (cheap but
+            # unnecessary) dict-building work in ``_state_chip_info``.
+            state_info = _state_chip_info(rec)
+            self._paint_state_chip(p, state_info)
+            self._paint_degradation_chip(p, rec, state_chip_visible=bool(state_info.get("visible")))
             self._paint_banner(p, rec, streaming)
 
         # Selection glow is separate from tracking; tracking is shown on the target marker.
@@ -1163,6 +1172,79 @@ class CameraTile(QWidget):
         p.drawRoundedRect(rect, 5, 5)
         p.setPen(color)
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+
+    # Tracking-state chip colors, keyed by the ``color_key`` that
+    # ``_state_chip_info`` resolves engine states onto (project transparency
+    # rule: auto/degraded behavior must be visible, not silently hidden).
+    _STATE_CHIP_QCOLOR = {
+        "locked": "TRACKING",
+        "coasting": "WARNING",
+        "searching": "LOST",
+        "ambiguous": "LOST",
+        "lost": "ERROR",
+    }
+
+    def _paint_state_chip(self, p: QPainter, info: dict[str, Any]) -> None:
+        """Small colored chip showing the live tracking state (name-pill row).
+
+        Same scrim-pill treatment as ``_paint_fps_chip``/``_paint_name_pill``:
+        no per-frame allocation beyond the QColor/QFont/QRectF Qt itself needs
+        to paint text, matching the rest of the HUD. Chip is display-only —
+        no config, no interaction — it reflects ``tracking_status.state``
+        exactly as the engine reports it (project rule: configured→effective,
+        never silently hidden). ``info`` is the pre-resolved
+        ``_state_chip_info(rec)`` result (shared with ``_paint_degradation_chip``
+        for its same-row positioning, so it's resolved once in ``paintEvent``).
+        """
+        if not info.get("visible"):
+            return
+        text = str(info.get("text", ""))
+        color_attr = self._STATE_CHIP_QCOLOR.get(str(info.get("color_key")), "TRACKING")
+        color = QColor(getattr(T, color_attr))
+        f = QFont(self.font())
+        f.setPixelSize(10)
+        f.setBold(True)
+        p.setFont(f)
+        fm = QFontMetrics(f)
+        tw = fm.horizontalAdvance(text)
+        # Sits directly below the name pill, left-aligned to match its x origin.
+        rect = QRectF(8, 35, tw + 16, 20)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(T.VIDEO_SCRIM)
+        p.drawRoundedRect(rect, 5, 5)
+        p.setPen(color)
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+
+    def _paint_degradation_chip(
+        self, p: QPainter, rec: Any, *, state_chip_visible: bool = False
+    ) -> None:
+        """Small ``×2``/``×4`` chip when the auto quality ladder has relaxed the
+        detector cadence below what's configured (transparency for the "auto
+        scales but stays visible" rule) — hidden at the configured cadence.
+        """
+        info = _degradation_chip_info(rec)
+        if not info.get("visible"):
+            return
+        text = str(info.get("text", ""))
+        f = QFont(self.font())
+        f.setPixelSize(10)
+        f.setBold(True)
+        p.setFont(f)
+        fm = QFontMetrics(f)
+        tw = fm.horizontalAdvance(text)
+        # Sits to the right of the state chip, same row.
+        x = 8 + (fm.horizontalAdvance("COASTING") + 16 + 6) if state_chip_visible else 8
+        rect = QRectF(x, 35, tw + 16, 20)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(T.VIDEO_SCRIM)
+        p.drawRoundedRect(rect, 5, 5)
+        p.setPen(QColor(T.WARNING))
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        tip = str(info.get("tooltip", ""))
+        if tip and self.toolTip() != tip:
+            # Reuse the widget tooltip as the "detail carrying the reason" the
+            # brief asks for; cheap to set only when it actually changes.
+            self.setToolTip(tip)
 
     def _paint_banner(self, p: QPainter, rec: Any, streaming: bool) -> None:
         health = str(getattr(rec, "health", "ok"))

@@ -426,6 +426,38 @@ class CameraRecord:
             "severity": s.severity,
         }
 
+    def quality_state_as_dict(self) -> dict[str, Any]:
+        """Effective adaptive-quality state, plus the *configured* baseline.
+
+        ``configured_interval`` comes from this camera's saved config (not
+        telemetry) so the UI can compare "what was asked for" against
+        ``detect_interval`` ("what the engine is actually doing") without a
+        second round trip. Falls back to ``detect_interval`` itself (ratio 1)
+        when no config snapshot is available yet, so degradation never appears
+        to be engaged before a config is loaded.
+        """
+        base = 1
+        try:
+            base = max(1, int(self.camera_config.tracking.detect_interval))
+        except Exception:  # noqa: BLE001
+            base = 1
+        if not self.telemetry:
+            return {
+                "floor": "auto",
+                "active": "auto",
+                "reason": "",
+                "detect_interval": base,
+                "configured_interval": base,
+            }
+        q = self.telemetry.quality_state
+        return {
+            "floor": q.floor,
+            "active": q.active,
+            "reason": q.reason,
+            "detect_interval": q.detect_interval,
+            "configured_interval": base,
+        }
+
     def presets_as_list(self) -> list[dict[str, Any]]:
         if not self.camera_config:
             return []

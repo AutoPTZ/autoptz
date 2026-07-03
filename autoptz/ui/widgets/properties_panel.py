@@ -479,6 +479,22 @@ class PropertiesPanel(QWidget):
         self._track_btn.toggled.connect(self._on_track_toggled)
         tr.add_widget(self._track_btn)
 
+        # Live tracking-state readout (R-6): what the engine is doing right now
+        # (locked/coasting/searching/ambiguous/...) and, separately, *why* the
+        # detector cadence is degraded when the quality ladder has engaged —
+        # same "configured→effective(reason)" transparency as the Detection
+        # section's ``_quality_effective``/``_detect_effective`` rows below.
+        self._track_state = QLabel("")
+        self._track_state.setWordWrap(True)
+        self._muted_captions.append(self._track_state)
+        self._track_state.setVisible(False)
+        tr.add_widget(self._track_state)
+        self._track_reason = QLabel("")
+        self._track_reason.setWordWrap(True)
+        self._muted_captions.append(self._track_reason)
+        self._track_reason.setVisible(False)
+        tr.add_widget(self._track_reason)
+
         tf = _form()
         self._target_combo = QComboBox()
         self._target_combo.setToolTip(
@@ -1324,7 +1340,42 @@ class PropertiesPanel(QWidget):
         """Per-tick UI refresh driven by ``telemetryUpdated``."""
         self._update_measured_fps()
         self._update_effective_detection()
+        self._update_tracking_state_row()
         self._sync_track_state()
+
+    def _update_tracking_state_row(self) -> None:
+        """Echo the live tracking state + degradation reason (R-6, text form).
+
+        Reuses the same record/telemetry lookup as
+        ``_update_effective_detection`` — no new refresh path, just two more
+        rows fed by the tick that's already firing.  Hidden when there's
+        nothing to say (idle / no telemetry yet), same convention as the
+        Detection section's effective-value rows.
+        """
+        if not self._camera_id:
+            return
+        rec = _safe(lambda: self._client.cameraModel.get_record(self._camera_id), None)
+        status = _safe(lambda: rec.tracking_status_as_dict(), {}) if rec is not None else {}
+        state = str(status.get("state", "") or "")
+        if state and state != "idle":
+            headline = str(status.get("headline", "") or "") or state.capitalize()
+            self._track_state.setText(f"State: {headline} ({state})")
+            self._track_state.setVisible(True)
+        else:
+            self._track_state.clear()
+            self._track_state.setVisible(False)
+
+        qs = _safe(lambda: rec.quality_state_as_dict(), {}) if rec is not None else {}
+        configured = int(qs.get("configured_interval", 1) or 1)
+        effective = int(qs.get("detect_interval", configured) or configured)
+        if configured > 0 and effective > configured:
+            multiplier = max(2, effective // configured)
+            reason = str(qs.get("reason", "") or "") or "Auto quality ladder engaged."
+            self._track_reason.setText(f"Degraded ×{multiplier}: {reason}")
+            self._track_reason.setVisible(True)
+        else:
+            self._track_reason.clear()
+            self._track_reason.setVisible(False)
 
     def _update_effective_detection(self) -> None:
         """Echo what the engine is *actually* doing next to the configured values.
