@@ -67,13 +67,24 @@ class InferenceClient:
     """
 
     def __init__(
-        self, camera_id: str, req_q: Any, resp_q: Any, shm_writer: Any, timeout_s: float = 5.0
+        self,
+        camera_id: str,
+        req_q: Any,
+        resp_q: Any,
+        shm_writer: Any,
+        timeout_s: float = 2.0,
+        server_down: Any = None,
     ) -> None:
         self._cam = camera_id
         self._req_q = req_q
         self._resp_q = resp_q
         self._shm = shm_writer
         self._timeout_s = timeout_s
+        # Supervisor-owned gate (multiprocessing.Event or equivalent — anything with
+        # ``is_set()``): set while the shared server is down/being restarted, so
+        # detect() fast-fails instead of blocking a whole timeout per frame during
+        # an outage. None (tests/no-recovery callers) → gate is always "up".
+        self._server_down = server_down
         self._seq = 0  # per-request id so a timed-out reply can't desync the next call
         # The response queue may be reused across a worker restart; drop any replies
         # left by a previous (crashed) run so they can't be matched to a fresh request.
@@ -88,6 +99,10 @@ class InferenceClient:
         return "model-server"
 
     def detect(self, frame: Any) -> Any:
+        if self._server_down is not None and self._server_down.is_set():
+            # Supervisor has flagged the server as down/being restarted — fail fast
+            # instead of waiting on a queue nothing is going to answer.
+            return []
         try:
             h, w = int(self._shm.height), int(self._shm.width)
             oh, ow = int(frame.shape[0]), int(frame.shape[1])
@@ -130,14 +145,40 @@ class InferenceClient:
 
 class RemotePool:
     """Pool-shaped wrapper so the worker's pooled detect-stack build uses the IPC
-    client as its detector (the tracker stays local per-camera)."""
+    client as its detector (the tracker stays local per-camera).
+
+    Degraded fallback (R-3): once the supervisor gives up trying to respawn a dead
+    model-server (``failed`` set), ``detector()`` stops handing back the (now
+    permanently useless) IPC client and instead lazily builds + caches a LOCAL
+    detector via ``build_local_fn``. This is the seam
+    ``CameraWorker.refresh_detector_from_pool()`` already re-invokes on command, so
+    the supervisor's only job on budget exhaustion is: set ``failed`` and ask every
+    model-server worker to refresh — no new IPC, no protocol change.
+    """
 
     detector_ep = "model-server"
 
-    def __init__(self, client: InferenceClient) -> None:
+    def __init__(
+        self,
+        client: InferenceClient,
+        *,
+        failed: Any = None,
+        build_local_fn: Any = None,
+    ) -> None:
         self._client = client
+        self._failed = failed
+        self._build_local_fn = build_local_fn
+        self._local: Any | None = None
 
-    def detector(self) -> InferenceClient:
+    def detector(self) -> Any:
+        if self._failed is not None and self._failed.is_set():
+            if self._local is None and self._build_local_fn is not None:
+                try:
+                    self._local = self._build_local_fn()
+                except Exception:  # noqa: BLE001 — local fallback must never crash the worker
+                    log.warning("model-server fallback: local detector build failed", exc_info=True)
+            if self._local is not None:
+                return self._local
         return self._client
 
 

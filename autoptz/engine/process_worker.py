@@ -213,6 +213,8 @@ def run_camera_process(
     identity_q: Any,
     infer_req_q: Any = None,
     infer_resp_q: Any = None,
+    infer_down_ev: Any = None,
+    infer_failed_ev: Any = None,
 ) -> None:
     """Child-process entrypoint: build + run a CameraWorker, driven by ``cmd_q``.
 
@@ -272,8 +274,26 @@ def run_camera_process(
             from autoptz.engine.runtime.shm import ShmWriter
 
             _infer_writer = ShmWriter(shm_name_for(spec.camera_id), SERVER_FRAME_H, SERVER_FRAME_W)
-            client = InferenceClient(spec.camera_id, infer_req_q, infer_resp_q, _infer_writer)
-            worker.set_inference_pool(RemotePool(client))
+            client = InferenceClient(
+                spec.camera_id, infer_req_q, infer_resp_q, _infer_writer, server_down=infer_down_ev
+            )
+
+            # Local-fallback factory (R-3): only used if the supervisor ever sets
+            # infer_failed_ev (model-server restart budget exhausted). Built lazily
+            # and cached by RemotePool so a healthy model-server never pays for it.
+            def _build_local_detector(_spec: WorkerSpec = spec) -> Any:
+                from autoptz.engine.pipeline.pool import build_inference_pool
+
+                pool = build_inference_pool(
+                    detector_tier=_spec.detector_tier,
+                    unified_pose=_spec.unified_pose,
+                    allow_model_download=False,
+                )
+                return pool.detector() if pool is not None else None
+
+            worker.set_inference_pool(
+                RemotePool(client, failed=infer_failed_ev, build_local_fn=_build_local_detector)
+            )
             worker._infer_shm_writer = _infer_writer  # keep the shm alive for the worker's life
         elif not spec.synthetic:
             _wire_models_and_identity(worker, spec)
@@ -392,6 +412,8 @@ class ProcessWorkerHandle:
         unified_pose: bool = False,
         infer_req_q: Any = None,
         infer_resp_q: Any = None,
+        infer_down_ev: Any = None,
+        infer_failed_ev: Any = None,
     ) -> None:
         self.camera_id = camera_id
         self.config = config
@@ -399,6 +421,13 @@ class ProcessWorkerHandle:
         # this camera's response queue. None → the child builds its own detector.
         self._infer_req_q = infer_req_q
         self._infer_resp_q = infer_resp_q
+        # R-3 crash recovery: shared gates set by the supervisor. ``infer_down_ev``
+        # makes the child's InferenceClient fast-fail while the server is being
+        # respawned; ``infer_failed_ev`` tells RemotePool to fall back to a local
+        # detector once the restart budget is exhausted. Both None → no recovery
+        # wiring (matches today's behavior).
+        self._infer_down_ev = infer_down_ev
+        self._infer_failed_ev = infer_failed_ev
         self.shm_name = f"cam_{camera_id[:8]}_preview"  # must match CameraWorker's
         self._on_telemetry = on_telemetry
         self._on_identity: Any | None = None
@@ -472,6 +501,8 @@ class ProcessWorkerHandle:
                 self._identity_q,
                 self._infer_req_q,
                 self._infer_resp_q,
+                self._infer_down_ev,
+                self._infer_failed_ev,
             ),
             name=f"camproc-{self.camera_id[:8]}",
             daemon=True,

@@ -686,6 +686,233 @@ class TestInferenceDeathDetection:
             sup.stop()
 
 
+class _FakeModelServerProc:
+    """Minimal fake for supervisor._model_server_proc with a settable is_alive()."""
+
+    def __init__(self, *_a, **_k) -> None:  # noqa: ANN002, ANN003
+        self._alive = True
+        self.start_calls = 0
+        self.terminate_calls = 0
+
+    def start(self) -> None:
+        self.start_calls += 1
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+        self._alive = False
+
+    def join(self, timeout: float = 0.0) -> None:  # noqa: ARG002
+        pass
+
+
+class _FakeEvent:
+    """Stand-in for ctx.Event() used by both the ready-handshake and the
+    stop/down/failed gates. The fake process never runs run_inference_server to
+    set "ready" for real, so wait() always reports ready instantly instead of
+    blocking the full 30s production timeout; set()/clear()/is_set() behave
+    normally so down-gate assertions still work."""
+
+    def __init__(self) -> None:
+        self._flag = False
+
+    def set(self) -> None:
+        self._flag = True
+
+    def clear(self) -> None:
+        self._flag = False
+
+    def is_set(self) -> bool:
+        return self._flag
+
+    def wait(self, timeout: float = 0.0) -> bool:  # noqa: ARG002
+        return True
+
+
+class _MsFakeProcessWorker(_HealthFakeWorker):
+    """Fake model-server-mode camera worker: flags itself as a process worker (like
+    ProcessWorkerHandle) and records refresh_detector_from_pool() calls so tests can
+    assert the supervisor invoked the local-fallback seam."""
+
+    _is_process_worker = True
+
+    def __init__(self, camera_id, config, on_telemetry) -> None:  # noqa: ANN001
+        super().__init__(camera_id, config, on_telemetry)
+        self.refresh_calls = 0
+
+    def refresh_detector_from_pool(self) -> None:
+        self.refresh_calls += 1
+
+
+class TestModelServerHealthScan:
+    """R-3: the supervisor's model-server respawn path mirrors the worker
+    auto-restart machinery (same backoff constants, same budget/cap shape) instead
+    of inventing a new mechanism."""
+
+    def _build_ms(self, qapp, monkeypatch):  # noqa: ANN001
+        """Supervisor in model-server mode with a fake process + one fake
+        process-worker camera, bypassing the real mp.Process spawn."""
+        import multiprocessing as mp
+
+        from autoptz.ui.engine_client import EngineClient
+
+        monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
+        client = EngineClient()
+        cid = client.addCamera("usb://0", "X")
+        client.drain_commands()
+
+        factory_log: list[_MsFakeProcessWorker] = []
+
+        def factory(camera_id, config, on_tel):  # noqa: ANN001
+            w = _MsFakeProcessWorker(camera_id, config, on_tel)
+            factory_log.append(w)
+            return w
+
+        sup = _make_sup_with_factory(client, factory)
+        sup._ensure_identity_service = lambda: None  # type: ignore[method-assign]
+        sup._ensure_inference_pool = lambda: None  # type: ignore[method-assign]
+
+        real_ctx = mp.get_context("spawn")
+        proc_log: list[_FakeModelServerProc] = []
+
+        class _FakeCtx:
+            Queue = staticmethod(real_ctx.Queue)
+            Event = staticmethod(_FakeEvent)
+
+            def Process(self, *_a, **_k):  # noqa: ANN002, ANN003, N802
+                p = _FakeModelServerProc()
+                proc_log.append(p)
+                return p
+
+        monkeypatch.setattr(mp, "get_context", lambda *_a, **_k: _FakeCtx())
+        # The fake process never actually serves, so don't block start() waiting
+        # for the real ready-event handshake.
+        monkeypatch.setattr(
+            "autoptz.engine.supervisor.Supervisor._ensure_model_server",
+            lambda self, camera_ids: _fake_ensure_model_server(self, camera_ids, proc_log),
+        )
+        sup.start()
+        return sup, client, factory_log, proc_log, cid
+
+    def test_dead_model_server_is_respawned(self, qapp, monkeypatch) -> None:
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            assert len(proc_log) == 1
+            proc_log[0]._alive = False
+            sup._scan_model_server_health(1000.0)
+            assert len(proc_log) == 2  # respawned
+            assert sup._model_server_proc is proc_log[1]
+        finally:
+            sup.stop()
+
+    def test_respawn_reuses_same_queues_no_reconstruction(self, qapp, monkeypatch) -> None:
+        """(d) Across a respawn the SAME request queue / response queues stay in
+        place — clients need no reconstruction, only the server process changes."""
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            req_q_before = sup._infer_req_q
+            resp_qs_before = sup._infer_resp_qs
+            proc_log[0]._alive = False
+            sup._scan_model_server_health(1000.0)
+            assert sup._infer_req_q is req_q_before
+            assert sup._infer_resp_qs is resp_qs_before
+        finally:
+            sup.stop()
+
+    def test_backoff_prevents_immediate_second_respawn(self, qapp, monkeypatch) -> None:
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            proc_log[0]._alive = False
+            now = 1000.0
+            sup._scan_model_server_health(now)
+            assert len(proc_log) == 2
+            proc_log[1]._alive = False
+            sup._scan_model_server_health(now + 0.1)  # still inside backoff window
+            assert len(proc_log) == 2
+        finally:
+            sup.stop()
+
+    def test_backoff_expires_and_allows_respawn(self, qapp, monkeypatch) -> None:
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            proc_log[0]._alive = False
+            now = 1000.0
+            sup._scan_model_server_health(now)
+            assert len(proc_log) == 2
+            proc_log[1]._alive = False
+            sup._scan_model_server_health(now + _BASE_BACKOFF_S + 0.1)
+            assert len(proc_log) == 3
+        finally:
+            sup.stop()
+
+    def test_budget_exhaustion_sets_failed_flag_and_triggers_worker_fallback(
+        self, qapp, monkeypatch
+    ) -> None:
+        """(c) After restart attempts are exhausted, model_server_failed() is True
+        and every model-server-mode worker's refresh_detector_from_pool() fires
+        (the seam that lets RemotePool swap in a local detector)."""
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            now = 1000.0
+            for _attempt in range(_MAX_RESTART_ATTEMPTS):
+                sup._model_server_proc._alive = False
+                now += _MAX_BACKOFF_S + 1.0
+                sup._scan_model_server_health(now)
+
+            assert sup.model_server_failed() is True
+            assert factory_log[0].refresh_calls == 1  # fired exactly once, at exhaustion
+        finally:
+            sup.stop()
+
+    def test_healthy_server_is_not_touched(self, qapp, monkeypatch) -> None:
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            sup._scan_model_server_health(1000.0)
+            assert len(proc_log) == 1  # no respawn
+            assert sup.model_server_failed() is False
+        finally:
+            sup.stop()
+
+    def test_not_enabled_is_a_noop(self, qapp, monkeypatch) -> None:
+        """With AUTOPTZ_MODEL_SERVER off, scanning must never try to touch a
+        model-server process that was never started."""
+        from autoptz.ui.engine_client import EngineClient
+
+        monkeypatch.delenv("AUTOPTZ_MODEL_SERVER", raising=False)
+        client = EngineClient()
+        sup = _make_sup_with_factory(client, lambda cid, cfg, tel: _HealthFakeWorker(cid, cfg, tel))
+        sup._ensure_identity_service = lambda: None  # type: ignore[method-assign]
+        sup._ensure_inference_pool = lambda: None  # type: ignore[method-assign]
+        sup._running = True
+        sup._scan_model_server_health(1000.0)  # must not raise
+        assert sup._model_server_proc is None
+        assert sup.model_server_failed() is False
+
+
+def _fake_ensure_model_server(sup, camera_ids, proc_log) -> None:  # noqa: ANN001
+    """Deterministic stand-in for Supervisor._ensure_model_server: builds the same
+    queue/event handles but skips the real ready-event wait (the fake process never
+    serves), so tests can drive _scan_model_server_health directly."""
+    import multiprocessing as mp
+
+    from autoptz.engine.runtime.flags import env_model_server
+
+    if not env_model_server() or sup._model_server_proc is not None:
+        return
+    ctx = mp.get_context("spawn")
+    sup._infer_req_q = ctx.Queue()
+    sup._infer_resp_qs = {cid: ctx.Queue() for cid in camera_ids}
+    sup._model_server_stop = ctx.Event()
+    sup._model_server_down = ctx.Event()
+    sup._model_server_failed_ev = ctx.Event()
+    sup._model_server_camera_ids = list(camera_ids)
+    sup._ms_restart_state = (0, 0.0, False)
+    sup._model_server_proc = ctx.Process()
+    sup._model_server_proc.start()
+
+
 class TestPermanentFailed:
     def test_failed_flag_and_accessor_set_at_cap(self, qapp, caplog) -> None:
         import logging

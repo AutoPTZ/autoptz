@@ -251,3 +251,187 @@ def test_server_survives_a_detector_exception() -> None:
         t.join(timeout=1.0)
         writer.close()
         reader.close()
+
+
+# ── R-3: model-server crash recovery ─────────────────────────────────────────
+
+
+def test_default_timeout_is_two_seconds() -> None:
+    """The client must fast-fail at 2.0s (not the old 5.0s) so a dead server does
+    not stall a camera's inference loop for 5 seconds on every single frame."""
+    import inspect
+
+    sig = inspect.signature(InferenceClient.__init__)
+    assert sig.parameters["timeout_s"].default == 2.0
+
+
+def test_server_down_gate_short_circuits_detect_without_waiting_on_queue() -> None:
+    """(b) While the supervisor has the server marked down, detect() must return []
+    IMMEDIATELY (well under timeout_s) instead of blocking on the (dead) response
+    queue — otherwise every camera crawls at timeout_s per frame during an outage.
+    """
+    import queue
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 32, 32)
+    server_down = threading.Event()
+    server_down.set()  # supervisor has flagged the server as down/being restarted
+    # No server thread running at all — if the gate didn't short-circuit, this would
+    # block for the full timeout waiting on an empty resp_q.
+    client = InferenceClient(
+        "camA", queue.Queue(), queue.Queue(), writer, timeout_s=5.0, server_down=server_down
+    )
+    t0 = time.monotonic()
+    assert client.detect(_frame(1, 32, 32)) == []
+    elapsed = time.monotonic() - t0
+    assert elapsed < 0.5, f"detect() blocked {elapsed:.2f}s despite the down-gate being set"
+    writer.close()
+
+
+def test_server_down_gate_clears_and_detect_resumes() -> None:
+    """Once the supervisor clears the down-gate (respawned server signalled ready),
+    detect() must go back to actually talking to the server instead of staying
+    latched in the fast-fail path."""
+    import queue
+
+    cam = "camA"
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 32, 32)
+    reader = ShmReader(name, 32, 32)
+    req_q: queue.Queue = queue.Queue()
+    resp_q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+    server_down = threading.Event()
+    server_down.set()
+
+    def detect_fn(frame):  # noqa: ANN001
+        return [("ok", int(frame[0, 0, 0]))]
+
+    t = threading.Thread(
+        target=serve, args=(req_q, {cam: resp_q}, {cam: reader}, detect_fn, stop), daemon=True
+    )
+    t.start()
+    try:
+        client = InferenceClient(cam, req_q, resp_q, writer, timeout_s=2.0, server_down=server_down)
+        assert client.detect(_frame(3, 32, 32)) == []  # gate set → fast-fail, no real call
+        server_down.clear()  # supervisor: respawned server is ready again
+        assert client.detect(_frame(3, 32, 32)) == [("ok", 3)]  # resumes real detection
+    finally:
+        stop.set()
+        t.join(timeout=1.0)
+        writer.close()
+        reader.close()
+
+
+def test_remote_pool_uses_client_while_server_is_healthy() -> None:
+    """RemotePool must not fall back to a local detector while the model-server
+    has not been declared permanently failed — the IPC client stays authoritative."""
+    import queue
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 16, 16)
+    client = InferenceClient("camA", queue.Queue(), queue.Queue(), writer)
+    built_local = []
+
+    def _build_local():
+        built_local.append(True)
+        return object()
+
+    pool = RemotePool(client, failed=threading.Event(), build_local_fn=_build_local)
+    assert pool.detector() is client
+    assert built_local == []
+    writer.close()
+
+
+def test_remote_pool_falls_back_to_local_detector_once_failed() -> None:
+    """(c) After the supervisor exhausts the model-server restart budget, it sets
+    the pool's failed flag. RemotePool.detector() must then hand back a LOCAL
+    detector (built via the injected factory) instead of the dead IPC client, so
+    ``worker.refresh_detector_from_pool()`` — which just re-calls ``pool.detector()``
+    — is enough to make detection resume in degraded (per-worker) mode.
+    """
+    import queue
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 16, 16)
+    client = InferenceClient("camA", queue.Queue(), queue.Queue(), writer)
+    local_detector = object()
+    calls = []
+
+    def _build_local():
+        calls.append(True)
+        return local_detector
+
+    failed = threading.Event()
+    pool = RemotePool(client, failed=failed, build_local_fn=_build_local)
+    assert pool.detector() is client  # healthy → still the IPC client
+
+    failed.set()  # supervisor: restart budget exhausted
+    assert pool.detector() is local_detector
+    assert len(calls) == 1
+
+    # Subsequent calls reuse the cached local detector, not rebuild it every time.
+    assert pool.detector() is local_detector
+    assert len(calls) == 1
+    writer.close()
+
+
+def test_respawned_server_reuses_same_queues_no_client_reconstruction() -> None:
+    """(a)+(d) Kill the server-side thread mid-run, "respawn" it (a fresh serve()
+    loop reusing the SAME req/resp queues and shm reader dict — exactly what the
+    supervisor does across a real process respawn), and prove the ORIGINAL client
+    resumes getting real detections with NO reconstruction. This pins that shm
+    re-attach is lazy per-request (serve()'s ``attach`` callback), so reusing the
+    same queues + a fresh reader dict is sufficient for recovery.
+    """
+    import queue
+
+    cam = "camA"
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 32, 32)
+    req_q: queue.Queue = queue.Queue()
+    resp_q: queue.Queue = queue.Queue()
+
+    def detect_fn(frame):  # noqa: ANN001
+        return [("ok", int(frame[0, 0, 0]))]
+
+    def attach(_c: str):  # noqa: ANN202
+        try:
+            return ShmReader(name, 32, 32)
+        except FileNotFoundError:
+            return None
+
+    stop1 = threading.Event()
+    t1 = threading.Thread(
+        target=serve,
+        args=(req_q, {cam: resp_q}, {}, detect_fn, stop1),
+        kwargs={"attach": attach},
+        daemon=True,
+    )
+    t1.start()
+    client = InferenceClient(cam, req_q, resp_q, writer, timeout_s=2.0)
+    try:
+        assert client.detect(_frame(4, 32, 32)) == [("ok", 4)]  # server #1 alive
+
+        # Kill server #1 ("the child process died").
+        stop1.set()
+        t1.join(timeout=1.0)
+
+        # Respawn: a brand-new serve() loop, SAME req_q/resp_q, fresh reader dict —
+        # mirrors the supervisor building a new Process with the queues it already
+        # held. No new InferenceClient is constructed.
+        stop2 = threading.Event()
+        t2 = threading.Thread(
+            target=serve,
+            args=(req_q, {cam: resp_q}, {}, detect_fn, stop2),
+            kwargs={"attach": attach},
+            daemon=True,
+        )
+        t2.start()
+        try:
+            assert client.detect(_frame(9, 32, 32)) == [("ok", 9)]  # resumed, same client
+        finally:
+            stop2.set()
+            t2.join(timeout=1.0)
+    finally:
+        writer.close()

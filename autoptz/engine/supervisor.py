@@ -165,6 +165,18 @@ class Supervisor:
         self._model_server_stop: Any | None = None
         self._infer_req_q: Any | None = None
         self._infer_resp_qs: dict[str, Any] = {}
+        # R-3 crash recovery. ``_model_server_down`` is set while the server is
+        # dead/being respawned so every camera's InferenceClient fast-fails instead
+        # of blocking a full timeout per frame; cleared once the respawned server
+        # signals ready. ``_model_server_failed_ev`` latches once the restart budget
+        # is exhausted — handed to RemotePool so it swaps in a local detector, and
+        # queryable via :meth:`model_server_failed`. ``_ms_restart_state`` mirrors
+        # the per-camera ``_restart_state`` shape (attempts, next_allowed_t, failed)
+        # for this single shared process, reusing the SAME backoff constants.
+        self._model_server_down: Any | None = None
+        self._model_server_failed_ev: Any | None = None
+        self._ms_restart_state: tuple[int, float, bool] = (0, 0.0, False)
+        self._model_server_camera_ids: list[str] = []
 
         # Global ML-subsystem switches (detection / tracking / face_recognition /
         # pose), broadcast via SetFeaturesCmd and applied to every worker.
@@ -309,6 +321,10 @@ class Supervisor:
         self._model_server_stop = None
         self._infer_req_q = None
         self._infer_resp_qs = {}
+        self._model_server_down = None
+        self._model_server_failed_ev = None
+        self._ms_restart_state = (0, 0.0, False)
+        self._model_server_camera_ids = []
         if proc is not None:
             try:
                 if stop_ev is not None:
@@ -499,6 +515,7 @@ class Supervisor:
         if now - self._last_health_scan_t >= _HEALTH_SCAN_INTERVAL_S:
             self._last_health_scan_t = now
             self._scan_worker_health(now)
+            self._scan_model_server_health(now)
         # Throttled (~1 Hz) system-CPU sample fanned out to every worker so the
         # per-camera governor can back off collectively when the machine is hot.
         if now - getattr(self, "_last_cpu_sample_t", 0.0) >= _CPU_SAMPLE_INTERVAL_S:
@@ -688,6 +705,121 @@ class Supervisor:
                 self._spawn_worker(cid)
             except Exception:  # noqa: BLE001
                 log.warning("camera_id=%s respawn failed", cid, exc_info=True)
+
+    def _scan_model_server_health(self, now: float) -> None:
+        """Respawn the shared model-server process if it died (model-server mode).
+
+        Mirrors :meth:`_scan_worker_health`'s backoff/budget shape exactly (same
+        constants, same exponential curve, same cap) rather than inventing a new
+        mechanism — there is just one "camera" here (the server process) instead of
+        one per real camera, so the state is a single tuple, not a dict.
+
+        On respawn: reuse the SAME ``_infer_req_q`` / ``_infer_resp_qs`` (shm re-
+        attach on the server side is already lazy per-request — see
+        :func:`autoptz.engine.pipeline.inference_server.serve`), holding
+        ``_model_server_down`` set for the duration so every camera's
+        ``InferenceClient`` fast-fails instead of blocking a timeout per frame.
+
+        On budget exhaustion: latch ``_model_server_failed_ev`` (queryable via
+        :meth:`model_server_failed`) and ask every model-server-mode worker to
+        ``refresh_detector_from_pool()`` — the seam ``RemotePool.detector()`` uses
+        to swap in a local detector — so detection continues in degraded mode.
+        """
+        from autoptz.engine.runtime.flags import env_model_server
+
+        if not env_model_server() or self._model_server_proc is None:
+            return
+
+        try:
+            alive = bool(self._model_server_proc.is_alive())
+        except Exception:  # noqa: BLE001
+            alive = False
+        if alive:
+            if self._ms_restart_state != (0, 0.0, False):
+                self._ms_restart_state = (0, 0.0, False)
+            return
+
+        attempts, next_allowed_t, _failed = self._ms_restart_state
+        if attempts >= _MAX_RESTART_ATTEMPTS:
+            return  # already gave up — the permanent-failure ERROR was logged once
+        if now < next_allowed_t:
+            return  # still in the back-off window
+
+        log.info(
+            "model-server process died — restarting (attempt %d/%d)",
+            attempts + 1,
+            _MAX_RESTART_ATTEMPTS,
+        )
+        new_attempts = attempts + 1
+        backoff = min(_MAX_BACKOFF_S, _BASE_BACKOFF_S * (2 ** (new_attempts - 1)))
+
+        if new_attempts >= _MAX_RESTART_ATTEMPTS:
+            self._ms_restart_state = (new_attempts, now + backoff, True)
+            log.error(
+                "model-server permanently failed: %d auto-restart attempts exhausted "
+                "— falling back to local per-camera detectors.",
+                new_attempts,
+            )
+            if self._model_server_failed_ev is not None:
+                self._model_server_failed_ev.set()
+            self._refresh_model_server_workers()
+            return
+
+        self._ms_restart_state = (new_attempts, now + backoff, False)
+        if self._model_server_down is not None:
+            self._model_server_down.set()
+        self._respawn_model_server()
+
+    def _respawn_model_server(self) -> None:
+        """Start a fresh server process reusing the existing queues, then clear the
+        down-gate once it signals ready (or on any failure, so cameras don't stay
+        latched fast-fail forever over a respawn that itself failed to start)."""
+        try:
+            import multiprocessing as mp
+
+            from autoptz.engine.pipeline.inference_server import run_inference_server
+
+            ctx = mp.get_context("spawn")
+            self._model_server_stop = ctx.Event()
+            ready = ctx.Event()
+            self._model_server_proc = ctx.Process(
+                target=run_inference_server,
+                args=(
+                    self._infer_req_q,
+                    self._infer_resp_qs,
+                    list(self._model_server_camera_ids),
+                    self._resolve_detector_tier(),
+                    self._any_unified_pose(),
+                    ready,
+                    self._model_server_stop,
+                ),
+                name="model-server",
+                daemon=True,
+            )
+            self._model_server_proc.start()
+            if not ready.wait(timeout=30.0):
+                log.warning("respawned model-server slow to accept requests.")
+        except Exception:  # noqa: BLE001 — respawn is best-effort; next scan retries
+            log.warning("model-server respawn failed", exc_info=True)
+        finally:
+            if self._model_server_down is not None:
+                self._model_server_down.clear()
+
+    def _refresh_model_server_workers(self) -> None:
+        """Ask every model-server-mode camera worker to re-pull its detector from
+        the pool — the seam RemotePool uses to swap in a local detector once the
+        supervisor has given up on the shared server."""
+        with self._lock:
+            workers = list(self._workers.values())
+        for worker in workers:
+            if not getattr(worker, "_is_process_worker", False):
+                continue
+            refresh = getattr(worker, "refresh_detector_from_pool", None)
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception:  # noqa: BLE001
+                    log.debug("model-server fallback refresh failed", exc_info=True)
 
     # ── command routing ─────────────────────────────────────────────────────────
 
@@ -986,6 +1118,16 @@ class Supervisor:
             self._inference_pool = None
         return self._inference_pool
 
+    def _resolve_detector_tier(self) -> str:
+        tier = "auto"
+        try:
+            getter = getattr(self._client, "getDetectorModelTier", None)
+            if callable(getter):
+                tier = str(getter() or "auto")
+        except Exception:  # noqa: BLE001
+            tier = "auto"
+        return tier
+
     def _ensure_model_server(self, camera_ids: list[str]) -> None:
         """Spawn the ONE shared model-server process (model-server mode only).
 
@@ -1008,14 +1150,12 @@ class Supervisor:
             self._infer_req_q = ctx.Queue()
             self._infer_resp_qs = {cid: ctx.Queue() for cid in camera_ids}
             self._model_server_stop = ctx.Event()
+            self._model_server_down = ctx.Event()
+            self._model_server_failed_ev = ctx.Event()
+            self._model_server_camera_ids = list(camera_ids)
+            self._ms_restart_state = (0, 0.0, False)
             ready = ctx.Event()
-            tier = "auto"
-            try:
-                getter = getattr(self._client, "getDetectorModelTier", None)
-                if callable(getter):
-                    tier = str(getter() or "auto")
-            except Exception:  # noqa: BLE001
-                tier = "auto"
+            tier = self._resolve_detector_tier()
             self._model_server_proc = ctx.Process(
                 target=run_inference_server,
                 args=(
@@ -1050,6 +1190,8 @@ class Supervisor:
             self._model_server_stop = None
             self._infer_req_q = None
             self._infer_resp_qs = {}
+            self._model_server_down = None
+            self._model_server_failed_ev = None
 
     def _apply_hardware_env(self, camera_count: int) -> None:
         """Publish global hardware prefs into the environment before workers start.
@@ -1236,13 +1378,7 @@ class Supervisor:
             )
             return self._worker_factory(camera_id, config, on_telemetry)
 
-        tier = "auto"
-        try:
-            getter = getattr(self._client, "getDetectorModelTier", None)
-            if callable(getter):
-                tier = str(getter() or "auto")
-        except Exception:  # noqa: BLE001
-            tier = "auto"
+        tier = self._resolve_detector_tier()
         db_path = ""
         try:
             db_path = str(getattr(self._store, "_path", "") or "")
@@ -1270,6 +1406,11 @@ class Supervisor:
             # response queue so it delegates detection instead of loading a detector.
             infer_req_q=self._infer_req_q,
             infer_resp_q=infer_resp_q,
+            # R-3 crash recovery gates (both None until the flag first spawns the
+            # server): fast-fail while down, fall back to a local detector once the
+            # restart budget is exhausted.
+            infer_down_ev=self._model_server_down,
+            infer_failed_ev=self._model_server_failed_ev,
         )
 
     def _spawn_worker(self, camera_id: str, *, defer_inference: bool = False) -> None:
@@ -1376,6 +1517,15 @@ class Supervisor:
     def failed_cameras(self) -> list[str]:
         """Camera ids that auto-restart has permanently given up on."""
         return [cid for cid, st in self._restart_state.items() if st[2]]
+
+    def model_server_failed(self) -> bool:
+        """True iff the shared model-server's restart budget is exhausted.
+
+        The UI can use this to surface "model server failed — using local
+        detectors"; workers have already been told to fall back (see
+        :meth:`_refresh_model_server_workers`) by the time this latches.
+        """
+        return bool(self._ms_restart_state[2])
 
     def _default_worker_factory(
         self,
