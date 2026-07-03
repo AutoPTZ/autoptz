@@ -535,8 +535,11 @@ class TestONVIFDiscovery:
         added = [e for e in events if e[0] == "added"]
         assert len(added) == 1
 
-    def test_wsdiscovery_unavailable_does_not_raise(self) -> None:
-        _remove_mock_wsdiscovery()
+    def test_wsdiscovery_unavailable_does_not_raise(self, monkeypatch) -> None:
+        # None in sys.modules makes `import wsdiscovery` raise ImportError even
+        # when the real package is installed — otherwise this test runs a live
+        # WS-Discovery scan and fails on any LAN with responsive devices.
+        monkeypatch.setitem(sys.modules, "wsdiscovery", None)
 
         discovery = ONVIFDiscovery(rescan_interval=0.05)
         discovery.start()
