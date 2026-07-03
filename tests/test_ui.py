@@ -329,29 +329,84 @@ class TestStateChips:
         return rec
 
     # (a) each tracking_state -> correct chip text/color -----------------------
-
+    #
+    # Pinned vocabulary: the full literal ``(state, action, severity)`` set
+    # emitted by ``_tracking_status_info`` (autoptz/engine/camera_worker.py).
+    # ``locked`` and ``standby`` each have two ``action`` flavors that must
+    # render differently even though ``state`` is identical:
+    #   - locked+tracking (severity=ok) is the only state that gets the green
+    #     "actively following" chip; locked+paused (severity=info) must NOT
+    #     read as active tracking (target picked, auto-tracking toggle off).
+    #   - standby+confirming fires on *every* fresh target pick (worker sets
+    #     ``_target_lock.status="pending"`` unconditionally in
+    #     ``_commit_target_track``) — this used to render red LOST, which
+    #     falsely alarmed on ordinary acquisition. standby+standby is the
+    #     terminal "gave up waiting to reacquire" fallback. Both are
+    #     severity=info and must render amber-at-most (neutral here), never red.
+    # Severity->color: ok->green ("locked"), warning->amber ("warning"),
+    # info->neutral/gray ("neutral"). Nothing in this table is red/"error" —
+    # the engine never emits severity="error" from this function.
     @pytest.mark.parametrize(
-        ("state", "color_key", "text"),
+        ("state", "action", "severity", "color_key", "text"),
         [
-            ("locked", "locked", "LOCKED"),
-            ("coasting", "coasting", "COASTING"),
-            ("searching", "searching", "SEARCHING"),
-            ("ambiguous", "ambiguous", "AMBIGUOUS"),
-            ("standby", "lost", "LOST"),
+            ("locked", "tracking", "ok", "locked", "LOCKED"),
+            ("locked", "paused", "info", "neutral", "SELECTED"),
+            ("coasting", "holding", "warning", "warning", "COASTING"),
+            ("searching", "zooming_out", "warning", "warning", "SEARCHING"),
+            ("ambiguous", "holding", "warning", "warning", "AMBIGUOUS"),
+            ("manual", "manual", "warning", "warning", "MANUAL"),
+            ("degraded", "holding", "warning", "warning", "DEGRADED"),
+            # Fresh target pick — the critical regression case (used to be red).
+            ("standby", "confirming", "info", "neutral", "STANDBY"),
+            # Coast window elapsed, waiting to reacquire.
+            ("standby", "standby", "info", "neutral", "STANDBY"),
         ],
     )
-    def test_state_chip_maps_each_tracking_state(self, qapp, state, color_key, text) -> None:
+    def test_state_chip_maps_each_tracking_state(
+        self, qapp, state, action, severity, color_key, text
+    ) -> None:
         from autoptz.engine.runtime.messages import TelemetryMsg, TrackingStatusInfo
         from autoptz.ui.widgets.tile_helpers import _state_chip_info
 
         rec = self._rec()
         rec.telemetry = TelemetryMsg(
-            camera_id="cam-1", seq=0, tracking_status=TrackingStatusInfo(state=state)
+            camera_id="cam-1",
+            seq=0,
+            tracking_status=TrackingStatusInfo(state=state, action=action, severity=severity),
         )
         info = _state_chip_info(rec)
         assert info["visible"] is True
         assert info["color_key"] == color_key
         assert info["text"] == text
+        # The mandatory non-alarming guard: nothing in the pinned vocabulary
+        # is ever "error"/red — the engine has no severity="error" state and
+        # no literal "lost" state (only an internal lock status that always
+        # folds onto one of the "standby" flavors above).
+        assert color_key != "error"
+
+    def test_unknown_future_state_falls_back_to_neutral_not_red(self, qapp) -> None:
+        """A state the engine might add later must never default to red/alarming.
+
+        ``_SEVERITY_COLOR_KEY`` only recognizes ok/warning/info; an
+        unrecognized severity (or a state string with no dedicated label)
+        must fail safe to the neutral color, matching the module's
+        back-compat/forward-compat contract.
+        """
+        from autoptz.engine.runtime.messages import TelemetryMsg, TrackingStatusInfo
+        from autoptz.ui.widgets.tile_helpers import _state_chip_info
+
+        rec = self._rec()
+        rec.telemetry = TelemetryMsg(
+            camera_id="cam-1",
+            seq=0,
+            tracking_status=TrackingStatusInfo(
+                state="some_future_state", action="", severity="some_future_severity"
+            ),
+        )
+        info = _state_chip_info(rec)
+        assert info["visible"] is True
+        assert info["color_key"] == "neutral"
+        assert info["text"] == "SOME_FUTURE_STATE"
 
     def test_state_chip_hidden_when_idle(self, qapp) -> None:
         from autoptz.engine.runtime.messages import TelemetryMsg, TrackingStatusInfo

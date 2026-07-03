@@ -57,6 +57,7 @@ from autoptz.ui.widgets.properties_helpers import (  # noqa: F401  re-exported
     _with_chip,
     _wrap,
 )
+from autoptz.ui.widgets.tile_helpers import quality_multiplier
 
 log = logging.getLogger(__name__)
 
@@ -1369,7 +1370,7 @@ class PropertiesPanel(QWidget):
         configured = int(qs.get("configured_interval", 1) or 1)
         effective = int(qs.get("detect_interval", configured) or configured)
         if configured > 0 and effective > configured:
-            multiplier = max(2, effective // configured)
+            multiplier = quality_multiplier(effective, configured)
             reason = str(qs.get("reason", "") or "") or "Auto quality ladder engaged."
             self._track_reason.setText(f"Degraded ×{multiplier}: {reason}")
             self._track_reason.setVisible(True)

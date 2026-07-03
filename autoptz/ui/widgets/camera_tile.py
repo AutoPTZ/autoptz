@@ -583,8 +583,8 @@ class CameraTile(QWidget):
             # too — computing it twice per paint would double the (cheap but
             # unnecessary) dict-building work in ``_state_chip_info``.
             state_info = _state_chip_info(rec)
-            self._paint_state_chip(p, state_info)
-            self._paint_degradation_chip(p, rec, state_chip_visible=bool(state_info.get("visible")))
+            state_chip_w = self._paint_state_chip(p, state_info)
+            self._paint_degradation_chip(p, rec, state_chip_width=state_chip_w)
             self._paint_banner(p, rec, streaming)
 
         # Selection glow is separate from tracking; tracking is shown on the target marker.
@@ -1174,17 +1174,17 @@ class CameraTile(QWidget):
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
     # Tracking-state chip colors, keyed by the ``color_key`` that
-    # ``_state_chip_info`` resolves engine states onto (project transparency
-    # rule: auto/degraded behavior must be visible, not silently hidden).
+    # ``_state_chip_info`` resolves engine severity onto (project transparency
+    # rule: auto/degraded behavior must be visible, not silently hidden, and
+    # never overstated — nothing here is red; see ``tile_helpers`` module
+    # docstring for the full pinned state->(label, color_key) vocabulary).
     _STATE_CHIP_QCOLOR = {
         "locked": "TRACKING",
-        "coasting": "WARNING",
-        "searching": "LOST",
-        "ambiguous": "LOST",
-        "lost": "ERROR",
+        "warning": "WARNING",
+        "neutral": "VIDEO_SUBTEXT",
     }
 
-    def _paint_state_chip(self, p: QPainter, info: dict[str, Any]) -> None:
+    def _paint_state_chip(self, p: QPainter, info: dict[str, Any]) -> float:
         """Small colored chip showing the live tracking state (name-pill row).
 
         Same scrim-pill treatment as ``_paint_fps_chip``/``_paint_name_pill``:
@@ -1195,11 +1195,16 @@ class CameraTile(QWidget):
         never silently hidden). ``info`` is the pre-resolved
         ``_state_chip_info(rec)`` result (shared with ``_paint_degradation_chip``
         for its same-row positioning, so it's resolved once in ``paintEvent``).
+
+        Returns the painted chip's pixel width (0.0 when hidden) so the
+        degradation chip can offset off the *actual* label instead of a
+        hardcoded guess — labels vary (LOCKED/COASTING/STANDBY/MANUAL/
+        DEGRADED/...) and a fixed offset would misplace the second chip.
         """
         if not info.get("visible"):
-            return
+            return 0.0
         text = str(info.get("text", ""))
-        color_attr = self._STATE_CHIP_QCOLOR.get(str(info.get("color_key")), "TRACKING")
+        color_attr = self._STATE_CHIP_QCOLOR.get(str(info.get("color_key")), "VIDEO_SUBTEXT")
         color = QColor(getattr(T, color_attr))
         f = QFont(self.font())
         f.setPixelSize(10)
@@ -1208,19 +1213,25 @@ class CameraTile(QWidget):
         fm = QFontMetrics(f)
         tw = fm.horizontalAdvance(text)
         # Sits directly below the name pill, left-aligned to match its x origin.
-        rect = QRectF(8, 35, tw + 16, 20)
+        chip_w = tw + 16
+        rect = QRectF(8, 35, chip_w, 20)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(T.VIDEO_SCRIM)
         p.drawRoundedRect(rect, 5, 5)
         p.setPen(color)
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        return chip_w
 
     def _paint_degradation_chip(
-        self, p: QPainter, rec: Any, *, state_chip_visible: bool = False
+        self, p: QPainter, rec: Any, *, state_chip_width: float = 0.0
     ) -> None:
         """Small ``×2``/``×4`` chip when the auto quality ladder has relaxed the
         detector cadence below what's configured (transparency for the "auto
         scales but stays visible" rule) — hidden at the configured cadence.
+
+        ``state_chip_width`` is the pixel width ``_paint_state_chip`` just
+        painted (0.0 if that chip is hidden), so this chip sits immediately
+        to the right of whatever the state chip actually rendered.
         """
         info = _degradation_chip_info(rec)
         if not info.get("visible"):
@@ -1233,7 +1244,7 @@ class CameraTile(QWidget):
         fm = QFontMetrics(f)
         tw = fm.horizontalAdvance(text)
         # Sits to the right of the state chip, same row.
-        x = 8 + (fm.horizontalAdvance("COASTING") + 16 + 6) if state_chip_visible else 8
+        x = 8 + state_chip_width + 6 if state_chip_width > 0 else 8
         rect = QRectF(x, 35, tw + 16, 20)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(T.VIDEO_SCRIM)
