@@ -6,12 +6,68 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-07-03
+
+> Stable release. Headline: **predictive tracking through occlusion** (the camera
+> now follows a briefly-occluded moving subject instead of freezing and whipping
+> on re-acquire) plus **self-healing reliability** (a dead inference thread or a
+> crashed shared model-server now recovers automatically instead of silently
+> killing detection forever). Every change below was TDD'd RED-first and passed
+> an adversarial per-task review before merge; the release was gated on a fresh
+> 30-minute 8×1080p30 NDI full-profile model-server soak with a **live mid-run
+> model-server kill** to prove recovery on real hardware.
+
+### Added
+
+- **Tracking-state and degradation chips on camera tiles.** Operators finally see
+  what tracking is doing: LOCKED (green, actively following), SELECTED (neutral —
+  target picked but auto-tracking off), STANDBY/COASTING/MANUAL/DEGRADED
+  (amber/neutral, honest labels), plus an amber ×2/×4 chip with the reason when
+  the auto quality ladder relaxes detect cadence. Chip colors derive from the
+  engine's own severity field, so a benign state can never render red — and an
+  unknown future state falls back non-alarming (pinned by a vocabulary test).
+- **SHA-256 verification for model downloads**, mirroring the updater's verified
+  pattern: mismatches delete the file and error; releases without a `SHA256SUMS`
+  manifest log a warning and proceed (hard-fail comes once all published releases
+  carry manifests). Locally generated files (INT8 quantization, exports) are exempt.
+
 ### Changed
 
-- Experimental Features dialog is reachable again (Engine → Experimental
-  Features…), now including the shared detection server toggle; dead
-  `AUTOPTZ_INFERENCE_SCHEDULER` references removed; the full flag surface is
-  documented in `docs/flags.md`.
+- **Experimental Features dialog is reachable again** (Engine → Experimental
+  Features…, also linked from the Services panel), now including the **shared
+  detection server** toggle; dead `AUTOPTZ_INFERENCE_SCHEDULER` references were
+  removed and the full `AUTOPTZ_*` flag surface is documented in `docs/flags.md`.
+
+### Fixed
+
+- **Camera bounce through occlusion (root cause).** LOST tracks used to freeze
+  their box and emit zero velocity; the first re-detection after an N-frame gap
+  then reported the whole gap as one frame of motion (measured 40 px/frame for a
+  3-frame gap at a true 10 px/frame). Tracks now coast along a damped smoothed
+  velocity (decaying to 10% after 1 s, frame-clamped), and re-acquire emits the
+  smoothed velocity — no spike, no whip.
+- **The camera now follows the coasted prediction briefly.** The worker publishes
+  the locked target's coasted track and drives PTZ while its coast velocity is
+  ≥1 px/frame — a mover is followed ≲1 s through occlusion, then behavior falls
+  back to today's hold→coast→search exactly; a subject occluded in place is never
+  chased (velocity ≈ 0).
+- **Half-dead workers heal.** A dead or stalled inference thread (capture alive,
+  detection silently gone) is now detected by the supervisor and the worker is
+  restarted with the existing backoff. Stall is only counted while a newer frame
+  is pending unprocessed, so camera-source outages (NDI/USB drops) never churn
+  healthy self-recovering workers.
+- **Model-server crash recovery** (opt-in `AUTOPTZ_MODEL_SERVER=1` scale mode).
+  The supervisor respawns a dead shared-detector process with the standard
+  backoff, reusing the same queues and shared-memory slots; clients fast-fail
+  (return no detections immediately) during the outage instead of stalling
+  2 s/frame; after the restart budget is exhausted, a queryable failed-flag is
+  set and workers rebuild local detectors so detection continues degraded.
+  Respawn is non-blocking on the GUI thread.
+
+### Internal
+
+- The wsdiscovery-unavailable test no longer performs a live WS-Discovery scan
+  on LANs where the real package is installed.
 
 ## [2.2.0-rc9] — 2026-06-30
 
