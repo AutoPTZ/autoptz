@@ -556,6 +556,12 @@ class Supervisor:
         inference thread — the worker's own watchdog stops PTZ safely but never
         restarts the thread.  Pure predicate (no side effects).
 
+        Mirrors ``_worker_hung``'s spawn-time warmup grace: a freshly (re)spawned
+        worker is still opening the camera / building its inference models and has
+        not completed a first inference tick yet, so it must never be flagged
+        during ``_WORKER_WARMUP_GRACE_S`` regardless of what its inference-health
+        surface reports.
+
         Only in-process (threaded) ``CameraWorker`` instances expose the
         inference-thread health surface; process-per-camera handles
         (``_is_process_worker``) are monitored by their own liveness path
@@ -563,6 +569,9 @@ class Supervisor:
         predicate.
         """
         if getattr(worker, "_is_process_worker", False):
+            return False
+        spawn_t = self._spawn_t.get(cid)
+        if spawn_t is None or (now - spawn_t) < _WORKER_WARMUP_GRACE_S:
             return False
         stalled_for = getattr(worker, "inference_stalled_for", None)
         if callable(stalled_for) and stalled_for(now) > _INFER_RESTART_S:

@@ -149,8 +149,38 @@ class TestCameraWorkerIsAlive:
         )
         worker._frames_inferred = 1
         worker._last_infer_t = 1000.0
+        # A new frame is pending (latest != current-inference) so the stall is real.
+        worker._latest_frame_id = 2
+        worker._current_inference_frame_id = 1
         assert worker.inference_stalled_for(1000.0) == 0.0
         assert worker.inference_stalled_for(1020.0) == 20.0
+
+    def test_inference_stalled_for_zero_during_source_outage(self, qapp) -> None:
+        """Critical (R2 review): a source outage (no new frames) must NOT read as
+        an inference stall — the capture loop idles with no pending frame, so the
+        inference thread has nothing to consume. Only the capture thread's own
+        reconnect backoff should handle this, not a worker restart.
+
+        This is the RED test for the churn bug: before the pending-frame gate,
+        ``inference_stalled_for`` grew unboundedly from ``_last_infer_t`` alone
+        and would report a large stall here even though nothing is wrong.
+        """
+        from autoptz.engine.camera_worker import CameraWorker
+
+        worker = CameraWorker(
+            "hltcam01abcd",
+            _camera_config("hltcam01abcd"),
+            lambda m: None,
+        )
+        worker._frames_inferred = 1
+        worker._last_infer_t = 1000.0
+        # No new frame since inference last ran — pending id equals last-inferred id.
+        worker._latest_frame_id = 1
+        worker._current_inference_frame_id = 1
+        # Advance the clock far past the 15 s restart threshold: still must be 0.0.
+        assert worker.inference_stalled_for(1000.0) == 0.0
+        assert worker.inference_stalled_for(1020.0) == 0.0
+        assert worker.inference_stalled_for(1_000_000.0) == 0.0
 
     def test_inference_thread_alive_false_before_start(self, qapp) -> None:
         from autoptz.engine.camera_worker import CameraWorker
@@ -456,6 +486,11 @@ class TestInferenceDeathDetection:
         try:
             original = factory_log[0]
             assert original._alive is True
+            # Anchor spawn_t to the injected clock (past warmup grace) — see
+            # test_healthy_worker_is_not_touched for why: real spawn_t is a
+            # real-monotonic timestamp, which desyncs from the injected `now`
+            # used here on a low-uptime CI runner.
+            sup._spawn_t[cid] = 1000.0 - _WORKER_WARMUP_GRACE_S - 1.0
             # Fresh capture-side telemetry so _worker_hung stays False — isolates
             # the inference-death predicate.
             sup._last_telemetry_t[cid] = 1000.0
@@ -472,6 +507,7 @@ class TestInferenceDeathDetection:
         sup, client, factory_log, cid = _build(qapp)
         try:
             original = factory_log[0]
+            sup._spawn_t[cid] = 1000.0 - _WORKER_WARMUP_GRACE_S - 1.0
             sup._last_telemetry_t[cid] = 1000.0
             original._infer_stall_s = _INFER_RESTART_S - 0.1
             sup._scan_worker_health(1000.0)
@@ -485,6 +521,7 @@ class TestInferenceDeathDetection:
         sup, client, factory_log, cid = _build(qapp)
         try:
             original = factory_log[0]
+            sup._spawn_t[cid] = 1000.0 - _WORKER_WARMUP_GRACE_S - 1.0
             sup._last_telemetry_t[cid] = 1000.0
             original._infer_thread_alive = False
             sup._scan_worker_health(1000.0)
@@ -501,6 +538,11 @@ class TestInferenceDeathDetection:
             now = 1000.0
             for _attempt in range(_MAX_RESTART_ATTEMPTS):
                 sup._workers[cid]._infer_thread_alive = False
+                # Re-anchor spawn_t on the injected clock every iteration: each
+                # respawn resets it to real time.monotonic() (see _spawn_worker),
+                # which would otherwise desync from the injected `now` again and
+                # spuriously suppress the predicate under the warmup grace.
+                sup._spawn_t[cid] = now - _WORKER_WARMUP_GRACE_S - 1.0
                 sup._last_telemetry_t[cid] = now
                 now += _MAX_BACKOFF_S + 1.0
                 sup._scan_worker_health(now)
@@ -508,6 +550,7 @@ class TestInferenceDeathDetection:
             count_at_cap = len(factory_log)
             if cid in sup._workers:
                 sup._workers[cid]._infer_thread_alive = False
+                sup._spawn_t[cid] = now - _WORKER_WARMUP_GRACE_S - 1.0
                 sup._last_telemetry_t[cid] = now
             now += _MAX_BACKOFF_S + 1.0
             sup._scan_worker_health(now)
@@ -527,6 +570,68 @@ class TestInferenceDeathDetection:
             sup._scan_worker_health(1000.0)
             assert len(factory_log) == 1  # untouched
             assert original.stop_calls == 0
+        finally:
+            sup.stop()
+
+    def test_warmup_grace_suppresses_inference_dead_predicate(self, qapp) -> None:
+        """Important-1: a freshly (re)spawned worker must not be flagged as
+        inference-dead during the spawn-time warmup grace, mirroring
+        ``_worker_hung``'s existing grace handling.
+        """
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            original = factory_log[0]
+            # Spawn "just happened" on the injected clock; inference already
+            # looks stalled/dead, but we are still within warmup grace.
+            sup._spawn_t[cid] = 1000.0
+            sup._last_telemetry_t[cid] = 1000.0
+            original._infer_stall_s = _INFER_RESTART_S + 100.0
+            original._infer_thread_alive = False
+            now = 1000.0 + _WORKER_WARMUP_GRACE_S - 0.1
+            assert sup._worker_inference_dead(cid, original, now) is False
+            sup._scan_worker_health(now)
+            assert len(factory_log) == 1  # untouched — still within warmup grace
+        finally:
+            sup.stop()
+
+    def test_inference_dead_predicate_fires_once_warmup_grace_elapses(self, qapp) -> None:
+        """Sanity check for the warmup-grace test above: once grace elapses the
+        same stalled worker IS flagged (grace only delays, never masks forever).
+        """
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            original = factory_log[0]
+            sup._spawn_t[cid] = 1000.0
+            sup._last_telemetry_t[cid] = 1000.0
+            original._infer_stall_s = _INFER_RESTART_S + 100.0
+            now = 1000.0 + _WORKER_WARMUP_GRACE_S + 0.1
+            assert sup._worker_inference_dead(cid, original, now) is True
+        finally:
+            sup.stop()
+
+    def test_inference_dead_check_raising_is_treated_as_not_dead(self, qapp, caplog) -> None:
+        """Important-2: the try/except around the predicate call site
+        (``_scan_worker_health``) — if ``inference_stalled_for`` raises, the
+        worker must be treated as NOT inference-dead (debug-logged), not
+        restarted.
+        """
+        import logging
+
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            original = factory_log[0]
+            sup._spawn_t[cid] = 1000.0 - _WORKER_WARMUP_GRACE_S - 1.0
+            sup._last_telemetry_t[cid] = 1000.0
+
+            def _raise(now: float) -> float:
+                raise RuntimeError("boom")
+
+            original.inference_stalled_for = _raise  # type: ignore[method-assign]
+            with caplog.at_level(logging.DEBUG):
+                sup._scan_worker_health(1000.0)
+            assert len(factory_log) == 1  # not restarted
+            assert original.stop_calls == 0
+            assert any("inference-death check raised" in r.getMessage() for r in caplog.records)
         finally:
             sup.stop()
 
