@@ -71,6 +71,10 @@ _HEALTH_SCAN_INTERVAL_S = 2.0  # how often tick() runs the health scan
 _BASE_BACKOFF_S = 1.0  # initial restart back-off
 _MAX_BACKOFF_S = 30.0  # maximum restart back-off (exponential cap)
 _MAX_RESTART_ATTEMPTS = 5  # give up after this many consecutive failures
+# How long a respawned model-server gets to signal "ready" before the attempt is
+# treated as failed. Polled across ticks (never awaited) so a slow spawn cannot
+# block the GUI thread — see Supervisor._scan_model_server_health.
+_MS_SPAWN_TIMEOUT_S = 30.0
 # A worker can be ALIVE yet HUNG (capture/inference threads stuck, no telemetry).
 # Treat it as unhealthy and respawn it through the same backoff path once its
 # telemetry is older than this.  Deliberately above the 2.0 s inference-stall
@@ -177,6 +181,13 @@ class Supervisor:
         self._model_server_failed_ev: Any | None = None
         self._ms_restart_state: tuple[int, float, bool] = (0, 0.0, False)
         self._model_server_camera_ids: list[str] = []
+        # Non-blocking respawn bookkeeping (tick() runs on the GUI thread — the
+        # health scan must never block it). ``_ms_ready_ev`` is the ready-handshake
+        # Event for the IN-FLIGHT respawn attempt; ``_ms_spawn_deadline`` is the
+        # monotonic time by which it must have signalled ready. Both None when no
+        # respawn is currently in flight.
+        self._ms_ready_ev: Any | None = None
+        self._ms_spawn_deadline: float | None = None
 
         # Global ML-subsystem switches (detection / tracking / face_recognition /
         # pose), broadcast via SetFeaturesCmd and applied to every worker.
@@ -325,6 +336,8 @@ class Supervisor:
         self._model_server_failed_ev = None
         self._ms_restart_state = (0, 0.0, False)
         self._model_server_camera_ids = []
+        self._ms_ready_ev = None
+        self._ms_spawn_deadline = None
         if proc is not None:
             try:
                 if stop_ev is not None:
@@ -714,11 +727,18 @@ class Supervisor:
         mechanism — there is just one "camera" here (the server process) instead of
         one per real camera, so the state is a single tuple, not a dict.
 
+        ``tick()`` (and therefore this scan) runs on the GUI thread in the shipped
+        app, so a respawn attempt must never block it: starting the child and
+        waiting for its ready-handshake are split across ticks. ``_ms_spawn_deadline``
+        is None when no respawn is in flight; while it is set, this method only
+        POLLS the ready Event (never ``.wait()`` with a timeout) and otherwise
+        no-ops until the deadline passes. ``_model_server_down`` stays set for the
+        whole spawning+backoff window so every camera's ``InferenceClient``
+        fast-fails instead of blocking a timeout per frame.
+
         On respawn: reuse the SAME ``_infer_req_q`` / ``_infer_resp_qs`` (shm re-
         attach on the server side is already lazy per-request — see
-        :func:`autoptz.engine.pipeline.inference_server.serve`), holding
-        ``_model_server_down`` set for the duration so every camera's
-        ``InferenceClient`` fast-fails instead of blocking a timeout per frame.
+        :func:`autoptz.engine.pipeline.inference_server.serve`).
 
         On budget exhaustion: latch ``_model_server_failed_ev`` (queryable via
         :meth:`model_server_failed`) and ask every model-server-mode worker to
@@ -730,13 +750,16 @@ class Supervisor:
         if not env_model_server() or self._model_server_proc is None:
             return
 
+        if self._ms_spawn_deadline is not None:
+            self._poll_model_server_spawn(now)
+            return
+
         try:
             alive = bool(self._model_server_proc.is_alive())
         except Exception:  # noqa: BLE001
             alive = False
         if alive:
-            if self._ms_restart_state != (0, 0.0, False):
-                self._ms_restart_state = (0, 0.0, False)
+            self._ms_restart_state = (0, 0.0, False)
             return
 
         attempts, next_allowed_t, _failed = self._ms_restart_state
@@ -768,12 +791,74 @@ class Supervisor:
         self._ms_restart_state = (new_attempts, now + backoff, False)
         if self._model_server_down is not None:
             self._model_server_down.set()
-        self._respawn_model_server()
+        self._respawn_model_server(now)
 
-    def _respawn_model_server(self) -> None:
-        """Start a fresh server process reusing the existing queues, then clear the
-        down-gate once it signals ready (or on any failure, so cameras don't stay
-        latched fast-fail forever over a respawn that itself failed to start)."""
+    def _poll_model_server_spawn(self, now: float) -> None:
+        """Non-blocking continuation of an in-flight respawn attempt.
+
+        Called on every scan tick while ``_ms_spawn_deadline`` is set. Only ever
+        polls ``is_set()`` — never ``.wait()`` with a nonzero timeout — so a slow
+        or stuck child cannot stall the GUI thread. The down-gate stays set for the
+        whole spawning window regardless of outcome; it is only cleared on success.
+        """
+        ready = self._ms_ready_ev
+        deadline = self._ms_spawn_deadline
+        assert deadline is not None  # guarded by caller
+
+        if ready is not None and ready.is_set():
+            # Respawn succeeded — same reset the old alive-branch did.
+            self._ms_spawn_deadline = None
+            self._ms_ready_ev = None
+            self._ms_restart_state = (0, 0.0, False)
+            if self._model_server_down is not None:
+                self._model_server_down.clear()
+            log.info("model-server respawned successfully — resuming shared detection.")
+            return
+
+        if now < deadline:
+            return  # still spawning; check again next tick
+
+        # Deadline exceeded without a ready signal — treat exactly like a failed
+        # attempt: kill the stuck child (best-effort, non-blocking join) and apply
+        # the same backoff/budget accounting _scan_model_server_health uses. The
+        # down-gate is deliberately left set — the caller (next tick) may either
+        # retry or, at budget exhaustion, trigger the local-fallback path.
+        log.warning("respawned model-server slow to accept requests — treating as failed.")
+        self._ms_spawn_deadline = None
+        self._ms_ready_ev = None
+        proc = self._model_server_proc
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001
+                log.debug("failed to terminate stuck model-server child", exc_info=True)
+            try:
+                proc.join(timeout=0.5)
+            except Exception:  # noqa: BLE001
+                log.debug("failed to join stuck model-server child", exc_info=True)
+
+        attempts, _next_allowed_t, _failed = self._ms_restart_state
+        backoff = min(_MAX_BACKOFF_S, _BASE_BACKOFF_S * (2 ** (attempts - 1)))
+        if attempts >= _MAX_RESTART_ATTEMPTS:
+            self._ms_restart_state = (attempts, now + backoff, True)
+            log.error(
+                "model-server permanently failed: %d auto-restart attempts exhausted "
+                "— falling back to local per-camera detectors.",
+                attempts,
+            )
+            if self._model_server_failed_ev is not None:
+                self._model_server_failed_ev.set()
+            self._refresh_model_server_workers()
+        else:
+            self._ms_restart_state = (attempts, now + backoff, False)
+        # Gate stays set (never cleared here) — next scan either retries after the
+        # backoff window or the caller above has already routed to fallback.
+
+    def _respawn_model_server(self, now: float) -> None:
+        """Start a fresh server process reusing the existing queues and record a
+        spawn deadline; the ready-handshake is polled on later ticks by
+        :meth:`_poll_model_server_spawn`, never awaited here — starting a child
+        process is fast, so this itself does not block the caller."""
         try:
             import multiprocessing as mp
 
@@ -797,13 +882,16 @@ class Supervisor:
                 daemon=True,
             )
             self._model_server_proc.start()
-            if not ready.wait(timeout=30.0):
-                log.warning("respawned model-server slow to accept requests.")
+            self._ms_ready_ev = ready
+            self._ms_spawn_deadline = now + _MS_SPAWN_TIMEOUT_S
         except Exception:  # noqa: BLE001 — respawn is best-effort; next scan retries
             log.warning("model-server respawn failed", exc_info=True)
-        finally:
-            if self._model_server_down is not None:
-                self._model_server_down.clear()
+            self._ms_ready_ev = None
+            self._ms_spawn_deadline = None
+            # Gate stays set: the outer backoff/budget accounting already ran for
+            # this attempt, so the next scan either retries (after backoff) or
+            # routes to fallback (budget exhausted) — see
+            # _scan_model_server_health / _poll_model_server_spawn.
 
     def _refresh_model_server_workers(self) -> None:
         """Ask every model-server-mode camera worker to re-pull its detector from

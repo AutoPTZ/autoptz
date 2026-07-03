@@ -265,6 +265,25 @@ def test_default_timeout_is_two_seconds() -> None:
     assert sig.parameters["timeout_s"].default == 2.0
 
 
+def test_default_timeout_actually_bounds_detect_when_server_never_replies() -> None:
+    """Behavioral companion to the signature check above: construct a client with
+    the DEFAULT timeout_s (no override) against a request queue nobody is
+    servicing, and prove detect() actually gives up around 2s — not the old 5s —
+    instead of only trusting the __init__ default value in isolation."""
+    import queue
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 32, 32)
+    # No server thread at all — the response queue is never populated, so detect()
+    # must fall through its own timeout_s deadline rather than hang.
+    client = InferenceClient("camA", queue.Queue(), queue.Queue(), writer)
+    t0 = time.monotonic()
+    assert client.detect(_frame(1, 32, 32)) == []
+    elapsed = time.monotonic() - t0
+    assert 1.5 <= elapsed < 4.0, f"detect() took {elapsed:.2f}s — expected ~2.0s default timeout"
+    writer.close()
+
+
 def test_server_down_gate_short_circuits_detect_without_waiting_on_queue() -> None:
     """(b) While the supervisor has the server marked down, detect() must return []
     IMMEDIATELY (well under timeout_s) instead of blocking on the (dead) response

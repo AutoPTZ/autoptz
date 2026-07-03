@@ -13,6 +13,7 @@ from autoptz.engine.supervisor import (
     _INFER_RESTART_S,
     _MAX_BACKOFF_S,
     _MAX_RESTART_ATTEMPTS,
+    _MS_SPAWN_TIMEOUT_S,
     _WORKER_HANG_S,
     _WORKER_WARMUP_GRACE_S,
 )
@@ -835,15 +836,35 @@ class TestModelServerHealthScan:
             sup.stop()
 
     def test_backoff_expires_and_allows_respawn(self, qapp, monkeypatch) -> None:
+        """Updated for non-blocking respawn (R-3 review fix): a single
+        _scan_model_server_health call now only STARTS a respawn attempt (spawn
+        deadline pending) instead of synchronously spawning-and-waiting-for-ready
+        in one call. ``_FakeEvent`` here never actually signals ready (nothing
+        drives a real server loop that would call ``.set()``), so — like a
+        genuinely stuck child — the in-flight attempt only resolves once its
+        spawn deadline passes; see TestModelServerRespawnNonBlocking for
+        dedicated polling-across-ticks coverage including the ready-succeeds
+        case. This test now walks a full spawn-timeout -> backoff -> respawn
+        cycle instead of asserting a same-tick third spawn."""
         sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
         try:
             proc_log[0]._alive = False
             now = 1000.0
-            sup._scan_model_server_health(now)
+            sup._scan_model_server_health(now)  # attempt 1: starts spawning
             assert len(proc_log) == 2
-            proc_log[1]._alive = False
+
+            # Spawn deadline passes without a ready signal -> attempt 1 fails and
+            # enters its backoff window.
+            now += _MS_SPAWN_TIMEOUT_S + 0.1
+            sup._scan_model_server_health(now)
+            assert len(proc_log) == 2  # no new process yet — still in backoff
+            assert sup._ms_spawn_deadline is None
+
+            sup._scan_model_server_health(now + 0.01)  # still inside backoff window
+            assert len(proc_log) == 2  # untouched
+
             sup._scan_model_server_health(now + _BASE_BACKOFF_S + 0.1)
-            assert len(proc_log) == 3
+            assert len(proc_log) == 3  # backoff expired — attempt 2 starts
         finally:
             sup.stop()
 
@@ -852,14 +873,23 @@ class TestModelServerHealthScan:
     ) -> None:
         """(c) After restart attempts are exhausted, model_server_failed() is True
         and every model-server-mode worker's refresh_detector_from_pool() fires
-        (the seam that lets RemotePool swap in a local detector)."""
+        (the seam that lets RemotePool swap in a local detector).
+
+        Updated for non-blocking respawn (R-3 review fix): starting a respawn and
+        observing its outcome are now two separate ticks, and ``_FakeEvent``
+        never actually signals ready, so each cycle below ticks twice: once to
+        start the respawn, once more past the spawn deadline to resolve it as a
+        failed attempt (mirroring a server that never comes up) before advancing
+        past the backoff window for the next cycle."""
         sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
         try:
             now = 1000.0
             for _attempt in range(_MAX_RESTART_ATTEMPTS):
                 sup._model_server_proc._alive = False
                 now += _MAX_BACKOFF_S + 1.0
-                sup._scan_model_server_health(now)
+                sup._scan_model_server_health(now)  # starts the respawn attempt
+                now += _MS_SPAWN_TIMEOUT_S + 0.1
+                sup._scan_model_server_health(now)  # deadline exceeded -> failed
 
             assert sup.model_server_failed() is True
             assert factory_log[0].refresh_calls == 1  # fired exactly once, at exhaustion
@@ -889,6 +919,244 @@ class TestModelServerHealthScan:
         sup._scan_model_server_health(1000.0)  # must not raise
         assert sup._model_server_proc is None
         assert sup.model_server_failed() is False
+
+
+class _AssertNoBlockingWaitEvent:
+    """Stand-in for ctx.Event() that records any ``.wait(timeout=...)`` call made
+    with a nonzero timeout, so a test can assert the tick path never blocked —
+    the health-scan/tick thread must only ever poll ``is_set()``.
+
+    Deliberately does NOT raise from inside ``wait()``: production code wraps the
+    old blocking respawn in a broad ``except Exception``, which would silently
+    swallow an AssertionError raised here and give a false-negative (test passes
+    even though the code blocked in real life, where wait() actually sleeps
+    instead of raising). Recording to a class-level list and asserting on it
+    from the test body survives that broad except clause. ``wait(timeout=0)`` (a
+    non-blocking check) is tolerated and not recorded."""
+
+    blocking_wait_calls: list[float] = []
+
+    def __init__(self) -> None:
+        self._flag = False
+
+    def set(self) -> None:
+        self._flag = True
+
+    def clear(self) -> None:
+        self._flag = False
+
+    def is_set(self) -> bool:
+        return self._flag
+
+    def wait(self, timeout: float = 0.0) -> bool:
+        if timeout:
+            _AssertNoBlockingWaitEvent.blocking_wait_calls.append(timeout)
+        return self._flag
+
+
+class _ControllableModelServerProc(_FakeModelServerProc):
+    """Fake model-server process whose is_alive() can be flipped after start()."""
+
+
+class TestModelServerRespawnNonBlocking:
+    """IMPORTANT-1: _respawn_model_server (called from _scan_model_server_health,
+    which tick() drives on the GUI thread in the shipped app) must never block —
+    `proc.start()` + record a spawn deadline, then poll `ready.is_set()` on later
+    ticks instead of `ready.wait(timeout=...)`. All tests here use a synthetic
+    monotonic clock (`now`) — no real sleeps."""
+
+    def _build_ms(self, qapp, monkeypatch, event_cls=_AssertNoBlockingWaitEvent):  # noqa: ANN001
+        """Same shape as TestModelServerHealthScan._build_ms but with a pluggable
+        Event class so this suite can prove the tick path never awaits it."""
+        import multiprocessing as mp
+
+        from autoptz.ui.engine_client import EngineClient
+
+        _AssertNoBlockingWaitEvent.blocking_wait_calls.clear()
+        monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
+        client = EngineClient()
+        cid = client.addCamera("usb://0", "X")
+        client.drain_commands()
+
+        factory_log: list[_MsFakeProcessWorker] = []
+
+        def factory(camera_id, config, on_tel):  # noqa: ANN001
+            w = _MsFakeProcessWorker(camera_id, config, on_tel)
+            factory_log.append(w)
+            return w
+
+        sup = _make_sup_with_factory(client, factory)
+        sup._ensure_identity_service = lambda: None  # type: ignore[method-assign]
+        sup._ensure_inference_pool = lambda: None  # type: ignore[method-assign]
+
+        real_ctx = mp.get_context("spawn")
+        proc_log: list[_ControllableModelServerProc] = []
+
+        class _FakeCtx:
+            Queue = staticmethod(real_ctx.Queue)
+            Event = staticmethod(event_cls)
+
+            def Process(self, *_a, **_k):  # noqa: ANN002, ANN003, N802
+                p = _ControllableModelServerProc()
+                proc_log.append(p)
+                return p
+
+        monkeypatch.setattr(mp, "get_context", lambda *_a, **_k: _FakeCtx())
+        monkeypatch.setattr(
+            "autoptz.engine.supervisor.Supervisor._ensure_model_server",
+            lambda self, camera_ids: _fake_ensure_model_server(self, camera_ids, proc_log),
+        )
+        sup.start()
+        return sup, client, factory_log, proc_log, cid
+
+    def test_tick_path_never_calls_blocking_wait(self, qapp, monkeypatch) -> None:
+        """RED against fc6eee1: the old _respawn_model_server called
+        ready.wait(timeout=30.0) synchronously from the scan. With the fix, the
+        scan only starts the child and polls is_set() on later ticks, so no
+        nonzero-timeout wait() call is ever recorded.
+
+        Asserts on the event's call recorder rather than letting wait() raise,
+        because the old code wraps the whole respawn in a broad
+        ``except Exception`` that would otherwise swallow an in-wait assertion
+        and produce a false-negative RED."""
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            proc_log[0]._alive = False
+            sup._scan_model_server_health(1000.0)
+            assert len(proc_log) == 2  # respawn attempt was started
+            assert _AssertNoBlockingWaitEvent.blocking_wait_calls == []
+        finally:
+            sup.stop()
+
+    def test_spawn_pending_tick_is_a_noop(self, qapp, monkeypatch) -> None:
+        """While a respawn is in flight and not yet at its deadline, subsequent
+        scan ticks must not start another child or touch restart state."""
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            proc_log[0]._alive = False
+            now = 1000.0
+            sup._scan_model_server_health(now)
+            assert len(proc_log) == 2
+            assert sup._ms_spawn_deadline == now + _MS_SPAWN_TIMEOUT_S
+
+            # Well before the deadline — should be a pure no-op.
+            sup._scan_model_server_health(now + 1.0)
+            assert len(proc_log) == 2  # no new spawn
+            assert sup._ms_spawn_deadline == now + _MS_SPAWN_TIMEOUT_S  # unchanged
+            assert sup._ms_restart_state == (1, now + _BASE_BACKOFF_S, False)
+        finally:
+            sup.stop()
+
+    def test_ready_on_later_tick_succeeds(self, qapp, monkeypatch) -> None:
+        """Ready-signal arriving on a LATER tick (not the same one that started
+        the spawn) must clear the gate and reset attempts, mirroring the old
+        synchronous-success semantics — just detected asynchronously."""
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            proc_log[0]._alive = False
+            now = 1000.0
+            sup._scan_model_server_health(now)
+            assert sup._ms_spawn_deadline is not None
+            assert sup._model_server_down.is_set() is True  # fast-fail gate held
+
+            # Simulate the child signalling ready sometime later, well before the
+            # spawn deadline.
+            sup._model_server_proc._alive = True
+            ready_ev = sup._ms_ready_ev
+            ready_ev.set()
+
+            sup._scan_model_server_health(now + 2.0)
+
+            assert sup._ms_spawn_deadline is None
+            assert sup._ms_restart_state == (0, 0.0, False)
+            assert sup._model_server_down.is_set() is False  # gate cleared
+        finally:
+            sup.stop()
+
+    def test_deadline_exceeded_counts_as_failed_attempt_with_backoff(
+        self, qapp, monkeypatch
+    ) -> None:
+        """If the child never signals ready before the spawn deadline, that tick
+        must count as a failed attempt (existing backoff/budget accounting) and
+        kill the stuck child — not hang waiting for it."""
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            proc_log[0]._alive = False
+            now = 1000.0
+            sup._scan_model_server_health(now)
+            assert sup._ms_spawn_deadline == now + _MS_SPAWN_TIMEOUT_S
+            stuck_proc = sup._model_server_proc
+
+            # Never signals ready; advance past the spawn deadline.
+            sup._scan_model_server_health(now + _MS_SPAWN_TIMEOUT_S + 0.1)
+
+            assert sup._ms_spawn_deadline is None
+            assert stuck_proc.terminate_calls == 1  # stuck child was killed
+            attempts, next_allowed_t, failed = sup._ms_restart_state
+            # The attempt was already counted (attempts=1) when the respawn was
+            # initiated — mirrors the old synchronous code, which incremented
+            # before the (blocking) wait. A timed-out spawn does not double-count.
+            assert attempts == 1
+            assert next_allowed_t > now + _MS_SPAWN_TIMEOUT_S  # backoff window set
+            assert failed is False
+            assert sup._model_server_down.is_set() is True  # gate still held
+        finally:
+            sup.stop()
+
+    def test_gate_stays_set_across_spawning_and_backoff_window(self, qapp, monkeypatch) -> None:
+        """The down-gate must remain set continuously from the moment the server
+        is first found dead through spawning AND the subsequent backoff wait —
+        clients must keep fast-failing the whole time, never just during one
+        phase."""
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            proc_log[0]._alive = False
+            now = 1000.0
+            sup._scan_model_server_health(now)
+            assert sup._model_server_down.is_set() is True  # spawning phase
+
+            # Deadline exceeded -> failed attempt -> now in backoff phase.
+            now += _MS_SPAWN_TIMEOUT_S + 0.1
+            sup._scan_model_server_health(now)
+            assert sup._ms_spawn_deadline is None
+            assert sup._model_server_down.is_set() is True  # backoff phase
+
+            # Still inside the backoff window — must stay a no-op, gate still set.
+            now += 0.1
+            sup._scan_model_server_health(now)
+            assert sup._model_server_down.is_set() is True
+        finally:
+            sup.stop()
+
+    def test_deadline_exceeded_at_budget_exhaustion_triggers_fallback(
+        self, qapp, monkeypatch
+    ) -> None:
+        """A spawn that times out on the FINAL allowed attempt must exhaust the
+        budget exactly like the old synchronous failure path did: latch
+        model_server_failed() and fire the worker fallback."""
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            now = 1000.0
+            proc_log[0]._alive = False
+            for _attempt in range(_MAX_RESTART_ATTEMPTS - 1):
+                sup._scan_model_server_health(now)
+                now += _MS_SPAWN_TIMEOUT_S + 0.1  # spawn never signals ready
+                sup._scan_model_server_health(now)  # deadline exceeded -> failed
+                now += _MAX_BACKOFF_S + 1.0  # clear backoff before next attempt
+                if sup._model_server_proc is not None:
+                    sup._model_server_proc._alive = False
+
+            assert sup.model_server_failed() is False  # not yet — one more to go
+
+            sup._scan_model_server_health(now)  # final attempt starts spawning
+            now += _MS_SPAWN_TIMEOUT_S + 0.1
+            sup._scan_model_server_health(now)  # final deadline exceeded -> exhausted
+
+            assert sup.model_server_failed() is True
+            assert factory_log[0].refresh_calls == 1
+            assert sup._model_server_down.is_set() is True
+        finally:
+            sup.stop()
 
 
 def _fake_ensure_model_server(sup, camera_ids, proc_log) -> None:  # noqa: ANN001
