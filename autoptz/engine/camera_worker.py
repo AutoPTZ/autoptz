@@ -289,6 +289,14 @@ _TARGET_JUMP_CONFIRM_IOU = 0.50
 _TARGET_OVERLAP_IOU = 0.08
 _TARGET_CLOSE_Y_OVERLAP = 0.45
 _TARGET_CLOSE_GAP_FRAC = 0.18
+
+# Minimum coasted-track speed (px/frame) worth chasing while a locked target is
+# LOST.  The tracker's coast velocity decays each frame (see track.py), so this
+# threshold is self-limiting: a mover is followed for ~1 s of coast, then falls
+# back to hold->coast->search once its velocity has decayed below this floor.
+# A stationary loss (occluder steps in front of a still subject) never crosses
+# it, preserving today's no-chase behaviour for that case.
+_COAST_FOLLOW_MIN_V = 1.0
 _POSE_BBOX_MARGIN = 0.22
 _POSE_KEYPOINT_MARGIN = 0.08
 _POSE_JUMP_MIN_PX = 70.0
@@ -1532,30 +1540,46 @@ class CameraWorker:
         # coasts→stops), even if a target track is locked.
         tracking_on = self._feature("tracking")
         target = self._resolve_target_track(tracks)
-        # A coasting (LOST) target is a STALE box — don't chase it.  Stepping the
-        # controller with track_active=False lets it run its graceful coast→search
-        # →stop instead of driving the PTZ toward where the subject no longer is
-        # (the "moves the camera for no reason while the box lingers" bug).
+        # A coasting (LOST) target is a STALE box, but its damped pre-loss
+        # velocity is still meaningful prediction for a beat: while |coast
+        # velocity| clears _COAST_FOLLOW_MIN_V we follow that prediction so a
+        # brief occlusion doesn't freeze the camera; once it decays below the
+        # floor (or the loss was a stationary occluder, v≈0 from the start) we
+        # fall back to track_active=False so the controller coasts→searches→stops
+        # instead of driving the PTZ toward where the subject no longer is.
+        coasting_fast = (
+            target is not None
+            and target.lost
+            and (math.hypot(target.vx, target.vy) >= _COAST_FOLLOW_MIN_V)
+        )
         if (
             target is not None
-            and not target.lost
+            and (not target.lost or coasting_fast)
             and frame is not None
             and self._tracking_enabled
             and tracking_on
         ):
-            fh = max(1, int(frame.shape[0]))
-            usable = self._target_box_usable_for_ptz(target, frame)
-            box_h_frac = (float(target.bbox.y2) - float(target.bbox.y1)) / fh if usable else 0.0
-            occluded = usable and self._target_box_collapsed(box_h_frac)
-            if usable and not occluded:
+            if target.lost:
+                # The coast prediction bypasses the live-box usability/collapse
+                # gates below (they assume a fresh detection) — a coasted bbox is
+                # by definition not "fresh," that's the point of following it.
                 err, height = self._track_error(target, frame, now, tracks=tracks)
                 vel = self._estimate_aim_velocity(err, now)
                 active = True
             else:
-                # Bad/partial boxes are not evidence.  Do not update aim velocity
-                # from them; tell the controller to hold/stop until a fresh target
-                # box is usable again.
-                err, height, vel, active = (0.0, 0.0), 0.0, (0.0, 0.0), False
+                fh = max(1, int(frame.shape[0]))
+                usable = self._target_box_usable_for_ptz(target, frame)
+                box_h_frac = (float(target.bbox.y2) - float(target.bbox.y1)) / fh if usable else 0.0
+                occluded = usable and self._target_box_collapsed(box_h_frac)
+                if usable and not occluded:
+                    err, height = self._track_error(target, frame, now, tracks=tracks)
+                    vel = self._estimate_aim_velocity(err, now)
+                    active = True
+                else:
+                    # Bad/partial boxes are not evidence.  Do not update aim velocity
+                    # from them; tell the controller to hold/stop until a fresh target
+                    # box is usable again.
+                    err, height, vel, active = (0.0, 0.0), 0.0, (0.0, 0.0), False
             try:
                 # A box that suddenly collapsed (occlusion → only a partial body
                 # visible) is not a trustworthy aim — coast (track_active=False) so
@@ -4086,9 +4110,14 @@ class CameraWorker:
 
         out: list[TrackInfo] = []
         for t in tracks:
+            is_lost = getattr(t, "state", None) == "lost"
+            is_target = self._target_track_id is not None and t.track_id == self._target_track_id
             # LOST tracks remain inside the tracker for ReID/re-acquisition, but
-            # they are stale visual boxes. Do not publish them to the UI or PTZ.
-            if getattr(t, "state", None) == "lost":
+            # they are stale visual boxes. Do not publish them to the UI or PTZ —
+            # EXCEPT the locked target: its coasted (damped pre-loss velocity)
+            # prediction is published with lost=True so the PTZ layer can briefly
+            # follow the coast instead of freezing through the occlusion.
+            if is_lost and not is_target:
                 continue
             # _track_identity[track_id] = (identity_id, display_name, score)
             ident = self._track_identity.get(t.track_id)
@@ -4100,10 +4129,8 @@ class CameraWorker:
                     identity=(ident[1] if ident else None),  # NAME, for display
                     identity_id=(ident[0] if ident else None),  # id, for enroll/target
                     confidence=(ident[2] if ident else t.conf),
-                    is_target=(
-                        self._target_track_id is not None and t.track_id == self._target_track_id
-                    ),
-                    lost=False,
+                    is_target=is_target,
+                    lost=is_lost,
                     vx=float(vel[0]),
                     vy=float(vel[1]),
                 )
