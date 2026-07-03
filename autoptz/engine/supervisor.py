@@ -81,6 +81,14 @@ _WORKER_HANG_S = 5.0
 # worker is opening the camera + building models and legitimately emits no
 # telemetry for a few seconds.  Must exceed worst-case warmup-before-first-frame.
 _WORKER_WARMUP_GRACE_S = 8.0
+# A worker's CAPTURE thread can stay alive (still reading frames / streaming
+# preview) while its separate INFERENCE thread has died or wedged — telemetry
+# keeps flowing so ``_worker_hung`` never fires, yet detection/tracking never
+# recovers.  The worker's own watchdog stops PTZ safely once inference has been
+# stalled for _INFER_STALL_S (2.0 s, see camera_worker.py) but does not restart
+# the thread.  Restart the whole worker once the stall persists well past that
+# self-healing window so a transient model hiccup doesn't churn workers.
+_INFER_RESTART_S = 15.0
 
 
 def _log_macos_capture_path() -> None:
@@ -540,6 +548,30 @@ class Supervisor:
         last_seen = self._last_telemetry_t.get(cid, spawn_t)
         return (now - last_seen) > _WORKER_HANG_S
 
+    def _worker_inference_dead(self, cid: str, worker: Any, now: float) -> bool:
+        """True iff an alive (capture-thread-up) worker's INFERENCE thread is dead.
+
+        Complementary to ``_worker_hung``: telemetry is emitted by the capture
+        thread, so a capture thread that is still streaming masks a dead/stalled
+        inference thread — the worker's own watchdog stops PTZ safely but never
+        restarts the thread.  Pure predicate (no side effects).
+
+        Only in-process (threaded) ``CameraWorker`` instances expose the
+        inference-thread health surface; process-per-camera handles
+        (``_is_process_worker``) are monitored by their own liveness path
+        (``is_alive()`` on the child process) and are never subject to this
+        predicate.
+        """
+        if getattr(worker, "_is_process_worker", False):
+            return False
+        stalled_for = getattr(worker, "inference_stalled_for", None)
+        if callable(stalled_for) and stalled_for(now) > _INFER_RESTART_S:
+            return True
+        thread_alive = getattr(worker, "inference_thread_alive", None)
+        if callable(thread_alive) and not thread_alive():
+            return True
+        return False
+
     def _scan_worker_health(self, now: float) -> None:
         """Check every worker's liveness and restart any that have died.
 
@@ -560,12 +592,26 @@ class Supervisor:
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s is_alive() raised", cid, exc_info=True)
 
-            hung = alive and self._worker_hung(cid, now)
+            inference_dead = False
+            if alive:
+                try:
+                    inference_dead = self._worker_inference_dead(cid, worker, now)
+                except Exception:  # noqa: BLE001
+                    log.debug("camera_id=%s inference-death check raised", cid, exc_info=True)
+
+            hung = alive and (self._worker_hung(cid, now) or inference_dead)
             if alive and not hung:
                 # Worker is healthy — clear any stale restart state.
                 self._restart_state.pop(cid, None)
                 continue
-            if hung:
+            if inference_dead:
+                log.warning(
+                    "camera_id=%s alive but inference thread dead/stalled (>%.1fs) — "
+                    "treating as hung",
+                    cid,
+                    _INFER_RESTART_S,
+                )
+            elif hung:
                 log.warning(
                     "camera_id=%s alive but telemetry stale (>%.1fs) — treating as hung",
                     cid,

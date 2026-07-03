@@ -830,6 +830,30 @@ class CameraWorker:
         """
         return self.is_running
 
+    def inference_stalled_for(self, now: float) -> float:
+        """Seconds since the last completed inference tick (0.0 before the first).
+
+        Supervisor-facing counterpart to ``_inference_stall_age``: that method is
+        gated on tracking being enabled (it only matters there for the PTZ-stop
+        watchdog), but a dead/stalled inference thread is a worker-health problem
+        regardless of tracking state — so this is unconditional once inference has
+        completed at least one tick.  Gated on ``_frames_inferred > 0`` (not a
+        separate warmup constant) so a worker still building its models on first
+        start is never reported as stalled.  Pure, side-effect free.
+        """
+        if self._frames_inferred <= 0:
+            return 0.0
+        return max(0.0, now - self._last_infer_t)
+
+    def inference_thread_alive(self) -> bool:
+        """True iff the inference thread object exists and is alive.
+
+        False before the capture thread has started it, after a clean stop, or
+        if it died/was never started successfully.
+        """
+        thread = self._inference_thread
+        return thread is not None and thread.is_alive()
+
     # ── command intake (thread-safe; called from supervisor/command pump) ────────
 
     def enable_tracking(self, enabled: bool) -> None:
