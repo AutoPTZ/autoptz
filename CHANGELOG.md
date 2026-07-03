@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Experimental Features dialog is reachable again (Engine → Experimental
+  Features…), now including the shared detection server toggle; dead
+  `AUTOPTZ_INFERENCE_SCHEDULER` references removed; the full flag surface is
+  documented in `docs/flags.md`.
+
 ## [2.2.0-rc9] — 2026-06-30
 
 > Pre-release for testing. Headline: an **AutoPTZ 2.2 reliability overhaul** plus

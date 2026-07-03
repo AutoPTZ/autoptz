@@ -109,6 +109,16 @@ def test_apply_button_click_runs_the_apply_flow(qtapp) -> None:
     dlg.close()
 
 
+def test_dialog_renders_model_server_row(qtapp) -> None:
+    """The registry-driven dialog must render a row for the shared model-server
+    flag once it is registered — no hand-built row, purely from EXPERIMENTAL_FLAGS.
+    """
+    client = _client()
+    dlg, _ = _dialog(client)
+    assert "AUTOPTZ_MODEL_SERVER" in dlg._bool_boxes
+    dlg.close()
+
+
 def test_legacy_apply_still_just_persists(qtapp) -> None:
     """``_apply`` stays a pure persist (no modal) so existing callers/tests hold."""
     client = _client()

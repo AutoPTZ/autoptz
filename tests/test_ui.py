@@ -1862,6 +1862,58 @@ finally:
         result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
         assert result.returncode == 0, result.stderr or result.stdout
 
+    def test_engine_menu_opens_experimental_features_dialog(self, tmp_path) -> None:
+        """Engine menu must expose "Experimental Features..." and triggering it
+        must actually open the (registry-driven) ExperimentalFeaturesDialog —
+        the dialog class exists and is exported but was never mounted anywhere.
+        """
+        code = f"""
+import os
+import sys
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication
+from autoptz.config.store import ConfigStore
+from autoptz.ui.engine_client import EngineClient
+from autoptz.ui.frames import ShmFrameSource
+from autoptz.ui.log_bridge import LogListModel
+from autoptz.ui.widgets import MainWindow
+from autoptz.ui.widgets.dialogs.experimental import ExperimentalFeaturesDialog
+app = QApplication(sys.argv[:1])
+client = EngineClient(store=ConfigStore(db_path=Path({str(tmp_path / "cfg.db")!r}), debounce_s=0))
+win = MainWindow(client, log_model=LogListModel(), frame_source=ShmFrameSource())
+try:
+    act = getattr(win, "_act_experimental", None)
+    assert act is not None, "MainWindow has no _act_experimental action"
+    assert "Experimental Features" in act.text()
+
+    engine_menu = None
+    for menu_action in win.menuBar().actions():
+        if menu_action.text().replace("&", "") == "Engine":
+            engine_menu = menu_action.menu()
+            break
+    assert engine_menu is not None, "no Engine menu found"
+    assert act in engine_menu.actions(), "_act_experimental is not in the Engine menu"
+
+    opened = {{}}
+    orig_exec = ExperimentalFeaturesDialog.exec
+    def fake_exec(self):
+        opened["dialog"] = self
+        return 0
+    ExperimentalFeaturesDialog.exec = fake_exec
+    try:
+        act.trigger()
+    finally:
+        ExperimentalFeaturesDialog.exec = orig_exec
+    assert isinstance(opened.get("dialog"), ExperimentalFeaturesDialog)
+finally:
+    win.close()
+"""
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
+        result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
+        assert result.returncode == 0, result.stderr or result.stdout
+
     def test_theme_does_not_strip_mainwindow_desktop_chrome(self, tmp_path) -> None:
         code = f"""
 import os
@@ -2190,7 +2242,12 @@ finally:
 
 
 class TestNormalMenuSurface:
-    def test_mark_present_but_experimental_features_absent(self, tmp_path) -> None:
+    def test_mark_and_experimental_features_both_present(self, tmp_path) -> None:
+        """Run AutoPTZ Mark and Experimental Features... are both real, reachable
+        menu actions. (Experimental Features was briefly demoted to env-only in
+        rc9's "simplify experimental surfaces" pass — PR-7E brought it back as a
+        proper visible, registry-driven surface; see docs/flags.md.)
+        """
         code = f"""
 import os
 import sys
@@ -2210,7 +2267,7 @@ win = MainWindow(client, log_model=LogListModel(), frame_source=ShmFrameSource()
 try:
     texts = [a.text() for a in win.findChildren(QAction)]
     assert any("Run AutoPTZ Mark" in (t or "") for t in texts), texts
-    assert not any("Experimental Features" in (t or "") for t in texts), texts
+    assert any("Experimental Features" in (t or "") for t in texts), texts
 finally:
     win.close()
 """

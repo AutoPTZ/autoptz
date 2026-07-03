@@ -40,6 +40,7 @@ from autoptz.ui.widgets.camera_wall import CameraWall
 from autoptz.ui.widgets.common import on_theme_changed
 from autoptz.ui.widgets.dialogs import (
     AboutDialog,
+    ExperimentalFeaturesDialog,
     ModelManagerDialog,
     NetworkCameraDialog,
 )
@@ -402,6 +403,17 @@ class MainWindow(QMainWindow):
                 ),
             )
         )
+        self._act_experimental = _action(
+            self,
+            "Experimental Features...",
+            self._open_experimental_features,
+            tip=(
+                "Toggle curated experimental engine flags (e.g. the shared "
+                "detection server) and per-camera tracking defaults for new "
+                "cameras. Most changes need a restart to take effect."
+            ),
+        )
+        engine.addAction(self._act_experimental)
         engine.addSeparator()
         self._act_stop_tracking = _action(
             self,
@@ -947,6 +959,9 @@ class MainWindow(QMainWindow):
             self._services.refresh()
         except Exception:  # noqa: BLE001
             log.debug("refresh services after model dialog failed", exc_info=True)
+
+    def _open_experimental_features(self) -> None:
+        ExperimentalFeaturesDialog(self._client, parent=self).exec()
 
     def _maybe_show_model_setup_on_startup(self) -> None:
         from PySide6.QtWidgets import QApplication

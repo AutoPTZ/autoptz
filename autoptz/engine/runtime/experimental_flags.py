@@ -139,6 +139,24 @@ EXPERIMENTAL_FLAGS: tuple[ExperimentalFlag, ...] = (
         choices=("fastest", "bgra"),
         restart_required=True,
     ),
+    ExperimentalFlag(
+        env_key="AUTOPTZ_MODEL_SERVER",
+        label="Shared detection server (multi-camera)",
+        description=(
+            "Run one shared detection server process that every camera delegates "
+            "to, instead of each camera loading its own model set. Validated as "
+            "the best-scaling mode for many cameras (54 ms end-to-end at 16 "
+            "cameras vs. 1.6 s for the threaded path) and now self-healing: the "
+            "server auto-respawns on crash, fails fast during an outage instead "
+            "of hanging cameras, and cameras fall back to their own local "
+            "detector after repeated failures. Still experimental — off by "
+            "default; validate on your hardware before relying on it."
+        ),
+        default="0",
+        kind="bool",
+        choices=(),
+        restart_required=True,
+    ),
 )
 
 

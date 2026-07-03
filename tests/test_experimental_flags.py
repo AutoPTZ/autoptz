@@ -44,13 +44,25 @@ def test_expected_flags_inventoried() -> None:
         "AUTOPTZ_NDI_COLOR_FORMAT",
         "AUTOPTZ_PTZ_SERIAL_AUTOPROBE",
         "AUTOPTZ_TRUE_LATENCY_LEAD",
+        "AUTOPTZ_MODEL_SERVER",
     }
 
 
-def test_process_scaling_flags_are_not_in_normal_experimental_ui() -> None:
+def test_process_per_camera_stays_out_of_the_normal_experimental_ui() -> None:
+    # The standalone model-per-child experiment is retired (see
+    # docs/engineering/retired-experiments.md) and is NOT the same thing as the
+    # shared model-server candidate below — it stays out of the registry.
     keys = {f.env_key for f in EXPERIMENTAL_FLAGS}
     assert "AUTOPTZ_PROCESS_PER_CAMERA" not in keys
-    assert "AUTOPTZ_MODEL_SERVER" not in keys
+
+
+def test_model_server_flag_registered() -> None:
+    flag = next(f for f in EXPERIMENTAL_FLAGS if f.env_key == "AUTOPTZ_MODEL_SERVER")
+    assert flag.kind == "bool"
+    assert flag.default == "0"  # off by default — still experimental
+    assert flag.restart_required is True
+    assert flag.label.strip()
+    assert flag.description.strip()
 
 
 def test_true_latency_lead_flag_registered() -> None:

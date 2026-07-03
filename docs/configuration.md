@@ -69,3 +69,6 @@ See [Performance](performance.md) for how these interact with your accelerator.
 | `AUTOPTZ_POSE_MODEL_PATH` | Use this pose ONNX verbatim. |
 | `AUTOPTZ_FORCE_EP` / `AUTOPTZ_PRECISION` / `AUTOPTZ_ORT_INTRA_THREADS` | Hardware prefs (set automatically from config by the supervisor). |
 | `AUTOPTZ_UPDATE_REPO` | Override the GitHub repo the updater checks. |
+
+The full `AUTOPTZ_*` flag surface — including the experimental flags managed by
+Engine → Experimental Features... — is documented in [flags.md](flags.md).

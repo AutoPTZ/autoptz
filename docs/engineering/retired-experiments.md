@@ -205,3 +205,9 @@ not preference.
 ### Reconsideration Criteria
 Only promote after it passes the same release gates as production: 6 and 8 fake
 NDI streams, CPU/RAM stability, clean shutdown, and no app-induced capture drops.
+
+> **Reconsidered 2026-07-03:** the curated Experimental Features dialog is
+> mounted again (Engine → Experimental Features…), by explicit user decision for
+> the 2.2.0 release. The 2026-06-29 rationale above still governs the *shape* of
+> the surface — curated registry entries with honest descriptions and restart
+> semantics, never a generic dumping ground for research switches.

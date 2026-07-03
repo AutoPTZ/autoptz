@@ -75,8 +75,6 @@ def main() -> None:
     sup.start(run_pump=False)
 
     print(
-        f"SCHED_ENGAGED {getattr(sup, '_inference_scheduler', None) is not None} "
-        f"flag={os.environ.get('AUTOPTZ_INFERENCE_SCHEDULER')} "
         f"MS_ENGAGED {getattr(sup, '_model_server_proc', None) is not None} "
         f"ms_flag={os.environ.get('AUTOPTZ_MODEL_SERVER')}",
         flush=True,
@@ -185,8 +183,6 @@ def main() -> None:
         "model_server_flag": os.environ.get("AUTOPTZ_MODEL_SERVER", ""),
         "model_server_engaged": getattr(sup, "_model_server_proc", None) is not None,
         "unified_pose_flag": os.environ.get("AUTOPTZ_UNIFIED_POSE", ""),
-        "inference_scheduler_flag": os.environ.get("AUTOPTZ_INFERENCE_SCHEDULER", ""),
-        "inference_scheduler_engaged": getattr(sup, "_inference_scheduler", None) is not None,
         "platform": platform.platform(),
         "python": sys.executable,
         "duration_s": DURATION,

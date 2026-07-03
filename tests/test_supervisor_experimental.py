@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from autoptz.config.store import ConfigStore
+from autoptz.engine.runtime.flags import env_model_server
 from autoptz.engine.supervisor import Supervisor
 
 
@@ -120,22 +121,37 @@ def test_absent_dict_leaves_unmanaged_env_untouched(tmp_path: Any, monkeypatch: 
     # Feature-inactive baseline: with nothing persisted, a directly-set env var
     # (exported by the operator, or by another test) is NOT clobbered.  Only keys
     # the user actually persists in experimental_features are managed.
-    monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
+    monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", "1")
     sup, _store = _sup(tmp_path)  # nothing persisted
     sup._apply_experimental_env()
-    assert os.environ.get("AUTOPTZ_MODEL_SERVER") == "1"
+    assert os.environ.get("AUTOPTZ_PROCESS_PER_CAMERA") == "1"
 
 
-def test_process_scaling_flags_are_not_managed_by_dev_flag_persistence(
+def test_model_server_flag_round_trips_through_dialog_persistence(
     tmp_path: Any, monkeypatch: Any
 ) -> None:
-    # The model-server candidate is env-only. A deliberately exported env var
-    # must not be clobbered by a stale saved dict from an older build.
+    """AUTOPTZ_MODEL_SERVER is now a registered experimental flag: persisting it
+    "on" via the dialog's apply path (``experimental_features`` in ConfigStore)
+    must flow through the supervisor's env-apply at engine start, same as any
+    other registered flag (PR #132 convention).
+    """
+    monkeypatch.delenv("AUTOPTZ_MODEL_SERVER", raising=False)
+    sup, store = _sup(tmp_path)
+    store.set_setting("experimental_features", {"AUTOPTZ_MODEL_SERVER": "1"})
+    sup._apply_experimental_env()
+    assert os.environ.get("AUTOPTZ_MODEL_SERVER") == "1"
+    assert env_model_server() is True
+
+
+def test_model_server_default_value_pops_existing_env(tmp_path: Any, monkeypatch: Any) -> None:
+    # Saving "off" (the registry default) clears a stale env var so the in-code
+    # fallback (off) governs — same contract as every other bool flag.
     monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
     sup, store = _sup(tmp_path)
     store.set_setting("experimental_features", {"AUTOPTZ_MODEL_SERVER": "0"})
     sup._apply_experimental_env()
-    assert os.environ.get("AUTOPTZ_MODEL_SERVER") == "1"
+    assert "AUTOPTZ_MODEL_SERVER" not in os.environ
+    assert env_model_server() is False
 
 
 def test_tracking_keys_in_dict_are_ignored_for_env(tmp_path: Any, monkeypatch: Any) -> None:

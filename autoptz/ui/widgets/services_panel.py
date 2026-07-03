@@ -229,6 +229,22 @@ class ServicesPanel(QWidget):
         root.addLayout(self._list)
         root.addStretch(1)
 
+        # ── footer (mirrors the Manage Models button pattern) ─────────────────────
+        root.addWidget(hline())
+        experimental_row = QHBoxLayout()
+        experimental_row.setSpacing(6)
+        self._experimental_btn = QPushButton("Experimental...")
+        self._experimental_btn.setToolTip(
+            "Toggle curated experimental engine flags (e.g. the shared detection "
+            "server) and per-camera tracking defaults for new cameras. Most "
+            "changes need a restart to take effect."
+        )
+        self._experimental_btn.clicked.connect(self._open_experimental_features)
+        experimental_row.addWidget(self._experimental_btn)
+        experimental_row.addWidget(HelpBadge(self._experimental_btn.toolTip()))
+        experimental_row.addStretch(1)
+        root.addLayout(experimental_row)
+
         self._restyle()
         on_theme_changed(client, self._restyle)
         _connect(client, "engineStateChanged", self.refresh)
@@ -425,6 +441,11 @@ class ServicesPanel(QWidget):
         ModelManagerDialog(self._client, parent=self).exec()
         self._refresh_optional_components()
         self.refresh()
+
+    def _open_experimental_features(self) -> None:
+        from autoptz.ui.widgets.dialogs.experimental import ExperimentalFeaturesDialog
+
+        ExperimentalFeaturesDialog(self._client, parent=self).exec()
 
     def _ensure_row(self, key: str) -> None:
         if key in self._rows:
