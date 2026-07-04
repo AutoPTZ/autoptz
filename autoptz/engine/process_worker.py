@@ -300,6 +300,12 @@ def run_camera_process(
                 RemotePool(client, failed=infer_failed_ev, build_local_fn=_build_local_detector)
             )
             worker._infer_shm_writer = _infer_writer  # keep the shm alive for the worker's life
+            # Only DETECTION is delegated to the server — this child still owns its
+            # face matching, so it needs the DB-backed gallery like any other worker.
+            # Without it the face stack falls back to an empty in-memory gallery:
+            # enrolled names never load ("Person N" forever) and the sibling
+            # ingest_identity relay no-ops (it targets the injected service).
+            _wire_identity(worker, spec)
         elif not spec.synthetic:
             _wire_models_and_identity(worker, spec)
 
@@ -348,6 +354,11 @@ def _wire_models_and_identity(worker: Any, spec: WorkerSpec) -> None:
     except Exception:  # noqa: BLE001 — pool is an optimisation, never load-bearing
         log.warning("camera process %s: inference pool init failed", spec.camera_id, exc_info=True)
 
+    _wire_identity(worker, spec)
+
+
+def _wire_identity(worker: Any, spec: WorkerSpec) -> None:
+    """Build this child's DB-backed identity gallery and inject it (both modes)."""
     try:
         from pathlib import Path
 
@@ -608,6 +619,10 @@ class ProcessWorkerHandle:
     def ingest_identity(self, record: Any) -> None:
         """Relay an identity harvested in another process into this child's gallery."""
         self._send("ingest_identity", (record,))
+
+    def delete_identity(self, identity_id: str) -> None:
+        """Drop an identity deleted in the UI from this child's gallery."""
+        self._send("delete_identity", (identity_id,))
 
     def enroll_track(self, *args: Any) -> None:
         self._send("enroll_track", args)

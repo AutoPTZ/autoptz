@@ -970,6 +970,18 @@ class CameraWorker:
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s ingest_identity failed", self.camera_id, exc_info=True)
 
+    def delete_identity(self, identity_id: str) -> None:
+        """Drop an identity deleted in the UI from this worker's gallery (process mode).
+
+        Best-effort: a missing identity service (identity features off) is a no-op.
+        """
+        service = self._injected_identity_service
+        if service is not None and hasattr(service, "delete"):
+            try:
+                service.delete(identity_id)
+            except Exception:  # noqa: BLE001
+                log.debug("camera_id=%s delete_identity failed", self.camera_id, exc_info=True)
+
     def set_inference_pool(self, pool: Any | None) -> None:
         """Inject the process-wide shared inference pool (heavy models once).
 

@@ -1794,6 +1794,15 @@ class EngineClient(QObject):
 
         self._identity_model.update_identity(updated)
         self.identitiesChanged.emit()
+        # Engine sync: a rename-to-current-name "touch" relays the record (with
+        # its new enabled state) to process-mode children's galleries.
+        self._enqueue(
+            RenameIdentityCmd(
+                camera_id=None,
+                identity_id=identity_id,
+                new_name=getattr(updated, "name", "") or "",
+            )
+        )
 
     @Slot(str, str)
     def mergeIdentities(self, keep_id: str, drop_id: str) -> None:
@@ -1828,6 +1837,16 @@ class EngineClient(QObject):
         self._identity_model.update_identity(merged)
         self._identity_model.remove_identity(drop_id)
         self.identitiesChanged.emit()
+        # Engine sync (process-mode children hold their own galleries): touch the
+        # kept identity so the merged record is relayed, and drop the folded one.
+        self._enqueue(
+            RenameIdentityCmd(
+                camera_id=None,
+                identity_id=keep_id,
+                new_name=getattr(merged, "name", "") or "",
+            )
+        )
+        self._enqueue(DeleteIdentityCmd(camera_id=None, identity_id=drop_id))
 
     @Slot(str, str)
     def setTargetIdentity(self, camera_id: str, identity_id: str) -> None:
@@ -2252,9 +2271,7 @@ class EngineClient(QObject):
         if ep:
             self._camera_eps[str(getattr(msg, "camera_id", "") or "")] = ep
             live_ids = set(self._model.camera_ids())
-            composed = " + ".join(
-                sorted({v for k, v in self._camera_eps.items() if k in live_ids})
-            )
+            composed = " + ".join(sorted({v for k, v in self._camera_eps.items() if k in live_ids}))
             if composed and composed != self._engine_ep:
                 self._engine_ep = composed
                 self.engineStateChanged.emit()

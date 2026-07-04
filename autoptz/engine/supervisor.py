@@ -1000,9 +1000,13 @@ class Supervisor:
             self._on_update_config(cmd)
         elif kind == CmdKind.ENROLL_IDENTITY:
             self._on_enroll_identity(cmd)
-        # Remaining commands (named-preset, identities, layouts) are UI/store
-        # concerns with no per-worker effect yet; they are intentionally ignored
-        # here so the pump never errors on them.
+        elif kind == CmdKind.RENAME_IDENTITY:
+            self._on_rename_identity(cmd)
+        elif kind == CmdKind.DELETE_IDENTITY:
+            self._on_delete_identity(cmd)
+        # Remaining commands (named-preset, layouts) are UI/store concerns with
+        # no per-worker effect yet; they are intentionally ignored here so the
+        # pump never errors on them.
 
     def _on_add_camera(self, cmd: AddCameraCmd) -> None:
         # _spawn_worker dedupes + registers under the lock and starts the worker
@@ -1064,6 +1068,59 @@ class Supervisor:
                 getattr(cmd, "click_x", None),
                 getattr(cmd, "click_y", None),
             )
+
+    def _on_rename_identity(self, cmd: Any) -> None:
+        """Apply a rename/label/touch to the shared gallery, then relay the
+        updated record to every process-mode child.
+
+        The UI already mutated the shared (parent) gallery, so the rename here is
+        an idempotent re-apply; the point of the handler is the relay — each
+        process child holds its OWN gallery and would otherwise only learn about
+        face-DB edits on restart.  ``merge`` and enable/disable arrive as a
+        rename-to-the-current-name "touch": the relayed record carries the merged
+        embeddings / new enabled state.
+        """
+        if not cmd.identity_id:
+            return
+        service = self._ensure_identity_service()
+        if service is None:
+            return
+        try:
+            service.rename(cmd.identity_id, cmd.new_name)
+        except Exception:  # noqa: BLE001
+            log.debug("identity rename in shared gallery failed", exc_info=True)
+        try:
+            record = service.get(cmd.identity_id)
+        except Exception:  # noqa: BLE001
+            record = None
+        if record is not None:
+            # source_cid="" → no worker matches, so this relays to ALL process
+            # children (a UI edit has no source camera).
+            self._relay_identity_to_siblings("", record)
+
+    def _on_delete_identity(self, cmd: Any) -> None:
+        """Delete from the shared gallery, then tell every process-mode child.
+
+        Without the broadcast a process child keeps matching (and following) an
+        identity the user deleted until its next restart.
+        """
+        if not cmd.identity_id:
+            return
+        service = self._ensure_identity_service()
+        if service is not None:
+            try:
+                service.delete(cmd.identity_id)
+            except Exception:  # noqa: BLE001
+                log.debug("identity delete in shared gallery failed", exc_info=True)
+        with self._lock:
+            workers = [w for w in self._workers.values() if getattr(w, "_is_process_worker", False)]
+        for worker in workers:
+            drop = getattr(worker, "delete_identity", None)
+            if callable(drop):
+                try:
+                    drop(cmd.identity_id)
+                except Exception:  # noqa: BLE001
+                    log.debug("identity delete relay failed", exc_info=True)
 
     def _on_ptz_nudge(self, cmd: PtzNudgeCmd) -> None:
         worker = self._get(cmd.camera_id)
