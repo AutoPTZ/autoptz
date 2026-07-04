@@ -124,6 +124,12 @@ class ServicesPanel(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # With the bar hidden, Qt can still auto-scroll sideways (e.g. focusing a
+        # button wider than a narrow dock), which shows up as content clipped at
+        # the LEFT with no way back. Pin the hidden scrollbar to 0 so the panel
+        # content always starts at its left edge.
+        hsb = scroll.horizontalScrollBar()
+        hsb.valueChanged.connect(lambda v: hsb.setValue(0) if v else None)
         scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         outer.addWidget(scroll, 1)
 
@@ -135,7 +141,8 @@ class ServicesPanel(QWidget):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        # header + controls
+        # header (title row + its own controls row: keeps the panel's minimum
+        # width small enough that a narrow dock never clips/h-scrolls content)
         head = QHBoxLayout()
         head.setSpacing(6)
         title = QLabel("Services and Status")
@@ -148,6 +155,10 @@ class ServicesPanel(QWidget):
             )
         )
         head.addStretch(1)
+        root.addLayout(head)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(6)
         self._start = QPushButton("Start")
         self._start.clicked.connect(client.userStartEngine)
         self._stop = QPushButton("Stop")
@@ -157,8 +168,9 @@ class ServicesPanel(QWidget):
         for b in (self._start, self._stop, self._restart):
             # min-height (not fixed) so vertical padding/descenders aren't clipped.
             b.setMinimumHeight(26)
-            head.addWidget(b)
-        root.addLayout(head)
+            controls.addWidget(b)
+        controls.addStretch(1)
+        root.addLayout(controls)
 
         # ── module switches ─────────────────────────────────────────────────────
         root.addWidget(hline())

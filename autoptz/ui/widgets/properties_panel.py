@@ -277,6 +277,10 @@ class PropertiesPanel(QWidget):
         # fields (combos/line edits) are constrained below so labels aren't
         # truncated behind a horizontal scrollbar in a narrow dock.
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # And pin the hidden bar to 0 — Qt can still auto-scroll sideways (focus
+        # navigation), which reads as content clipped at the left edge.
+        hsb = self._scroll.horizontalScrollBar()
+        hsb.valueChanged.connect(lambda v: hsb.setValue(0) if v else None)
         root.addWidget(self._scroll)
 
         body = QWidget()
@@ -510,15 +514,17 @@ class PropertiesPanel(QWidget):
         # detector cadence is degraded when the quality ladder has engaged —
         # same "configured→effective(reason)" transparency as the Detection
         # section's ``_quality_effective``/``_detect_effective`` rows below.
-        self._track_state = QLabel("")
-        self._track_state.setWordWrap(True)
+        # Both captions are ALWAYS visible, single-line, and elided — text-only
+        # updates, never show/hide — so the panel below them doesn't jump every
+        # time the state or the quality ladder changes (which is frequent under
+        # load). The full text lives in the tooltip.
+        self._track_state = QLabel(" ")
+        self._track_state.setWordWrap(False)
         self._muted_captions.append(self._track_state)
-        self._track_state.setVisible(False)
         tr.add_widget(self._track_state)
-        self._track_reason = QLabel("")
-        self._track_reason.setWordWrap(True)
+        self._track_reason = QLabel(" ")
+        self._track_reason.setWordWrap(False)
         self._muted_captions.append(self._track_reason)
-        self._track_reason.setVisible(False)
         tr.add_widget(self._track_reason)
 
         tf = _form()
@@ -1422,11 +1428,9 @@ class PropertiesPanel(QWidget):
         state = str(status.get("state", "") or "")
         if state and state != "idle":
             headline = str(status.get("headline", "") or "") or state.capitalize()
-            self._track_state.setText(f"State: {headline} ({state})")
-            self._track_state.setVisible(True)
+            self._set_caption(self._track_state, f"State: {headline} ({state})")
         else:
-            self._track_state.clear()
-            self._track_state.setVisible(False)
+            self._set_caption(self._track_state, "")
 
         qs = _safe(lambda: rec.quality_state_as_dict(), {}) if rec is not None else {}
         configured = int(qs.get("configured_interval", 1) or 1)
@@ -1434,11 +1438,28 @@ class PropertiesPanel(QWidget):
         if configured > 0 and effective > configured:
             multiplier = quality_multiplier(effective, configured)
             reason = str(qs.get("reason", "") or "") or "Auto quality ladder engaged."
-            self._track_reason.setText(f"Degraded ×{multiplier}: {reason}")
-            self._track_reason.setVisible(True)
+            self._set_caption(self._track_reason, f"Degraded ×{multiplier}: {reason}")
         else:
-            self._track_reason.clear()
-            self._track_reason.setVisible(False)
+            self._set_caption(self._track_reason, "")
+
+    @staticmethod
+    def _set_caption(label: QLabel, text: str) -> None:
+        """Update an always-visible one-line caption without moving the layout.
+
+        Empty text becomes a single space (keeps the line's height reserved);
+        long text is elided to the label's current width with the full string on
+        the tooltip. The label is never shown/hidden, so surrounding widgets
+        never shift when the state flips.
+        """
+        full = (text or "").strip()
+        if not full:
+            label.setText(" ")
+            label.setToolTip("")
+            return
+        fm = label.fontMetrics()
+        width = max(60, label.width() - 4)
+        label.setText(fm.elidedText(full, Qt.TextElideMode.ElideRight, width))
+        label.setToolTip(full)
 
     def _update_effective_detection(self) -> None:
         """Echo what the engine is *actually* doing next to the configured values.

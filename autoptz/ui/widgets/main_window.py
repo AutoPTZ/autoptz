@@ -683,11 +683,30 @@ class MainWindow(QMainWindow):
         else:
             # List discovered sources directly (check to add, uncheck to remove),
             # exactly like USB — populated from the background discovery cache.
-            sources = list(self._ndi_sources_cache)
+            # This machine's OWN AutoPTZ NDI outputs are hidden: adding one as a
+            # camera re-ingests our own broadcast (a feedback loop that can nest
+            # and eats CPU with encode+decode of the same pixels). Another
+            # machine's AutoPTZ output remains listed — that's a legitimate use.
+            all_sources = list(self._ndi_sources_cache)
+            sources = [
+                s
+                for s in all_sources
+                if not _is_own_ndi_output(str(s.get("name", s.get("uri", ""))))
+            ]
+            hidden = len(all_sources) - len(sources)
             if not sources:
                 msg = "Scanning for NDI sources…" if self._ndi_scanning else "No NDI sources found"
                 placeholder = ndi.addAction(msg)
                 placeholder.setEnabled(False)
+            if hidden:
+                note = ndi.addAction(
+                    f"{hidden} AutoPTZ output(s) from this Mac hidden (feedback loop)"
+                )
+                note.setEnabled(False)
+                note.setToolTip(
+                    "These are AutoPTZ's own NDI output feeds from this computer. "
+                    "Re-adding them as cameras would make AutoPTZ watch itself."
+                )
             for src in sources:
                 name = str(src.get("name", src.get("uri", "?")))
                 uri = str(src.get("uri", ""))
@@ -1496,6 +1515,29 @@ class MainWindow(QMainWindow):
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _is_own_ndi_output(name: str, host: str | None = None) -> bool:
+    """True when *name* is THIS machine's own AutoPTZ NDI output feed.
+
+    NDI advertises sources as ``"HOSTNAME (sender name)"`` and AutoPTZ's output
+    sender names start with ``"AutoPTZ "`` — so our own feeds look like
+    ``"PRINCES-MBP (AutoPTZ Camera 1)"`` on PRINCES-MBP. Matching requires BOTH
+    the local hostname AND the AutoPTZ prefix, so another machine's AutoPTZ
+    output (a legitimate remote source) is never filtered. ``host`` is
+    injectable for tests; defaults to this machine's short hostname.
+    """
+    if host is None:
+        import socket
+
+        host = socket.gethostname().split(".")[0]
+    text = (name or "").strip()
+    lead, sep, inner = text.partition(" (")
+    if not sep:
+        return False
+    return lead.strip().lower() == (host or "").strip().lower() and inner.lstrip().startswith(
+        "AutoPTZ "
+    )
 
 
 class _ScanTask(QObject):

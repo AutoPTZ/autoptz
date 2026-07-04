@@ -502,11 +502,12 @@ class TestStateChips:
         client.cameraModel.add_camera(rec)
         tile = CameraTile("cam-1", client, frame_source=None)
         try:
-            # The tile must actually own paint methods for both chips (not just
-            # tolerate their absence) — proves the HUD is wired, not merely that
-            # painting doesn't crash without them.
+            # The state chip is the tile's status surface; the old bare "×N"
+            # degradation chip is deliberately GONE (it was cryptic and stacked
+            # onto the target label) — its info lives in the "?" per-stage
+            # tooltip and the Properties caption instead.
             assert hasattr(tile, "_paint_state_chip")
-            assert hasattr(tile, "_paint_degradation_chip")
+            assert not hasattr(tile, "_paint_degradation_chip")
             tile.resize(320, 240)
             tile.grab()  # forces paintEvent offscreen; must not raise
         finally:
@@ -2065,8 +2066,11 @@ class TestPropertiesPanelStateChips:
                 camera_id=cid, seq=1, tracking_status=TrackingStatusInfo(state="idle")
             )
             panel._on_telemetry()
-            assert panel._track_state.isHidden()
-            assert panel._track_state.text() == ""
+            # The caption stays visible with a blank placeholder — reserving its
+            # line so the panel below never jumps when the state flips (the old
+            # show/hide made the whole Tracking section move under load).
+            assert not panel._track_state.isHidden()
+            assert panel._track_state.text() == " "
         finally:
             panel.deleteLater()
 

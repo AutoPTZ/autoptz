@@ -59,6 +59,7 @@ from autoptz.engine.runtime.messages import (
 
 if TYPE_CHECKING:
     from autoptz.config.models import CameraConfig, IdentityRecord
+    from autoptz.engine.framing_target import FramingTarget
     from autoptz.engine.runtime.shm import ShmWriter
 
 log = logging.getLogger(__name__)
@@ -686,7 +687,13 @@ class CameraWorker:
         # UNION box (which must fit-width); False for a single locked person (which
         # keeps the prior height-only sizing). Read by the Center Stage crop path.
         self._digital_target_is_group: bool = False
-        self._cs_diag_t: float = 0.0  # throttle for the Center Stage diagnostic log
+        # Center Stage diagnostic log: last logged (target-present, tid) so the
+        # line fires only on a state CHANGE, never as a periodic repeat.
+        self._cs_last_logged_state: tuple[bool, int | None] | None = None
+        # Whether the last inference-backpressure window was ≥50% skipped — the
+        # "inference behind" line logs at INFO only on the enter/recover
+        # transitions (steady-state repeats go to DEBUG).
+        self._inference_behind = False
         # The active Center-Stage digital crop (x, y, w, h) in full-frame pixels
         # for the most recently framed output, or None when Center Stage is not
         # driving the painted frame. Stamped onto each TelemetryMsg so the UI can
@@ -3899,19 +3906,31 @@ class CameraWorker:
         self._last_logged_inf_captured = self._frames_captured
         self._last_logged_inf_inferred = self._frames_inferred
         skipped = cap_delta - inf_delta
-        if cap_delta > 0 and skipped > 0:
-            ratio = skipped / cap_delta
-            if ratio >= 0.5:  # only shout when the inference thread is well behind
-                log.info(
-                    "camera_id=%s inference behind: processed %d/%d frames (%.0f%% skipped) "
-                    "in the last %.0fs; cadence=%s",
-                    self.camera_id,
-                    inf_delta,
-                    cap_delta,
-                    ratio * 100.0,
-                    _DROP_LOG_INTERVAL_S,
-                    self._quality_active,
-                )
+        ratio = (skipped / cap_delta) if cap_delta > 0 else 0.0
+        behind = cap_delta > 0 and ratio >= 0.5
+        if behind:
+            # INFO only when ENTERING the behind state; a steady-state repeat every
+            # window said nothing new and, at 5 cameras, spammed a line every ~2 s.
+            emit = log.info if not self._inference_behind else log.debug
+            emit(
+                "camera_id=%s inference behind: processed %d/%d frames (%.0f%% skipped) "
+                "in the last %.0fs; cadence=%s",
+                self.camera_id,
+                inf_delta,
+                cap_delta,
+                ratio * 100.0,
+                _DROP_LOG_INTERVAL_S,
+                self._quality_active,
+            )
+        elif self._inference_behind and cap_delta > 0:
+            log.info(
+                "camera_id=%s inference caught up: processed %d/%d frames in the last %.0fs",
+                self.camera_id,
+                inf_delta,
+                cap_delta,
+                _DROP_LOG_INTERVAL_S,
+            )
+        self._inference_behind = behind
 
     def _framed_output(self, frame: NDArray[np.uint8]) -> NDArray[np.uint8]:
         """Center Stage: crop+scale the frame to auto-frame the target.
@@ -3957,9 +3976,13 @@ class CameraWorker:
             x, y, cw, ch = framer.frame_for(target, w, h, fit_width=self._digital_target_is_group)
         else:
             x, y, cw, ch = framer.full_frame(w, h)
-        nowm = time.monotonic()
-        if nowm - self._cs_diag_t > 2.0:
-            self._cs_diag_t = nowm
+        # Log ONLY on a state change (target appears/vanishes or the tid flips):
+        # the previous 2-second repeat of an unchanged state spammed the console
+        # and the in-app Logs panel — 5 cameras produced a line every ~400 ms
+        # while saying nothing new.
+        cs_state = (target is not None, self._target_track_id)
+        if cs_state != self._cs_last_logged_state:
+            self._cs_last_logged_state = cs_state
             log.info(
                 "camera_id=%s center-stage: target=%s crop=%dx%d of %dx%d (tid=%s)",
                 self.camera_id,
@@ -4013,7 +4036,7 @@ class CameraWorker:
         self._digital_target_is_group = ft.is_group
         return ft.bbox
 
-    def _select_framing_target(self) -> "FramingTarget":
+    def _select_framing_target(self) -> FramingTarget:
         """This tick's shared framing target (used by Center Stage AND physical PTZ)."""
         from autoptz.engine.framing_target import select_framing_target
 
@@ -4339,6 +4362,13 @@ class CameraWorker:
             # Still keep identity-targeting honest even without the face stack:
             # if an explicit identity target can't be resolved we leave the
             # current track lock untouched (manual box-tracking still works).
+            return
+        # Nobody detected → a face couldn't bind to any track (matching, targeting
+        # and harvest all key off a containing track), so skip the whole pass —
+        # the SCRFD full-frame scan is pure CPU burn on an empty scene. The timer
+        # is NOT stamped, so the pass runs immediately once someone appears.
+        if not tracks and not self._pending_enroll:
+            self._clear_face_overlay()
             return
         self._last_face_t = now
 

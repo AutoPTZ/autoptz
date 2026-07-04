@@ -199,6 +199,10 @@ class EngineClient(QObject):
         # stopped engine is never "trapped off" across launches. Persisted under
         # ``engine_autostart``; seeded from that setting at startup.
         self._autostart_desired: bool = True
+        # Per-camera inference EP from telemetry — aggregated into the stable
+        # Engine label (mixed worker modes report different strings; see
+        # _on_telemetry_main).
+        self._camera_eps: dict[str, str] = {}
         self._engine_ep: str = ""
         self._startup_active: bool = False
         self._startup_phase: str = ""
@@ -497,6 +501,7 @@ class EngineClient(QObject):
                 log.exception("Supervisor stop failed")
         self._engine_running = False
         self._engine_ep = ""
+        self._camera_eps.clear()
         self._set_startup_progress(active=False, phase="")
         # Detach the (now-stopped) engine's gallery; CRUD reverts to store-only.
         self._identity_service = None
@@ -2236,14 +2241,23 @@ class EngineClient(QObject):
     def _on_telemetry_main(self, msg: TelemetryMsg) -> None:
         """Apply telemetry on the owning (GUI) thread."""
         self._model.update_telemetry(msg)
-        # Surface the actually-active inference EP reported by the worker.  Without
-        # this the status bar / camera-info panel showed a blank EP on every
-        # platform (the value was only ever seeded empty); the user noticed it on
-        # Windows.  Telemetry carries the real provider (CoreML / Dml / CPU / …).
+        # Surface the actually-active inference EP(s). Workers can legitimately
+        # report DIFFERENT strings at the same time — cameras on the shared
+        # detection server say "model-server" while cameras on the threaded path
+        # say the real provider (CoreML / Dml / CPU) — so last-writer-wins made
+        # the Engine label flap between the two at telemetry rate. Aggregate per
+        # camera instead and compose a stable, honest label ("model-server",
+        # "CoreML", or "CoreML + model-server" when mixed).
         ep = (getattr(msg, "ep", "") or "").replace("ExecutionProvider", "")
-        if ep and ep != self._engine_ep:
-            self._engine_ep = ep
-            self.engineStateChanged.emit()
+        if ep:
+            self._camera_eps[str(getattr(msg, "camera_id", "") or "")] = ep
+            live_ids = set(self._model.camera_ids())
+            composed = " + ".join(
+                sorted({v for k, v in self._camera_eps.items() if k in live_ids})
+            )
+            if composed and composed != self._engine_ep:
+                self._engine_ep = composed
+                self.engineStateChanged.emit()
         # Fan out to additive observers (Mark quality / ground-truth accumulators).
         # Guarded so a bad observer never breaks telemetry delivery.
         for observer in self._telemetry_observers:
