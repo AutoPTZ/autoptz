@@ -35,6 +35,33 @@ KP_LEFT_SHOULDER = 5
 KP_RIGHT_SHOULDER = 6
 KP_LEFT_HIP = 11
 KP_RIGHT_HIP = 12
+KP_LEFT_KNEE = 13
+KP_RIGHT_KNEE = 14
+KP_LEFT_ANKLE = 15
+KP_RIGHT_ANKLE = 16
+
+# Every COCO-17 keypoint EXCEPT the arms (elbows 7/8, wrists 9/10): the body
+# landmarks whose extent is stable when arms wave/extend.  Framing math must
+# only ever measure these, so gesturing can never grow or shift the shot.
+NON_ARM_KEYPOINTS: tuple[int, ...] = (
+    KP_NOSE,
+    KP_LEFT_EYE,
+    KP_RIGHT_EYE,
+    KP_LEFT_EAR,
+    KP_RIGHT_EAR,
+    KP_LEFT_SHOULDER,
+    KP_RIGHT_SHOULDER,
+    KP_LEFT_HIP,
+    KP_RIGHT_HIP,
+    KP_LEFT_KNEE,
+    KP_RIGHT_KNEE,
+    KP_LEFT_ANKLE,
+    KP_RIGHT_ANKLE,
+)
+
+# Real body extent (nose→ankle) misses the crown of the head and the sole of
+# the foot; pad it so the framed height covers the whole person.
+_BODY_EXTENT_PAD = 1.08
 
 # Head landmarks, in fallback order (nose is the best single head point).
 KP_HEAD_GROUPS: tuple[tuple[int, ...], ...] = (
@@ -272,12 +299,13 @@ def subject_height_from_pose(
 ) -> float | None:
     """Return a **stable** subject-height span (pixels), or ``None``.
 
-    Uses the shoulder→hip vertical distance — a torso measure that does not
-    change when arms/legs move — scaled up to approximate the framing-relevant
-    person height (a standing adult is roughly ~3.3× their shoulder→hip span).
-    The caller divides this by the frame height for the auto-zoom fraction, so
-    only the *ratio* matters; the scale just keeps the zoom target comparable to
-    the legacy bbox-height behaviour.
+    Prefers the REAL vertical extent of the confident non-arm landmarks (head →
+    ankles, padded ×1.08 for crown/sole) when that is taller than the classic
+    3.3× shoulder→hip heuristic; the heuristic remains the floor so a subject
+    with cropped legs (extent = head→hips only) is never under-measured into an
+    over-zoom.  Arms (elbows/wrists) are NEVER measured, so gesturing cannot
+    change the result.  The caller divides this by the frame height for the
+    auto-zoom fraction, so only the *ratio* matters.
 
     Returns ``None`` when shoulders or hips are not both confidently available
     (the caller then keeps the bbox-height zoom math).
@@ -291,7 +319,23 @@ def subject_height_from_pose(
         return None
     # Empirical torso→full-height factor; keeps the zoom subject-height in the
     # same ballpark as the person bbox height the controller was tuned against.
-    return span * 3.3
+    height = span * 3.3
+    extent = _body_extent(kps, min_conf)
+    if extent is not None:
+        height = max(height, (extent[1] - extent[0]) * _BODY_EXTENT_PAD)
+    return height
+
+
+def _body_extent(
+    kps: Keypoints,
+    min_conf: float = DEFAULT_KP_CONF,
+) -> tuple[float, float] | None:
+    """(min_y, max_y) of the confident NON-ARM landmarks, or ``None``."""
+    pts = _confident(kps, NON_ARM_KEYPOINTS, min_conf)
+    if not pts:
+        return None
+    ys = [p.y for p in pts]
+    return (min(ys), max(ys))
 
 
 def torso_framing_box(
@@ -305,11 +349,12 @@ def torso_framing_box(
     untouched.  Center Stage crops around it when ``aim_body_mode == "torso"``
     ("Ignore arms"):
 
-    - height = :func:`subject_height_from_pose` (3.3× the shoulder→hip span), so
-      the crop zoom matches the physical auto-zoom's torso-mode subject height;
+    - height = :func:`subject_height_from_pose`: the padded head→ankle body
+      extent when visible, floored by the 3.3× shoulder→hip heuristic — so the
+      crop zoom matches the physical auto-zoom's torso-mode subject height;
     - centre-x = the shoulder midpoint (the steadiest horizontal anchor);
-    - centre-y = the hips (≈ a standing body's mid-height, per
-      :func:`body_aim_point`), which puts the head comfortably inside the box.
+    - centre-y = the body-extent midpoint when the extent drives the height
+      (covers head AND feet), else the hips (≈ a standing body's mid-height).
 
     The width is nominal (the digital crop is sized height-only for a single
     person; only the centre-x matters).  ``None`` when shoulders or hips are not
@@ -323,6 +368,11 @@ def torso_framing_box(
     if shoulders is None or hips is None:  # pragma: no cover — height implies both
         return None
     cx, cy = shoulders[0], hips[1]
+    extent = _body_extent(kps, min_conf)
+    if extent is not None and (extent[1] - extent[0]) * _BODY_EXTENT_PAD >= height:
+        # The real body extent set the height — centre the box on it so the
+        # head and the feet both stay inside (hips are NOT mid-height then).
+        cy = (extent[0] + extent[1]) * 0.5
     half_w = height * 0.2  # nominal ~0.4 aspect person
     return (cx - half_w, cy - height * 0.5, cx + half_w, cy + height * 0.5)
 

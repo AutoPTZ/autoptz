@@ -133,6 +133,27 @@ class TestSubjectHeight:
         moved[9] = Keypoint(110.0, 10.0, 0.9)  # raise a wrist
         assert subject_height_from_pose(moved) == before
 
+    def test_full_body_extent_beats_heuristic_when_taller(self) -> None:
+        """With head + ankle landmarks the REAL body extent (padded) wins over
+        the 3.3x torso heuristic — 'use body pose estimation more'."""
+        kps = list(_STANDING)
+        kps[KP_NOSE] = Keypoint(200.0, 60.0, 0.9)
+        kps[15] = Keypoint(190.0, 700.0, 0.9)  # left ankle
+        kps[16] = Keypoint(210.0, 700.0, 0.9)  # right ankle
+        # extent nose→ankle = 640, padded ×1.08 = 691.2 > 660 (3.3×200)
+        assert abs(subject_height_from_pose(kps) - 640.0 * 1.08) < 1e-6
+
+    def test_extent_ignores_arm_keypoints(self) -> None:
+        """A wrist thrown above the head must not stretch the body extent."""
+        kps = list(_STANDING)
+        kps[KP_NOSE] = Keypoint(200.0, 60.0, 0.9)
+        kps[15] = Keypoint(190.0, 700.0, 0.9)
+        kps[16] = Keypoint(210.0, 700.0, 0.9)
+        before = subject_height_from_pose(kps)
+        kps[9] = Keypoint(110.0, 0.0, 0.9)  # left wrist way above the head
+        kps[10] = Keypoint(290.0, 720.0, 0.9)  # right wrist at the floor
+        assert subject_height_from_pose(kps) == before
+
 
 class TestTorsoFramingBox:
     def test_box_from_torso_anchors(self) -> None:
@@ -162,6 +183,19 @@ class TestTorsoFramingBox:
         assert torso_framing_box(_pose(ls=(170.0, 100.0, 0.9), rs=(230.0, 100.0, 0.9))) is None
         assert torso_framing_box(_pose(lh=(180.0, 300.0, 0.9), rh=(220.0, 300.0, 0.9))) is None
         assert torso_framing_box(_pose()) is None
+
+    def test_full_body_extent_centres_on_the_body(self) -> None:
+        """With head + ankles the box must cover the REAL body (centre at the
+        extent midpoint), not assume hips-at-mid-height — else feet get cut."""
+        kps = list(_STANDING)
+        kps[KP_NOSE] = Keypoint(200.0, 60.0, 0.9)
+        kps[15] = Keypoint(190.0, 700.0, 0.9)
+        kps[16] = Keypoint(210.0, 700.0, 0.9)
+        box = torso_framing_box(kps)
+        assert box is not None
+        x1, y1, x2, y2 = box
+        assert y1 <= 60.0 and y2 >= 700.0  # head AND feet inside
+        assert abs((x1 + x2) * 0.5 - 200.0) < 1e-6  # still shoulder-centred x
 
     def test_none_on_degenerate_span(self) -> None:
         flat = _pose(

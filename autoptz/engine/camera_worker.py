@@ -560,8 +560,18 @@ class CameraWorker:
         self._pose_keypoints: list[Any] | None = None  # last keypoints (reused)
         self._pose_kp_track_id: int | None = None  # track they belong to
         self._last_pose_t = 0.0
+        # Sticky last-GOOD pose cache: unlike _pose_keypoints (cleared by any
+        # single failed/inconsistent estimate — pose quality dips exactly while
+        # the subject gestures), these survive momentary dropouts so framing
+        # holds the torso box instead of snapping to the arms-inflated bbox.
+        # Written only on successful estimates; cleared on target change/loss.
+        self._last_good_kps: list[Any] | None = None
+        self._last_good_kps_track_id: int | None = None
+        self._last_pose_good_t = 0.0
         # Throttle for the head-out-of-view recovery log line.
         self._last_head_recover_log_t = 0.0
+        # Last logged 'Ignore arms' framing source ("torso"/"bbox"), change-only.
+        self._framing_source = ""
         self._last_pose_overlay_t = 0.0
         self._last_pose_overlay_frame_id = 0
         self._last_pose_emitted_frame_id = -1
@@ -2955,6 +2965,7 @@ class CameraWorker:
                 self._pose_kp_track_id = track.track_id
                 self._last_pose_overlay_t = now
                 self._last_pose_overlay_frame_id = max(1, self._current_inference_frame_id)
+                self._note_good_kps(kps, track.track_id, now)
             else:
                 self._pose_keypoints = None
                 self._pose_kp_track_id = None
@@ -3076,6 +3087,9 @@ class CameraWorker:
         """Clear the pose aim smoother + cached keypoints (on target change)."""
         self._pose_keypoints = None
         self._pose_kp_track_id = None
+        self._last_good_kps = None
+        self._last_good_kps_track_id = None
+        self._last_pose_good_t = 0.0
         self._last_pose_overlay_t = 0.0
         self._last_pose_overlay_frame_id = 0
         self._last_pose_emitted_frame_id = -1
@@ -4209,19 +4223,31 @@ class CameraWorker:
         torso = self._torso_stable_box(ft.primary_track_id)
         return torso if torso is not None else ft.bbox
 
+    def _note_good_kps(self, kps: list[Any], track_id: int, now: float) -> None:
+        """Record a successful, consistency-checked pose estimate (sticky).
+
+        Framing reads this cache instead of the strict per-tick one so a single
+        bad estimate — common exactly while the subject gestures — cannot snap
+        the shot back to the raw bbox.
+        """
+        self._last_good_kps = kps
+        self._last_good_kps_track_id = track_id
+        self._last_pose_good_t = now
+
     def _fresh_target_kps(self, track_id: int | None) -> list[Any] | None:
-        """Cached pose keypoints iff they belong to *track_id* and are fresh.
+        """The last GOOD pose keypoints iff they belong to *track_id* and a
+        successful estimate happened within ``_POSE_FRAMING_TTL_S``.
 
         Safe from any thread: the keypoints are written by the inference thread
         (reference swap — GIL-atomic, same contract as the overlay).  The
-        freshness gate rejects keypoints older than ``_POSE_FRAMING_TTL_S`` so a
-        stalled inference thread degrades to raw-bbox behaviour instead of
-        acting on a stale torso.
+        freshness gate means a sustained pose outage (dead estimator, stalled
+        inference thread) degrades to raw-bbox behaviour instead of acting on a
+        stale torso — but a momentary dropout does NOT.
         """
-        kps = self._pose_keypoints
-        if not kps or track_id is None or self._pose_kp_track_id != track_id:
+        kps = self._last_good_kps
+        if not kps or track_id is None or self._last_good_kps_track_id != track_id:
             return None
-        if time.monotonic() - self._last_pose_t > _POSE_FRAMING_TTL_S:
+        if time.monotonic() - self._last_pose_good_t > _POSE_FRAMING_TTL_S:
             return None
         return kps
 
@@ -4230,18 +4256,47 @@ class CameraWorker:
 
         Only in "Ignore arms" mode (``aim_body_mode == "torso"``); falls back to
         None — raw-bbox framing — whenever fresh owned keypoints are missing.
+        Transitions between the two sources are logged (throttled by
+        change-only) so a field run shows whether pose is actually protecting
+        the framing or it silently degraded to the raw box.
         """
         if getattr(self.config.tracking, "aim_body_mode", "torso") != "torso":
             return None
         kps = self._fresh_target_kps(track_id)
-        if kps is None:
-            return None
-        try:
-            from autoptz.engine.pipeline import framing
+        box = None
+        if kps is not None:
+            try:
+                from autoptz.engine.pipeline import framing
 
-            return framing.torso_framing_box(kps)
-        except Exception:  # noqa: BLE001
-            return None
+                box = framing.torso_framing_box(kps)
+            except Exception:  # noqa: BLE001
+                box = None
+        if box is not None:
+            self._note_framing_source("torso")
+            return box
+        self._note_framing_source(
+            "bbox",
+            reason="no fresh pose keypoints" if kps is None else "torso landmarks unavailable",
+        )
+        return None
+
+    def _note_framing_source(self, source: str, *, reason: str = "") -> None:
+        """Log 'Ignore arms' framing-source transitions (change-only)."""
+        if source == self._framing_source:
+            return
+        self._framing_source = source
+        if source == "torso":
+            log.info(
+                "camera_id=%s framing source → torso (pose-stable; arms ignored)",
+                self.camera_id,
+            )
+        else:
+            log.info(
+                "camera_id=%s framing source → bbox (%s) — arm motion CAN move "
+                "the shot until pose recovers",
+                self.camera_id,
+                reason or "pose unavailable",
+            )
 
     def _head_recovery_bias(self, track: TrackInfo, ey: float, frame_h: float) -> float:
         """Tilt-up bias when the head is out of view above the frame.

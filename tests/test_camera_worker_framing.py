@@ -82,9 +82,12 @@ def _locked_worker_with_pose(*, aim_body_mode: str = "torso", raised_arm_bbox=No
     box = raised_arm_bbox or (60.0, 20.0, 340.0, 640.0)  # arms up: tall + wide
     w._last_tracks = [TrackInfo(track_id=1, bbox=BBox(x1=box[0], y1=box[1], x2=box[2], y2=box[3]))]
     w._target_track_id = 1
+    # Mirror _pose_aim's success state: the strict per-tick cache AND the
+    # sticky last-good cache that framing reads.
     w._pose_keypoints = _standing_kps()
     w._pose_kp_track_id = 1
     w._last_pose_t = time.monotonic()
+    w._note_good_kps(_standing_kps(), 1, time.monotonic())
     return w, box
 
 
@@ -113,15 +116,31 @@ def test_center_stage_raw_bbox_when_full_silhouette() -> None:
     assert w._current_digital_target() == raw_box
 
 
+def test_framing_pose_survives_single_bad_estimate() -> None:
+    """One failed/inconsistent pose estimate (production clears _pose_keypoints)
+    must NOT snap framing back to the raw arms-inflated bbox: the last GOOD
+    keypoints hold the torso box for _POSE_FRAMING_TTL_S."""
+    from autoptz.engine.pipeline.framing import torso_framing_box
+
+    w, raw_box = _locked_worker_with_pose()
+    # Exactly what _pose_aim's failure branch does on one bad estimate:
+    w._pose_keypoints = None
+    w._pose_kp_track_id = None
+    assert w._current_digital_target() == torso_framing_box(_standing_kps())
+    assert w._current_digital_target() != raw_box
+
+
 def test_center_stage_raw_bbox_without_pose() -> None:
     w, raw_box = _locked_worker_with_pose()
-    w._pose_keypoints = None
+    w._reset_pose_aim()  # pose fully unavailable — no good keypoints ever held
     assert w._current_digital_target() == raw_box
 
 
 def test_center_stage_raw_bbox_when_pose_is_other_track() -> None:
     w, raw_box = _locked_worker_with_pose()
-    w._pose_kp_track_id = 2  # keypoints belong to someone else
+    # Keypoints belong to someone else (both caches).
+    w._pose_kp_track_id = 2
+    w._last_good_kps_track_id = 2
     assert w._current_digital_target() == raw_box
 
 
@@ -129,7 +148,8 @@ def test_center_stage_raw_bbox_when_pose_stale() -> None:
     import time
 
     w, raw_box = _locked_worker_with_pose()
-    w._last_pose_t = time.monotonic() - 5.0  # inference thread stalled
+    # No successful estimate for a while (inference thread stalled).
+    w._last_pose_good_t = time.monotonic() - 5.0
     assert w._current_digital_target() == raw_box
 
 
@@ -198,6 +218,20 @@ def test_ptz_track_error_follows_bbox_in_full_silhouette_mode() -> None:
     assert err_a != err_b
 
 
+def test_framing_source_flip_is_logged(caplog) -> None:
+    """Transparency: when 'Ignore arms' framing degrades torso→bbox (or
+    recovers), a log line says so — field runs must be diagnosable."""
+    import logging
+
+    w, _ = _locked_worker_with_pose()
+    with caplog.at_level(logging.INFO, logger="autoptz.engine.camera_worker"):
+        w._current_digital_target()  # torso-stable engaged
+        w._last_pose_good_t -= 30.0  # pose expires mid-run
+        w._current_digital_target()  # → raw bbox
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("framing source" in m and "bbox" in m for m in messages), messages
+
+
 def _head_assist_error(box, *, with_head: bool = False):
     """(ex, ey) for a worker whose cached pose has torso keypoints and — only
     when *with_head* — a confident nose. full_silhouette mode isolates the
@@ -211,6 +245,7 @@ def _head_assist_error(box, *, with_head: bool = False):
         kps = list(w._pose_keypoints)
         kps[KP_NOSE] = Keypoint(200.0, 60.0, 0.9)
         w._pose_keypoints = kps
+        w._note_good_kps(kps, 1, time.monotonic())
     w._pose_aim = lambda *a, **k: (None, 0.0, 0.0)
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
     (ex, ey), _ = w._track_error(w._last_tracks[0], frame, time.monotonic(), tracks=w._last_tracks)
