@@ -682,6 +682,7 @@ class CameraWorker:
         self._shm: ShmWriter | None = None
         self._vcam: Any | None = None  # VirtualCamSink (lazily created when vcam_out enabled)
         self._ndi: Any | None = None  # NDISendSink (lazily created when ndi_out enabled)
+        self._output_sender: Any | None = None  # OutputSender pump (lazy, off-capture-thread)
         self._digital_framer: Any | None = None  # Center Stage auto-framer (lazy)
         # True when the last _current_digital_target() returned a multi-person group
         # UNION box (which must fit-width); False for a single locked person (which
@@ -828,6 +829,10 @@ class CameraWorker:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=timeout)
         self._thread = None
+        # Stop the output pump BEFORE closing its sinks (it may be mid-send).
+        if self._output_sender is not None:
+            self._output_sender.close()
+            self._output_sender = None
         if self._vcam is not None:
             self._vcam.close()
             self._vcam = None
@@ -4117,6 +4122,11 @@ class CameraWorker:
             if preview_due:
                 self._last_preview_push_t = now
                 self._shm.push(self._fit_frame(framed))
+            # Output sinks (vcam / NDI) send on their own pump thread: the
+            # BGR→RGBA conversion + SDK hand-off cost milliseconds per frame,
+            # and paying them here — on the CAPTURE thread — surfaced as random
+            # frame drops under load. The capture thread only parks the frame.
+            sinks: list[Any] = []
             if vcam_due:
                 self._last_vcam_push_t = now
                 ow = int(getattr(self.config.ptz, "digital_output_w", 1280))
@@ -4125,7 +4135,7 @@ class CameraWorker:
                     from autoptz.engine.pipeline.vcam import VirtualCamSink
 
                     self._vcam = VirtualCamSink(ow, oh)
-                self._vcam.send_bgr(framed)
+                sinks.append(self._vcam)
             if ndi_due:
                 self._last_ndi_push_t = now
                 ow = int(getattr(self.config.ptz, "digital_output_w", 1280))
@@ -4134,7 +4144,17 @@ class CameraWorker:
                     from autoptz.engine.pipeline.ndi_send import NDISendSink
 
                     self._ndi = NDISendSink(ow, oh, self._ndi_output_name())
-                self._ndi.send_bgr(framed)
+                sinks.append(self._ndi)
+            if sinks:
+                if self._output_sender is None:
+                    from autoptz.engine.pipeline.output_sender import OutputSender
+
+                    self._output_sender = OutputSender(name=self.camera_id[:8])
+                # The passthrough path hands out the adapter's own buffer, which
+                # the next capture tick may overwrite — copy it for the pump.
+                # The Center Stage crop path returns a fresh array (no copy).
+                safe = framed if framed is not frame else np.ascontiguousarray(frame).copy()
+                self._output_sender.submit(safe, sinks)
         except Exception:  # noqa: BLE001
             # Was DEBUG-only: a broken preview pipe (shm/vcam) left the operator
             # staring at a frozen preview with an empty log.  Surface it as a

@@ -239,3 +239,83 @@ def test_face_pass_skipped_when_no_tracks(qtapp) -> None:
     )
     w._maybe_identify(frame, [track], now=100.05)
     assert calls == [1]
+
+
+# ── output pump: sinks never run on the capture thread ──────────────────────
+
+
+def test_output_sender_delivers_on_its_own_thread() -> None:
+    import threading
+    import time
+
+    import numpy as np
+
+    from autoptz.engine.pipeline.output_sender import OutputSender
+
+    seen: list[str] = []
+    done = threading.Event()
+
+    class _Sink:
+        def send_bgr(self, frame):
+            seen.append(threading.current_thread().name)
+            done.set()
+
+    sender = OutputSender(name="t1")
+    try:
+        sender.submit(np.zeros((4, 4, 3), dtype=np.uint8), [_Sink()])
+        assert done.wait(2.0)
+        assert seen and "output-sender" in seen[0]  # NOT the caller's thread
+    finally:
+        sender.close()
+
+
+def test_output_sender_drops_oldest_when_busy() -> None:
+    import threading
+    import time
+
+    import numpy as np
+
+    from autoptz.engine.pipeline.output_sender import OutputSender
+
+    delivered: list[int] = []
+    release = threading.Event()
+    first_started = threading.Event()
+
+    class _SlowSink:
+        def send_bgr(self, frame):
+            first_started.set()
+            release.wait(2.0)  # hold the pump busy
+            delivered.append(int(frame[0, 0, 0]))
+
+    sender = OutputSender(name="t2")
+    try:
+        mk = lambda v: np.full((2, 2, 3), v, dtype=np.uint8)  # noqa: E731
+        sink = _SlowSink()
+        sender.submit(mk(1), [sink])
+        assert first_started.wait(2.0)
+        # While busy, park two more — only the NEWEST must survive.
+        sender.submit(mk(2), [sink])
+        sender.submit(mk(3), [sink])
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while len(delivered) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert delivered == [1, 3]  # frame 2 was replaced, never sent
+    finally:
+        sender.close()
+
+
+def test_output_sender_close_is_idempotent_and_fast() -> None:
+    from autoptz.engine.pipeline.output_sender import OutputSender
+
+    sender = OutputSender(name="t3")
+    sender.close()
+    sender.close()  # second close must be a no-op
+
+
+def test_is_own_autoptz_output_shared_helper() -> None:
+    from autoptz.engine.discovery.ndi import is_own_autoptz_output
+
+    assert is_own_autoptz_output("HOSTY (AutoPTZ Cam)", "HOSTY")
+    assert not is_own_autoptz_output("OTHER (AutoPTZ Cam)", "HOSTY")
+    assert not is_own_autoptz_output("HOSTY (OBS)", "HOSTY")

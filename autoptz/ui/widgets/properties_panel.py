@@ -1226,7 +1226,9 @@ class PropertiesPanel(QWidget):
             pz = cfg.get("ptz", {}) or {}
             self._name.setText(cfg.get("name", ""))
             self._source_type.setText(src.get("type", "—"))
-            self._address.setText(_short(src.get("address", "")))
+            # Long addresses (NDI names / RTSP URLs) are elided with the full
+            # value on the tooltip so they can never widen the form.
+            self._set_caption(self._address, _short(src.get("address", "")))
             self._refresh_substream_visibility(src)
             self._substream.setChecked(bool(src.get("substream", False)))
             cap = self._fps_cap()
@@ -1475,7 +1477,11 @@ class PropertiesPanel(QWidget):
         super().resizeEvent(event)
         # Re-elide the one-line captions to the new width (their full text lives
         # on the tooltip) so a narrower panel shows "…" instead of a hard cut.
-        for label in (getattr(self, "_track_state", None), getattr(self, "_track_reason", None)):
+        for label in (
+            getattr(self, "_track_state", None),
+            getattr(self, "_track_reason", None),
+            getattr(self, "_address", None),
+        ):
             if label is not None and label.toolTip():
                 self._set_caption(label, label.toolTip())
 

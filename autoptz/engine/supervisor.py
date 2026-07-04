@@ -1464,6 +1464,25 @@ class Supervisor:
         threaded worker.
         """
         on_telemetry = self._make_telemetry_callback(camera_id)
+        # Transparency: a configured NDI camera that ingests THIS machine's own
+        # AutoPTZ output is a feedback loop (encode + re-decode of our own
+        # pixels, possibly nested) — a major, easy-to-miss CPU/frame-drop source.
+        # The NDI menu hides these now, but cameras added earlier persist.
+        src = getattr(config, "source", None)
+        if src is not None and str(getattr(src, "type", "")) == "ndi":
+            from autoptz.engine.discovery.ndi import is_own_autoptz_output
+
+            addr = str(getattr(src, "address", "") or "").removeprefix("ndi://")
+            cam_name = str(getattr(config, "name", "") or "")
+            if is_own_autoptz_output(addr) or is_own_autoptz_output(cam_name):
+                log.warning(
+                    "camera_id=%s ingests this machine's OWN AutoPTZ NDI output (%s) — "
+                    "a feedback loop that re-encodes and re-decodes the same pixels. "
+                    "Expect heavy CPU and frame drops; remove this camera unless "
+                    "intentional.",
+                    camera_id,
+                    addr or cam_name,
+                )
         from autoptz.engine.process_worker import (
             ProcessWorkerHandle,
             model_server_workers_enabled,

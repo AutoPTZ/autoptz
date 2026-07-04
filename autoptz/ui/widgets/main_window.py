@@ -1544,24 +1544,12 @@ class MainWindow(QMainWindow):
 def _is_own_ndi_output(name: str, host: str | None = None) -> bool:
     """True when *name* is THIS machine's own AutoPTZ NDI output feed.
 
-    NDI advertises sources as ``"HOSTNAME (sender name)"`` and AutoPTZ's output
-    sender names start with ``"AutoPTZ "`` — so our own feeds look like
-    ``"PRINCES-MBP (AutoPTZ Camera 1)"`` on PRINCES-MBP. Matching requires BOTH
-    the local hostname AND the AutoPTZ prefix, so another machine's AutoPTZ
-    output (a legitimate remote source) is never filtered. ``host`` is
-    injectable for tests; defaults to this machine's short hostname.
+    Thin wrapper over the shared engine-side helper so the NDI menu filter and
+    the supervisor's feedback-loop warning can never disagree.
     """
-    if host is None:
-        import socket
+    from autoptz.engine.discovery.ndi import is_own_autoptz_output
 
-        host = socket.gethostname().split(".")[0]
-    text = (name or "").strip()
-    lead, sep, inner = text.partition(" (")
-    if not sep:
-        return False
-    return lead.strip().lower() == (host or "").strip().lower() and inner.lstrip().startswith(
-        "AutoPTZ "
-    )
+    return is_own_autoptz_output(name, host)
 
 
 class _ScanTask(QObject):

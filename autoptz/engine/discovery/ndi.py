@@ -150,3 +150,29 @@ class NDIDiscovery:
                 cb(event, source)
             except Exception as exc:  # noqa: BLE001
                 log.error("NDIDiscovery callback raised: %s", exc)
+
+
+def is_own_autoptz_output(name: str, host: str | None = None) -> bool:
+    """True when *name* is THIS machine's own AutoPTZ NDI output feed.
+
+    NDI advertises sources as ``"HOSTNAME (sender name)"`` and AutoPTZ's output
+    sender names start with ``"AutoPTZ "`` — so our own feeds look like
+    ``"PRINCES-MBP (AutoPTZ Camera 1)"`` on PRINCES-MBP. Requires BOTH the local
+    hostname AND the AutoPTZ prefix, so another machine's AutoPTZ output (a
+    legitimate remote source) never matches. Ingesting our own output is a
+    feedback loop: the machine encodes and re-decodes its own pixels, and the
+    re-broadcast can nest — the UI hides these from the NDI menu and the
+    supervisor warns when a configured camera still points at one. ``host`` is
+    injectable for tests; defaults to this machine's short hostname.
+    """
+    if host is None:
+        import socket
+
+        host = socket.gethostname().split(".")[0]
+    text = (name or "").strip()
+    lead, sep, inner = text.partition(" (")
+    if not sep:
+        return False
+    return lead.strip().lower() == (host or "").strip().lower() and inner.lstrip().startswith(
+        "AutoPTZ "
+    )
