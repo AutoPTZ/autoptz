@@ -24,6 +24,20 @@ from typing import Any
 
 Box = tuple[float, float, float, float]
 
+# Named "Framing" presets → target subject-height as a fraction of the visible
+# frame.  THE single source of truth for shot composition: the physical PTZ
+# auto-zoom drives the subject toward this height, and the Center Stage crop is
+# sized so the subject fills this fraction of it — so both actuators produce the
+# same shot for the same preset.  face/head_shoulders are deliberately moderate
+# (the old 0.80/0.60 physical targets and 0.86/0.80 digital fills were
+# user-reported as "intense": over-zoomed and twitchy).
+SUBJECT_HEIGHT_TARGETS: dict[str, float] = {
+    "face": 0.65,
+    "head_shoulders": 0.52,
+    "upper_body": 0.45,
+    "full_body": 0.30,
+}
+
 
 @dataclass(frozen=True)
 class FramingTarget:
@@ -102,13 +116,25 @@ def select_framing_target(
         return FramingTarget(None, False, target_track_id)
 
     if group_framing:
-        boxes = confident_person_boxes(tracks)
-        if not boxes:
+        confident = [
+            t
+            for t in tracks or ()
+            if not getattr(t, "lost", False) and getattr(t, "bbox", None) is not None
+        ]
+        if not confident:
             return FramingTarget(None, False, None)
-        if len(boxes) == 1:
-            return FramingTarget(boxes[0], False, None)
+        if len(confident) == 1:
+            # A lone person is a single subject: expose their track id so the
+            # pose-stable ("Ignore arms") framing applies like an explicit lock.
+            t = confident[0]
+            bb = t.bbox
+            return FramingTarget((bb.x1, bb.y1, bb.x2, bb.y2), False, getattr(t, "track_id", None))
         from autoptz.engine.pipeline.digital_framer import union_bbox
 
-        return FramingTarget(union_bbox(boxes), True, None)
+        return FramingTarget(
+            union_bbox([(t.bbox.x1, t.bbox.y1, t.bbox.x2, t.bbox.y2) for t in confident]),
+            True,
+            None,
+        )
 
     return FramingTarget(None, False, None)

@@ -39,6 +39,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from autoptz.config.models import AIM_REGION_FRACTION
+from autoptz.engine.framing_target import SUBJECT_HEIGHT_TARGETS
 from autoptz.engine.runtime.messages import (
     BBox,
     FaceBox,
@@ -107,11 +108,17 @@ def _push_due(now: float, last: float, min_period: float) -> bool:
 # framings allow a tighter crop; full_body stays conservative so a whole-person
 # shot doesn't over-zoom. True specks are already dropped upstream by
 # ``tracking.min_detection_size_frac``, so a low floor here is safe.
+# ``fill`` comes from the SHARED composition table (framing_target.
+# SUBJECT_HEIGHT_TARGETS) so the Center Stage crop and the physical auto-zoom
+# compose the SAME shot per preset — the crop is sized so the subject occupies
+# exactly the fraction of it that physical PTZ zooms the subject to occupy of
+# the frame.  (The old per-actuator fills 0.86/0.80/… framed noticeably tighter
+# than physical and were user-reported as "intense".)
 _CENTERSTAGE_FRAMING: dict[str, tuple[float, float, float, float]] = {
-    "face": (0.86, 0.12, 0.50, 0.06),  # tight head/face closeup, zooms in on far faces
-    "head_shoulders": (0.80, 0.16, 0.62, 0.08),  # head + shoulders
-    "upper_body": (0.70, 0.22, 0.74, 0.10),  # head + chest — default midpoint
-    "full_body": (0.58, 0.34, 0.94, 0.14),  # whole person, conservative min zoom
+    "face": (SUBJECT_HEIGHT_TARGETS["face"], 0.18, 0.50, 0.06),
+    "head_shoulders": (SUBJECT_HEIGHT_TARGETS["head_shoulders"], 0.20, 0.62, 0.08),
+    "upper_body": (SUBJECT_HEIGHT_TARGETS["upper_body"], 0.22, 0.74, 0.10),
+    "full_body": (SUBJECT_HEIGHT_TARGETS["full_body"], 0.34, 0.94, 0.14),
 }
 
 _DEFAULT_TELEMETRY_HZ = 10.0
@@ -276,6 +283,16 @@ _POSE_TTL_S = 0.12
 # while the target is live) but tight enough that a stalled inference thread
 # falls back to raw-bbox framing instead of freezing the crop on a stale torso.
 _POSE_FRAMING_TTL_S = 1.0
+
+# Head-recovery tilt assist: when a head-centric framing preset is active, the
+# pose sees a torso but no head landmark, and the detection box is clipped at
+# the very top of the frame, the head is above the field of view — bias the
+# tilt error up to at least this value so the PTZ recovers the shot instead of
+# parking on the body. The box must start within this fraction of the frame
+# height from the top to count as "clipped".
+_HEAD_RECOVERY_FRAMINGS = frozenset({"face", "head_shoulders", "upper_body"})
+_HEAD_RECOVERY_EY = 0.30
+_HEAD_CLIP_TOP_FRAC = 0.02
 
 # How often (seconds) to run OSNet appearance ReID: refresh the target's template
 # while it's visible, or attempt recovery while it's lost.  Throttled because the
@@ -543,6 +560,8 @@ class CameraWorker:
         self._pose_keypoints: list[Any] | None = None  # last keypoints (reused)
         self._pose_kp_track_id: int | None = None  # track they belong to
         self._last_pose_t = 0.0
+        # Throttle for the head-out-of-view recovery log line.
+        self._last_head_recover_log_t = 0.0
         self._last_pose_overlay_t = 0.0
         self._last_pose_overlay_frame_id = 0
         self._last_pose_emitted_frame_id = -1
@@ -2570,11 +2589,12 @@ class CameraWorker:
         grows the YOLO box but does **not** move the aim.  The point is
         EMA-smoothed to suppress keypoint jitter.
 
-        The **arms toggle** (``aim_body_mode``) changes only the *zoom* source,
-        not the aim centre:
+        The **arms toggle** (``aim_body_mode``):
 
-        - ``torso`` (ignore arms) → zoom on the stable shoulder→hip span, so an
-          extended arm does not make the camera zoom out.
+        - ``torso`` (ignore arms) → zoom on the stable shoulder→hip span, AND the
+          box anchor itself is the pose-torso framing box when fresh torso
+          keypoints are cached — so even the ``(1 - pose_conf)`` bbox share of the
+          fused aim is arm-invariant and an extended arm cannot pan the camera.
         - ``full_silhouette`` (include arms) → zoom on the full detection-box
           height, so the shot widens to fit outstretched arms.
 
@@ -2605,8 +2625,18 @@ class CameraWorker:
         framing_name = _resolve_framing(self.config.tracking)
 
         # ── bbox anchor — always available (centre-x, framing fraction down) ─────
-        ax_bbox = (bb.x1 + bb.x2) * 0.5
-        ay_bbox = bb.y1 + (bb.y2 - bb.y1) * AIM_REGION_FRACTION.get(framing_name, 0.5)
+        # "Ignore arms": when fresh torso keypoints are cached for this track,
+        # the anchor comes from the arm-invariant torso framing box (same box
+        # Center Stage crops around) so the raw arms-inflated detection box never
+        # steers the camera — not even through the (1 - pose_conf) blend share.
+        anchor = (bb.x1, bb.y1, bb.x2, bb.y2)
+        if now is not None and ignore_arms:
+            tb = self._torso_stable_box(track.track_id)
+            if tb is not None:
+                anchor = tb
+                bbox_height = (tb[3] - tb[1]) / h
+        ax_bbox = (anchor[0] + anchor[2]) * 0.5
+        ay_bbox = anchor[1] + (anchor[3] - anchor[1]) * AIM_REGION_FRACTION.get(framing_name, 0.5)
         ax, ay = ax_bbox, ay_bbox
         subject_height = bbox_height
         aim_source = "bbox"
@@ -2657,6 +2687,10 @@ class CameraWorker:
 
         ex = (ax - w * 0.5) / (w * 0.5)  # [-1, 1] right-positive
         ey = -((ay - h * 0.5) / (h * 0.5))  # [-1, 1] up-positive
+        if now is not None:
+            # Head cut off above the frame while a head-centric preset is active →
+            # bias the tilt up so the camera recovers the head automatically.
+            ey = self._head_recovery_bias(track, ey, float(h))
         ex = max(-1.0, min(1.0, ex))
         ey = max(-1.0, min(1.0, ey))
         subject_height = max(0.0, min(1.0, subject_height))
@@ -2950,13 +2984,15 @@ class CameraWorker:
     ) -> None:
         """Populate the tracked target's pose keypoints for the overlay + aim.
 
-        Pose is tied strictly to the **tracked subject** (the locked/selected
-        target), so the skeleton and the green aim circle always describe the
-        same one person — a skeleton never appears on someone with no aim circle.
-        Selecting a person (clicking their box) sets the target, which is enough
-        to see their skeleton; no PTZ follow required.  Throttled + cached inside
-        ``_pose_aim`` (``_POSE_INTERVAL_S``), so the later aim call this tick
-        reuses the same keypoints (no double inference).
+        Pose is tied to the **framed subject**: the locked/selected target, or —
+        with group framing on and no lock — the lone confident person (they are
+        the framing subject too, so their torso must be pose-stable exactly like
+        a locked target's).  The skeleton and the green aim circle always
+        describe the same one person — a skeleton never appears on someone with
+        no aim circle.  Selecting a person (clicking their box) sets the target,
+        which is enough to see their skeleton; no PTZ follow required.
+        Throttled + cached inside ``_pose_aim`` (``_POSE_INTERVAL_S``), so the
+        later aim call this tick reuses the same keypoints (no double inference).
         """
         if frame is None or not self._feature("pose"):
             self._pose_keypoints = None
@@ -2966,10 +3002,22 @@ class CameraWorker:
             self._last_pose_emitted_frame_id = -1
             return
         target = self._resolve_target_track(tracks)
+        if target is None and self._target_track_id is None:
+            target = self._group_single_track(tracks)
         if target is None or target.lost:
             self._reset_pose_aim()
             return
         self._pose_aim(target, frame, now, tracks=tracks)  # side effect: fills _pose_keypoints
+
+    def _group_single_track(self, tracks: list[TrackInfo]) -> TrackInfo | None:
+        """The lone confident person when group framing is on and nothing is
+        locked — the framing subject of the group-single path, or None."""
+        if self._target_identity_id is not None:
+            return None
+        if not bool(getattr(self.config.tracking, "group_framing", False)):
+            return None
+        confident = [t for t in tracks if not t.lost and t.bbox is not None]
+        return confident[0] if len(confident) == 1 else None
 
     def _ensure_pose(self) -> Any | None:
         """Return the pose estimator (shared pool's first, else per-worker build).
@@ -4161,21 +4209,32 @@ class CameraWorker:
         torso = self._torso_stable_box(ft.primary_track_id)
         return torso if torso is not None else ft.bbox
 
-    def _torso_stable_box(self, track_id: int | None) -> tuple[float, float, float, float] | None:
-        """The cached pose-torso framing box for *track_id*, or None.
+    def _fresh_target_kps(self, track_id: int | None) -> list[Any] | None:
+        """Cached pose keypoints iff they belong to *track_id* and are fresh.
 
-        Runs on the capture thread; the keypoints are written by the inference
-        thread (reference swap — GIL-atomic, same contract as the overlay).  A
+        Safe from any thread: the keypoints are written by the inference thread
+        (reference swap — GIL-atomic, same contract as the overlay).  The
         freshness gate rejects keypoints older than ``_POSE_FRAMING_TTL_S`` so a
-        stalled inference thread degrades to raw-bbox framing instead of freezing
-        the crop on a stale torso.
+        stalled inference thread degrades to raw-bbox behaviour instead of
+        acting on a stale torso.
         """
-        if getattr(self.config.tracking, "aim_body_mode", "torso") != "torso":
-            return None
         kps = self._pose_keypoints
         if not kps or track_id is None or self._pose_kp_track_id != track_id:
             return None
         if time.monotonic() - self._last_pose_t > _POSE_FRAMING_TTL_S:
+            return None
+        return kps
+
+    def _torso_stable_box(self, track_id: int | None) -> tuple[float, float, float, float] | None:
+        """The cached pose-torso framing box for *track_id*, or None.
+
+        Only in "Ignore arms" mode (``aim_body_mode == "torso"``); falls back to
+        None — raw-bbox framing — whenever fresh owned keypoints are missing.
+        """
+        if getattr(self.config.tracking, "aim_body_mode", "torso") != "torso":
+            return None
+        kps = self._fresh_target_kps(track_id)
+        if kps is None:
             return None
         try:
             from autoptz.engine.pipeline import framing
@@ -4183,6 +4242,47 @@ class CameraWorker:
             return framing.torso_framing_box(kps)
         except Exception:  # noqa: BLE001
             return None
+
+    def _head_recovery_bias(self, track: TrackInfo, ey: float, frame_h: float) -> float:
+        """Tilt-up bias when the head is out of view above the frame.
+
+        The smart "we're accidentally framing the body" check: the framing
+        preset expects the head (face / head_shoulders / upper_body), the pose
+        sees a torso but NO head landmark, and the detection box is clipped at
+        the very top of the frame — i.e. the head is above the field of view.
+        Returns *ey* raised to at least ``_HEAD_RECOVERY_EY`` so the controller
+        tilts up until the head re-enters the frame (head keypoints then appear
+        and the bias stops).  Occlusions mid-frame (head behind an object, box
+        not top-clipped) never trigger it, so it cannot oscillate against a
+        blocked view.
+        """
+        framing_name = _resolve_framing(self.config.tracking)
+        if framing_name not in _HEAD_RECOVERY_FRAMINGS:
+            return ey
+        if float(track.bbox.y1) > frame_h * _HEAD_CLIP_TOP_FRAC:
+            return ey
+        kps = self._fresh_target_kps(track.track_id)
+        if kps is None:
+            return ey
+        try:
+            from autoptz.engine.pipeline import framing
+
+            if framing.head_point(kps) is not None:
+                return ey  # head is visible — normal aim math owns the tilt
+            if framing.shoulder_midpoint(kps) is None and framing.hip_midpoint(kps) is None:
+                return ey  # no body evidence either — don't invent a direction
+        except Exception:  # noqa: BLE001
+            return ey
+        now = time.monotonic()
+        if now - self._last_head_recover_log_t >= _TICK_WARN_INTERVAL_S:
+            self._last_head_recover_log_t = now
+            log.info(
+                "camera_id=%s head out of view above frame (torso visible, no head "
+                "landmark, box top-clipped) — biasing tilt up to recover the %s shot",
+                self.camera_id,
+                framing_name,
+            )
+        return max(ey, _HEAD_RECOVERY_EY)
 
     def _select_framing_target(self) -> FramingTarget:
         """This tick's shared framing target (used by Center Stage AND physical PTZ)."""

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from autoptz.engine.framing_target import (
     FramingTarget,
     aim_error_for_box,
@@ -29,6 +31,37 @@ def _select(tracks, *, tid=None, iid=None, trusted=None, group=False):
         trusted_bbox=trusted,
         group_framing=group,
     )
+
+
+class TestSharedCompositionTargets:
+    """One preset table drives BOTH actuators, so Center Stage and physical PTZ
+    compose the same shot for the same "Framing" setting."""
+
+    def test_shared_table_values(self) -> None:
+        from autoptz.engine.framing_target import SUBJECT_HEIGHT_TARGETS
+
+        t = SUBJECT_HEIGHT_TARGETS
+        # face/head_shoulders deliberately calmer than the old 0.80/0.60 —
+        # user-reported as "intense" (over-zoomed, twitchy) on both actuators.
+        assert t["face"] == pytest.approx(0.65)
+        assert t["head_shoulders"] == pytest.approx(0.52)
+        assert t["upper_body"] == pytest.approx(0.45)
+        assert t["full_body"] == pytest.approx(0.30)
+        assert t["face"] > t["head_shoulders"] > t["upper_body"] > t["full_body"]
+
+    def test_ptz_zoom_targets_come_from_shared_table(self) -> None:
+        from autoptz.engine.framing_target import SUBJECT_HEIGHT_TARGETS
+        from autoptz.engine.ptz.controller import _ZOOM_FRAMING_TARGETS
+
+        for key, value in SUBJECT_HEIGHT_TARGETS.items():
+            assert _ZOOM_FRAMING_TARGETS[key] == pytest.approx(value), key
+
+    def test_center_stage_fill_comes_from_shared_table(self) -> None:
+        from autoptz.engine.camera_worker import _CENTERSTAGE_FRAMING
+        from autoptz.engine.framing_target import SUBJECT_HEIGHT_TARGETS
+
+        for key, value in SUBJECT_HEIGHT_TARGETS.items():
+            assert _CENTERSTAGE_FRAMING[key][0] == pytest.approx(value), key
 
 
 def test_explicit_track_lock_returns_that_box() -> None:
@@ -73,6 +106,9 @@ def test_group_single_confident_frames_that_person_not_group() -> None:
     ft = _select([_track(1, (10, 10, 20, 30))], group=True)
     assert ft.bbox == (10, 10, 20, 30)
     assert ft.is_group is False
+    # The lone person's track id is exposed so the pose-stable ("Ignore arms")
+    # framing applies to the group-single case exactly like an explicit lock.
+    assert ft.primary_track_id == 1
 
 
 def test_group_multiple_confident_frames_union() -> None:

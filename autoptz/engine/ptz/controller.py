@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
 
+from autoptz.engine.framing_target import SUBJECT_HEIGHT_TARGETS
+
 if TYPE_CHECKING:
     from autoptz.config.models import PTZConfig
     from autoptz.engine.ptz.base import PTZBackend
@@ -45,20 +47,16 @@ _HEARTBEAT_WARN_INTERVAL_S = 5.0
 
 # Named framing presets → target subject-height fraction of the frame.
 # A larger fraction means the subject fills more of the frame (tighter shot).
-#   face           — head fills most of the frame (closeup)
-#   head_shoulders — classic head-and-shoulders
-#   upper_body     — waist-up (default)
-#   full_body      — whole person in frame
-#   wide           — person small in a wide establishing shot
+# The four named shots come from the SHARED composition table (see
+# autoptz.engine.framing_target.SUBJECT_HEIGHT_TARGETS) so physical PTZ and the
+# Center Stage crop compose identically; "wide" + legacy aliases are
+# controller-only extras.
 _ZOOM_FRAMING_TARGETS = {
-    "face": 0.80,
-    "head_shoulders": 0.60,
-    "upper_body": 0.45,
-    "full_body": 0.30,
+    **SUBJECT_HEIGHT_TARGETS,
     "wide": 0.20,
     # Legacy names kept so an un-migrated config still resolves sanely.
-    "tight": 0.60,
-    "medium": 0.45,
+    "tight": SUBJECT_HEIGHT_TARGETS["head_shoulders"],
+    "medium": SUBJECT_HEIGHT_TARGETS["upper_body"],
 }
 _DEFAULT_ZOOM_FRAMING_TARGET = 0.45  # == upper_body
 # Auto-zoom is deliberately slow + stable: it holds the crop across a wide band
