@@ -18,7 +18,7 @@ from autoptz.engine.process_worker import (
     _STOP,
     ProcessWorkerHandle,
     WorkerSpec,
-    process_per_camera_enabled,
+    model_server_workers_enabled,
 )
 
 
@@ -66,19 +66,27 @@ class TestEnabledFlag:
     def test_disabled_by_default(self, monkeypatch) -> None:
         monkeypatch.delenv("AUTOPTZ_PROCESS_PER_CAMERA", raising=False)
         monkeypatch.delenv("AUTOPTZ_MODEL_SERVER", raising=False)
-        assert process_per_camera_enabled() is False
+        assert model_server_workers_enabled() is False
 
     def test_standalone_process_flag_is_retired(self, monkeypatch) -> None:
         for val in ("1", "true", "on", "YES"):
             monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", val)
             monkeypatch.delenv("AUTOPTZ_MODEL_SERVER", raising=False)
-            assert process_per_camera_enabled() is False
+            assert model_server_workers_enabled() is False
 
     def test_model_server_enables_process_workers(self, monkeypatch) -> None:
         for val in ("1", "true", "on", "YES"):
             monkeypatch.delenv("AUTOPTZ_PROCESS_PER_CAMERA", raising=False)
             monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", val)
-            assert process_per_camera_enabled() is True
+            assert model_server_workers_enabled() is True
+
+    def test_no_process_per_camera_alias_left(self) -> None:
+        """The retired process-per-camera naming is fully gone from the codebase."""
+        import autoptz.engine.process_worker as pw
+        import autoptz.engine.runtime.flags as flags
+
+        assert not hasattr(flags, "env_process_per_camera")
+        assert not hasattr(pw, "process_per_camera_enabled")
 
 
 class TestRelayIdentityLockFree:
@@ -111,7 +119,7 @@ class TestRelayIdentityLockFree:
         sentinel = object()
         # Patch at the source module so the local import inside the method picks up the mock.
         with patch(
-            "autoptz.engine.process_worker.process_per_camera_enabled",
+            "autoptz.engine.process_worker.model_server_workers_enabled",
             return_value=False,
         ) as mock_gate:
             sup._relay_identity_to_siblings("cam-source", sentinel)

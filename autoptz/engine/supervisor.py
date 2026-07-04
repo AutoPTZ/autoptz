@@ -17,9 +17,9 @@ The :class:`Supervisor` is the engine's top-level orchestrator.  It:
 Threading
 ---------
 Each camera runs on its own threads (capture + inference) in this process.
-The retired model-per-child process mode is not a product path. The only retained
-process boundary is the explicit model-server candidate, where camera children
-use shm/msgpack transport and delegate detector inference to one shared server.
+The only path that crosses a process boundary is the shared detection server
+candidate, where camera children use shm/msgpack transport and delegate detector
+inference to one shared server.
 
 The command pump can either be driven externally (``tick()`` from a GUI-thread
 ``QTimer`` — the default the UI uses) or by an internal daemon thread
@@ -593,7 +593,7 @@ class Supervisor:
         surface reports.
 
         Only in-process (threaded) ``CameraWorker`` instances expose the
-        inference-thread health surface; process-per-camera handles
+        inference-thread health surface; model-server process handles
         (``_is_process_worker``) are monitored by their own liveness path
         (``is_alive()`` on the child process) and are never subject to this
         predicate.
@@ -779,8 +779,8 @@ class Supervisor:
         if new_attempts >= _MAX_RESTART_ATTEMPTS:
             self._ms_restart_state = (new_attempts, now + backoff, True)
             log.error(
-                "model-server permanently failed: %d auto-restart attempts exhausted "
-                "— falling back to local per-camera detectors.",
+                "shared detection server permanently failed: %d auto-restart attempts "
+                "exhausted — cameras continue with their own built-in detectors.",
                 new_attempts,
             )
             if self._model_server_failed_ev is not None:
@@ -842,8 +842,8 @@ class Supervisor:
         if attempts >= _MAX_RESTART_ATTEMPTS:
             self._ms_restart_state = (attempts, now + backoff, True)
             log.error(
-                "model-server permanently failed: %d auto-restart attempts exhausted "
-                "— falling back to local per-camera detectors.",
+                "shared detection server permanently failed: %d auto-restart attempts "
+                "exhausted — cameras continue with their own built-in detectors.",
                 attempts,
             )
             if self._model_server_failed_ev is not None:
@@ -1412,9 +1412,9 @@ class Supervisor:
         process workers are active every worker shares the same in-process gallery,
         so no relay is necessary and we avoid touching the supervisor RLock.
         """
-        from autoptz.engine.process_worker import process_per_camera_enabled
+        from autoptz.engine.process_worker import model_server_workers_enabled
 
-        if not process_per_camera_enabled():
+        if not model_server_workers_enabled():
             return
         with self._lock:
             siblings = [
@@ -1433,18 +1433,17 @@ class Supervisor:
     def _make_worker(self, camera_id: str, config: CameraConfig) -> Any:
         """Build a camera worker.
 
-        Production uses the threaded worker.  The only remaining process-worker
-        path is the explicit model-server architecture: camera children may run in
-        separate processes only when a shared inference request queue and a
-        per-camera response queue are ready.  If the model-server did not start or
-        the camera was added after its fixed queue set was built, fall back to the
-        normal threaded worker instead of recreating the retired model-per-child
-        experiment.
+        Production uses the threaded worker.  The only path that crosses a process
+        boundary is the shared detection server: camera children run in separate
+        processes only when a shared inference request queue and a per-camera
+        response queue are ready.  If the server did not start, or the camera was
+        added after its fixed queue set was built, fall back to the built-in
+        threaded worker.
         """
         on_telemetry = self._make_telemetry_callback(camera_id)
         from autoptz.engine.process_worker import (
             ProcessWorkerHandle,
-            process_per_camera_enabled,
+            model_server_workers_enabled,
         )
 
         # ``==`` (not ``is``): ``self._default_worker_factory`` is a bound method, and
@@ -1453,15 +1452,16 @@ class Supervisor:
         # opt-in process path.  Bound methods compare equal by (instance, function),
         # so ``==`` is True only when no custom/test factory was injected.
         use_process = (
-            self._worker_factory == self._default_worker_factory and process_per_camera_enabled()
+            self._worker_factory == self._default_worker_factory and model_server_workers_enabled()
         )
         if not use_process:
             return self._worker_factory(camera_id, config, on_telemetry)
         infer_resp_q = self._infer_resp_qs.get(camera_id)
         if self._infer_req_q is None or infer_resp_q is None:
             log.warning(
-                "model-server process worker unavailable for %s; using the normal "
-                "threaded worker instead of the retired model-per-child process path.",
+                "no shared-detection-server slot for camera %s (it was added after "
+                "the server started) — this camera runs the built-in threaded "
+                "pipeline; restart the engine to attach it to the shared server.",
                 camera_id,
             )
             return self._worker_factory(camera_id, config, on_telemetry)

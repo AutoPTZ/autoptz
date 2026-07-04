@@ -17,8 +17,8 @@ How the boundary is crossed (the scaffolding the engine was designed around):
   picklable pydantic models, so no hand-rolled framing is needed.
 - **Models** are not loaded per child in the supported process path.  The camera
   child receives model-server IPC queues and uses a shared detector server; if
-  those queues are missing, the supervisor falls back to the normal threaded
-  worker instead of reviving the retired model-per-child mode.
+  those queues are missing, the supervisor falls back to the built-in threaded
+  worker.
 
 **Identity:** labeled identities converge through the shared SQLite DB (each child
 opens its own connection).  *Unlabeled* auto-harvested faces are propagated live
@@ -680,8 +680,13 @@ class ProcessWorkerHandle:
                 continue
 
 
-def process_per_camera_enabled() -> bool:
-    """True only for model-server mode; the model-per-child flag is retired."""
-    from autoptz.engine.runtime.flags import env_process_per_camera
+def model_server_workers_enabled() -> bool:
+    """Whether camera workers run as model-server child processes.
 
-    return env_process_per_camera()
+    True only when the shared detection server (``AUTOPTZ_MODEL_SERVER``) is on;
+    each camera process then delegates detection to that one server instead of
+    loading its own model set.  The default threaded path returns False.
+    """
+    from autoptz.engine.runtime.flags import env_model_server
+
+    return env_model_server()
