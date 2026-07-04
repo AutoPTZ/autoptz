@@ -149,9 +149,9 @@ class ServicesPanel(QWidget):
         )
         head.addStretch(1)
         self._start = QPushButton("Start")
-        self._start.clicked.connect(client.startEngine)
+        self._start.clicked.connect(client.userStartEngine)
         self._stop = QPushButton("Stop")
-        self._stop.clicked.connect(client.stopEngine)
+        self._stop.clicked.connect(client.userStopEngine)
         self._restart = QPushButton("Restart")
         self._restart.clicked.connect(client.restartEngine)
         for b in (self._start, self._stop, self._restart):

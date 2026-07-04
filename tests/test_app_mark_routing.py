@@ -40,8 +40,8 @@ def _stub_event_loop(monkeypatch) -> None:
 
 
 def test_persist_uses_window_intended_engine_state() -> None:
-    """The state persisted for next launch comes from the window's intended
-    engine state (which survives a Mark suspend), not the live client."""
+    """The state persisted for next launch is the user's auto-start INTENT (which
+    survives a Mark suspend and a failed start), not the live running state."""
     import autoptz.ui.app as app_mod
 
     class _Win:
@@ -49,22 +49,24 @@ def test_persist_uses_window_intended_engine_state() -> None:
             return True
 
     class _Client:
-        engineRunning = False  # suspended live, but intent is ON
+        engineRunning = False  # not running, but intent is ON
+        autostartDesired = False  # (ignored: the window accessor wins)
 
-    assert app_mod._engine_running_to_persist(_Win(), _Client()) is True
+    assert app_mod._engine_autostart_to_persist(_Win(), _Client()) is True
 
 
-def test_persist_falls_back_to_client_when_accessor_missing() -> None:
-    """Windows without the accessor (older/test fakes) keep the old behavior."""
+def test_persist_falls_back_to_client_intent_when_accessor_missing() -> None:
+    """Windows without the accessor fall back to the client's auto-start intent."""
     import autoptz.ui.app as app_mod
 
     class _Win:
         pass
 
     class _Client:
-        engineRunning = True
+        engineRunning = False  # not running...
+        autostartDesired = True  # ...but the intent is ON → persist ON
 
-    assert app_mod._engine_running_to_persist(_Win(), _Client()) is True
+    assert app_mod._engine_autostart_to_persist(_Win(), _Client()) is True
 
 
 def test_run_always_builds_main_window_and_disables_quit_on_close(monkeypatch) -> None:

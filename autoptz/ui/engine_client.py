@@ -193,6 +193,12 @@ class EngineClient(QObject):
         self._supervisor: Any | None = None
         self._supervisor_factory: Callable[[EngineClient], Any] | None = None
         self._engine_running: bool = False
+        # Whether the engine should auto-start on the next launch — the user's
+        # INTENT, not the momentary running state. Only a deliberate user Stop
+        # clears it; a never-started or failed engine leaves it alone, so a
+        # stopped engine is never "trapped off" across launches. Persisted under
+        # ``engine_autostart``; seeded from that setting at startup.
+        self._autostart_desired: bool = True
         self._engine_ep: str = ""
         self._startup_active: bool = False
         self._startup_phase: str = ""
@@ -374,6 +380,32 @@ class EngineClient(QObject):
         self._supervisor_factory = factory
 
     @Slot()
+    @property
+    def autostartDesired(self) -> bool:
+        """Whether the engine should auto-start next launch (the user's intent)."""
+        return self._autostart_desired
+
+    def set_autostart_desired(self, value: bool) -> None:
+        """Seed the auto-start intent (from the persisted setting at startup)."""
+        self._autostart_desired = bool(value)
+
+    @Slot()
+    def userStartEngine(self) -> None:
+        """Start the engine from a user control — records intent to auto-start."""
+        self._autostart_desired = True
+        self.startEngine()
+
+    @Slot()
+    def userStopEngine(self) -> None:
+        """Stop the engine from a user control — records intent NOT to auto-start.
+
+        Distinct from :meth:`stopEngine` (called by shutdown, Mark suspend, and
+        restart), which must NOT change the auto-start intent — otherwise a
+        transient stop would trap the engine off on every future launch.
+        """
+        self._autostart_desired = False
+        self.stopEngine()
+
     def startEngine(self) -> None:
         """Create (if needed) and start the supervisor.  Idempotent."""
         if self._engine_running:

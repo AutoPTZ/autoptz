@@ -94,14 +94,11 @@ class MainWindow(QMainWindow):
         # window (or None) and whether the main engine was running when we suspended
         # into Mark (so Return-to-AutoPTZ can restore that exact state).
         self._mark_window: Any | None = None
+        # Whether the engine was running just before a Mark run suspended it, so
+        # Return-to-AutoPTZ can restore that exact state. (Auto-start persistence
+        # uses the client's auto-start intent, which Mark's system-level stop/start
+        # never touches — so no separate "suspended" latch is needed.)
         self._engine_was_running = False
-        # True while a Mark run has the engine suspended: the live ``engineRunning``
-        # no longer reflects user intent, so ``desired_engine_running()`` (what we
-        # persist for next launch) reports the pre-Mark state instead. Cleared only
-        # on a successful resume; every quit-from-Mark path leaves it set so the
-        # engine's on/off choice survives across the Mark run (fixes "engine always
-        # off after quitting from Mark").
-        self._mark_engine_suspended = False
         # Set if this (suspended) main window is itself closed while a Mark swap is
         # active — a later Mark Return then has no live window to resume, so it quits
         # the app instead of re-showing a dead window (routing bug (h)).
@@ -377,14 +374,14 @@ class MainWindow(QMainWindow):
         self._act_start = _action(
             self,
             "Start",
-            self._client.startEngine,
+            self._client.userStartEngine,
             "Ctrl+E",
             "Start the detection/tracking engine and open all enabled cameras.",
         )
         self._act_stop = _action(
             self,
             "Stop",
-            self._client.stopEngine,
+            self._client.userStopEngine,
             "Ctrl+Shift+E",
             "Stop the engine and release all cameras.",
         )
@@ -905,7 +902,6 @@ class MainWindow(QMainWindow):
         from autoptz.ui.widgets.mark_window import MarkWindow
 
         self._engine_was_running = bool(_safe(lambda: self._client.engineRunning, False))
-        self._mark_engine_suspended = True
         if self._engine_was_running:
             try:
                 self._client.stopEngine()
@@ -943,8 +939,6 @@ class MainWindow(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
-        # Back to the live app: the engine's on/off state is authoritative again.
-        self._mark_engine_suspended = False
         if self._engine_was_running:
             try:
                 self._client.startEngine()
@@ -952,16 +946,14 @@ class MainWindow(QMainWindow):
                 log.debug("resume engine after mark failed", exc_info=True)
 
     def desired_engine_running(self) -> bool:
-        """Engine on/off state to persist for next launch.
+        """Whether the engine should auto-start next launch — the user's intent.
 
-        While a Mark run has the engine suspended, the live ``engineRunning`` is
-        an artefact of the suspend, so report the pre-Mark state instead; every
-        quit-from-Mark path leaves the suspend latch set, so the user's real
-        on/off choice is what gets persisted.
+        This is the persisted auto-start choice, not the momentary ``engineRunning``:
+        only a deliberate user Stop clears it, so a stopped/failed engine (or one
+        suspended for a Mark run — Mark stops/starts the engine at the system level,
+        which never touches the intent) is never trapped off across launches.
         """
-        if self._mark_engine_suspended:
-            return bool(self._engine_was_running)
-        return bool(_safe(lambda: self._client.engineRunning, False))
+        return bool(_safe(lambda: self._client.autostartDesired, True))
 
     def _open_model_manager(
         self,
