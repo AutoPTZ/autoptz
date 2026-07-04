@@ -83,6 +83,58 @@ def test_confirm_required_before_suspend(qtapp, monkeypatch) -> None:
     win.deleteLater()
 
 
+def test_desired_engine_state_without_mark_mirrors_client(qtapp) -> None:
+    win = _main(qtapp)
+    assert win.desired_engine_running() is False
+    win._client._engine_running = True
+    assert win.desired_engine_running() is True
+    win.deleteLater()
+
+
+def test_desired_engine_state_is_pre_mark_state_while_suspended(qtapp, monkeypatch) -> None:
+    """Suspending the engine for a Mark run must not change the state we intend
+    to persist — quitting later must remember the engine was ON."""
+    import autoptz.ui.widgets.main_window as mw
+
+    win = _main(qtapp)
+    monkeypatch.setattr(mw, "MarkPreflightDialog", _FakeDlg, raising=False)
+    win._client._engine_running = True  # engine running before Mark
+    win._start_mark()
+    assert win._client.engineRunning is False  # suspended for the Mark run
+    assert win.desired_engine_running() is True  # but intent stays ON
+    win._mark_window.close()
+
+
+def test_quit_from_mark_reports_pre_mark_state(qtapp, monkeypatch) -> None:
+    """Quitting from inside Mark persists the pre-Mark engine state (the bug: it
+    used to persist the suspended OFF state, so the engine stayed off forever)."""
+    from PySide6.QtWidgets import QApplication
+
+    import autoptz.ui.widgets.main_window as mw
+
+    win = _main(qtapp)
+    monkeypatch.setattr(mw, "MarkPreflightDialog", _FakeDlg, raising=False)
+    monkeypatch.setattr(QApplication, "quit", lambda *a: None)
+    win._client._engine_running = True
+    win._start_mark()
+    win._mark_window.request_quit()
+    assert win.desired_engine_running() is True
+
+
+def test_return_from_mark_clears_latch(qtapp, monkeypatch) -> None:
+    """After a normal return from Mark, desired state tracks the live client again."""
+    import autoptz.ui.widgets.main_window as mw
+
+    win = _main(qtapp)
+    monkeypatch.setattr(mw, "MarkPreflightDialog", _FakeDlg, raising=False)
+    win._start_mark()  # entered with engine OFF
+    win._mark_window.request_return()
+    assert win.desired_engine_running() is False
+    win._client._engine_running = True
+    assert win.desired_engine_running() is True
+    win.deleteLater()
+
+
 def test_enter_mark_hides_main_and_builds_isolated_window(qtapp, monkeypatch) -> None:
     import autoptz.ui.widgets.main_window as mw
 

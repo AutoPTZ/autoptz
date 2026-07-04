@@ -95,6 +95,13 @@ class MainWindow(QMainWindow):
         # into Mark (so Return-to-AutoPTZ can restore that exact state).
         self._mark_window: Any | None = None
         self._engine_was_running = False
+        # True while a Mark run has the engine suspended: the live ``engineRunning``
+        # no longer reflects user intent, so ``desired_engine_running()`` (what we
+        # persist for next launch) reports the pre-Mark state instead. Cleared only
+        # on a successful resume; every quit-from-Mark path leaves it set so the
+        # engine's on/off choice survives across the Mark run (fixes "engine always
+        # off after quitting from Mark").
+        self._mark_engine_suspended = False
         # Set if this (suspended) main window is itself closed while a Mark swap is
         # active — a later Mark Return then has no live window to resume, so it quits
         # the app instead of re-showing a dead window (routing bug (h)).
@@ -898,6 +905,7 @@ class MainWindow(QMainWindow):
         from autoptz.ui.widgets.mark_window import MarkWindow
 
         self._engine_was_running = bool(_safe(lambda: self._client.engineRunning, False))
+        self._mark_engine_suspended = True
         if self._engine_was_running:
             try:
                 self._client.stopEngine()
@@ -935,11 +943,25 @@ class MainWindow(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
+        # Back to the live app: the engine's on/off state is authoritative again.
+        self._mark_engine_suspended = False
         if self._engine_was_running:
             try:
                 self._client.startEngine()
             except Exception:  # noqa: BLE001
                 log.debug("resume engine after mark failed", exc_info=True)
+
+    def desired_engine_running(self) -> bool:
+        """Engine on/off state to persist for next launch.
+
+        While a Mark run has the engine suspended, the live ``engineRunning`` is
+        an artefact of the suspend, so report the pre-Mark state instead; every
+        quit-from-Mark path leaves the suspend latch set, so the user's real
+        on/off choice is what gets persisted.
+        """
+        if self._mark_engine_suspended:
+            return bool(self._engine_was_running)
+        return bool(_safe(lambda: self._client.engineRunning, False))
 
     def _open_model_manager(
         self,

@@ -39,6 +39,34 @@ def _stub_event_loop(monkeypatch) -> None:
     monkeypatch.setattr(QApplication, "processEvents", lambda self, *a, **k: None)
 
 
+def test_persist_uses_window_intended_engine_state() -> None:
+    """The state persisted for next launch comes from the window's intended
+    engine state (which survives a Mark suspend), not the live client."""
+    import autoptz.ui.app as app_mod
+
+    class _Win:
+        def desired_engine_running(self) -> bool:
+            return True
+
+    class _Client:
+        engineRunning = False  # suspended live, but intent is ON
+
+    assert app_mod._engine_running_to_persist(_Win(), _Client()) is True
+
+
+def test_persist_falls_back_to_client_when_accessor_missing() -> None:
+    """Windows without the accessor (older/test fakes) keep the old behavior."""
+    import autoptz.ui.app as app_mod
+
+    class _Win:
+        pass
+
+    class _Client:
+        engineRunning = True
+
+    assert app_mod._engine_running_to_persist(_Win(), _Client()) is True
+
+
 def test_run_always_builds_main_window_and_disables_quit_on_close(monkeypatch) -> None:
     from PySide6.QtWidgets import QApplication
 

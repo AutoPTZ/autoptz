@@ -227,6 +227,27 @@ def _build_main_window(
     )
 
 
+def _engine_running_to_persist(window: Any, client: Any) -> bool:
+    """The engine on/off state to persist for next launch.
+
+    Prefer the window's intended state via ``desired_engine_running()`` — it
+    reports the pre-Mark state while a Mark run has the engine suspended, so
+    quitting from Mark no longer records the (transient) suspended-off state and
+    leaves the engine off on every later launch.  Windows that don't expose it
+    (older builds / test fakes) fall back to the live client state.
+    """
+    probe = getattr(window, "desired_engine_running", None)
+    if callable(probe):
+        try:
+            return bool(probe())
+        except Exception:  # noqa: BLE001
+            log.debug("desired_engine_running probe failed", exc_info=True)
+    try:
+        return bool(client.engineRunning)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def run(argv: list[str] | None = None) -> int:
     """Launch the AutoPTZ UI.  Returns the process exit code.
 
@@ -478,7 +499,7 @@ def run(argv: list[str] | None = None) -> int:
 
     # Persist the engine on/off state for the next launch.
     try:
-        store.set_setting("engine_running", bool(client.engineRunning))
+        store.set_setting("engine_running", _engine_running_to_persist(window, client))
     except Exception:  # noqa: BLE001
         log.exception("Error persisting engine_running on shutdown")
 
