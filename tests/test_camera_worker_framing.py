@@ -218,6 +218,55 @@ def test_ptz_track_error_follows_bbox_in_full_silhouette_mode() -> None:
     assert err_a != err_b
 
 
+def test_torso_box_is_smoothed_not_stepped() -> None:
+    """Pose estimates arrive in ~0.2 s steps; the framing box must EASE toward
+    a new estimate, never jump onto it (the reported jitter)."""
+    import time
+
+    from autoptz.engine.pipeline.framing import Keypoint, torso_framing_box
+
+    w, _ = _locked_worker_with_pose()
+    first = w._current_digital_target()
+    # Next pose estimate: torso shifted 80 px right (subject moved / kp noise).
+    shifted = [Keypoint(kp.x + 80.0, kp.y, kp.conf) for kp in _standing_kps()]
+    w._note_good_kps(shifted, 1, time.monotonic())
+    second = w._current_digital_target()
+    raw = torso_framing_box(shifted)
+    assert second != raw  # no instant jump onto the new estimate
+    assert abs(second[0] - first[0]) < 8.0  # microseconds later → barely moved
+
+
+def test_head_recovery_has_hysteresis_against_flapping() -> None:
+    """Once the tilt-up recovery is active, a BORDERLINE head landmark (conf
+    just above the normal visibility floor) must not flap it off — exit needs a
+    clearly-visible head."""
+    import time
+
+    from autoptz.engine.pipeline.framing import KP_NOSE, Keypoint
+
+    w, _ = _locked_worker_with_pose(
+        aim_body_mode="full_silhouette", raised_arm_bbox=(150.0, 0.0, 250.0, 720.0)
+    )
+    w._pose_aim = lambda *a, **k: (None, 0.0, 0.0)
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    # Tick 1: head fully missing → recovery activates.
+    (_, ey1), _ = w._track_error(w._last_tracks[0], frame, time.monotonic(), tracks=w._last_tracks)
+    assert ey1 >= 0.30
+    # Tick 2: nose flickers in at conf 0.40 (visible by the 0.35 floor, but not
+    # CLEARLY visible) — recovery must hold, not flap off.
+    kps = list(_standing_kps())
+    kps[KP_NOSE] = Keypoint(200.0, 60.0, 0.40)
+    w._note_good_kps(kps, 1, time.monotonic())
+    (_, ey2), _ = w._track_error(w._last_tracks[0], frame, time.monotonic(), tracks=w._last_tracks)
+    assert ey2 >= 0.30
+    # Tick 3: nose clearly visible (0.60) → recovery releases.
+    kps2 = list(_standing_kps())
+    kps2[KP_NOSE] = Keypoint(200.0, 60.0, 0.60)
+    w._note_good_kps(kps2, 1, time.monotonic())
+    (_, ey3), _ = w._track_error(w._last_tracks[0], frame, time.monotonic(), tracks=w._last_tracks)
+    assert ey3 < 0.30
+
+
 def test_framing_source_flip_is_logged(caplog) -> None:
     """Transparency: when 'Ignore arms' framing degrades torso→bbox (or
     recovers), a log line says so — field runs must be diagnosable."""

@@ -293,6 +293,14 @@ _POSE_FRAMING_TTL_S = 1.0
 _HEAD_RECOVERY_FRAMINGS = frozenset({"face", "head_shoulders", "upper_body"})
 _HEAD_RECOVERY_EY = 0.30
 _HEAD_CLIP_TOP_FRAC = 0.02
+# Hysteresis: once recovery is active, releasing it needs a CLEARLY visible
+# head landmark (base keypoint floor + this margin) and a bigger un-clipped
+# gap, so borderline confidences can't flap the tilt bias on/off.
+_HEAD_RECOVERY_EXIT_CONF_MARGIN = 0.10
+_HEAD_CLIP_EXIT_FRAC = 0.04
+
+# Time constant for smoothing the pose-derived framing box (seconds).
+_TORSO_BOX_TAU_S = 0.35
 
 # How often (seconds) to run OSNet appearance ReID: refresh the target's template
 # while it's visible, or attempt recovery while it's lost.  Throttled because the
@@ -570,8 +578,12 @@ class CameraWorker:
         self._last_pose_good_t = 0.0
         # Throttle for the head-out-of-view recovery log line.
         self._last_head_recover_log_t = 0.0
+        # Head-recovery hysteresis state (see _head_recovery_bias).
+        self._head_recovery_active = False
         # Last logged 'Ignore arms' framing source ("torso"/"bbox"), change-only.
         self._framing_source = ""
+        # Continuous smoother for the pose-derived framing box (lazy).
+        self._torso_box_smoother: Any | None = None
         self._last_pose_overlay_t = 0.0
         self._last_pose_overlay_frame_id = 0
         self._last_pose_emitted_frame_id = -1
@@ -3090,6 +3102,12 @@ class CameraWorker:
         self._last_good_kps = None
         self._last_good_kps_track_id = None
         self._last_pose_good_t = 0.0
+        self._head_recovery_active = False
+        if self._torso_box_smoother is not None:
+            try:
+                self._torso_box_smoother.reset()
+            except Exception:  # noqa: BLE001
+                pass
         self._last_pose_overlay_t = 0.0
         self._last_pose_overlay_frame_id = 0
         self._last_pose_emitted_frame_id = -1
@@ -4272,8 +4290,18 @@ class CameraWorker:
             except Exception:  # noqa: BLE001
                 box = None
         if box is not None:
+            # Pose estimates arrive as discrete ~0.2 s samples with keypoint
+            # noise — smooth them into a continuous signal so the framing
+            # target (and the PTZ velocity feed-forward differentiating it)
+            # never sees a step.  Shared by BOTH actuators; time-aware, so the
+            # two calling threads just add smoothing sub-steps.
+            if self._torso_box_smoother is None:
+                from autoptz.engine.pipeline import framing
+
+                self._torso_box_smoother = framing.BoxSmoother(tau=_TORSO_BOX_TAU_S)
+            smoothed = self._torso_box_smoother.update(box, time.monotonic())
             self._note_framing_source("torso")
-            return box
+            return smoothed if smoothed is not None else box
         self._note_framing_source(
             "bbox",
             reason="no fresh pose keypoints" if kps is None else "torso landmarks unavailable",
@@ -4306,28 +4334,42 @@ class CameraWorker:
         sees a torso but NO head landmark, and the detection box is clipped at
         the very top of the frame — i.e. the head is above the field of view.
         Returns *ey* raised to at least ``_HEAD_RECOVERY_EY`` so the controller
-        tilts up until the head re-enters the frame (head keypoints then appear
-        and the bias stops).  Occlusions mid-frame (head behind an object, box
-        not top-clipped) never trigger it, so it cannot oscillate against a
-        blocked view.
+        tilts up until the head re-enters the frame.  Occlusions mid-frame
+        (head behind an object, box not top-clipped) never trigger it, so it
+        cannot oscillate against a blocked view.  HYSTERESIS: once active,
+        releasing needs a *clearly* visible head landmark (confidence floor +
+        ``_HEAD_RECOVERY_EXIT_CONF_MARGIN``) and a wider un-clipped gap — a
+        borderline nose flickering around the floor can't flap the bias on/off
+        (which read as tilt jitter).
         """
+        active = self._head_recovery_active
         framing_name = _resolve_framing(self.config.tracking)
         if framing_name not in _HEAD_RECOVERY_FRAMINGS:
+            self._head_recovery_active = False
             return ey
-        if float(track.bbox.y1) > frame_h * _HEAD_CLIP_TOP_FRAC:
+        clip_frac = _HEAD_CLIP_EXIT_FRAC if active else _HEAD_CLIP_TOP_FRAC
+        if float(track.bbox.y1) > frame_h * clip_frac:
+            self._head_recovery_active = False
             return ey
         kps = self._fresh_target_kps(track.track_id)
         if kps is None:
+            self._head_recovery_active = False
             return ey
         try:
             from autoptz.engine.pipeline import framing
 
-            if framing.head_point(kps) is not None:
+            head_conf = framing.DEFAULT_KP_CONF + (
+                _HEAD_RECOVERY_EXIT_CONF_MARGIN if active else 0.0
+            )
+            if framing.head_point(kps, min_conf=head_conf) is not None:
+                self._head_recovery_active = False
                 return ey  # head is visible — normal aim math owns the tilt
             if framing.shoulder_midpoint(kps) is None and framing.hip_midpoint(kps) is None:
+                self._head_recovery_active = False
                 return ey  # no body evidence either — don't invent a direction
         except Exception:  # noqa: BLE001
             return ey
+        self._head_recovery_active = True
         now = time.monotonic()
         if now - self._last_head_recover_log_t >= _TICK_WARN_INTERVAL_S:
             self._last_head_recover_log_t = now

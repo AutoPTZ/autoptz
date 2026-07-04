@@ -22,6 +22,7 @@ so :data:`TORSO_KEYPOINTS` names the four points we actually use.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 # COCO-17 keypoint indices for the torso anchors we rely on.  Documented here so
@@ -375,6 +376,51 @@ def torso_framing_box(
         cy = (extent[0] + extent[1]) * 0.5
     half_w = height * 0.2  # nominal ~0.4 aspect person
     return (cx - half_w, cy - height * 0.5, cx + half_w, cy + height * 0.5)
+
+
+class BoxSmoother:
+    """Time-aware EMA over a framing box (x1, y1, x2, y2).
+
+    Pose-derived framing boxes arrive as discrete ~0.2 s estimates with
+    keypoint regression noise; consumed raw they make the framing target STEP
+    several times a second (visible as jitter, and the PTZ velocity
+    feed-forward differentiates the steps into jerks).  This smooths them into
+    a continuous signal: ``alpha = 1 - exp(-dt / tau)`` so the smoothing is
+    frame-rate independent — a call 1 ms after the last barely moves, a call
+    seconds later lands on the target.  ``None`` holds the last box (momentary
+    pose dropouts don't snap anything).
+    """
+
+    def __init__(self, tau: float = 0.35) -> None:
+        self._tau = max(1e-3, tau)
+        self._value: tuple[float, float, float, float] | None = None
+        self._t: float | None = None
+
+    @property
+    def value(self) -> tuple[float, float, float, float] | None:
+        return self._value
+
+    def reset(self) -> None:
+        self._value = None
+        self._t = None
+
+    def update(
+        self,
+        box: tuple[float, float, float, float] | None,
+        t: float,
+    ) -> tuple[float, float, float, float] | None:
+        """Blend *box* (at time *t*, seconds) into the running estimate."""
+        if box is None:
+            return self._value
+        if self._value is None or self._t is None or t <= self._t:
+            self._value = box
+            self._t = t
+            return self._value
+        dt = t - self._t
+        alpha = 1.0 - math.exp(-dt / self._tau)
+        self._value = tuple(v + alpha * (b - v) for v, b in zip(self._value, box, strict=True))  # type: ignore[assignment]
+        self._t = t
+        return self._value
 
 
 class AimSmoother:

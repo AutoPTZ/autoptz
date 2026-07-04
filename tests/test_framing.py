@@ -207,6 +207,54 @@ class TestTorsoFramingBox:
         assert torso_framing_box(flat) is None
 
 
+class TestBoxSmoother:
+    """Time-aware EMA over a framing box: pose estimates arrive in ~0.2 s steps
+    with keypoint noise — the smoother turns them into a continuous signal so
+    the framing target never jumps (the reported jitter)."""
+
+    def _smoother(self):
+        from autoptz.engine.pipeline.framing import BoxSmoother
+
+        return BoxSmoother(tau=0.35)
+
+    def test_first_update_passes_through(self) -> None:
+        s = self._smoother()
+        assert s.update((0.0, 0.0, 100.0, 200.0), t=10.0) == (0.0, 0.0, 100.0, 200.0)
+
+    def test_small_dt_barely_moves(self) -> None:
+        s = self._smoother()
+        s.update((0.0, 0.0, 100.0, 200.0), t=10.0)
+        out = s.update((50.0, 0.0, 150.0, 200.0), t=10.001)  # 1 ms later
+        assert abs(out[0] - 0.0) < 1.0  # nearly unmoved
+
+    def test_large_dt_converges(self) -> None:
+        s = self._smoother()
+        s.update((0.0, 0.0, 100.0, 200.0), t=10.0)
+        out = s.update((50.0, 0.0, 150.0, 200.0), t=13.0)  # 3 s ≫ tau
+        assert abs(out[0] - 50.0) < 1.0  # essentially at the new target
+
+    def test_step_sequence_moves_monotonically(self) -> None:
+        s = self._smoother()
+        s.update((0.0, 0.0, 100.0, 200.0), t=0.0)
+        xs = []
+        for i in range(1, 6):
+            out = s.update((50.0, 0.0, 150.0, 200.0), t=i * 0.2)
+            xs.append(out[0])
+        assert all(b > a for a, b in zip(xs, xs[1:], strict=False))  # smooth approach
+        assert 0.0 < xs[0] < 50.0  # no instant jump
+
+    def test_none_holds_last(self) -> None:
+        s = self._smoother()
+        s.update((0.0, 0.0, 100.0, 200.0), t=0.0)
+        assert s.update(None, t=0.2) == (0.0, 0.0, 100.0, 200.0)
+
+    def test_reset_forgets(self) -> None:
+        s = self._smoother()
+        s.update((0.0, 0.0, 100.0, 200.0), t=0.0)
+        s.reset()
+        assert s.update((50.0, 0.0, 150.0, 200.0), t=0.2) == (50.0, 0.0, 150.0, 200.0)
+
+
 class TestAimSmoother:
     def test_first_sample_passes_through(self) -> None:
         s = AimSmoother(alpha=0.4)
