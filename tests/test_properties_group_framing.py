@@ -54,6 +54,19 @@ def test_checkbox_loads_saved_value(qtapp, tmp_path) -> None:
         panel.deleteLater()
 
 
+def test_on_config_changed_does_not_raise(qtapp, tmp_path) -> None:
+    """Regression: _on_config_changed called a removed _sync_framing_sliders()
+    method, so any external config change on the selected camera (e.g. a toggle
+    round-tripping through the client's configChanged signal) raised
+    AttributeError. It must complete cleanly."""
+    client, cid, panel = _panel_with_camera(tmp_path)
+    try:
+        panel.set_camera(cid)
+        panel._on_config_changed(cid)  # must not raise
+    finally:
+        panel.deleteLater()
+
+
 def test_toggle_persists_via_push(qtapp, tmp_path) -> None:
     client, cid, panel = _panel_with_camera(tmp_path)
     try:

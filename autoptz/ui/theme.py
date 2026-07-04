@@ -312,6 +312,7 @@ def build_stylesheet(pal: Palette, accent: QColor, selection: QColor) -> str:
     QPushButton[danger="true"] {{ background: transparent; color: {ERROR}; border: 1px solid {pal.border}; }}
     QPushButton[danger="true"]:hover {{ background: {ERROR}; color: {ACCENT_TEXT}; border-color: {ERROR}; }}
     QPushButton[danger="true"]:pressed {{ background: {DANGER_HOVER}; color: {ACCENT_TEXT}; }}
+    QPushButton[danger="true"]:disabled {{ background: transparent; color: {pal.muted}; border-color: {pal.border}; }}
     /* icon-only square button (IconButton): borderless, subtle hover fill */
     QToolButton#iconButton {{ background: transparent; border: none; border-radius: {r}px;
         padding: 0; color: {pal.subtext}; }}

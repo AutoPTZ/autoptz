@@ -1081,8 +1081,6 @@ class PropertiesPanel(QWidget):
                 _safe(lambda: self._client.getCameraConfig(self._camera_id), self._cfg) or self._cfg
             )
             self._refresh_presets()
-            # Mirror framing changes made on the tile (drag-resize) into the sliders.
-            self._sync_framing_sliders()
 
     def _build_fps_row(self) -> QWidget:
         """A frame-rate slider with a live value + measured-fps readout.

@@ -66,7 +66,10 @@ class ExperimentalFeaturesDialog(QDialog):
         self._client = client
         self.setWindowTitle("Experimental Features")
         self.setModal(True)
-        self.setMinimumWidth(560)
+        # Wide enough that a row (label + editor + Browse + help + "Restart
+        # required" badge) fits without clipping the badge / a horizontal scrollbar.
+        self.setMinimumWidth(680)
+        self.resize(720, 620)
 
         self._bool_boxes: dict[str, QCheckBox] = {}
         self._choice_combos: dict[str, QComboBox] = {}
@@ -88,6 +91,7 @@ class ExperimentalFeaturesDialog(QDialog):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         outer.addWidget(scroll, 1)
         body = QWidget()
         scroll.setWidget(body)
