@@ -246,7 +246,6 @@ def test_face_pass_skipped_when_no_tracks(qtapp) -> None:
 
 def test_output_sender_delivers_on_its_own_thread() -> None:
     import threading
-    import time
 
     import numpy as np
 
