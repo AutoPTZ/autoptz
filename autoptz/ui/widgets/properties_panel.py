@@ -244,8 +244,11 @@ class PropertiesPanel(QWidget):
         self.setObjectName("propertiesPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         # Floor the panel width so labels/checkboxes don't clip in a docked layout
-        # a saved session may have shrunk narrower than the content needs.
-        self.setMinimumWidth(268)
+        # a saved session may have shrunk narrower than the content needs. Sized
+        # for the widest expanded-Tracking row (label + combo + cost chip + help
+        # badge ≈ 264) plus the body margins AND the styled vertical scrollbar
+        # (~12), which all eat into the scroll viewport.
+        self.setMinimumWidth(300)
         self._client = client
         # Optional live-frame handle (a ``ShmFrameSource`` like the camera tiles
         # use).  When supplied, "Save preset" grabs the current frame as a JPEG
