@@ -442,6 +442,12 @@ class CameraWorker:
         self._injected_shm = shm_writer
         self._telemetry_period = 1.0 / max(1.0, telemetry_hz)
 
+        # Worker-owned source reconnect state (see ``_maybe_reopen_source``); the
+        # capture loop re-arms these on every delivered frame.
+        self._last_frame_t = 0.0
+        self._reopen_backoff = config.reconnect.backoff_initial_s
+        self._reopen_next_t = 0.0
+
         # ── face / identity wiring ──────────────────────────────────────────────
         # The face stack (insightface + the gallery service) is built lazily in
         # the worker thread unless injected (tests).  When a worker-thread face
@@ -1021,9 +1027,7 @@ class CameraWorker:
         """
         done = threading.Event() if wait > 0 else None
         with self._cmd_lock:
-            self._cmd_queue.append(
-                ("release_models", {"done": done, "include_face": include_face})
-            )
+            self._cmd_queue.append(("release_models", {"done": done, "include_face": include_face}))
         if done is not None:
             done.wait(timeout=wait)
 
@@ -1207,12 +1211,16 @@ class CameraWorker:
             self._refresh_detector_from_pool()
         elif kind == "reload_models":
             self._reload_inference_models(
-                include_face=bool(payload.get("include_face")) if isinstance(payload, dict) else False
+                include_face=bool(payload.get("include_face"))
+                if isinstance(payload, dict)
+                else False
             )
         elif kind == "release_models":
             done = payload.get("done") if isinstance(payload, dict) else payload
             self._release_inference_models(
-                include_face=bool(payload.get("include_face")) if isinstance(payload, dict) else False
+                include_face=bool(payload.get("include_face"))
+                if isinstance(payload, dict)
+                else False
             )
             if isinstance(done, threading.Event):
                 done.set()
@@ -3064,6 +3072,12 @@ class CameraWorker:
             fps_window_start = time.monotonic()
             fps_window_frames = 0
             self._next_drop_log_t = time.monotonic() + _DROP_LOG_INTERVAL_S
+            # Worker-owned reconnect state: the ingest adapters' own stall/reconnect
+            # loop never runs here (the worker drives _open/_read_frame directly),
+            # so the capture loop must reopen a dead/stalled source itself.
+            self._last_frame_t = time.monotonic()
+            self._reopen_backoff = self.config.reconnect.backoff_initial_s
+            self._reopen_next_t = 0.0
             last_health = HealthState.OK if self._source is not None else HealthState.ERROR
             last_error = None if self._source is not None else "frame source unavailable"
 
@@ -3115,6 +3129,9 @@ class CameraWorker:
                         self._push_frame(frame)
                         fps_window_frames += 1
                         miss_streak = 0  # got a frame → drop back to fast retries
+                        self._last_frame_t = now
+                        self._reopen_backoff = self.config.reconnect.backoff_initial_s
+                        self._reopen_next_t = 0.0
                         last_health = HealthState.OK
                         last_error = None
 
@@ -3157,6 +3174,14 @@ class CameraWorker:
                     # to the cap so a stalled/offline/denied camera doesn't spin the
                     # capture thread.
                     if frame is None:
+                        # A sustained stall (or a source that never opened) gets a
+                        # full close+rebuild+reopen — read() alone can NEVER revive
+                        # a session that stopped delivering (e.g. a Continuity
+                        # Camera that was asleep at service start).
+                        if self._maybe_reopen_source(now):
+                            last_health = HealthState.RECONNECTING
+                            if self._source is None:
+                                last_error = "frame source unavailable; retrying"
                         miss_streak += 1
                         if miss_streak <= _RECONNECT_FAST_RETRIES:
                             wait = 0.01
@@ -3470,6 +3495,74 @@ class CameraWorker:
         # inference thread (see ``_build_inference_stacks``).
         self._build_ptz_stack()
         self._maybe_start_ptz_pump()
+
+    def _maybe_reopen_source(self, now: float) -> bool:
+        """Rebuild + reopen a dead/stalled frame source (worker-owned reconnect).
+
+        The ingest adapters carry their own stall/reconnect loop, but it only runs
+        on the adapter's own thread — which this worker never starts (it drives
+        ``_open``/``_read_frame`` directly to feed detection).  Without this, a
+        source that failed to open at startup, or a session that stopped
+        delivering frames (a Continuity Camera that was asleep at service start),
+        stayed dead until a full service restart.
+
+        Called from the capture loop's no-frame branch.  Attempts fire when the
+        source is missing or ``reconnect.stall_timeout_s`` has passed without a
+        frame, paced by exponential backoff (``backoff_initial_s`` doubling up to
+        ``backoff_max_s``; a delivered frame resets it).  Injected sources
+        (tests / synthetic children) are never rebuilt.  Returns ``True`` when an
+        attempt was made — successful or not — so the loop can surface
+        RECONNECTING health.  Never raises.
+        """
+        if self._injected_source is not None:
+            return False
+        reconnect = self.config.reconnect
+        stalled = (now - self._last_frame_t) >= reconnect.stall_timeout_s
+        if self._source is not None and not stalled:
+            return False
+        if now < self._reopen_next_t:
+            return False
+        self._reopen_next_t = now + self._reopen_backoff
+        self._reopen_backoff = min(self._reopen_backoff * 2.0, reconnect.backoff_max_s)
+
+        old = self._source
+        self._source = None
+        if old is not None:
+            try:
+                old.close()
+            except Exception:  # noqa: BLE001
+                log.debug("camera_id=%s stale source close failed", self.camera_id, exc_info=True)
+            log.warning(
+                "camera_id=%s no frames for %.1fs; reopening frame source",
+                self.camera_id,
+                now - self._last_frame_t,
+            )
+        try:
+            source = build_frame_source(self.camera_id, self.config)
+            if source is not None and source.open():
+                self._source = source
+                # Fresh stall window: give the new session a full stall_timeout
+                # before it can be torn down again.
+                self._last_frame_t = now
+                log.info("camera_id=%s frame source reopened", self.camera_id)
+            else:
+                if source is not None:
+                    try:
+                        source.close()
+                    except Exception:  # noqa: BLE001
+                        log.debug(
+                            "camera_id=%s failed-open source close failed",
+                            self.camera_id,
+                            exc_info=True,
+                        )
+                log.info(
+                    "camera_id=%s frame source reopen failed; next attempt in %.1fs",
+                    self.camera_id,
+                    self._reopen_next_t - now,
+                )
+        except Exception:  # noqa: BLE001 — reopen is best-effort, never kills capture
+            log.warning("camera_id=%s frame source reopen raised", self.camera_id, exc_info=True)
+        return True
 
     def _build_inference_stacks(self) -> None:
         """Build the detect + face stacks ON the inference thread.
