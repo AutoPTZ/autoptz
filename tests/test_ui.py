@@ -1862,10 +1862,10 @@ finally:
         result = _run_ui_smoke(code, cwd=Path(__file__).resolve().parents[1], env=env, timeout=30)
         assert result.returncode == 0, result.stderr or result.stdout
 
-    def test_engine_menu_opens_experimental_features_dialog(self, tmp_path) -> None:
-        """Engine menu must expose "Experimental Features..." and triggering it
-        must actually open the (registry-driven) ExperimentalFeaturesDialog —
-        the dialog class exists and is exported but was never mounted anywhere.
+    def test_help_menu_opens_experimental_features_dialog(self, tmp_path) -> None:
+        """Experimental Features lives in the Help menu (not Engine), between
+        "Run AutoPTZ Mark…" and "About AutoPTZ", and triggering it opens the
+        (registry-driven) ExperimentalFeaturesDialog.
         """
         code = f"""
 import os
@@ -1887,13 +1887,26 @@ try:
     assert act is not None, "MainWindow has no _act_experimental action"
     assert "Experimental Features" in act.text()
 
-    engine_menu = None
+    engine_actions = None
+    help_actions = None
     for menu_action in win.menuBar().actions():
-        if menu_action.text().replace("&", "") == "Engine":
-            engine_menu = menu_action.menu()
-            break
-    assert engine_menu is not None, "no Engine menu found"
-    assert act in engine_menu.actions(), "_act_experimental is not in the Engine menu"
+        sub = menu_action.menu()
+        if sub is None:
+            continue
+        name = menu_action.text().replace("&", "")
+        if name == "Engine":
+            engine_actions = list(sub.actions())
+        elif name == "Help":
+            help_actions = list(sub.actions())
+    assert engine_actions is not None and help_actions is not None
+    assert act not in engine_actions, "experimental must NOT be in Engine"
+    assert act in help_actions, "_act_experimental is not in the Help menu"
+
+    texts = [a.text() for a in help_actions]
+    mark_i = next(i for i, t in enumerate(texts) if "Run AutoPTZ Mark" in (t or ""))
+    exp_i = help_actions.index(act)
+    about_i = next(i for i, t in enumerate(texts) if "About AutoPTZ" in (t or ""))
+    assert mark_i < exp_i < about_i, texts
 
     opened = {{}}
     orig_exec = ExperimentalFeaturesDialog.exec

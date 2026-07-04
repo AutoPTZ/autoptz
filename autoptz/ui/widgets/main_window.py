@@ -403,17 +403,6 @@ class MainWindow(QMainWindow):
                 ),
             )
         )
-        self._act_experimental = _action(
-            self,
-            "Experimental Features...",
-            self._open_experimental_features,
-            tip=(
-                "Toggle curated experimental engine flags (e.g. the shared "
-                "detection server) and per-camera tracking defaults for new "
-                "cameras. Most changes need a restart to take effect."
-            ),
-        )
-        engine.addAction(self._act_experimental)
         engine.addSeparator()
         self._act_stop_tracking = _action(
             self,
@@ -540,6 +529,16 @@ class MainWindow(QMainWindow):
                 tip="Benchmark this machine with simulated cameras (3DMark-style).",
             )
         )
+        self._act_experimental = _action(
+            self,
+            "Experimental Features…",
+            self._open_experimental_features,
+            tip=(
+                "Turn optional engine features on or off (e.g. the shared "
+                "detection server). Most changes apply after a restart."
+            ),
+        )
+        helpm.addAction(self._act_experimental)
         helpm.addAction(_action(self, "About AutoPTZ", self._show_about))
 
     def _build_scale_menu(self, view: QMenu) -> None:
