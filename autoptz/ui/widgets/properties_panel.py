@@ -243,12 +243,12 @@ class PropertiesPanel(QWidget):
         super().__init__(parent)
         self.setObjectName("propertiesPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        # Floor the panel width so labels/checkboxes don't clip in a docked layout
-        # a saved session may have shrunk narrower than the content needs. Sized
-        # for the widest expanded-Tracking row (label + combo + cost chip + help
-        # badge ≈ 264) plus the body margins AND the styled vertical scrollbar
-        # (~12), which all eat into the scroll viewport.
-        self.setMinimumWidth(300)
+        # Floor the panel width so nothing EVER clips horizontally, whatever a
+        # saved layout restored: sized for the widest expanded section — the
+        # PTZ manual-control cluster (~326) — plus body margins and the styled
+        # vertical scrollbar, all of which eat into the scroll viewport. The
+        # invariant is pinned by tests/test_panel_min_width_no_clip.py.
+        self.setMinimumWidth(360)
         self._client = client
         # Optional live-frame handle (a ``ShmFrameSource`` like the camera tiles
         # use).  When supplied, "Save preset" grabs the current frame as a JPEG
@@ -1154,6 +1154,11 @@ class PropertiesPanel(QWidget):
         col.addLayout(top)
         self._fps_measured = QLabel("")
         self._fps_measured.setObjectName("fpsMeasured")
+        # This caption grows a long suffix under load ("— source isn't reaching
+        # 30 fps") — it must WRAP, and must never widen the form (a QLabel's
+        # minimum width is otherwise its full text width).
+        self._fps_measured.setWordWrap(True)
+        self._fps_measured.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._restyle_fps_measured()
         col.addWidget(self._fps_measured)
         return holder
