@@ -69,3 +69,8 @@ ground-truth plumbing). It is worth building **only when a tracking-quality gate
 demands closed-loop evidence** — see the control-quality direction in the PTZ-parity
 work and `docs/MASTER-PLAN.md`. Until then, the current clips remain the right tool
 for throughput/scaling, and real cameras remain the check for control quality.
+
+A concrete, cheaper-first design for that closed-loop rig — a 2D "virtual PTZ over
+a wide canvas" that reuses the existing synthetic-source and PTZ-backend seams,
+before any 3D renderer — is written up in
+[virtual-ptz-simulation.md](virtual-ptz-simulation.md).
