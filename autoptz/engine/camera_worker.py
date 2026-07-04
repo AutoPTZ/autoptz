@@ -1213,11 +1213,13 @@ class CameraWorker:
             log.debug("camera_id=%s set_target_fps failed", self.camera_id, exc_info=True)
 
     def _release_inference_models(self) -> None:
-        """Drop detector/pose refs *without* rebuilding so their ORT sessions free.
+        """Drop detector/pose/face refs *without* rebuilding so their ORT sessions free.
 
         Called before the on-disk model cache is mutated: once these refs and the
         shared pool's are gone (and GC runs), Windows can delete/replace the files
-        that onnxruntime had open.  The subsequent ``reload_models`` rebuilds.
+        that onnxruntime had open (including the insightface face pack).  The
+        subsequent ``reload_models`` rebuilds.  An INJECTED face stack (tests) is
+        left alone — it isn't ours to drop.
         """
         self._detect = None
         self._unified_pose_active = False
@@ -1226,9 +1228,11 @@ class CameraWorker:
         self._pose_probed = False
         self._pose_keypoints = None
         self._pose_kp_track_id = None
+        if self._injected_face_stack is None:
+            self._face = None
 
     def _reload_inference_models(self) -> None:
-        """Force-drop + rebuild detector/pose to match the current model cache."""
+        """Force-drop + rebuild detector/pose/face to match the current model cache."""
         self._detect = None
         self._unified_pose_active = False
         self._last_detections = []
@@ -1236,6 +1240,10 @@ class CameraWorker:
         self._pose_probed = False
         self._pose_keypoints = None
         self._pose_kp_track_id = None
+        if self._injected_face_stack is None:
+            self._face = None
+            if self._feature("face_recognition"):
+                self._ensure_face_stack()
         if self._feature("detection"):
             self._ensure_detect_stack()
             model = (

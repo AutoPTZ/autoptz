@@ -1082,7 +1082,7 @@ class Supervisor:
                     log.debug("pool %s failed", method, exc_info=True)
 
     def release_model_sessions(self) -> None:
-        """Free every detector/pose ORT session (pool + workers) before a cache mutation.
+        """Free every detector/pose/face ORT session (pool + workers) before a cache mutation.
 
         Windows refuses to delete/replace a model file while onnxruntime still has
         it open, so the UI calls this *before* downloading/removing files: the pool
@@ -1095,7 +1095,7 @@ class Supervisor:
             return
         pool = self._inference_pool
         if pool is not None:
-            for method in ("release_detector", "release_pose"):
+            for method in ("release_detector", "release_pose", "release_face"):
                 fn = getattr(pool, method, None)
                 if callable(fn):
                     try:

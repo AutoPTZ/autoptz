@@ -758,3 +758,99 @@ def test_camera_worker_resolve_model_path_never_raises(monkeypatch) -> None:
         id="cam-abcd1234", name="C", source=SourceConfig(type="usb", address="usb://0")
     )
     assert camera_worker._resolve_model_path(cfg) is None
+
+
+class TestFacePack:
+    """ModelManager owns download/remove of the insightface face pack in its own
+    app-data cache (never the bundled or ~/.insightface copies)."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("INSIGHTFACE_HOME", raising=False)
+        monkeypatch.delenv("AUTOPTZ_FACE_MODEL", raising=False)
+        # No bundled pack and an empty fake home by default; tests opt into each.
+        self._home = tmp_path / "home"
+        self._home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: self._home)
+
+    def _write_pack(self, insightface_root: Path, model: str = "buffalo_l") -> Path:
+        """Write a fake pack at ``<insightface_root>/models/<model>/*.onnx``."""
+        pack = insightface_root / "models" / model
+        pack.mkdir(parents=True)
+        (pack / "w600k_r50.onnx").write_bytes(b"x" * 2048)
+        (pack / "det_10g.onnx").write_bytes(b"y" * 1024)
+        return pack
+
+    def test_status_missing(self, tmp_path):
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        st = mgr.face_pack_status()
+        assert st["present"] is False
+        assert st["location"] == "missing"
+        assert st["removable"] is False
+
+    def test_status_app_data(self, tmp_path):
+        cache = tmp_path / "cache"
+        self._write_pack(cache / "insightface")
+        mgr = ModelManager(cache_dir=cache)
+        st = mgr.face_pack_status()
+        assert st["present"] is True
+        assert st["location"] == "app-data"
+        assert st["removable"] is True
+        assert st["size_bytes"] == 2048 + 1024
+
+    def test_status_bundled_wins_and_not_removable(self, tmp_path, monkeypatch):
+        bundled = tmp_path / "bundled"
+        self._write_pack(bundled / "insightface")
+        monkeypatch.setattr(
+            "autoptz.engine.runtime.models.bundled_models_dir", lambda: bundled
+        )
+        cache = tmp_path / "cache"
+        self._write_pack(cache / "insightface")  # app-data copy shadowed by bundled
+        mgr = ModelManager(cache_dir=cache)
+        st = mgr.face_pack_status()
+        assert st["location"] == "bundled"
+        assert st["removable"] is False
+
+    def test_status_home_not_removable(self, tmp_path):
+        self._write_pack(self._home / ".insightface")
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        st = mgr.face_pack_status()
+        assert st["location"] == "home"
+        assert st["removable"] is False
+
+    def test_ensure_uses_appdata_root(self, tmp_path, monkeypatch):
+        cache = tmp_path / "cache"
+        seen = {}
+
+        def fake_ensure(root=None, model_name="buffalo_l"):
+            seen["root"] = root
+            self._write_pack(Path(root))
+            return None
+
+        monkeypatch.setattr(
+            "autoptz.engine.pipeline.identify.ensure_face_model", fake_ensure
+        )
+        mgr = ModelManager(cache_dir=cache)
+        results = mgr.ensure_face_pack()
+        assert seen["root"] == str(cache / "insightface")
+        assert results[0]["state"] == "downloaded"
+
+    def test_ensure_failure_reports_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "autoptz.engine.pipeline.identify.ensure_face_model",
+            lambda root=None, model_name="buffalo_l": "OSError: offline",
+        )
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        results = mgr.ensure_face_pack()
+        assert results[0]["state"] == "failed"
+        assert "offline" in results[0]["error"]
+
+    def test_remove_deletes_only_appdata(self, tmp_path):
+        cache = tmp_path / "cache"
+        app_pack = self._write_pack(cache / "insightface")
+        home_pack = self._write_pack(self._home / ".insightface")
+        mgr = ModelManager(cache_dir=cache)
+        results = mgr.remove_face_pack()
+        assert results and all(r["state"] == "removed" for r in results)
+        assert not any(app_pack.glob("*.onnx"))  # app-data pack gone
+        assert list(home_pack.glob("*.onnx"))  # home pack untouched

@@ -97,6 +97,14 @@ class _ModelTask(QObject):
                         total,
                     ),
                 )
+            elif self._action == "download_face":
+                # insightface exposes no byte progress → indeterminate bar.
+                self.progress.emit("Downloading face recognition pack", 0, 0)
+                results = manager.ensure_face_pack()
+            elif self._action == "remove_face":
+                self.progress.emit("Removing face recognition pack", 0, 1)
+                results = manager.remove_face_pack()
+                self.progress.emit("Removing face recognition pack", 1, 1)
             else:
                 self.progress.emit("Removing models", 0, 1)
                 results = manager.remove_app_models(keys=self._keys)
@@ -241,6 +249,100 @@ class _ExternalRow(QFrame):
         lay.addWidget(detail)
 
 
+class _FacePackRow(QFrame):
+    """The insightface face pack as a first-class row: status + Download/Remove.
+
+    Unlike ReID (whose weights are managed entirely by the upstream boxmot/torch
+    caches), the face pack lives in a location AutoPTZ controls, so it can be
+    downloaded and removed here — but only when it resolves to the app-data cache;
+    a bundled-in-app or ~/.insightface copy is never removable.
+    """
+
+    def __init__(
+        self,
+        status: dict[str, Any],
+        *,
+        on_download: Any,
+        on_remove: Any,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setObjectName("facePackRow")
+        self.setStyleSheet(
+            f"QFrame#facePackRow {{ background: transparent; border: none;"
+            f" border-bottom: 1px solid {T.CURRENT.border}; }}"
+        )
+        self.present = bool(status.get("present"))
+        self.removable = bool(status.get("removable"))
+        location = str(status.get("location", "missing"))
+        size = int(status.get("size_bytes", 0) or 0)
+
+        lay = QGridLayout(self)
+        lay.setContentsMargins(4, 10, 4, 10)
+        lay.setHorizontalSpacing(10)
+        lay.setVerticalSpacing(4)
+
+        title = QLabel("<b>Face recognition pack (insightface buffalo_l)</b>")
+        title.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(title, 0, 0)
+
+        if not self.present:
+            status_text, status_color = "NOT DOWNLOADED", T.CURRENT.muted
+        elif location == "app-data":
+            status_text, status_color = "DOWNLOADED", T.TRACKING
+        elif location == "home":
+            status_text, status_color = "IN ~/.INSIGHTFACE", T.TRACKING
+        else:  # bundled / custom (INSIGHTFACE_HOME)
+            status_text, status_color = "INCLUDED", T.TRACKING
+        pill = QLabel(status_text)
+        pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pill.setStyleSheet(
+            f"color: {status_color}; border: 1px solid {status_color};"
+            f" border-radius: 8px; padding: 1px 8px; font-size: {T.fs(9)}px; font-weight: 700;"
+        )
+        lay.addWidget(pill, 0, 3, Qt.AlignmentFlag.AlignRight)
+
+        self.download_btn = QPushButton("Download")
+        self.download_btn.setEnabled(not self.present)
+        self.download_btn.setToolTip(
+            "Download the ~300 MB face pack so face recognition works."
+            if not self.present
+            else "The face pack is already available."
+        )
+        self.download_btn.clicked.connect(on_download)
+        self.remove_btn = DangerButton("Remove")
+        self.remove_btn.setEnabled(self.removable)
+        self.remove_btn.setToolTip(
+            "Remove the downloaded face pack from the AutoPTZ cache."
+            if self.removable
+            else "Only a pack in the AutoPTZ cache can be removed "
+            "(bundled / ~/.insightface packs can't)."
+        )
+        self.remove_btn.clicked.connect(on_remove)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        btns.addWidget(self.remove_btn)
+        btns.addWidget(self.download_btn)
+        lay.addLayout(btns, 1, 0, 1, 4)
+
+        detail_bits = ["Named-person confirmation and face identity matching."]
+        if self.present and size:
+            detail_bits.append(f"{size / 1e6:.0f} MB")
+        detail_bits.append(str(status.get("path", "")))
+        detail = QLabel(
+            f"<span style='color:{T.CURRENT.subtext}'>{' · '.join(detail_bits)}</span>"
+        )
+        detail.setTextFormat(Qt.TextFormat.RichText)
+        detail.setWordWrap(True)
+        lay.addWidget(detail, 2, 0, 1, 4)
+        lay.setColumnStretch(0, 1)
+
+    def set_controls_enabled(self, enabled: bool) -> None:
+        self.download_btn.setEnabled(enabled and not self.present)
+        self.remove_btn.setEnabled(enabled and self.removable)
+
+
 class ModelManagerDialog(QDialog):
     """Interactive model download/removal window."""
 
@@ -259,6 +361,7 @@ class ModelManagerDialog(QDialog):
         self._rows: dict[str, _ModelRow] = {}
         self._status_by_key: dict[str, dict[str, Any]] = {}
         self._task: _ModelTask | None = None
+        self._face_row: _FacePackRow | None = None
         self.setWindowTitle("AutoPTZ Models")
         self.setModal(True)
         self.setMinimumSize(880, 700)
@@ -275,9 +378,9 @@ class ModelManagerDialog(QDialog):
             "The <b>detector</b> model is the foundation — it finds the bodies that "
             "everything else builds on. Face recognition, pose and ReID only label "
             "or stabilise bodies the detector already found, so with no detector "
-            "model nothing is drawn. Face and ReID weights live in their upstream "
-            "package caches: AutoPTZ doesn't delete those files, but it unloads them "
-            "from memory whenever their feature is switched off in Services."
+            "model nothing is drawn. The <b>face recognition pack</b> can be "
+            "downloaded or removed here; <b>ReID</b> weights are managed by their "
+            "upstream package (optional install) and are never deleted by AutoPTZ."
         )
         intro.setTextFormat(Qt.TextFormat.RichText)
         intro.setWordWrap(True)
@@ -498,13 +601,29 @@ class ModelManagerDialog(QDialog):
         else:
             self._add_empty_note("All AutoPTZ-managed models are downloaded.")
 
+        self._face_row = None
+        self._add_section_label("Face recognition pack")
+        try:
+            from autoptz.engine.runtime.models import default_manager
+
+            face_status = default_manager().face_pack_status()
+            self._face_row = _FacePackRow(
+                face_status,
+                on_download=self._download_face,
+                on_remove=self._remove_face,
+            )
+            self._list.addWidget(self._face_row)
+        except Exception:  # noqa: BLE001
+            log.debug("face pack status failed", exc_info=True)
+            self._add_empty_note("Face pack status unavailable.")
+
         self._add_section_label("Upstream-managed models")
         external = []
         try:
             external = [
                 row
                 for row in (self._client.optionalComponents() or [])
-                if row.get("key") in {"face", "reid"}
+                if row.get("key") == "reid"
             ]
         except Exception:  # noqa: BLE001
             log.debug("optional component inventory failed", exc_info=True)
@@ -556,6 +675,8 @@ class ModelManagerDialog(QDialog):
     def _set_busy(self, busy: bool) -> None:
         for row in self._rows.values():
             row.set_controls_enabled(not busy)
+        if self._face_row is not None:
+            self._face_row.set_controls_enabled(not busy)
         for widget in (
             self._tier,
             self._select_missing,
@@ -635,6 +756,34 @@ class ModelManagerDialog(QDialog):
         self._status.setText("Starting model operation...")
         threading.Thread(target=task.run, name=f"ui-model-{action}", daemon=True).start()
 
+    def _download_face(self) -> None:
+        self._run_face_task("download_face")
+
+    def _remove_face(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Remove Face Pack",
+            "Remove the downloaded face recognition pack from the AutoPTZ cache?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._run_face_task("remove_face")
+
+    def _run_face_task(self, action: str) -> None:
+        if self._task is not None:
+            return
+        task = _ModelTask(action, [], client=self._client)
+        self._task = task
+        task.progress.connect(self._on_progress)
+        task.done.connect(self._on_done)
+        self._set_busy(True)
+        if action == "download_face":
+            self._progress.setVisible(True)
+            self._progress.setRange(0, 0)  # indeterminate — no byte progress
+            self._progress.setFormat("Downloading face recognition pack (~300 MB)…")
+        self._status.setText("Starting face pack operation...")
+        threading.Thread(target=task.run, name=f"ui-model-{action}", daemon=True).start()
+
     def _on_client_download_started(self, label: str) -> None:
         if self._task is not None:
             return
@@ -670,7 +819,7 @@ class ModelManagerDialog(QDialog):
         failed = [
             row
             for row in results
-            if isinstance(row, dict) and row.get("state") not in {"ok", "removed"}
+            if isinstance(row, dict) and row.get("state") not in {"ok", "removed", "downloaded"}
         ]
         # Model sessions were released before the mutation and rebuilt after (see
         # _ModelTask.run), so a removed model has already stopped drawing boxes and

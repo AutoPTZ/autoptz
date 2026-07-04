@@ -1854,6 +1854,24 @@ class TestSupervisorModelLifecycle:
         finally:
             sup.stop()
 
+    def test_release_model_sessions_also_releases_face(self, qapp) -> None:
+        """A face-pack download/remove goes through release_model_sessions, so the
+        shared face ORT session must be released too (else Windows can't delete the
+        pack files while onnxruntime holds them open)."""
+        client = _make_client(qapp)
+        client.addCamera("usb://0", "A")
+        client.drain_commands()
+        sup = _make_supervisor(client, factory=_FeatureFakeWorker)
+        sup.start()
+        try:
+            pool = _FakePool()
+            sup._inference_pool = pool
+            sup.release_model_sessions()
+            assert "face" in pool.released
+            assert "detector" in pool.released and "pose" in pool.released
+        finally:
+            sup.stop()
+
     def test_apply_model_cache_changed_reloads_workers(self, qapp) -> None:
         client = _make_client(qapp)
         cid = client.addCamera("usb://0", "A")

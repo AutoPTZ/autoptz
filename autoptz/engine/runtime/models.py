@@ -670,6 +670,136 @@ class ModelManager:
                 out.append(path)
         return out
 
+    # ── face pack (insightface) ─────────────────────────────────────────────────
+
+    def _face_model_name(self) -> str:
+        return os.environ.get("AUTOPTZ_FACE_MODEL", "buffalo_l")
+
+    def _face_appdata_dir(self) -> Path:
+        """The app-data insightface model dir this manager owns (download/remove)."""
+        return self._cache_dir / "insightface" / "models" / self._face_model_name()
+
+    def face_pack_status(self) -> dict[str, Any]:
+        """Where the insightface face pack resolves, and whether we can remove it.
+
+        Classified in the same priority as
+        :func:`autoptz.engine.pipeline.identify.insightface_root` — ``INSIGHTFACE_HOME``
+        → bundled-in-app → app-data cache → ``~/.insightface`` → missing — so the
+        reported location matches what the engine actually loads.  ``removable`` is
+        True only for the app-data cache (the copy this manager owns); a bundled or
+        home pack is never deleted from here.
+        """
+        model = self._face_model_name()
+        candidates: list[tuple[str, Path]] = []
+        env = os.environ.get("INSIGHTFACE_HOME")
+        if env:
+            candidates.append(("custom", Path(env)))
+        candidates.append(("bundled", bundled_models_dir() / "insightface"))
+        candidates.append(("app-data", self._cache_dir / "insightface"))
+        candidates.append(("home", Path.home() / ".insightface"))
+        for location, root in candidates:
+            pack = root / "models" / model
+            try:
+                onnx = sorted(pack.glob("*.onnx")) if pack.is_dir() else []
+            except OSError:
+                onnx = []
+            if onnx:
+                size = sum(p.stat().st_size for p in onnx if p.is_file())
+                return {
+                    "model": model,
+                    "location": location,
+                    "path": str(pack),
+                    "present": True,
+                    "removable": location == "app-data",
+                    "size_bytes": size,
+                }
+        return {
+            "model": model,
+            "location": "missing",
+            "path": str(self._face_appdata_dir()),
+            "present": False,
+            "removable": False,
+            "size_bytes": 0,
+        }
+
+    def ensure_face_pack(self) -> list[dict[str, str]]:
+        """Download the insightface face pack into the app-data cache.
+
+        Delegates to :func:`autoptz.engine.pipeline.identify.ensure_face_model`
+        (which triggers insightface's own download) with the app-data root, so the
+        pack lands where :meth:`remove_face_pack` and the packaging step expect it.
+        """
+        from autoptz.engine.pipeline.identify import ensure_face_model  # noqa: PLC0415
+
+        model = self._face_model_name()
+        root = str(self._cache_dir / "insightface")
+        with self._lock:
+            err = ensure_face_model(root=root, model_name=model)
+        if err:
+            return [
+                {
+                    "name": f"Face pack ({model})",
+                    "state": "failed",
+                    "path": root,
+                    "size": "",
+                    "error": err,
+                }
+            ]
+        status = self.face_pack_status()
+        return [
+            {
+                "name": f"Face pack ({model})",
+                "state": "downloaded",
+                "path": status["path"],
+                "size": str(status["size_bytes"]),
+                "error": "",
+            }
+        ]
+
+    def remove_face_pack(self) -> list[dict[str, str]]:
+        """Delete the face pack from the **app-data cache only**.
+
+        The path is computed from ``self._cache_dir`` directly (never
+        ``insightface_root()``, which may resolve to the bundled or home copy) so a
+        remove can never touch a bundled-in-app pack or the user's ``~/.insightface``.
+        """
+        removed: list[dict[str, str]] = []
+        pack = self._face_appdata_dir()
+        with self._lock:
+            if not pack.is_dir():
+                return removed
+            for path in sorted(pack.glob("*")):
+                if not path.is_file():
+                    continue
+                try:
+                    size = path.stat().st_size
+                    _unlink_with_retry(path)
+                    removed.append(
+                        {
+                            "name": path.name,
+                            "state": "removed",
+                            "path": str(path),
+                            "size": str(size),
+                            "error": "",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    removed.append(
+                        {
+                            "name": path.name,
+                            "state": "failed",
+                            "path": str(path),
+                            "size": "",
+                            "error": str(exc),
+                        }
+                    )
+                    log.warning("could not remove face pack file %s", path, exc_info=True)
+            try:  # best-effort: drop the now-empty model dir
+                pack.rmdir()
+            except OSError:
+                pass
+        return removed
+
     # ── internals ─────────────────────────────────────────────────────────────
 
     def _prebuilt_url_for(self, stem: str) -> str:

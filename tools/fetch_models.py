@@ -106,20 +106,17 @@ def main(argv: list[str] | None = None) -> int:
     # faces.  Best-effort — a failure here is a warning, never a hard exit, since
     # face recognition is optional (manual click-to-track still works).
     if not args.detector_only:
-        from autoptz.engine.pipeline.identify import ensure_face_model
-
-        # Fetch INTO the model cache dir (…/insightface) — the same tree the build
-        # scripts pass via --cache-dir autoptz/models, so the pack is bundled by
-        # packaging/autoptz.spec and resolved by insightface_root() at runtime.
-        # (Plain ensure_face_model() would write to ~/.insightface, which is NOT
-        # bundled — the gap that left installer users without face weights.)
-        face_root = str(mgr.cache_dir / "insightface")
-        log.info("Fetching face model (insightface buffalo_l) into %s ...", face_root)
-        face_err = ensure_face_model(root=face_root)
-        if face_err:
+        # Delegate to the same ModelManager method the GUI's Manage Models dialog
+        # uses, so there is one path that downloads the face pack INTO the app-data
+        # cache (…/insightface) — the tree the build scripts pass via
+        # --cache-dir autoptz/models, bundled by packaging/autoptz.spec and resolved
+        # by insightface_root() at runtime.
+        log.info("Fetching face model (insightface buffalo_l) into %s ...", mgr.cache_dir)
+        results = mgr.ensure_face_pack()
+        if results and results[0].get("state") == "failed":
             log.warning(
                 "  → face model NOT available (offline face enrolment will be disabled): %s",
-                face_err,
+                results[0].get("error", ""),
             )
         else:
             log.info("  → ready: insightface buffalo_l")
