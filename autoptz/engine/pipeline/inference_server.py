@@ -86,6 +86,10 @@ class InferenceClient:
         # an outage. None (tests/no-recovery callers) → gate is always "up".
         self._server_down = server_down
         self._seq = 0  # per-request id so a timed-out reply can't desync the next call
+        # Real execution provider of the SERVER's detector (e.g. "CoreMLExecutionProvider").
+        # Arrives tagged on replies once the server's background model load finishes;
+        # until then the label is the plain "model-server".
+        self._server_ep = ""
         # The response queue may be reused across a worker restart; drop any replies
         # left by a previous (crashed) run so they can't be matched to a fresh request.
         try:
@@ -96,6 +100,11 @@ class InferenceClient:
 
     @property
     def ep(self) -> str:
+        """Diagnostics label: enriched with the server's REAL provider once known,
+        so the UI can say "model-server (CoreML)" instead of hiding the engine."""
+        if self._server_ep:
+            short = self._server_ep.replace("ExecutionProvider", "")
+            return f"model-server ({short})"
         return "model-server"
 
     def detect(self, frame: Any) -> Any:
@@ -131,7 +140,16 @@ class InferenceClient:
                 msg = self._resp_q.get(timeout=remaining)
             except Exception:  # noqa: BLE001 — server gone / timed out
                 return []
-            rseq, dets = msg if isinstance(msg, tuple) and len(msg) == 2 else (seq, msg)
+            if isinstance(msg, tuple) and len(msg) == 3:
+                # New replies carry the server detector's real EP; remember it for
+                # the ``ep`` label. Empty while the server is still loading its model.
+                rseq, dets, srv_ep = msg
+                if srv_ep:
+                    self._server_ep = str(srv_ep)
+            elif isinstance(msg, tuple) and len(msg) == 2:
+                rseq, dets = msg
+            else:
+                rseq, dets = seq, msg
             if rseq != seq:
                 continue  # stale reply from a prior (timed-out) request — discard
             if not dets:
@@ -156,8 +174,6 @@ class RemotePool:
     model-server worker to refresh — no new IPC, no protocol change.
     """
 
-    detector_ep = "model-server"
-
     def __init__(
         self,
         client: InferenceClient,
@@ -169,6 +185,12 @@ class RemotePool:
         self._failed = failed
         self._build_local_fn = build_local_fn
         self._local: Any | None = None
+
+    @property
+    def detector_ep(self) -> str:
+        """"model-server", enriched to "model-server (CoreML)" once the server
+        has reported its detector's real execution provider."""
+        return str(getattr(self._client, "ep", "") or "model-server")
 
     def detector(self) -> Any:
         if self._failed is not None and self._failed.is_set():
@@ -189,6 +211,7 @@ def serve(
     detect_fn: Any,
     stop_ev: Any,
     attach: Any = None,
+    ep_fn: Any = None,
 ) -> None:
     """Server loop: drain detection requests, read each camera's latest frame from
     shm, run ``detect_fn`` once, and reply ``(seq, dets)`` on that camera's response
@@ -208,7 +231,12 @@ def serve(
 
     def _reply(rq: Any, seq: int, dets: Any) -> None:
         try:
-            rq.put((seq, dets))
+            if ep_fn is not None:
+                # Tag the reply with the detector's real EP ("" while still loading)
+                # so clients can label themselves "model-server (CoreML)".
+                rq.put((seq, dets, str(ep_fn() or "")))
+            else:
+                rq.put((seq, dets))
         except Exception:  # noqa: BLE001 — client gone
             pass
 
@@ -350,9 +378,13 @@ def run_inference_server(
         det = holder["detector"]
         return det.detect(frame) if det is not None else []
 
+    def _detector_ep() -> str:
+        det = holder["detector"]
+        return str(getattr(det, "ep", "") or "") if det is not None else ""
+
     ready_ev.set()  # "accepting requests" — detector may still be loading in the background
     try:
-        serve(req_q, resp_qs, readers, _detect, stop_ev, attach=_attach)
+        serve(req_q, resp_qs, readers, _detect, stop_ev, attach=_attach, ep_fn=_detector_ep)
     finally:
         for r in readers.values():  # release attached shm views on shutdown
             try:

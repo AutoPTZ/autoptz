@@ -454,3 +454,98 @@ def test_respawned_server_reuses_same_queues_no_client_reconstruction() -> None:
             t2.join(timeout=1.0)
     finally:
         writer.close()
+
+
+# ── real execution provider surfaces through the model-server label ──────────
+#
+# "model-server" alone hides WHAT is actually running the model (CoreML? CPU?).
+# The server knows its detector's real EP; it tags each reply with it, the client
+# folds it into its ``ep`` label, and the UI shows "model-server (CoreML)".
+
+
+def test_server_ep_flows_into_client_ep_label() -> None:
+    import queue
+
+    cam = "camA"
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 64, 64)
+    reader = ShmReader(name, 64, 64)
+    req_q: queue.Queue = queue.Queue()
+    resp_q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+
+    t = threading.Thread(
+        target=serve,
+        args=(req_q, {cam: resp_q}, {cam: reader}, lambda f: [], stop),
+        kwargs={"ep_fn": lambda: "CoreMLExecutionProvider"},
+        daemon=True,
+    )
+    t.start()
+    try:
+        client = InferenceClient(cam, req_q, resp_q, writer, timeout_s=2.0)
+        assert client.ep == "model-server"  # server hasn't spoken yet
+        client.detect(_frame(1))
+        assert client.ep == "model-server (CoreML)"
+        # RemotePool relays the enriched label to the worker's diagnostics.
+        assert RemotePool(client).detector_ep == "model-server (CoreML)"
+    finally:
+        stop.set()
+        t.join(timeout=1.0)
+        writer.close()
+        reader.close()
+
+
+def test_client_ep_stays_plain_when_server_does_not_report() -> None:
+    """A server without an ep_fn (old build / detector still loading → empty ep)
+    keeps the plain label — never 'model-server ()'."""
+    import queue
+
+    cam = "camA"
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 64, 64)
+    reader = ShmReader(name, 64, 64)
+    req_q: queue.Queue = queue.Queue()
+    resp_q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+
+    t = threading.Thread(
+        target=serve, args=(req_q, {cam: resp_q}, {cam: reader}, lambda f: [], stop), daemon=True
+    )
+    t.start()
+    try:
+        client = InferenceClient(cam, req_q, resp_q, writer, timeout_s=2.0)
+        client.detect(_frame(1))
+        assert client.ep == "model-server"
+        assert RemotePool(client).detector_ep == "model-server"
+    finally:
+        stop.set()
+        t.join(timeout=1.0)
+        writer.close()
+        reader.close()
+
+
+def test_worker_telemetry_ep_follows_late_server_ep() -> None:
+    """The worker snapshots ``ep`` when the detect stack is built — but the
+    model-server loads its detector in the BACKGROUND, so the real EP arrives
+    later. Telemetry must re-read the live detector's ep, not the stale snapshot."""
+    from autoptz.config.models import CameraConfig
+    from autoptz.engine.camera_worker import CameraWorker, _DetectStack
+    from autoptz.engine.runtime.messages import HealthState
+
+    class _LateEpDetector:
+        ep = "model-server"
+
+    seen = []
+    w = CameraWorker(
+        "cam-ep", CameraConfig(id="cam-ep", name="EpCam"), on_telemetry=seen.append
+    )
+    det = _LateEpDetector()
+    w._detect = _DetectStack(detector=det, tracker=None, ep=det.ep)
+    w._ep = det.ep
+
+    w._emit_telemetry(tracks=[], health=HealthState.OK, last_error=None)
+    assert seen[-1].ep == "model-server"
+
+    det.ep = "model-server (CoreML)"  # server finished loading; client label enriched
+    w._emit_telemetry(tracks=[], health=HealthState.OK, last_error=None)
+    assert seen[-1].ep == "model-server (CoreML)"

@@ -106,6 +106,20 @@ class ColorFormatter(logging.Formatter):
         return line
 
 
+def suppress_noisy_dependency_warnings() -> None:
+    """Silence third-party warning spam that fires on the per-frame hot path.
+
+    insightface's ``face_align`` trips a skimage ``FutureWarning`` ("`estimate`
+    is deprecated…") that floods the console during face recognition — one line
+    per attribution point per process, multiplied by every camera child. It is
+    upstream's to fix; scoped to insightface so OUR deprecation warnings stay
+    visible. Called from both the app console setup and the camera-child setup.
+    """
+    import warnings
+
+    warnings.filterwarnings("ignore", category=FutureWarning, module=r"insightface(\.|$)")
+
+
 def install_console_logging(
     level: int = logging.WARNING,
     *,
@@ -118,6 +132,7 @@ def install_console_logging(
     re-calling (e.g. after ``--log-level``) doesn't stack handlers.  Safe to call
     before the UI is imported.
     """
+    suppress_noisy_dependency_warnings()
     stream = stream or sys.stderr
     root = logging.getLogger()
     # Drop a prior handler we installed so level changes don't duplicate output.

@@ -5526,6 +5526,13 @@ class CameraWorker:
         # a streaming-but-box-blind camera has no tracks.
         if last_error is None and self._infer_last_error is not None:
             last_error = self._infer_last_error
+        # The model-server client's ``ep`` enriches itself ("model-server (CoreML)")
+        # only after the server's BACKGROUND model load reports in — re-read the live
+        # detector so the label follows, instead of freezing the build-time snapshot.
+        if self._detect is not None:
+            live_ep = str(getattr(self._detect.detector, "ep", "") or "")
+            if live_ep:
+                self._ep = live_ep
         # Phase 0a — per-source frame-delivery telemetry (NDI-only real values;
         # other sources return {} and fall back to the worker's own counters).
         dm = self._delivery_metrics()

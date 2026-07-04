@@ -198,6 +198,11 @@ def _configure_child_logging() -> None:
     """
     import sys
 
+    from autoptz.logsetup import suppress_noisy_dependency_warnings
+
+    # Children run face alignment on the hot path; without this every child
+    # floods stderr with insightface's skimage FutureWarning.
+    suppress_noisy_dependency_warnings()
     root = logging.getLogger()
     root.setLevel(logging.WARNING)
     if not root.handlers:
