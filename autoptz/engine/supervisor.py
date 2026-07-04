@@ -75,6 +75,11 @@ _MAX_RESTART_ATTEMPTS = 5  # give up after this many consecutive failures
 # treated as failed. Polled across ticks (never awaited) so a slow spawn cannot
 # block the GUI thread — see Supervisor._scan_model_server_health.
 _MS_SPAWN_TIMEOUT_S = 30.0
+# How long a late-camera attach waits for the OLD server to drain out on the stop
+# event before escalating to terminate().  Typical exit is ~0.2s (the serve loop's
+# get() timeout); the window is generous because terminate() on a queue consumer
+# poisons the shared request queue (see _attach_camera_to_model_server).
+_MS_DRAIN_TIMEOUT_S = 3.0
 # A worker can be ALIVE yet HUNG (capture/inference threads stuck, no telemetry).
 # Treat it as unhealthy and respawn it through the same backoff path once its
 # telemetry is older than this.  Deliberately above the 2.0 s inference-stall
@@ -932,14 +937,39 @@ class Supervisor:
                     stop_ev.set()  # graceful: serve() drains out on its own
                 except Exception:  # noqa: BLE001
                     log.debug("model-server stop event set failed", exc_info=True)
+            # Drain, do NOT kill: the old server is parked in ``req_q.get()``, and
+            # terminating a process inside a multiprocessing.Queue read poisons the
+            # SHARED request queue (the dead reader holds the queue's reader lock /
+            # leaves a partial length-prefixed message in the pipe) — the respawned
+            # server then never receives a single request and every camera loses
+            # detection until the app restarts.  The serve loop polls the stop
+            # event every ≤0.2s, so this join typically returns in ~a quarter
+            # second; terminate() stays only as the escalation for a truly wedged
+            # process (accepting the poisoning risk over hanging the add forever).
             try:
-                proc.terminate()
+                proc.join(timeout=_MS_DRAIN_TIMEOUT_S)
             except Exception:  # noqa: BLE001
-                log.debug("old model-server terminate failed", exc_info=True)
+                log.debug("old model-server drain join failed", exc_info=True)
+            still_alive = False
             try:
-                proc.join(timeout=0.5)
+                still_alive = bool(proc.is_alive())
             except Exception:  # noqa: BLE001
-                log.debug("old model-server join failed", exc_info=True)
+                still_alive = False
+            if still_alive:
+                log.warning(
+                    "old model-server did not drain within %.1fs — terminating; the "
+                    "shared request queue may be poisoned (cameras may need an "
+                    "engine restart to regain detection).",
+                    _MS_DRAIN_TIMEOUT_S,
+                )
+                try:
+                    proc.terminate()
+                except Exception:  # noqa: BLE001
+                    log.debug("old model-server terminate failed", exc_info=True)
+                try:
+                    proc.join(timeout=0.5)
+                except Exception:  # noqa: BLE001
+                    log.debug("old model-server join failed", exc_info=True)
             self._respawn_model_server(time.monotonic())
         except Exception:  # noqa: BLE001 — attach is best-effort; threaded fallback below
             log.warning(
@@ -1022,6 +1052,15 @@ class Supervisor:
         self._restart_state.pop(cid, None)
         self._last_telemetry_t.pop(cid, None)
         self._spawn_t.pop(cid, None)
+        # Drop the camera's model-server slot: each leaked mp.Queue holds pipe fds
+        # + a feeder thread, and the next server respawn would re-pickle queues for
+        # cameras that no longer exist.  (The running server keeps its own copy of
+        # the dict and safely ignores requests for unknown cameras.)
+        self._infer_resp_qs.pop(cid, None)
+        try:
+            self._model_server_camera_ids.remove(cid)
+        except ValueError:
+            pass
         if worker is not None:
             try:
                 worker.stop()
