@@ -45,7 +45,9 @@ Defaults are the validated, broadcast-sane starting point; one concept = one con
 | `auto_zoom` | `false` | Labs-only during 2.2 stabilization. Fixed zoom is the release default because pan/tilt is easier to stabilize when zoom is not changing the image scale. |
 | `zoom_framing` | `upper_body` | Auto-zoom target height: `face`, `head_shoulders`, `upper_body`, `full_body`, or `wide`. Mirrors `framing`; `wide` is the one extra (looser) option. |
 | `group_framing` | `false` | Per-camera checkbox in **Properties → PTZ** (next to Center Stage): with several people in view and no locked target, frame the whole group instead of one subject. Applies to BOTH Center Stage and physical PTZ (they share one framing-target selector). Locking a person always overrides it. |
-| `vcam_out` | `false` | Publish the Center Stage crop as a virtual camera (Properties → PTZ). Needs a system virtual-camera driver. |
+| `ndi_out` | `false` | Publish the framed feed as an **NDI network source** (Properties → PTZ) so any computer on the LAN can receive it with a free NDI receiver (OBS, vMix, NDI Tools). Advertised as `<host> (AutoPTZ <camera name>)`; override the name with `ndi_output_name`. Reuses the NDI SDK already shipped for input — no extra dependency. Recommended for using the feed on OTHER computers. |
+| `ndi_output_name` | `""` | Optional override for the NDI source name (empty → `AutoPTZ <camera name>`). |
+| `vcam_out` | `false` | Publish the framed feed as a **virtual camera on this computer** (Zoom/Teams/OBS), Properties → PTZ. Needs a system virtual-camera driver installed; only visible on this machine. |
 | `loss_zoom_out` / `reacquire_window_s` | `0.0` / `4.0` | Loss defaults to hold/stop. Zoom-out search is Labs-only until tracking is stable. |
 | `soft_limits` | none | Optional pan/tilt/zoom travel clamps. |
 

@@ -453,6 +453,7 @@ class CameraWorker:
         self._last_face_t = 0.0
         self._last_preview_push_t = 0.0
         self._last_vcam_push_t = 0.0
+        self._last_ndi_push_t = 0.0
         self._last_harvest_t = 0.0
         self._last_crop_t = 0.0
         # Most recent face→identity bindings seen this tick: track_id → (id, conf).
@@ -679,6 +680,7 @@ class CameraWorker:
         self._source: FrameSource | None = None
         self._shm: ShmWriter | None = None
         self._vcam: Any | None = None  # VirtualCamSink (lazily created when vcam_out enabled)
+        self._ndi: Any | None = None  # NDISendSink (lazily created when ndi_out enabled)
         self._digital_framer: Any | None = None  # Center Stage auto-framer (lazy)
         # True when the last _current_digital_target() returned a multi-person group
         # UNION box (which must fit-width); False for a single locked person (which
@@ -822,6 +824,9 @@ class CameraWorker:
         if self._vcam is not None:
             self._vcam.close()
             self._vcam = None
+        if self._ndi is not None:
+            self._ndi.close()
+            self._ndi = None
 
     @property
     def is_running(self) -> bool:
@@ -1769,6 +1774,17 @@ class CameraWorker:
             if t.track_id == self._target_track_id:
                 return t
         return None
+
+    def _ndi_output_name(self) -> str:
+        """The NDI source name for this camera's output feed.
+
+        Uses the configured ``ndi_output_name`` when set, else ``"AutoPTZ <name>"``;
+        NDI advertises it on the network as ``"<HOST> (AutoPTZ <name>)"``.
+        """
+        configured = str(getattr(self.config.ptz, "ndi_output_name", "") or "").strip()
+        if configured:
+            return configured
+        return f"AutoPTZ {self.config.name}".strip()
 
     def _group_ptz_target(
         self, tracks: list[TrackInfo]
@@ -4045,24 +4061,31 @@ class CameraWorker:
             return
         now = time.monotonic()
         vcam_on = bool(getattr(self.config.ptz, "vcam_out", False))
-        # Two INDEPENDENT rate gates:
+        ndi_on = bool(getattr(self.config.ptz, "ndi_out", False))
+        # Independent rate gates:
         #  • preview (~20 fps) — the SHM monitoring tile only; capping it skips the
         #    per-frame resize/copy on faster sources (overlays come from telemetry).
-        #  • vcam (~30 fps) — a real product feed, so it is NOT throttled to the
-        #    preview rate; it sends up to 30 fps when ``vcam_out`` is on.
+        #  • vcam / ndi (~30 fps) — real product feeds, so NOT throttled to the
+        #    preview rate; each sends up to 30 fps when its toggle is on.
         preview_due = _push_due(now, self._last_preview_push_t, _PREVIEW_PUSH_MIN_PERIOD_S)
         vcam_due = vcam_on and _push_due(now, self._last_vcam_push_t, _VCAM_PUSH_MIN_PERIOD_S)
+        ndi_due = ndi_on and _push_due(now, self._last_ndi_push_t, _VCAM_PUSH_MIN_PERIOD_S)
 
-        # Release the device promptly once output is turned off (so it disconnects
-        # from Zoom/OBS instead of lingering on a frozen frame) regardless of gates.
+        # Release each output promptly once turned off (so it disconnects from
+        # Zoom/OBS / NDI receivers instead of lingering on a frozen frame).
         if not vcam_on and self._vcam is not None:
             try:
                 self._vcam.close()
             finally:
                 self._vcam = None
+        if not ndi_on and self._ndi is not None:
+            try:
+                self._ndi.close()
+            finally:
+                self._ndi = None
 
-        # CPU savings preserved: if neither sink is due this tick, do no framing.
-        if not preview_due and not vcam_due:
+        # CPU savings preserved: if no sink is due this tick, do no framing.
+        if not preview_due and not vcam_due and not ndi_due:
             return
 
         try:
@@ -4080,6 +4103,15 @@ class CameraWorker:
 
                     self._vcam = VirtualCamSink(ow, oh)
                 self._vcam.send_bgr(framed)
+            if ndi_due:
+                self._last_ndi_push_t = now
+                ow = int(getattr(self.config.ptz, "digital_output_w", 1280))
+                oh = int(getattr(self.config.ptz, "digital_output_h", 720))
+                if self._ndi is None:
+                    from autoptz.engine.pipeline.ndi_send import NDISendSink
+
+                    self._ndi = NDISendSink(ow, oh, self._ndi_output_name())
+                self._ndi.send_bgr(framed)
         except Exception:  # noqa: BLE001
             # Was DEBUG-only: a broken preview pipe (shm/vcam) left the operator
             # staring at a frozen preview with an empty log.  Surface it as a

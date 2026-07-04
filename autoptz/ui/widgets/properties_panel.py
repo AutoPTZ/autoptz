@@ -651,10 +651,28 @@ class PropertiesPanel(QWidget):
         )
         self._auto_zoom.toggled.connect(self._schedule)
         self._auto_zoom.setVisible(False)
-        self._vcam_out = QCheckBox("Virtual camera output")
+        self._ndi_out = QCheckBox("NDI output (other computers)")
+        self._ndi_out.setToolTip(
+            "Publish the framed feed as an NDI source on your network, so any "
+            "computer running an NDI receiver (OBS, vMix, a monitor) can pick it up."
+        )
+        self._ndi_out.toggled.connect(self._schedule)
+        pf.addRow(
+            "",
+            _with_chip(
+                self._ndi_out,
+                HelpBadge(
+                    "NDI sends the feed over the network — recommended for using it on "
+                    "OTHER computers. Any NDI receiver on the LAN sees "
+                    '"<this computer> (AutoPTZ <camera name>)". Free NDI Tools can also '
+                    "turn it into a webcam on the receiving machine."
+                ),
+            ),
+        )
+        self._vcam_out = QCheckBox("Virtual camera (this computer)")
         self._vcam_out.setToolTip(
-            "Publish the auto-framed crop as a virtual camera device "
-            "(Center Stage / digital backend only)."
+            "Publish the framed feed as a virtual camera device on THIS computer "
+            "(Zoom / Teams / OBS). Needs a system virtual-camera driver installed."
         )
         self._vcam_out.toggled.connect(self._schedule)
         pf.addRow(
@@ -662,9 +680,9 @@ class PropertiesPanel(QWidget):
             _with_chip(
                 self._vcam_out,
                 HelpBadge(
-                    "When the digital (Center Stage) backend is active, publish the "
-                    "auto-framed crop as a virtual camera device so apps like Zoom "
-                    "or OBS can pick it up without hardware PTZ."
+                    "A virtual camera appears in apps on THIS computer only, and needs a "
+                    "system virtual-camera driver. To reach other computers, use NDI "
+                    "output above."
                 ),
             ),
         )
@@ -1201,6 +1219,7 @@ class PropertiesPanel(QWidget):
             self._ptz_baud.setCurrentText(str(pz.get("baud", 9600)))
             self._auto_zoom.setChecked(bool(pz.get("auto_zoom", False)))
             self._vcam_out.setChecked(bool(pz.get("vcam_out", False)))
+            self._ndi_out.setChecked(bool(pz.get("ndi_out", False)))
             self._refresh_presets()
             # Tracking target + on/off (driven via dedicated client calls).
             enabled = _safe(
@@ -1324,6 +1343,7 @@ class PropertiesPanel(QWidget):
             cfg["ptz"]["baud"] = 9600
         cfg["ptz"]["auto_zoom"] = self._auto_zoom.isChecked()
         cfg["ptz"]["vcam_out"] = self._vcam_out.isChecked()
+        cfg["ptz"]["ndi_out"] = self._ndi_out.isChecked()
         cfg["ptz"]["zoom_framing"] = framing
         # Advanced PTZ internals are no longer normal-user controls. Preserve any
         # saved legacy values from ``_cfg``; do not rewrite speed/gain/dead-zone
