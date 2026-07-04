@@ -8,6 +8,9 @@ injection keeps the existing fake-worker pattern from ``test_orchestration.py``.
 
 from __future__ import annotations
 
+import time
+import typing
+
 from autoptz.engine.supervisor import (
     _BASE_BACKOFF_S,
     _INFER_RESTART_S,
@@ -1231,5 +1234,115 @@ class TestPermanentFailed:
             sup._restart_state[cid] = (_MAX_RESTART_ATTEMPTS, 9999.0, True)
             sup._on_remove_camera(RemoveCameraCmd(camera_id=cid))
             assert sup.is_camera_failed(cid) is False
+        finally:
+            sup.stop()
+
+
+# ── late camera attach: added-after-server-start must not degrade to threaded ──
+
+
+class _FakeProcessHandle(_MsFakeProcessWorker):
+    """Stands in for ProcessWorkerHandle on the real process path; records the
+    kwargs so tests can assert the camera got a live response queue."""
+
+    created: typing.ClassVar[list] = []
+
+    def __init__(self, camera_id, config, on_telemetry, **kwargs) -> None:  # noqa: ANN001, ANN003
+        super().__init__(camera_id, config, on_telemetry)
+        self.kwargs = kwargs
+        type(self).created.append(self)
+
+
+class TestLateCameraAttach:
+    """A camera added AFTER the shared detection server started must attach by
+    restarting the server with an updated slot set (reusing the R-3 respawn
+    machinery — other cameras fast-fail behind the down-gate and coast), instead
+    of silently degrading to the threaded pipeline inside the GUI process."""
+
+    def _build(self, qapp, monkeypatch):  # noqa: ANN001
+        import multiprocessing as mp
+
+        from autoptz.engine import process_worker
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
+        client = EngineClient()
+        cid_a = client.addCamera("usb://0", "A")
+        client.drain_commands()
+
+        threaded_log: list = []
+
+        def fake_threaded_factory(self, camera_id, config, on_telemetry):  # noqa: ANN001, ARG001
+            w = _MsFakeProcessWorker(camera_id, config, on_telemetry)
+            threaded_log.append(w)
+            return w
+
+        # Patch the CLASS before construction so ``worker_factory ==
+        # _default_worker_factory`` stays True (the real process path), while the
+        # threaded fallback stays fake and light.
+        monkeypatch.setattr(Supervisor, "_default_worker_factory", fake_threaded_factory)
+        _FakeProcessHandle.created = []
+        monkeypatch.setattr(process_worker, "ProcessWorkerHandle", _FakeProcessHandle)
+
+        real_ctx = mp.get_context("spawn")
+        proc_log: list[_FakeModelServerProc] = []
+
+        class _FakeCtx:
+            Queue = staticmethod(real_ctx.Queue)
+            Event = staticmethod(_FakeEvent)
+
+            def Process(self, *_a, **_k):  # noqa: ANN002, ANN003, N802
+                p = _FakeModelServerProc()
+                proc_log.append(p)
+                return p
+
+        monkeypatch.setattr(mp, "get_context", lambda *_a, **_k: _FakeCtx())
+
+        sup = Supervisor(client, store=None)
+        sup._ensure_identity_service = lambda: None  # type: ignore[method-assign]
+        sup._ensure_inference_pool = lambda: None  # type: ignore[method-assign]
+        sup.start()
+        return sup, client, threaded_log, proc_log, cid_a
+
+    def test_late_added_camera_attaches_as_process_worker(self, qapp, monkeypatch) -> None:
+        sup, client, threaded_log, proc_log, _cid_a = self._build(qapp, monkeypatch)
+        try:
+            assert len(proc_log) == 1
+            assert len(_FakeProcessHandle.created) == 1  # camera A: process worker
+
+            cid_b = client.addCamera("usb://1", "B")
+            sup.tick()  # route ADD_CAMERA
+
+            # B got its own IPC slot, the server restarted with the updated queue
+            # set, and B runs as a PROCESS worker — never the threaded fallback.
+            assert cid_b in sup._infer_resp_qs
+            assert cid_b in sup._model_server_camera_ids
+            assert len(proc_log) == 2
+            assert proc_log[0].terminate_calls >= 1
+            assert len(_FakeProcessHandle.created) == 2
+            assert _FakeProcessHandle.created[-1].camera_id == cid_b
+            assert threaded_log == []
+
+            # Down-gate held for the swap; the ready handshake clears it on a tick.
+            assert sup._model_server_down.is_set()
+            sup._ms_ready_ev.set()
+            sup._scan_model_server_health(time.monotonic())
+            assert not sup._model_server_down.is_set()
+        finally:
+            sup.stop()
+
+    def test_no_server_at_all_still_falls_back_threaded(self, qapp, monkeypatch) -> None:
+        """When the server never came up there is nothing to attach to — the
+        threaded fallback (with its warning) must behave exactly as before."""
+        sup, client, threaded_log, proc_log, _cid_a = self._build(qapp, monkeypatch)
+        try:
+            sup._infer_req_q = None
+            sup._model_server_proc = None
+            client.addCamera("usb://1", "B")
+            sup.tick()
+            assert len(threaded_log) == 1
+            assert len(_FakeProcessHandle.created) == 1  # unchanged
+            assert len(proc_log) == 1  # no restart attempted
         finally:
             sup.stop()

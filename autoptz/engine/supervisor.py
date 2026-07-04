@@ -893,6 +893,65 @@ class Supervisor:
             # routes to fallback (budget exhausted) — see
             # _scan_model_server_health / _poll_model_server_spawn.
 
+    def _attach_camera_to_model_server(self, camera_id: str) -> Any | None:
+        """Give a camera added AFTER the shared server started its own IPC slot.
+
+        The server's response-queue set is fixed at spawn (an ``mp.Queue`` can only
+        cross the process boundary via spawn args), so a late camera — including a
+        remove + re-add, which mints a NEW camera id — gets a slot by restarting
+        the server process with the updated queue dict. This reuses the R-3 respawn
+        machinery: the down-gate holds while the fresh server boots, every existing
+        camera's ``InferenceClient`` fast-fails (serving empty) instead of blocking,
+        and predictive coast keeps their tracking smooth through the ~2s swap.
+
+        Returns the new response queue, or ``None`` when there is no live server to
+        attach to (the caller then falls back to the threaded pipeline, as before).
+        """
+        if self._infer_req_q is None or self._model_server_proc is None:
+            return None
+        try:
+            import multiprocessing as mp
+
+            ctx = mp.get_context("spawn")
+            q = ctx.Queue()
+            self._infer_resp_qs[camera_id] = q
+            if camera_id not in self._model_server_camera_ids:
+                self._model_server_camera_ids.append(camera_id)
+            log.info(
+                "camera %s added after the shared detection server started — "
+                "restarting the server with an updated slot set (other cameras "
+                "coast briefly).",
+                camera_id,
+            )
+            if self._model_server_down is not None:
+                self._model_server_down.set()
+            proc = self._model_server_proc
+            stop_ev = self._model_server_stop
+            if stop_ev is not None:
+                try:
+                    stop_ev.set()  # graceful: serve() drains out on its own
+                except Exception:  # noqa: BLE001
+                    log.debug("model-server stop event set failed", exc_info=True)
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001
+                log.debug("old model-server terminate failed", exc_info=True)
+            try:
+                proc.join(timeout=0.5)
+            except Exception:  # noqa: BLE001
+                log.debug("old model-server join failed", exc_info=True)
+            self._respawn_model_server(time.monotonic())
+        except Exception:  # noqa: BLE001 — attach is best-effort; threaded fallback below
+            log.warning(
+                "late model-server attach for camera %s failed — falling back to "
+                "the threaded pipeline.",
+                camera_id,
+                exc_info=True,
+            )
+            self._infer_resp_qs.pop(camera_id, None)
+            return None
+        return q
+
     def _refresh_model_server_workers(self) -> None:
         """Ask every model-server-mode camera worker to re-pull its detector from
         the pool — the seam RemotePool uses to swap in a local detector once the
@@ -1499,11 +1558,17 @@ class Supervisor:
         if not use_process:
             return self._worker_factory(camera_id, config, on_telemetry)
         infer_resp_q = self._infer_resp_qs.get(camera_id)
+        if self._infer_req_q is not None and infer_resp_q is None:
+            # Camera added (or removed + re-added, which mints a new id) after the
+            # server built its fixed queue set — give it a slot via a controlled
+            # server restart instead of silently degrading to the threaded
+            # pipeline inside the GUI process.
+            infer_resp_q = self._attach_camera_to_model_server(camera_id)
         if self._infer_req_q is None or infer_resp_q is None:
             log.warning(
-                "no shared-detection-server slot for camera %s (it was added after "
-                "the server started) — this camera runs the built-in threaded "
-                "pipeline; restart the engine to attach it to the shared server.",
+                "shared detection server unavailable for camera %s — this camera "
+                "runs the built-in threaded pipeline; restart the engine to attach "
+                "it to the shared server.",
                 camera_id,
             )
             return self._worker_factory(camera_id, config, on_telemetry)
