@@ -1213,6 +1213,9 @@ class PropertiesPanel(QWidget):
         self._scroll.setVisible(bool(self._camera_id))
         if self._camera_id:
             self._load()
+            # Elided values (Address, tracking captions) were set while the
+            # layout was still settling — re-elide once widths are real.
+            QTimer.singleShot(0, self._reelide_captions)
 
     # ── load / push ──────────────────────────────────────────────────────────────
 
@@ -1477,6 +1480,13 @@ class PropertiesPanel(QWidget):
         super().resizeEvent(event)
         # Re-elide the one-line captions to the new width (their full text lives
         # on the tooltip) so a narrower panel shows "…" instead of a hard cut.
+        # DEFERRED one event-loop turn: during resizeEvent the labels still
+        # report their OLD width, so an immediate elide targets a stale size
+        # (the bug that left a full-length Address hard-clipped in a narrow
+        # label). Same deferral after a camera load, when widths settle late.
+        QTimer.singleShot(0, self._reelide_captions)
+
+    def _reelide_captions(self) -> None:
         for label in (
             getattr(self, "_track_state", None),
             getattr(self, "_track_reason", None),

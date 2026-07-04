@@ -319,3 +319,45 @@ def test_is_own_autoptz_output_shared_helper() -> None:
     assert is_own_autoptz_output("HOSTY (AutoPTZ Cam)", "HOSTY")
     assert not is_own_autoptz_output("OTHER (AutoPTZ Cam)", "HOSTY")
     assert not is_own_autoptz_output("HOSTY (OBS)", "HOSTY")
+
+
+# ── layout audit regressions: values elide late-settling widths; floors real ─
+
+
+def test_services_panel_floor_covers_trailing_pills() -> None:
+    """At 260 the body overflowed the viewport by 22px (scrollbar + margins),
+    clipping the ON/OK pills and Restart/Enable-all — the floor is 300 now."""
+    from autoptz.ui.widgets.services_panel import ServicesPanel
+
+    assert ServicesPanel.minimumSizeHint(ServicesPanel.__new__(ServicesPanel)).width() >= 300
+
+
+def test_properties_address_elides_after_layout_settles(qtapp, tmp_path) -> None:
+    """The Address used to be elided against a stale (pre-layout) width, leaving
+    the full text hard-clipped in a narrow label. After set_camera + one event
+    loop turn, a long address must be elided with the full value on the tooltip."""
+    from pathlib import Path
+
+    from autoptz.config.store import ConfigStore
+    from autoptz.ui.engine_client import EngineClient
+    from autoptz.ui.frames import ShmFrameSource
+    from autoptz.ui.widgets.properties_panel import PropertiesPanel
+
+    client = EngineClient(store=ConfigStore(db_path=Path(tmp_path) / "cfg.db", debounce_s=0))
+    long_addr = "ndi://PRINCES-MBP (AutoPTZ PRINCES-MBP (AutoPTZ MacBook Pro Camera))"
+    cid = client.addCamera(long_addr, "Loopy")
+    panel = PropertiesPanel(client, frame_source=ShmFrameSource())
+    try:
+        panel.resize(300, 760)
+        panel.show()
+        qtapp.processEvents()
+        panel.set_camera(cid)
+        qtapp.processEvents()  # deferred re-elide fires here
+        qtapp.processEvents()
+        label = panel._address
+        assert long_addr.startswith(label.toolTip()[:20])  # full value on tooltip
+        shown = label.text()
+        assert "…" in shown  # elided, not hard-clipped
+        assert label.fontMetrics().horizontalAdvance(shown) <= label.width() + 2
+    finally:
+        panel.deleteLater()

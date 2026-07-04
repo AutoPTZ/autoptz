@@ -253,7 +253,12 @@ class ServicesPanel(QWidget):
         self.refresh()
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(260, 220)
+        # 300, not 260: at 260 the styled vertical scrollbar + margins push the
+        # whole body 22px past the viewport, clipping the trailing ON/OK pills
+        # and the Restart / Enable-all buttons off the right edge (measured by
+        # the offscreen layout audit; clean at 300). The main window enforces
+        # this as a real dock floor after layout restore.
+        return QSize(300, 220)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(360, 520)
