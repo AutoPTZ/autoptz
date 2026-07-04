@@ -1613,15 +1613,40 @@ class CameraWorker:
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s ptz auto step failed", self.camera_id, exc_info=True)
         else:
-            # No target → drop the velocity estimate so a re-acquire starts clean.
-            self._prev_aim_err = None
-            self._aim_vel = (0.0, 0.0)
-            try:
-                self._publish_ptz(
-                    ctrl, (0.0, 0.0), (0.0, 0.0), 0.0, track_active=False, now=now, log_label=None
-                )
-            except Exception:  # noqa: BLE001
-                log.debug("camera_id=%s ptz auto idle step failed", self.camera_id, exc_info=True)
+            # No locked target. Parity with Center Stage: if group framing is on and
+            # nobody is locked, aim the camera at the confident group. Otherwise drop
+            # the velocity estimate so a re-acquire starts clean and idle the loop.
+            group_box = (
+                self._group_ptz_target(tracks)
+                if frame is not None and self._tracking_enabled and tracking_on
+                else None
+            )
+            if group_box is not None:
+                err, height = self._group_error(group_box, frame)
+                vel = self._estimate_aim_velocity(err, now)
+                try:
+                    self._publish_ptz(
+                        ctrl, err, vel, height, track_active=True, now=now, log_label="group"
+                    )
+                except Exception:  # noqa: BLE001
+                    log.debug("camera_id=%s ptz group step failed", self.camera_id, exc_info=True)
+            else:
+                self._prev_aim_err = None
+                self._aim_vel = (0.0, 0.0)
+                try:
+                    self._publish_ptz(
+                        ctrl,
+                        (0.0, 0.0),
+                        (0.0, 0.0),
+                        0.0,
+                        track_active=False,
+                        now=now,
+                        log_label=None,
+                    )
+                except Exception:  # noqa: BLE001
+                    log.debug(
+                        "camera_id=%s ptz auto idle step failed", self.camera_id, exc_info=True
+                    )
 
     def _update_ego_motion(
         self,
@@ -1744,6 +1769,45 @@ class CameraWorker:
             if t.track_id == self._target_track_id:
                 return t
         return None
+
+    def _group_ptz_target(
+        self, tracks: list[TrackInfo]
+    ) -> tuple[float, float, float, float] | None:
+        """The group box physical PTZ should frame when NO person is locked.
+
+        Parity with Center Stage: with group framing on and nobody explicitly
+        locked, aim the camera at the confident group (union, or the single
+        confident person) instead of doing nothing.  Returns None when a person is
+        locked (the normal single-target path owns that), group framing is off, or
+        no one is present — so default behaviour (group framing off) is unchanged.
+        """
+        if self._target_track_id is not None or self._target_identity_id is not None:
+            return None
+        if not bool(getattr(self.config.tracking, "group_framing", False)):
+            return None
+        from autoptz.engine.framing_target import select_framing_target
+
+        ft = select_framing_target(
+            tracks,
+            target_track_id=None,
+            target_identity_id=None,
+            trusted_bbox=None,
+            group_framing=True,
+        )
+        return ft.bbox
+
+    def _group_error(
+        self,
+        box: tuple[float, float, float, float],
+        frame: NDArray[np.uint8],
+    ) -> tuple[tuple[float, float], float]:
+        """Normalized aim error + height for a group box (no pose fusion)."""
+        from autoptz.engine.framing_target import aim_error_for_box
+
+        h, w = frame.shape[:2]
+        framing_name = _resolve_framing(self.config.tracking)
+        aim_fraction = AIM_REGION_FRACTION.get(framing_name, 0.5)
+        return aim_error_for_box(box, int(w), int(h), float(aim_fraction))
 
     def _commit_target_track(
         self,
@@ -3926,42 +3990,26 @@ class CameraWorker:
         capped by ``max_frac``). One person, or the toggle off, is the single
         target's box exactly as before.
         """
-        self._digital_target_is_group = False
-        tid = self._target_track_id
-        explicit_lock = tid is not None or self._target_identity_id is not None
-        if tid is not None:
-            for t in self._last_tracks or ():
-                if (
-                    t.track_id == tid
-                    and not getattr(t, "lost", False)
-                    and getattr(t, "bbox", None) is not None
-                ):
-                    bb = t.bbox
-                    return (bb.x1, bb.y1, bb.x2, bb.y2)
-        # Fallback: the last trusted target box (set whenever a target is locked,
-        # by track id OR by identity), so the crop holds through brief track gaps.
-        if explicit_lock:
-            tb = getattr(self._target_lock, "trusted_bbox", None)
-            if tb is not None:
-                return (tb.x1, tb.y1, tb.x2, tb.y2)
-            # An explicit lock ALWAYS wins: never fall through to the group union
-            # just because the locked track is momentarily absent (transient — e.g.
-            # the first frame(s) after selecting a target, before trusted_bbox is
-            # populated). Returning None holds the prior crop / full frame instead.
-            return None
+        # Delegate to the shared framing-target selector so Center Stage and
+        # physical PTZ frame the same subject the same way (see
+        # autoptz.engine.framing_target).
+        ft = self._select_framing_target()
+        self._digital_target_is_group = ft.is_group
+        return ft.bbox
 
-        # No explicit lock: optionally frame the whole confident group as a union.
-        if bool(getattr(self.config.tracking, "group_framing", False)):
-            boxes = self._confident_person_boxes(self._last_tracks)
-            if not boxes:
-                return None
-            # fit-width only when the union actually spans MORE THAN ONE person; a
-            # single confident person keeps the prior height-only single-target feel.
-            self._digital_target_is_group = len(boxes) > 1
-            from autoptz.engine.pipeline.digital_framer import union_bbox
+    def _select_framing_target(self) -> "FramingTarget":
+        """This tick's shared framing target (used by Center Stage AND physical PTZ)."""
+        from autoptz.engine.framing_target import select_framing_target
 
-            return union_bbox(boxes)
-        return None
+        tb = getattr(self._target_lock, "trusted_bbox", None)
+        trusted = (tb.x1, tb.y1, tb.x2, tb.y2) if tb is not None else None
+        return select_framing_target(
+            self._last_tracks,
+            target_track_id=self._target_track_id,
+            target_identity_id=self._target_identity_id,
+            trusted_bbox=trusted,
+            group_framing=bool(getattr(self.config.tracking, "group_framing", False)),
+        )
 
     @staticmethod
     def _confident_person_boxes(
