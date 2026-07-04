@@ -204,11 +204,16 @@ class MarkPreflightDialog(QDialog):
         self._clip_radio = QRadioButton(clip_label)
         ndi_ok = ndi_sim_available()
         ndi_text = (
-            "Live NDI sources on your network"
+            "Simulated NDI streams (created on this computer)"
             if ndi_ok
-            else "Live NDI sources on your network  (requires cyndilib)"
+            else "Simulated NDI streams (requires cyndilib)"
         )
         self._ndi_radio = QRadioButton(ndi_text)
+        self._ndi_radio.setToolTip(
+            "Broadcasts temporary NDI senders on this computer and receives them "
+            "through the real NDI pipeline — it does NOT use NDI cameras already on "
+            "your network. Measures the actual NDI decode + capture path at scale."
+        )
         self._ndi_radio.setEnabled(ndi_ok)
         self._source_group.addButton(self._clip_radio)
         self._source_group.addButton(self._ndi_radio)

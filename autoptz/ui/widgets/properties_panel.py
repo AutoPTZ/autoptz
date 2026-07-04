@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -242,6 +243,9 @@ class PropertiesPanel(QWidget):
         super().__init__(parent)
         self.setObjectName("propertiesPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # Floor the panel width so labels/checkboxes don't clip in a docked layout
+        # a saved session may have shrunk narrower than the content needs.
+        self.setMinimumWidth(268)
         self._client = client
         # Optional live-frame handle (a ``ShmFrameSource`` like the camera tiles
         # use).  When supplied, "Save preset" grabs the current frame as a JPEG
@@ -269,6 +273,10 @@ class PropertiesPanel(QWidget):
         self._scroll = QScrollArea(self)
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        # Never scroll sideways: the form fits the panel width; content-hungry
+        # fields (combos/line edits) are constrained below so labels aren't
+        # truncated behind a horizontal scrollbar in a narrow dock.
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         root.addWidget(self._scroll)
 
         body = QWidget()
@@ -277,6 +285,7 @@ class PropertiesPanel(QWidget):
         self._col.setSpacing(6)
         self._build_controls()
         self._col.addStretch(1)
+        self._constrain_field_widths(body)
         self._scroll.setWidget(body)
         self._scroll.setVisible(False)
 
@@ -310,6 +319,22 @@ class PropertiesPanel(QWidget):
         # Re-render preset tiles when this camera's config changes (e.g. after a
         # save/clear writes the new ``preset_slots`` back asynchronously).
         _connect(self._client, "configChanged", self._on_config_changed)
+
+    def _constrain_field_widths(self, body: QWidget) -> None:
+        """Let content-hungry fields shrink to the panel width.
+
+        QComboBox/QLineEdit report a content-sized minimum width; in a narrow dock
+        that pushes the form wider than the panel, truncating labels behind a
+        horizontal scrollbar. Give them an ``Ignored`` horizontal size policy so the
+        form's ``AllNonFixedFieldsGrow`` fills the available field column and nothing
+        overflows. Preset thumbnails / the fps readout keep their fixed sizes.
+        """
+        from PySide6.QtWidgets import QComboBox, QLineEdit
+
+        for field in (*body.findChildren(QComboBox), *body.findChildren(QLineEdit)):
+            vpol = field.sizePolicy().verticalPolicy()
+            field.setSizePolicy(QSizePolicy.Policy.Ignored, vpol)
+            field.setMinimumWidth(48)
 
     def _restyle_all(self) -> None:
         """Re-apply EVERY per-widget literal-color style from the LIVE palette.
@@ -576,7 +601,7 @@ class PropertiesPanel(QWidget):
         )
         tf.addRow("Frame on", _with_chip(self._framing, framing_help))
         # Builder, part 2 — whether arms are ignored (steady) or included (widen).
-        self._ignore_arms = QCheckBox("Ignore arms (steadier framing)")
+        self._ignore_arms = QCheckBox("Ignore arms (steadier)")
         self._ignore_arms.setToolTip(
             "On: the aim sits on the body (pose torso) and the zoom stays steady "
             "when arms move — raising a hand won't yank or widen the shot. "
@@ -608,7 +633,7 @@ class PropertiesPanel(QWidget):
         # Center Stage: the user-facing toggle for software auto-framing. When on,
         # this camera uses the digital backend (crop-follow) instead of hardware PTZ;
         # the raw transport selector (moved to Advanced below) is then overridden.
-        self._center_stage = QCheckBox("Center Stage — auto-frame this camera (no PTZ hardware)")
+        self._center_stage = QCheckBox("Center Stage — auto-frame (no PTZ)")
         self._center_stage.setToolTip(
             "Software auto-framing: digitally pans and zooms a crop to follow the "
             "selected target, for cameras without motorised PTZ. Select a person to "

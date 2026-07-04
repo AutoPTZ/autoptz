@@ -95,7 +95,7 @@ _APPDATA = {"model": "buffalo_l", "location": "app-data", "path": "/c", "present
 _BUNDLED = {"model": "buffalo_l", "location": "bundled", "path": "/b", "present": True,
             "removable": False, "size_bytes": 300_000_000}
 _HOME = {"model": "buffalo_l", "location": "home", "path": "/h", "present": True,
-         "removable": False, "size_bytes": 300_000_000}
+         "removable": True, "size_bytes": 300_000_000}
 
 
 def test_face_row_download_enabled_when_missing(qtapp, monkeypatch) -> None:
@@ -127,11 +127,12 @@ def test_face_row_bundled_not_removable(qtapp, monkeypatch) -> None:
         dlg.close()
 
 
-def test_face_row_home_not_removable(qtapp, monkeypatch) -> None:
+def test_face_row_home_is_removable(qtapp, monkeypatch) -> None:
+    """A pack in the user's own ~/.insightface can be removed."""
     dlg, _ = _dialog(qtapp, monkeypatch, _HOME)
     try:
-        assert dlg._face_row.removable is False
-        assert dlg._face_row.remove_btn.isEnabled() is False
+        assert dlg._face_row.removable is True
+        assert dlg._face_row.remove_btn.isEnabled() is True
     finally:
         dlg.close()
 

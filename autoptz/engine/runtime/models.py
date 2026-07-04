@@ -698,7 +698,10 @@ class ModelManager:
             "location": location,
             "path": str(pack),
             "present": bool(onnx),
-            "removable": bool(onnx) and location == "app-data",
+            # Removable from the caches the user owns (the AutoPTZ app-data cache
+            # and their own ~/.insightface). A pack baked into the app bundle or
+            # pinned via INSIGHTFACE_HOME is left alone.
+            "removable": bool(onnx) and location in ("app-data", "home"),
             "size_bytes": sum(p.stat().st_size for p in onnx if p.is_file()),
         }
 
@@ -771,14 +774,18 @@ class ModelManager:
         ]
 
     def remove_face_pack(self) -> list[dict[str, str]]:
-        """Delete the face pack from the **app-data cache only**.
+        """Delete the face pack from the cache the user owns (app-data or home).
 
-        The path is computed from ``self._cache_dir`` directly (never
-        ``insightface_root()``, which may resolve to the bundled or home copy) so a
-        remove can never touch a bundled-in-app pack or the user's ``~/.insightface``.
+        Deletes only when :meth:`face_pack_status` reports the pack as ``removable``
+        (``location`` is ``app-data`` or ``home``) and uses that resolved path — so a
+        remove can never touch a pack baked into the app bundle or pinned via
+        ``INSIGHTFACE_HOME``.
         """
         removed: list[dict[str, str]] = []
-        pack = self._face_appdata_dir()
+        status = self.face_pack_status()
+        if not status.get("removable"):
+            return removed
+        pack = Path(status["path"])
         with self._lock:
             if not pack.is_dir():
                 return removed

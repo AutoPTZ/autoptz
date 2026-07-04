@@ -67,7 +67,9 @@ class TestPreflight:
         clip_text = dlg._clip_radio.text().lower()
         assert "built-in clip" in clip_text
         ndi_text = dlg._ndi_radio.text().lower()
-        assert "live ndi sources on your network" in ndi_text
+        # The NDI mode creates temporary local senders — not real network cameras.
+        assert "simulated ndi streams" in ndi_text
+        assert "network" not in ndi_text  # must not imply real network sources
         if not ndi_sim_available():
             assert "requires cyndilib" in ndi_text
         dlg.deleteLater()

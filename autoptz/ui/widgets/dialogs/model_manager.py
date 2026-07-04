@@ -598,13 +598,8 @@ class ModelManagerDialog(QDialog):
         else:
             self._add_empty_note("No AutoPTZ-managed models are downloaded.")
 
-        self._add_section_label("Available to download")
-        if missing:
-            for row in missing:
-                self._add_model_row(row, selected)
-        else:
-            self._add_empty_note("All AutoPTZ-managed models are downloaded.")
-
+        # Face recognition pack sits WITH the other downloadable models (up top),
+        # with its own Download / Remove (it isn't a checkbox-selectable row).
         self._face_row = None
         self._add_section_label("Face recognition pack")
         try:
@@ -620,6 +615,13 @@ class ModelManagerDialog(QDialog):
         except Exception:  # noqa: BLE001
             log.debug("face pack status failed", exc_info=True)
             self._add_empty_note("Face pack status unavailable.")
+
+        self._add_section_label("Available to download")
+        if missing:
+            for row in missing:
+                self._add_model_row(row, selected)
+        else:
+            self._add_empty_note("All AutoPTZ-managed models are downloaded.")
 
         self._add_section_label("Upstream-managed models")
         external = []

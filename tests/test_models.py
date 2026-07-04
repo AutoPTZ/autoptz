@@ -811,12 +811,13 @@ class TestFacePack:
         assert st["location"] == "bundled"
         assert st["removable"] is False
 
-    def test_status_home_not_removable(self, tmp_path):
+    def test_status_home_is_removable(self, tmp_path):
+        """The user's own ~/.insightface cache can be removed (they own it)."""
         self._write_pack(self._home / ".insightface")
         mgr = ModelManager(cache_dir=tmp_path / "cache")
         st = mgr.face_pack_status()
         assert st["location"] == "home"
-        assert st["removable"] is False
+        assert st["removable"] is True
 
     def test_insightface_home_is_terminal_when_present(self, tmp_path, monkeypatch):
         env = tmp_path / "custom"
@@ -882,12 +883,32 @@ class TestFacePack:
         assert st["present"] is False
         assert st["location"] == "missing"
 
-    def test_remove_deletes_only_appdata(self, tmp_path):
+    def test_remove_prefers_appdata_over_home(self, tmp_path):
         cache = tmp_path / "cache"
         app_pack = self._write_pack(cache / "insightface")
         home_pack = self._write_pack(self._home / ".insightface")
         mgr = ModelManager(cache_dir=cache)
         results = mgr.remove_face_pack()
         assert results and all(r["state"] == "removed" for r in results)
-        assert not any(app_pack.glob("*.onnx"))  # app-data pack gone
-        assert list(home_pack.glob("*.onnx"))  # home pack untouched
+        assert not any(app_pack.glob("*.onnx"))  # app-data (resolved) pack gone
+        assert list(home_pack.glob("*.onnx"))  # home pack untouched (not resolved)
+
+    def test_remove_deletes_home_pack_when_it_is_resolved(self, tmp_path):
+        """The user's own ~/.insightface pack can be deleted (their blocker)."""
+        home_pack = self._write_pack(self._home / ".insightface")
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        assert mgr.face_pack_status()["location"] == "home"
+        results = mgr.remove_face_pack()
+        assert results and all(r["state"] == "removed" for r in results)
+        assert not any(home_pack.glob("*.onnx"))  # home pack deleted
+
+    def test_remove_never_touches_bundled(self, tmp_path, monkeypatch):
+        bundled = tmp_path / "bundled"
+        bundled_pack = self._write_pack(bundled / "insightface")
+        monkeypatch.setattr(
+            "autoptz.engine.runtime.models.bundled_models_dir", lambda: bundled
+        )
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        assert mgr.face_pack_status()["location"] == "bundled"
+        assert mgr.remove_face_pack() == []  # nothing removed
+        assert list(bundled_pack.glob("*.onnx"))  # bundled pack intact

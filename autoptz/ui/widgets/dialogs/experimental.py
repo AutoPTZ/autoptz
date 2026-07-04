@@ -97,7 +97,7 @@ class ExperimentalFeaturesDialog(QDialog):
         scroll.setWidget(body)
         root = QVBoxLayout(body)
         root.setContentsMargins(2, 2, 2, 2)
-        root.setSpacing(4)
+        root.setSpacing(12)
 
         by_section: dict[str, list[ExperimentalFlag]] = {}
         for flag in EXPERIMENTAL_FLAGS:
@@ -106,9 +106,21 @@ class ExperimentalFeaturesDialog(QDialog):
         ordered = [s for s in _SECTION_ORDER if s in by_section]
         ordered += [s for s in by_section if s not in _SECTION_ORDER]
         for section in ordered:
-            root.addWidget(section_label(section))
+            # Each section is a distinct elevated card so the four groups read as
+            # separate panels rather than one flat list.
+            card = QFrame()
+            card.setObjectName("expCard")
+            card.setStyleSheet(
+                f"QFrame#expCard {{ background: {T.CURRENT.surface_alt};"
+                f" border: 1px solid {T.CURRENT.border}; border-radius: 10px; }}"
+            )
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(14, 12, 14, 12)
+            cl.setSpacing(2)
+            cl.addWidget(section_label(section))
             for flag in by_section[section]:
-                root.addWidget(self._build_flag_row(flag))
+                cl.addWidget(self._build_flag_row(flag))
+            root.addWidget(card)
         root.addStretch(1)
 
         note = QLabel("Some changes need a restart to take effect.")
