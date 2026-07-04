@@ -79,9 +79,12 @@ class _ModelTask(QObject):
         # to delete/replace a model onnxruntime still has open (POSIX tolerates it,
         # which is why this only failed on Windows).  Rebuild from the fresh cache
         # afterwards so a removed model stops drawing and a new one is picked up.
+        # include_face only for a face-pack op, so a detector/pose op never drops
+        # and reloads the ~1.3 GB face pack.
+        include_face = self._action in ("download_face", "remove_face")
         if self._client is not None:
             try:
-                self._client.releaseModelSessions()
+                self._client.releaseModelSessions(include_face=include_face)
             except Exception:  # noqa: BLE001
                 log.debug("releaseModelSessions before model op failed", exc_info=True)
         try:
@@ -98,8 +101,9 @@ class _ModelTask(QObject):
                     ),
                 )
             elif self._action == "download_face":
-                # insightface exposes no byte progress → indeterminate bar.
-                self.progress.emit("Downloading face recognition pack", 0, 0)
+                # No byte progress from insightface — leave the indeterminate bar the
+                # caller set (emitting (0,0) here would force _on_progress to a frozen
+                # determinate 0/1).
                 results = manager.ensure_face_pack()
             elif self._action == "remove_face":
                 self.progress.emit("Removing face recognition pack", 0, 1)
@@ -121,7 +125,7 @@ class _ModelTask(QObject):
         finally:
             if self._client is not None:
                 try:
-                    self._client.rebuildModelSessions()
+                    self._client.rebuildModelSessions(include_face=include_face)
                 except Exception:  # noqa: BLE001
                     log.debug("rebuildModelSessions after model op failed", exc_info=True)
         self.done.emit({"action": self._action, "results": results})
@@ -836,7 +840,11 @@ class ModelManagerDialog(QDialog):
                 f"Some model operations failed.\n\n{detail}",
             )
             return
-        if action == "remove":
+        if action == "remove_face":
+            self._status.setText("Face recognition pack removed.")
+        elif action == "download_face":
+            self._status.setText("Face recognition pack downloaded.")
+        elif action == "remove":
             self._status.setText(f"Removed {len(results)} cached model file(s).")
         else:
             self._status.setText("Selected models are cached.")

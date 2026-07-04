@@ -967,19 +967,20 @@ class CameraWorker:
         with self._cmd_lock:
             self._cmd_queue.append(("refresh_detector", None))
 
-    def reload_inference_models(self) -> None:
+    def reload_inference_models(self, *, include_face: bool = False) -> None:
         """Drop + rebuild detector/pose after the on-disk model cache changed.
 
         Unlike ``refresh_detector_from_pool`` (a hot-swap that keeps the old
         model if the new one isn't ready), this force-drops the worker's model
         references so a *removed* model truly stops drawing boxes, then rebuilds
         from the (now-refreshed) shared pool — yielding the new model, or nothing
-        when the files were deleted.
+        when the files were deleted.  ``include_face`` also cycles the face stack
+        (only for a face-pack op).
         """
         with self._cmd_lock:
-            self._cmd_queue.append(("reload_models", None))
+            self._cmd_queue.append(("reload_models", {"include_face": include_face}))
 
-    def release_inference_models(self, *, wait: float = 0.0) -> None:
+    def release_inference_models(self, *, wait: float = 0.0, include_face: bool = False) -> None:
         """Drop the worker's detector/pose refs so their ORT sessions can be freed.
 
         Unlike :meth:`reload_inference_models` this does *not* rebuild — it only
@@ -987,10 +988,13 @@ class CameraWorker:
         is mutated (delete/replace fails on Windows while a handle is open).  Pass
         ``wait > 0`` to block until the inference thread confirms the release (or
         the timeout elapses); the caller then GCs and mutates the files.
+        ``include_face`` also drops the face ref (only for a face-pack op).
         """
         done = threading.Event() if wait > 0 else None
         with self._cmd_lock:
-            self._cmd_queue.append(("release_models", done))
+            self._cmd_queue.append(
+                ("release_models", {"done": done, "include_face": include_face})
+            )
         if done is not None:
             done.wait(timeout=wait)
 
@@ -1173,11 +1177,16 @@ class CameraWorker:
         elif kind == "refresh_detector":
             self._refresh_detector_from_pool()
         elif kind == "reload_models":
-            self._reload_inference_models()
+            self._reload_inference_models(
+                include_face=bool(payload.get("include_face")) if isinstance(payload, dict) else False
+            )
         elif kind == "release_models":
-            self._release_inference_models()
-            if isinstance(payload, threading.Event):
-                payload.set()
+            done = payload.get("done") if isinstance(payload, dict) else payload
+            self._release_inference_models(
+                include_face=bool(payload.get("include_face")) if isinstance(payload, dict) else False
+            )
+            if isinstance(done, threading.Event):
+                done.set()
         elif kind == "save_ptz_preset":
             self._save_ptz_preset(int(payload))
         elif kind == "recall_ptz_preset":
@@ -1212,14 +1221,15 @@ class CameraWorker:
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s set_target_fps failed", self.camera_id, exc_info=True)
 
-    def _release_inference_models(self) -> None:
-        """Drop detector/pose/face refs *without* rebuilding so their ORT sessions free.
+    def _release_inference_models(self, include_face: bool = False) -> None:
+        """Drop detector/pose refs *without* rebuilding so their ORT sessions free.
 
         Called before the on-disk model cache is mutated: once these refs and the
         shared pool's are gone (and GC runs), Windows can delete/replace the files
-        that onnxruntime had open (including the insightface face pack).  The
-        subsequent ``reload_models`` rebuilds.  An INJECTED face stack (tests) is
-        left alone — it isn't ours to drop.
+        that onnxruntime had open.  The subsequent ``reload_models`` rebuilds.
+        ``include_face`` also drops the face ref (only for a face-pack op, so an
+        unrelated detector/pose op never disturbs the ~1.3 GB face pack).  An
+        INJECTED face stack (tests) is left alone — it isn't ours to drop.
         """
         self._detect = None
         self._unified_pose_active = False
@@ -1228,11 +1238,15 @@ class CameraWorker:
         self._pose_probed = False
         self._pose_keypoints = None
         self._pose_kp_track_id = None
-        if self._injected_face_stack is None:
+        if include_face and self._injected_face_stack is None:
             self._face = None
 
-    def _reload_inference_models(self) -> None:
-        """Force-drop + rebuild detector/pose/face to match the current model cache."""
+    def _reload_inference_models(self, include_face: bool = False) -> None:
+        """Force-drop + rebuild detector/pose to match the current model cache.
+
+        ``include_face`` also cycles the face stack — set only for a face-pack op,
+        so a detector/pose cache change never force-reloads the ~1.3 GB face pack.
+        """
         self._detect = None
         self._unified_pose_active = False
         self._last_detections = []
@@ -1240,7 +1254,7 @@ class CameraWorker:
         self._pose_probed = False
         self._pose_keypoints = None
         self._pose_kp_track_id = None
-        if self._injected_face_stack is None:
+        if include_face and self._injected_face_stack is None:
             self._face = None
             if self._feature("face_recognition"):
                 self._ensure_face_stack()

@@ -818,6 +818,31 @@ class TestFacePack:
         assert st["location"] == "home"
         assert st["removable"] is False
 
+    def test_insightface_home_is_terminal_when_present(self, tmp_path, monkeypatch):
+        env = tmp_path / "custom"
+        self._write_pack(env)
+        monkeypatch.setenv("INSIGHTFACE_HOME", str(env))
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        st = mgr.face_pack_status()
+        assert st["location"] == "custom"
+        assert st["present"] is True
+        assert st["removable"] is False
+
+    def test_insightface_home_empty_reports_missing_not_a_shadowed_pack(
+        self, tmp_path, monkeypatch
+    ):
+        """When INSIGHTFACE_HOME is set but empty, the engine loads from it
+        (unconditionally) and finds nothing — so status must NOT fall through to a
+        lower-priority present pack and falsely report the pack as available."""
+        env = tmp_path / "empty_custom"
+        env.mkdir()
+        self._write_pack(self._home / ".insightface")  # a present fallback exists
+        monkeypatch.setenv("INSIGHTFACE_HOME", str(env))
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        st = mgr.face_pack_status()
+        assert st["location"] == "custom"
+        assert st["present"] is False  # matches what the engine actually loads
+
     def test_ensure_uses_appdata_root(self, tmp_path, monkeypatch):
         cache = tmp_path / "cache"
         seen = {}
@@ -844,6 +869,18 @@ class TestFacePack:
         results = mgr.ensure_face_pack()
         assert results[0]["state"] == "failed"
         assert "offline" in results[0]["error"]
+
+    def test_partial_download_single_onnx_not_reported_present(self, tmp_path):
+        """A single leftover .onnx from an interrupted download must not read as a
+        complete/usable pack (which would wrongly disable Download)."""
+        cache = tmp_path / "cache"
+        pack = cache / "insightface" / "models" / "buffalo_l"
+        pack.mkdir(parents=True)
+        (pack / "det_10g.onnx").write_bytes(b"x" * 1024)  # only one of several files
+        mgr = ModelManager(cache_dir=cache)
+        st = mgr.face_pack_status()
+        assert st["present"] is False
+        assert st["location"] == "missing"
 
     def test_remove_deletes_only_appdata(self, tmp_path):
         cache = tmp_path / "cache"

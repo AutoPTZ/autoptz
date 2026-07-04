@@ -66,8 +66,14 @@ def _client() -> SimpleNamespace:
         ],
         getSetting=lambda k, d=None: store.get(k, d),
         setSetting=lambda k, v: store.__setitem__(k, v),
-        releaseModelSessions=lambda: store.__setitem__("rel", store.get("rel", 0) + 1),
-        rebuildModelSessions=lambda: store.__setitem__("reb", store.get("reb", 0) + 1),
+        releaseModelSessions=lambda include_face=False: store.__setitem__(
+            "rel", store.get("rel", 0) + 1
+        )
+        or store.__setitem__("rel_face", include_face),
+        rebuildModelSessions=lambda include_face=False: store.__setitem__(
+            "reb", store.get("reb", 0) + 1
+        )
+        or store.__setitem__("reb_face", include_face),
         _store=store,
     )
 
@@ -162,5 +168,26 @@ def test_face_download_runs_manager_and_brackets_sessions(qtapp, monkeypatch) ->
         assert "ensure_face_pack" in mgr.calls
         assert dlg._client._store.get("rel") == 1  # released before
         assert dlg._client._store.get("reb") == 1  # rebuilt after
+        # A face op releases/rebuilds the shared face session too.
+        assert dlg._client._store.get("rel_face") is True
+        assert dlg._client._store.get("reb_face") is True
+    finally:
+        dlg.close()
+
+
+def test_detector_op_does_not_touch_face_session(qtapp, monkeypatch) -> None:
+    """A detector download/remove must pass include_face=False so it never drops
+    and reloads the ~1.3 GB face pack."""
+    from autoptz.ui.widgets.dialogs.model_manager import _ModelTask
+
+    dlg, mgr = _dialog(qtapp, monkeypatch, _MISSING)
+    try:
+        # Give the fake manager a remove_app_models so the detector 'remove' works.
+        mgr.remove_app_models = lambda *, keys=None: [
+            {"name": "m", "state": "removed", "path": "", "size": "0", "error": ""}
+        ]
+        _ModelTask("remove", ["detector_fast"], client=dlg._client).run()
+        assert dlg._client._store.get("rel_face") is False
+        assert dlg._client._store.get("reb_face") is False
     finally:
         dlg.close()

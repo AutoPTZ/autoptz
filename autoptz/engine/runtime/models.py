@@ -679,40 +679,54 @@ class ModelManager:
         """The app-data insightface model dir this manager owns (download/remove)."""
         return self._cache_dir / "insightface" / "models" / self._face_model_name()
 
+    @staticmethod
+    def _face_pack_onnx(pack: Path) -> list[Path]:
+        """The pack's ``.onnx`` files, or [] — treated as *complete* only when there
+        are at least two (a lone leftover file from an interrupted download must not
+        read as a usable pack; a real buffalo_l pack ships several)."""
+        try:
+            onnx = sorted(pack.glob("*.onnx")) if pack.is_dir() else []
+        except OSError:
+            return []
+        return onnx if len(onnx) >= 2 else []
+
+    def _face_status_at(self, location: str, root: Path, model: str) -> dict[str, Any]:
+        pack = root / "models" / model
+        onnx = self._face_pack_onnx(pack)
+        return {
+            "model": model,
+            "location": location,
+            "path": str(pack),
+            "present": bool(onnx),
+            "removable": bool(onnx) and location == "app-data",
+            "size_bytes": sum(p.stat().st_size for p in onnx if p.is_file()),
+        }
+
     def face_pack_status(self) -> dict[str, Any]:
         """Where the insightface face pack resolves, and whether we can remove it.
 
         Classified in the same priority as
         :func:`autoptz.engine.pipeline.identify.insightface_root` — ``INSIGHTFACE_HOME``
-        → bundled-in-app → app-data cache → ``~/.insightface`` → missing — so the
-        reported location matches what the engine actually loads.  ``removable`` is
-        True only for the app-data cache (the copy this manager owns); a bundled or
-        home pack is never deleted from here.
+        → bundled-in-app → app-data cache → ``~/.insightface`` — so the reported
+        location matches what the engine actually loads.  ``INSIGHTFACE_HOME`` is
+        **terminal** (the engine returns it unconditionally): when it is set we
+        report its state directly and never fall through to a lower-priority pack,
+        so an empty override is honestly reported as not-present rather than masked
+        by a shadowed pack.  ``removable`` is True only for the app-data cache (the
+        copy this manager owns); a bundled, custom, or home pack is never deleted.
         """
         model = self._face_model_name()
-        candidates: list[tuple[str, Path]] = []
         env = os.environ.get("INSIGHTFACE_HOME")
         if env:
-            candidates.append(("custom", Path(env)))
-        candidates.append(("bundled", bundled_models_dir() / "insightface"))
-        candidates.append(("app-data", self._cache_dir / "insightface"))
-        candidates.append(("home", Path.home() / ".insightface"))
-        for location, root in candidates:
-            pack = root / "models" / model
-            try:
-                onnx = sorted(pack.glob("*.onnx")) if pack.is_dir() else []
-            except OSError:
-                onnx = []
-            if onnx:
-                size = sum(p.stat().st_size for p in onnx if p.is_file())
-                return {
-                    "model": model,
-                    "location": location,
-                    "path": str(pack),
-                    "present": True,
-                    "removable": location == "app-data",
-                    "size_bytes": size,
-                }
+            return self._face_status_at("custom", Path(env), model)
+        for location, root in (
+            ("bundled", bundled_models_dir() / "insightface"),
+            ("app-data", self._cache_dir / "insightface"),
+            ("home", Path.home() / ".insightface"),
+        ):
+            status = self._face_status_at(location, root, model)
+            if status["present"]:
+                return status
         return {
             "model": model,
             "location": "missing",

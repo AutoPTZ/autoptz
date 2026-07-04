@@ -1122,32 +1122,39 @@ class EngineClient(QObject):
         self.optionalComponentsChanged.emit()
 
     @Slot()
-    def releaseModelSessions(self) -> None:
+    def releaseModelSessions(self, include_face: bool = False) -> None:
         """Free the engine's ORT sessions *before* the model cache is mutated.
 
         The Model Manager calls this prior to a download/removal so onnxruntime
         no longer holds the files open — without it, delete/replace fails on
         Windows (POSIX tolerates unlink-while-open, which is why it only broke
-        there).  Safe no-op when the engine is stopped.
+        there).  Safe no-op when the engine is stopped.  ``include_face`` also
+        releases the shared face session — set only for a face-pack op.
         """
         sup = self._supervisor
         if self._engine_running and sup is not None:
             fn = getattr(sup, "release_model_sessions", None)
             if callable(fn):
                 try:
-                    fn()
+                    fn(include_face=include_face)
+                except TypeError:
+                    fn()  # older supervisor without include_face
                 except Exception:  # noqa: BLE001
                     log.debug("release_model_sessions failed", exc_info=True)
 
-    @Slot()
-    def rebuildModelSessions(self) -> None:
-        """Rebuild live models from the fresh cache after a download/removal."""
+    def rebuildModelSessions(self, include_face: bool = False) -> None:
+        """Rebuild live models from the fresh cache after a download/removal.
+
+        ``include_face`` also rebuilds the face stack — set only for a face-pack op.
+        """
         sup = self._supervisor
         if self._engine_running and sup is not None:
             fn = getattr(sup, "rebuild_model_sessions", None)
             if callable(fn):
                 try:
-                    fn()
+                    fn(include_face=include_face)
+                except TypeError:
+                    fn()  # older supervisor without include_face
                 except Exception:  # noqa: BLE001
                     log.debug("rebuild_model_sessions failed", exc_info=True)
         self.optionalComponentsChanged.emit()

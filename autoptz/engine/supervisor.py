@@ -1081,8 +1081,8 @@ class Supervisor:
                 except Exception:  # noqa: BLE001
                     log.debug("pool %s failed", method, exc_info=True)
 
-    def release_model_sessions(self) -> None:
-        """Free every detector/pose/face ORT session (pool + workers) before a cache mutation.
+    def release_model_sessions(self, *, include_face: bool = False) -> None:
+        """Free detector/pose ORT sessions (pool + workers) before a cache mutation.
 
         Windows refuses to delete/replace a model file while onnxruntime still has
         it open, so the UI calls this *before* downloading/removing files: the pool
@@ -1090,12 +1090,19 @@ class Supervisor:
         then a ``gc.collect()`` finalises the sessions so the OS handles are gone.
         POSIX tolerates unlink-while-open, which is why the old (release-after)
         order only failed on Windows.
+
+        ``include_face`` additionally releases the shared insightface face session —
+        set ONLY for a face-pack download/remove.  Left False for detector/pose ops
+        so an unrelated cache change never drops and reloads the ~1.3 GB face pack.
         """
         if not self._running:
             return
         pool = self._inference_pool
         if pool is not None:
-            for method in ("release_detector", "release_pose", "release_face"):
+            methods = ["release_detector", "release_pose"]
+            if include_face:
+                methods.append("release_face")
+            for method in methods:
                 fn = getattr(pool, method, None)
                 if callable(fn):
                     try:
@@ -1110,18 +1117,21 @@ class Supervisor:
                 try:
                     # Block briefly so the inference thread actually drops its refs
                     # before we GC + mutate; the file-op retry covers any residual.
-                    release(wait=1.0)
+                    release(wait=1.0, include_face=include_face)
+                except TypeError:
+                    release(wait=1.0)  # older/test workers without include_face
                 except Exception:  # noqa: BLE001
                     log.debug("worker model release failed", exc_info=True)
         import gc
 
         gc.collect()
 
-    def rebuild_model_sessions(self) -> None:
+    def rebuild_model_sessions(self, *, include_face: bool = False) -> None:
         """Rebuild detector/pose from the (now-refreshed) cache after a mutation.
 
         Each worker force-reloads from the shared pool — yielding the new model, or
-        live-preview-only when the files were removed.  Pairs with
+        live-preview-only when the files were removed.  ``include_face`` also
+        rebuilds the face stack (only for a face-pack op).  Pairs with
         :meth:`release_model_sessions`.
         """
         if not self._running:
@@ -1132,7 +1142,9 @@ class Supervisor:
             reload = getattr(worker, "reload_inference_models", None)
             if callable(reload):
                 try:
-                    reload()
+                    reload(include_face=include_face)
+                except TypeError:
+                    reload()  # older/test workers without include_face
                 except Exception:  # noqa: BLE001
                     log.debug("worker model reload failed", exc_info=True)
 
