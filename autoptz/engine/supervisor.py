@@ -1350,12 +1350,12 @@ class Supervisor:
 
         Read once at engine start (from inside :meth:`_apply_hardware_env`, before
         any worker spawns) so the flags take effect on the next engine run.  Only
-        keys persisted in the ``experimental_features`` dict by legacy UI/dev tools
-        are managed: for each such env-flag key, set the env var when the saved
-        value differs from the flag's engine default, or pop it (clearing a stale
-        value from a prior selection) when it equals the default.  Keys in the
-        saved dict that are not env flags (the per-camera ``TrackingConfig``
-        defaults) are ignored here — they are consumed when a NEW camera is added.
+        keys registered in ``EXPERIMENTAL_FLAGS`` are managed: for each such key,
+        set the env var when the saved value differs from the flag's engine
+        default, or pop it (clearing a stale value from a prior selection) when it
+        equals the default.  Unknown keys in the saved dict (a flag that was
+        removed, an excluded hardware var, the dead per-camera tracking defaults)
+        are ignored for env and pruned from the persisted dict.
 
         A key the user never persisted is left UNTOUCHED: an absent / empty /
         unreadable dict is the feature-inactive baseline, and any env var set
@@ -1379,6 +1379,17 @@ class Supervisor:
                 os.environ[flag.env_key] = str(value)
             else:
                 os.environ.pop(flag.env_key, None)
+
+        # Prune keys that are no longer in the registry so the persisted dict does
+        # not accumulate dead flags across upgrades.  Only rewrite when something
+        # actually changed, to avoid a needless store write on every engine start.
+        known = {flag.env_key for flag in EXPERIMENTAL_FLAGS}
+        cleaned = {k: v for k, v in saved.items() if k in known}
+        if self._store is not None and cleaned != saved:
+            try:
+                self._store.set_setting("experimental_features", cleaned)
+            except Exception:  # noqa: BLE001 — pruning is best-effort
+                log.debug("pruning stale experimental_features keys failed", exc_info=True)
 
     def _make_telemetry_callback(self, camera_id: str) -> Callable[[Any], None]:
         """Wrap push_telemetry so the supervisor records a per-camera last-seen time.

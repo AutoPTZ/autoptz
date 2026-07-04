@@ -2236,8 +2236,8 @@ try:
     # Untouched pump flag is preserved.
     assert saved.get("AUTOPTZ_PTZ_PUMP") == "1"
 
-    # Every env flag has a row widget.
-    assert set(dlg._bool_boxes) | set(dlg._choice_combos) == {{
+    # Every env flag has a row widget (bool / choice / text|path).
+    assert set(dlg._bool_boxes) | set(dlg._choice_combos) | set(dlg._text_fields) == {{
         f.env_key for f in EXPERIMENTAL_FLAGS
     }}
 

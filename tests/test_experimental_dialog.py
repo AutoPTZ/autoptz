@@ -20,6 +20,12 @@ def qtapp():
     yield QApplication.instance() or QApplication([])
 
 
+def _flags():
+    from autoptz.engine.runtime.experimental_flags import EXPERIMENTAL_FLAGS
+
+    return EXPERIMENTAL_FLAGS
+
+
 def _client(settings: dict[str, Any] | None = None) -> SimpleNamespace:
     store: dict[str, Any] = dict(settings or {})
 
@@ -116,6 +122,73 @@ def test_dialog_renders_model_server_row(qtapp) -> None:
     client = _client()
     dlg, _ = _dialog(client)
     assert "AUTOPTZ_MODEL_SERVER" in dlg._bool_boxes
+    dlg.close()
+
+
+def test_dialog_renders_sections(qtapp) -> None:
+    """The dialog groups flags under section headers (uppercased captions)."""
+    from PySide6.QtWidgets import QLabel
+
+    client = _client()
+    dlg, _ = _dialog(client)
+    captions = {
+        lbl.text() for lbl in dlg.findChildren(QLabel) if lbl.objectName() == "sectionCaption"
+    }
+    for section in ("Experiments", "Devices & tuning", "Model overrides", "Diagnostics"):
+        assert section.upper() in captions, section
+    dlg.close()
+
+
+def test_dialog_renders_text_and_path_fields(qtapp) -> None:
+    """Model-override flags render editable text/path fields, not checkboxes."""
+    client = _client()
+    dlg, _ = _dialog(client)
+    assert "AUTOPTZ_MODEL_PATH" in dlg._text_fields
+    assert "AUTOPTZ_POSE_MODEL_PATH" in dlg._text_fields
+    assert "AUTOPTZ_MODEL_URL" in dlg._text_fields
+    dlg.close()
+
+
+def test_no_tracking_defaults_section(qtapp) -> None:
+    """The dead "New-camera tracking defaults" section is gone."""
+    from PySide6.QtWidgets import QLabel
+
+    client = _client()
+    dlg, _ = _dialog(client)
+    assert not hasattr(dlg, "_tracking_boxes")
+    labels = {lbl.text() for lbl in dlg.findChildren(QLabel)}
+    assert not any("tracking defaults" in (t or "").lower() for t in labels)
+    dlg.close()
+
+
+def test_text_field_value_persists_on_apply(qtapp) -> None:
+    client = _client()
+    dlg, _ = _dialog(client)
+    dlg._text_fields["AUTOPTZ_MODEL_URL"].setText("https://example.invalid/models")
+    dlg._on_apply()
+    saved = client.getSetting("experimental_features", {})
+    assert saved.get("AUTOPTZ_MODEL_URL") == "https://example.invalid/models"
+    dlg.close()
+
+
+def test_stale_saved_keys_dropped_on_apply(qtapp) -> None:
+    """A persisted dict with removed keys loads cleanly and is rewritten to the
+    current registry set on Apply."""
+    client = _client(
+        {
+            "experimental_features": {
+                "AUTOPTZ_REID_DEVICE": "cpu",
+                "group_framing": True,  # dead tracking-defaults key
+                "AUTOPTZ_PTZ_PUMP": "1",
+            }
+        }
+    )
+    dlg, _ = _dialog(client)
+    assert dlg._bool_boxes["AUTOPTZ_PTZ_PUMP"].isChecked()  # loaded, tolerated
+    dlg._on_apply()
+    saved = client.getSetting("experimental_features", {})
+    assert "group_framing" not in saved
+    assert set(saved) == {f.env_key for f in _flags()}
     dlg.close()
 
 
