@@ -627,6 +627,23 @@ class PropertiesPanel(QWidget):
                 ),
             ),
         )
+        self._group_framing = QCheckBox("Frame the group when no one is locked")
+        self._group_framing.setToolTip(
+            "With several people in view and no one locked, frame everyone together "
+            "instead of one person. A person you explicitly lock always wins."
+        )
+        self._group_framing.toggled.connect(self._schedule)
+        pf.addRow(
+            "",
+            _with_chip(
+                self._group_framing,
+                HelpBadge(
+                    "When several people are present and you have not locked a target, "
+                    "widen the shot to frame the whole group rather than picking one "
+                    "subject. Locking a person always overrides this."
+                ),
+            ),
+        )
         self._auto_zoom = QCheckBox("Auto-zoom to frame the subject")
         self._auto_zoom.setToolTip(
             "Let the controller zoom in/out to keep the chosen Framing "
@@ -1174,6 +1191,7 @@ class PropertiesPanel(QWidget):
                 tr.get("framing") or tr.get("aim_region") or "upper_body",
             )
             self._ignore_arms.setChecked((tr.get("aim_body_mode") or "torso") == "torso")
+            self._group_framing.setChecked(bool(tr.get("group_framing", False)))
             backend = pz.get("backend", "auto")
             is_center_stage = backend == "digital"
             self._center_stage.setChecked(is_center_stage)
@@ -1295,6 +1313,7 @@ class PropertiesPanel(QWidget):
         cfg["tracking"]["aim_body_mode"] = (
             "torso" if self._ignore_arms.isChecked() else "full_silhouette"
         )
+        cfg["tracking"]["group_framing"] = self._group_framing.isChecked()
         cfg["ptz"]["backend"] = (
             "digital" if self._center_stage.isChecked() else self._backend.currentText()
         )
