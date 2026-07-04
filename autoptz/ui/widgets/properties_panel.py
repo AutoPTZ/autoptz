@@ -517,13 +517,19 @@ class PropertiesPanel(QWidget):
         # Both captions are ALWAYS visible, single-line, and elided — text-only
         # updates, never show/hide — so the panel below them doesn't jump every
         # time the state or the quality ladder changes (which is frequent under
-        # load). The full text lives in the tooltip.
+        # load). The full text lives in the tooltip. CRITICAL: a non-wrapping
+        # QLabel's minimum width is its FULL text width, which would silently
+        # widen the whole scroll body past the dock (clipping every row's right
+        # edge) — an Ignored horizontal policy keeps them from inflating the
+        # layout, so they take exactly the width the panel gives them.
         self._track_state = QLabel(" ")
         self._track_state.setWordWrap(False)
+        self._track_state.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._muted_captions.append(self._track_state)
         tr.add_widget(self._track_state)
         self._track_reason = QLabel(" ")
         self._track_reason.setWordWrap(False)
+        self._track_reason.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._muted_captions.append(self._track_reason)
         tr.add_widget(self._track_reason)
 
