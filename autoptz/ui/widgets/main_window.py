@@ -17,7 +17,7 @@ import logging
 import threading
 from typing import Any
 
-from PySide6.QtCore import QByteArray, QObject, Qt, Signal
+from PySide6.QtCore import QByteArray, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -1424,6 +1424,29 @@ class MainWindow(QMainWindow):
         if not self._has_visible_window_frame():
             self.resize(1320, 820)
             self._center_on_primary_screen()
+        # Saved layouts can restore docks NARROWER than their panels' minimums
+        # (Qt only enforces minimums on interactive drags) — widen them once the
+        # restored sizes are actually applied.
+        QTimer.singleShot(0, self._enforce_dock_minimums)
+
+    def _enforce_dock_minimums(self) -> None:
+        """Widen any dock the restored layout left narrower than its panel needs.
+
+        ``restoreState`` re-applies saved dock sizes verbatim — including sizes
+        saved before a panel's minimum width existed (or grew). A too-narrow dock
+        clips its panel's right edge (cost chips / help badges vanish, captions
+        hard-cut). Runs one event-loop turn after restore so widths are real.
+        """
+        for dock in self._docks.values():
+            widget = dock.widget()
+            if widget is None or not dock.isVisible() or dock.isFloating():
+                continue
+            need = max(widget.minimumSizeHint().width(), widget.minimumWidth())
+            if need > 0 and dock.width() < need:
+                try:
+                    self.resizeDocks([dock], [need], Qt.Orientation.Horizontal)
+                except Exception:  # noqa: BLE001
+                    log.debug("dock minimum enforcement failed", exc_info=True)
 
     def showEvent(self, event: Any) -> None:  # noqa: N802
         # Qt can defer creating the dock tab bar until first show; restyle it

@@ -1448,8 +1448,9 @@ class PropertiesPanel(QWidget):
 
         Empty text becomes a single space (keeps the line's height reserved);
         long text is elided to the label's current width with the full string on
-        the tooltip. The label is never shown/hidden, so surrounding widgets
-        never shift when the state flips.
+        the tooltip (from which :meth:`resizeEvent` re-elides after a panel
+        resize, so the ellipsis tracks the real width). The label is never
+        shown/hidden, so surrounding widgets never shift when the state flips.
         """
         full = (text or "").strip()
         if not full:
@@ -1460,6 +1461,14 @@ class PropertiesPanel(QWidget):
         width = max(60, label.width() - 4)
         label.setText(fm.elidedText(full, Qt.TextElideMode.ElideRight, width))
         label.setToolTip(full)
+
+    def resizeEvent(self, event: Any) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        # Re-elide the one-line captions to the new width (their full text lives
+        # on the tooltip) so a narrower panel shows "…" instead of a hard cut.
+        for label in (getattr(self, "_track_state", None), getattr(self, "_track_reason", None)):
+            if label is not None and label.toolTip():
+                self._set_caption(label, label.toolTip())
 
     def _update_effective_detection(self) -> None:
         """Echo what the engine is *actually* doing next to the configured values.
