@@ -294,6 +294,39 @@ def subject_height_from_pose(
     return span * 3.3
 
 
+def torso_framing_box(
+    kps: Keypoints,
+    min_conf: float = DEFAULT_KP_CONF,
+) -> tuple[float, float, float, float] | None:
+    """A **stable** person-framing box (x1, y1, x2, y2), or ``None``.
+
+    Derived from the torso anchors only, so raising/extending an arm — which
+    inflates the YOLO person bbox and drags its centre — leaves this box
+    untouched.  Center Stage crops around it when ``aim_body_mode == "torso"``
+    ("Ignore arms"):
+
+    - height = :func:`subject_height_from_pose` (3.3× the shoulder→hip span), so
+      the crop zoom matches the physical auto-zoom's torso-mode subject height;
+    - centre-x = the shoulder midpoint (the steadiest horizontal anchor);
+    - centre-y = the hips (≈ a standing body's mid-height, per
+      :func:`body_aim_point`), which puts the head comfortably inside the box.
+
+    The width is nominal (the digital crop is sized height-only for a single
+    person; only the centre-x matters).  ``None`` when shoulders or hips are not
+    both confidently present — the caller keeps the raw-bbox behaviour.
+    """
+    height = subject_height_from_pose(kps, min_conf)
+    if height is None:
+        return None
+    shoulders = shoulder_midpoint(kps, min_conf)
+    hips = hip_midpoint(kps, min_conf)
+    if shoulders is None or hips is None:  # pragma: no cover — height implies both
+        return None
+    cx, cy = shoulders[0], hips[1]
+    half_w = height * 0.2  # nominal ~0.4 aspect person
+    return (cx - half_w, cy - height * 0.5, cx + half_w, cy + height * 0.5)
+
+
 class AimSmoother:
     """Exponential-moving-average smoother for a 2-D aim point.
 

@@ -22,6 +22,7 @@ from autoptz.engine.pipeline.framing import (
     shoulder_midpoint,
     subject_height_from_pose,
     torso_aim_point,
+    torso_framing_box,
 )
 
 # COCO-17 has 17 keypoints; build a full list with a low-conf default and fill
@@ -131,6 +132,45 @@ class TestSubjectHeight:
         moved = list(_STANDING)
         moved[9] = Keypoint(110.0, 10.0, 0.9)  # raise a wrist
         assert subject_height_from_pose(moved) == before
+
+
+class TestTorsoFramingBox:
+    def test_box_from_torso_anchors(self) -> None:
+        box = torso_framing_box(_STANDING)
+        assert box is not None
+        x1, y1, x2, y2 = box
+        # Height = the same 3.3× shoulder→hip scale as subject_height_from_pose,
+        # so Center Stage zooms like the physical auto-zoom in torso mode.
+        assert math.isclose(y2 - y1, 200.0 * 3.3)
+        # Centred on the shoulder midpoint x, and vertically on the hips (a
+        # standing body's mid-height), so the head stays inside the box.
+        assert math.isclose((x1 + x2) * 0.5, 200.0)
+        assert math.isclose((y1 + y2) * 0.5, 300.0)
+        # The head (above the shoulders) is inside: top well above shoulder y.
+        assert y1 < 100.0
+
+    def test_invariant_to_arm_motion(self) -> None:
+        """The whole point: raised arms must not grow or shift the framing box."""
+        before = torso_framing_box(_STANDING)
+        moved = list(_STANDING)
+        moved[7] = Keypoint(120.0, 40.0, 0.9)  # left_elbow up high
+        moved[9] = Keypoint(110.0, 10.0, 0.9)  # left_wrist way up
+        moved[10] = Keypoint(290.0, 10.0, 0.9)  # right_wrist way up
+        assert torso_framing_box(moved) == before
+
+    def test_none_without_both_anchors(self) -> None:
+        assert torso_framing_box(_pose(ls=(170.0, 100.0, 0.9), rs=(230.0, 100.0, 0.9))) is None
+        assert torso_framing_box(_pose(lh=(180.0, 300.0, 0.9), rh=(220.0, 300.0, 0.9))) is None
+        assert torso_framing_box(_pose()) is None
+
+    def test_none_on_degenerate_span(self) -> None:
+        flat = _pose(
+            ls=(170.0, 100.0, 0.9),
+            rs=(230.0, 100.0, 0.9),
+            lh=(180.0, 100.0, 0.9),
+            rh=(220.0, 100.0, 0.9),
+        )
+        assert torso_framing_box(flat) is None
 
 
 class TestAimSmoother:

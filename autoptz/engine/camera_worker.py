@@ -271,6 +271,11 @@ def _appearance_guarded(method: Callable) -> Callable:
 # stale torso point is fine and far cheaper than per-frame pose inference).
 _POSE_INTERVAL_S = 0.2
 _POSE_TTL_S = 0.12
+# How long cached torso keypoints stay eligible for the Center Stage crop box
+# ("Ignore arms"). Generous vs _POSE_INTERVAL_S (keypoints refresh every 0.2 s
+# while the target is live) but tight enough that a stalled inference thread
+# falls back to raw-bbox framing instead of freezing the crop on a stale torso.
+_POSE_FRAMING_TTL_S = 1.0
 
 # How often (seconds) to run OSNet appearance ReID: refresh the target's template
 # while it's visible, or attempt recovery while it's lost.  Throttled because the
@@ -4138,13 +4143,46 @@ class CameraWorker:
         person present the crop frames the UNION of their boxes (auto-widening,
         capped by ``max_frac``). One person, or the toggle off, is the single
         target's box exactly as before.
+
+        **"Ignore arms"** (``aim_body_mode == "torso"``, the default): a single
+        locked person is framed on the pose-torso-derived box instead of the raw
+        detection bbox, so raised/extended arms — which inflate the YOLO box and
+        drag its centre — no longer grow or shift the crop.  Falls back to the
+        raw bbox whenever fresh torso keypoints for *this* track aren't cached
+        (pose off/unavailable/stale), and never applies to a group union.
         """
         # Delegate to the shared framing-target selector so Center Stage and
         # physical PTZ frame the same subject the same way (see
         # autoptz.engine.framing_target).
         ft = self._select_framing_target()
         self._digital_target_is_group = ft.is_group
-        return ft.bbox
+        if ft.bbox is None or ft.is_group:
+            return ft.bbox
+        torso = self._torso_stable_box(ft.primary_track_id)
+        return torso if torso is not None else ft.bbox
+
+    def _torso_stable_box(self, track_id: int | None) -> tuple[float, float, float, float] | None:
+        """The cached pose-torso framing box for *track_id*, or None.
+
+        Runs on the capture thread; the keypoints are written by the inference
+        thread (reference swap — GIL-atomic, same contract as the overlay).  A
+        freshness gate rejects keypoints older than ``_POSE_FRAMING_TTL_S`` so a
+        stalled inference thread degrades to raw-bbox framing instead of freezing
+        the crop on a stale torso.
+        """
+        if getattr(self.config.tracking, "aim_body_mode", "torso") != "torso":
+            return None
+        kps = self._pose_keypoints
+        if not kps or track_id is None or self._pose_kp_track_id != track_id:
+            return None
+        if time.monotonic() - self._last_pose_t > _POSE_FRAMING_TTL_S:
+            return None
+        try:
+            from autoptz.engine.pipeline import framing
+
+            return framing.torso_framing_box(kps)
+        except Exception:  # noqa: BLE001
+            return None
 
     def _select_framing_target(self) -> FramingTarget:
         """This tick's shared framing target (used by Center Stage AND physical PTZ)."""

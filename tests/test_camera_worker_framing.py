@@ -46,6 +46,93 @@ def test_framed_output_records_crop_rect_when_center_stage_active() -> None:
     assert 0 < cw <= 1920 and 0 < ch <= 1080
 
 
+def _standing_kps():
+    """COCO-17 keypoints for a standing person: shoulders y=100, hips y=300."""
+    from autoptz.engine.pipeline.framing import (
+        KP_LEFT_HIP,
+        KP_LEFT_SHOULDER,
+        KP_RIGHT_HIP,
+        KP_RIGHT_SHOULDER,
+        Keypoint,
+    )
+
+    kps = [Keypoint(0.0, 0.0, 0.0)] * 17
+    kps[KP_LEFT_SHOULDER] = Keypoint(170.0, 100.0, 0.9)
+    kps[KP_RIGHT_SHOULDER] = Keypoint(230.0, 100.0, 0.9)
+    kps[KP_LEFT_HIP] = Keypoint(180.0, 300.0, 0.9)
+    kps[KP_RIGHT_HIP] = Keypoint(220.0, 300.0, 0.9)
+    return kps
+
+
+def _locked_worker_with_pose(*, aim_body_mode: str = "torso", raised_arm_bbox=None):
+    """A bare worker with track 1 locked, a big 'arms raised' bbox, and fresh
+    cached torso keypoints for that track."""
+    import time
+
+    from autoptz.config.models import CameraConfig, TrackingConfig
+    from autoptz.engine.camera_worker import CameraWorker
+    from autoptz.engine.runtime.messages import BBox, TrackInfo
+
+    cfg = CameraConfig(
+        id="cam-fr",
+        name="Cam FR",
+        tracking=TrackingConfig(aim_body_mode=aim_body_mode),
+    )
+    w = CameraWorker("cam-fr", cfg, on_telemetry=lambda m: None)
+    box = raised_arm_bbox or (60.0, 20.0, 340.0, 640.0)  # arms up: tall + wide
+    w._last_tracks = [TrackInfo(track_id=1, bbox=BBox(x1=box[0], y1=box[1], x2=box[2], y2=box[3]))]
+    w._target_track_id = 1
+    w._pose_keypoints = _standing_kps()
+    w._pose_kp_track_id = 1
+    w._last_pose_t = time.monotonic()
+    return w, box
+
+
+def test_center_stage_torso_box_when_ignore_arms() -> None:
+    """aim_body_mode="torso" (Ignore arms): the Center Stage crop frames the
+    pose-torso-derived box, NOT the raw (arms-inflated) detection bbox."""
+    from autoptz.engine.pipeline.framing import torso_framing_box
+
+    w, raw_box = _locked_worker_with_pose(aim_body_mode="torso")
+    target = w._current_digital_target()
+    assert target is not None
+    assert target != raw_box
+    assert target == torso_framing_box(_standing_kps())
+
+
+def test_center_stage_torso_box_invariant_to_bbox_growth() -> None:
+    """Raising arms grows the YOLO bbox — the framed target must not change."""
+    w1, _ = _locked_worker_with_pose(raised_arm_bbox=(150.0, 60.0, 250.0, 640.0))
+    w2, _ = _locked_worker_with_pose(raised_arm_bbox=(20.0, 5.0, 380.0, 640.0))
+    assert w1._current_digital_target() == w2._current_digital_target()
+
+
+def test_center_stage_raw_bbox_when_full_silhouette() -> None:
+    """aim_body_mode="full_silhouette" (include arms) keeps the raw bbox."""
+    w, raw_box = _locked_worker_with_pose(aim_body_mode="full_silhouette")
+    assert w._current_digital_target() == raw_box
+
+
+def test_center_stage_raw_bbox_without_pose() -> None:
+    w, raw_box = _locked_worker_with_pose()
+    w._pose_keypoints = None
+    assert w._current_digital_target() == raw_box
+
+
+def test_center_stage_raw_bbox_when_pose_is_other_track() -> None:
+    w, raw_box = _locked_worker_with_pose()
+    w._pose_kp_track_id = 2  # keypoints belong to someone else
+    assert w._current_digital_target() == raw_box
+
+
+def test_center_stage_raw_bbox_when_pose_stale() -> None:
+    import time
+
+    w, raw_box = _locked_worker_with_pose()
+    w._last_pose_t = time.monotonic() - 5.0  # inference thread stalled
+    assert w._current_digital_target() == raw_box
+
+
 def test_telemetry_carries_last_digital_crop_rect() -> None:
     from autoptz.engine.runtime.messages import HealthState, TelemetryMsg
 
