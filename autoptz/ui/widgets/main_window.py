@@ -1457,11 +1457,12 @@ class MainWindow(QMainWindow):
         if not self._has_visible_window_frame():
             self.resize(1320, 820)
             self._center_on_primary_screen()
+        # Docks aren't visible until the window shows, so the post-restore
+        # minimum enforcement skipped them — run it (again) now that they are.
+        QTimer.singleShot(0, self._enforce_dock_minimums)
         # Fire the throttled update check once, deferred so first paint isn't blocked.
         if not self._startup_update_checked:
             self._startup_update_checked = True
-            from PySide6.QtCore import QTimer
-
             QTimer.singleShot(900, self._maybe_show_model_setup_on_startup)
             QTimer.singleShot(2500, self._updates.maybe_check_on_startup)
 
