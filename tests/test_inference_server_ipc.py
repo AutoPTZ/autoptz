@@ -395,6 +395,71 @@ def test_remote_pool_falls_back_to_local_detector_once_failed() -> None:
     writer.close()
 
 
+def test_remote_pool_provides_local_pose_estimator(monkeypatch) -> None:  # noqa: ANN001
+    """Model-server mode must not silently kill pose-stable framing.
+
+    Only DETECTION is delegated to the server; pose runs locally in the camera
+    child on the target's crop a few times a second.  Regression this pins:
+    ``RemotePool`` had no ``pose()`` at all, so ``CameraWorker._ensure_pose``
+    caught the AttributeError and permanently cached ``pose = None`` — every
+    pose-derived behaviour (arm-invariant aim, torso framing box, skeleton
+    overlay) silently degraded to the raw arms-inflated detection bbox.
+    """
+    import queue
+
+    import autoptz.engine.pipeline.pose as pose_mod
+
+    built = []
+
+    class _StubPose:
+        available = True
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            built.append(kwargs)
+
+    monkeypatch.setattr(pose_mod, "PoseEstimator", _StubPose)
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 16, 16)
+    client = InferenceClient("camA", queue.Queue(), queue.Queue(), writer)
+    pool = RemotePool(client)
+
+    pose = pool.pose()
+    assert isinstance(pose, _StubPose)
+    assert pool.pose() is pose  # cached — exactly one session per camera child
+    assert len(built) == 1
+    # Children never download models (mirrors the local-detector fallback);
+    # provisioning happens via Manage Models / fetch_models in the parent.
+    assert built[0].get("allow_download") is False
+    writer.close()
+
+
+def test_remote_pool_pose_build_failure_degrades_to_none(monkeypatch) -> None:  # noqa: ANN001
+    """A pose build failure in the child degrades to bbox aim (None), cached —
+    it must not raise into the worker or retry-build on every call."""
+    import queue
+
+    import autoptz.engine.pipeline.pose as pose_mod
+
+    calls = []
+
+    def _boom(**kwargs):  # noqa: ANN003
+        calls.append(True)
+        raise RuntimeError("no pose model")
+
+    monkeypatch.setattr(pose_mod, "PoseEstimator", _boom)
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 16, 16)
+    client = InferenceClient("camA", queue.Queue(), queue.Queue(), writer)
+    pool = RemotePool(client)
+
+    assert pool.pose() is None
+    assert pool.pose() is None
+    assert len(calls) == 1  # failure cached, not retried per tick
+    writer.close()
+
+
 def test_respawned_server_reuses_same_queues_no_client_reconstruction() -> None:
     """(a)+(d) Kill the server-side thread mid-run, "respawn" it (a fresh serve()
     loop reusing the SAME req/resp queues and shm reader dict — exactly what the

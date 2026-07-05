@@ -185,6 +185,8 @@ class RemotePool:
         self._failed = failed
         self._build_local_fn = build_local_fn
         self._local: Any | None = None
+        self._pose: Any | None = None
+        self._pose_built = False
 
     @property
     def detector_ep(self) -> str:
@@ -202,6 +204,30 @@ class RemotePool:
             if self._local is not None:
                 return self._local
         return self._client
+
+    def pose(self) -> Any | None:
+        """Local (per-child) pose estimator — only DETECTION is delegated to the
+        server.  Pose runs on the target's crop a few times a second, so a small
+        per-camera session is cheap; without this the worker's
+        ``_ensure_pose`` → ``pool.pose()`` raised AttributeError and permanently
+        disabled pose — every pose-derived behaviour (arm-invariant aim, torso
+        framing box, skeleton overlay) silently degraded to the raw
+        arms-inflated detection bbox.  Built lazily, cached (including a
+        ``None`` failure).  Never downloads models (children mirror the
+        local-detector fallback; provisioning belongs to the parent/UI)."""
+        if self._pose_built:
+            return self._pose
+        self._pose_built = True
+        try:
+            from autoptz.engine.pipeline.pose import PoseEstimator
+
+            self._pose = PoseEstimator(allow_download=False)
+        except Exception:  # noqa: BLE001 — pose must never break the camera child
+            log.warning(
+                "camera-child pose estimator init failed; bbox aim only.", exc_info=True
+            )
+            self._pose = None
+        return self._pose
 
 
 def serve(
