@@ -207,6 +207,81 @@ class TestTorsoFramingBox:
         assert torso_framing_box(flat) is None
 
 
+def _desk_pose() -> list[Keypoint]:
+    """A webcam/desk subject: head + shoulders confident, hips hidden (below
+    the desk / out of frame).  Nose at (200, 60), shoulders at y=100, 60 px
+    apart — the everyday single-camera case where the old hips-required math
+    silently degraded framing to the raw arms-inflated bbox."""
+    kps = [_LOW] * 17
+    kps[KP_NOSE] = Keypoint(200.0, 60.0, 0.9)
+    kps[KP_LEFT_SHOULDER] = Keypoint(170.0, 100.0, 0.9)
+    kps[KP_RIGHT_SHOULDER] = Keypoint(230.0, 100.0, 0.9)
+    return kps
+
+
+class TestHipsHiddenFallback:
+    """Hips hidden (desk/webcam shot) must still yield an ARM-INVARIANT subject
+    height + framing box from head+shoulders — not None (which made Center
+    Stage and the zoom fall back to the raw bbox, so waving arms moved the
+    shot even with pose healthy)."""
+
+    def test_subject_height_from_head_and_shoulders(self) -> None:
+        # span head→shoulders = 40 → 400; shoulder width = 60 → 246; max wins.
+        h = subject_height_from_pose(_desk_pose())
+        assert h is not None
+        assert math.isclose(h, 40.0 * 10.0)
+
+    def test_shoulder_width_floors_the_estimate(self) -> None:
+        # Head tilted down (nose close to the shoulder line): the span estimate
+        # collapses but the shoulder-width term holds the height steady.
+        kps = _desk_pose()
+        kps[KP_NOSE] = Keypoint(200.0, 96.0, 0.9)  # span = 4 → 40 via span
+        h = subject_height_from_pose(kps)
+        assert h is not None
+        assert math.isclose(h, 60.0 * 4.1)  # width term wins
+
+    def test_height_invariant_to_arm_motion(self) -> None:
+        before = subject_height_from_pose(_desk_pose())
+        moved = _desk_pose()
+        moved[7] = Keypoint(120.0, 40.0, 0.9)  # left elbow up high
+        moved[9] = Keypoint(110.0, 10.0, 0.9)  # left wrist way up
+        moved[10] = Keypoint(290.0, 10.0, 0.9)  # right wrist way up
+        assert subject_height_from_pose(moved) == before
+
+    def test_framing_box_from_head_and_shoulders(self) -> None:
+        box = torso_framing_box(_desk_pose())
+        assert box is not None
+        x1, y1, x2, y2 = box
+        height = 40.0 * 10.0
+        assert math.isclose(y2 - y1, height)
+        assert math.isclose((x1 + x2) * 0.5, 200.0)  # shoulder-centred x
+        # Top sits a crown-pad above the head point so the head stays inside.
+        assert math.isclose(y1, 60.0 - height * 0.10)
+
+    def test_framing_box_invariant_to_arm_motion(self) -> None:
+        """The user-visible bug: waving arms must not grow or shift the crop."""
+        before = torso_framing_box(_desk_pose())
+        moved = _desk_pose()
+        moved[7] = Keypoint(120.0, 40.0, 0.9)
+        moved[9] = Keypoint(110.0, 10.0, 0.9)
+        moved[10] = Keypoint(290.0, 10.0, 0.9)
+        assert torso_framing_box(moved) == before
+
+    def test_still_none_without_a_head_landmark(self) -> None:
+        # Shoulders alone give no vertical span to scale from — keep the bbox
+        # fallback rather than inventing a height.
+        only_shoulders = _pose(ls=(170.0, 100.0, 0.9), rs=(230.0, 100.0, 0.9))
+        assert subject_height_from_pose(only_shoulders) is None
+        assert torso_framing_box(only_shoulders) is None
+
+    def test_hips_present_keeps_the_torso_math(self) -> None:
+        # With hips visible the classic 3.3× shoulder→hip span still rules —
+        # the head fallback must not override the better anchor.
+        kps = list(_STANDING)
+        kps[KP_NOSE] = Keypoint(200.0, 60.0, 0.9)
+        assert subject_height_from_pose(kps) == 200.0 * 3.3
+
+
 class TestBoxSmoother:
     """Time-aware EMA over a framing box: pose estimates arrive in ~0.2 s steps
     with keypoint noise — the smoother turns them into a continuous signal so

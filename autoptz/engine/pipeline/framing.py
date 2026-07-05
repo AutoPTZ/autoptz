@@ -64,6 +64,19 @@ NON_ARM_KEYPOINTS: tuple[int, ...] = (
 # the foot; pad it so the framed height covers the whole person.
 _BODY_EXTENT_PAD = 1.08
 
+# Hips-hidden (desk/webcam) stature estimate, from two ARM-INVARIANT anchors:
+# the vertical head→shoulder span is ≈ 1/10 of standing height, the biacromial
+# (shoulder) width ≈ 1/4.1.  max() of the two is robust to both failure modes —
+# tilting the head shrinks the span but not the width; turning sideways shrinks
+# the width but not the span.  Composition only needs a STABLE ballpark (the
+# framer clamps to min/max crop fractions), so modest anthropometric error is
+# fine; following the raw bbox is not.
+_HEAD_SHOULDER_SPAN_TO_HEIGHT = 10.0
+_SHOULDER_WIDTH_TO_HEIGHT = 4.1
+# Hips-hidden framing box: its top sits this fraction of the height above the
+# head point (crown + hair margin), mirroring where the hips-based box lands.
+_CROWN_PAD_FRAC = 0.10
+
 # Head landmarks, in fallback order (nose is the best single head point).
 KP_HEAD_GROUPS: tuple[tuple[int, ...], ...] = (
     (KP_NOSE,),
@@ -308,22 +321,57 @@ def subject_height_from_pose(
     change the result.  The caller divides this by the frame height for the
     auto-zoom fraction, so only the *ratio* matters.
 
-    Returns ``None`` when shoulders or hips are not both confidently available
-    (the caller then keeps the bbox-height zoom math).
+    When the hips are hidden (desk/webcam shots — the everyday single-camera
+    case) it degrades to a head+shoulders stature estimate instead of ``None``,
+    because ``None`` sends the caller back to the arms-inflated bbox height:
+    exactly the instability this module exists to prevent.  Returns ``None``
+    only when neither anchor pair is available (no shoulders, or shoulders with
+    no head landmark and no hips) — the caller then keeps the bbox-height math.
     """
     shoulders = shoulder_midpoint(kps, min_conf)
     hips = hip_midpoint(kps, min_conf)
-    if shoulders is None or hips is None:
+    if shoulders is None:
         return None
-    span = abs(hips[1] - shoulders[1])
-    if span <= 0.0:
-        return None
-    # Empirical torso→full-height factor; keeps the zoom subject-height in the
-    # same ballpark as the person bbox height the controller was tuned against.
-    height = span * 3.3
+    if hips is not None:
+        span = abs(hips[1] - shoulders[1])
+        if span <= 0.0:
+            return None
+        # Empirical torso→full-height factor; keeps the zoom subject-height in
+        # the same ballpark as the person bbox height the controller was tuned
+        # against.
+        height = span * 3.3
+    else:
+        height = _head_shoulder_height(kps, min_conf)
+        if height is None:
+            return None
     extent = _body_extent(kps, min_conf)
     if extent is not None:
         height = max(height, (extent[1] - extent[0]) * _BODY_EXTENT_PAD)
+    return height
+
+
+def _head_shoulder_height(
+    kps: Keypoints,
+    min_conf: float = DEFAULT_KP_CONF,
+) -> float | None:
+    """Stature estimate from head + shoulders only (hips hidden), or ``None``.
+
+    ``max(head→shoulder span × 10, shoulder width × 4.1)`` — see the constants
+    above for why the max of the two anchors is stable.  The width term needs
+    BOTH shoulders confident; the span term carries a lone shoulder.
+    """
+    shoulders = shoulder_midpoint(kps, min_conf)
+    head = head_point(kps, min_conf)
+    if shoulders is None or head is None:
+        return None
+    span = shoulders[1] - head[1]  # positive: head above the shoulder line
+    if span <= 0.0:
+        return None
+    height = span * _HEAD_SHOULDER_SPAN_TO_HEIGHT
+    both = _confident(kps, (KP_LEFT_SHOULDER, KP_RIGHT_SHOULDER), min_conf)
+    if len(both) == 2:
+        width = abs(both[0].x - both[1].x)
+        height = max(height, width * _SHOULDER_WIDTH_TO_HEIGHT)
     return height
 
 
@@ -357,18 +405,29 @@ def torso_framing_box(
     - centre-y = the body-extent midpoint when the extent drives the height
       (covers head AND feet), else the hips (≈ a standing body's mid-height).
 
-    The width is nominal (the digital crop is sized height-only for a single
-    person; only the centre-x matters).  ``None`` when shoulders or hips are not
-    both confidently present — the caller keeps the raw-bbox behaviour.
+    Hips hidden (desk/webcam shots) degrades to the head+shoulders stature
+    estimate — the box top sits a crown pad above the head point — instead of
+    ``None``, so the crop stays arm-invariant in the everyday single-camera
+    case.  The width is nominal (the digital crop is sized height-only for a
+    single person; only the centre-x matters).  ``None`` when the shoulders —
+    or both the head and the hips — are not confidently present: the caller
+    keeps the raw-bbox behaviour.
     """
     height = subject_height_from_pose(kps, min_conf)
     if height is None:
         return None
     shoulders = shoulder_midpoint(kps, min_conf)
     hips = hip_midpoint(kps, min_conf)
-    if shoulders is None or hips is None:  # pragma: no cover — height implies both
+    if shoulders is None:  # pragma: no cover — height implies shoulders
         return None
-    cx, cy = shoulders[0], hips[1]
+    cx = shoulders[0]
+    if hips is not None:
+        cy = hips[1]
+    else:
+        head = head_point(kps, min_conf)
+        if head is None:  # pragma: no cover — hips-less height implies a head
+            return None
+        cy = (head[1] - height * _CROWN_PAD_FRAC) + height * 0.5
     extent = _body_extent(kps, min_conf)
     if extent is not None and (extent[1] - extent[0]) * _BODY_EXTENT_PAD >= height:
         # The real body extent set the height — centre the box on it so the
