@@ -652,13 +652,23 @@ class ProcessWorkerHandle:
     def refresh_detector_from_pool(self) -> None:
         self._send("refresh_detector_from_pool")
 
-    def reload_inference_models(self) -> None:
-        self._send("reload_inference_models")
+    def reload_inference_models(self, *, include_face: bool = False) -> None:
+        # include_face must reach the child verbatim: the child rebuilds its OWN
+        # local face stack (_wire_identity / _build_face_stack) — it is not the
+        # shared pool's face session, so Supervisor's generic
+        # `reload(include_face=include_face)` call needs this kwarg accepted here,
+        # not silently swallowed by the caller's `except TypeError` fallback.
+        self._send("reload_inference_models", (), {"include_face": bool(include_face)})
 
-    def release_inference_models(self, *, wait: float = 0.0) -> None:
+    def release_inference_models(self, *, wait: float = 0.0, include_face: bool = False) -> None:
         # Best-effort across the process boundary (the on-disk model-cache mutation
         # retry in models.py covers any residual lock); the wait is not honoured.
-        self._send("release_inference_models", (), {"wait": 0.0})
+        # include_face IS honoured — it must reach the child's own
+        # release_inference_models so a face-pack op drops ITS OWN FaceRecognizer
+        # session (see reload_inference_models above for why).
+        self._send(
+            "release_inference_models", (), {"wait": 0.0, "include_face": bool(include_face)}
+        )
 
     # ── child → parent event pump ───────────────────────────────────────────────
 

@@ -148,6 +148,23 @@ _HASH_CHUNK_SIZE = 1024 * 1024
 # the same release/directory as the ``.onnx`` files themselves.
 _CHECKSUM_MANIFEST_NAME = "SHA256SUMS"
 
+# The insightface face pack is fetched by insightface's OWN downloader (see
+# ``ensure_face_pack`` below) — unlike ``_download_prebuilt``, AutoPTZ does not
+# control the bytes on the wire, so there is no ``.part`` + SHA-256 + atomic-
+# rename hook available on the way IN.  ``_face_pack_onnx`` instead strengthens
+# the POST-hoc completeness check: for the packs AutoPTZ ships/documents, only
+# two of the five ``.onnx`` files a full pack contains are ever loaded —
+# ``FaceRecognizer`` restricts insightface to
+# ``allowed_modules=["detection", "recognition"]`` (see identify.py) — named
+# with these prefixes.  Requiring both, not just "any 2 files", means a
+# partial/interrupted extract that left only the (unused) auxiliary landmark/
+# attribute files behind reads as incomplete rather than a false "present". An
+# unrecognized/custom ``AUTOPTZ_FACE_MODEL`` pack keeps the plain "≥2 files"
+# heuristic (its naming convention is unknown), so a legitimate custom override
+# is never wrongly reported as broken.
+_KNOWN_FACE_PACKS = frozenset({"buffalo_l", "buffalo_s"})
+_FACE_PACK_REQUIRED_PREFIXES: tuple[str, ...] = ("det_", "w600k_")
+
 # Export knobs that match what detect.py expects (see module docstring).
 _EXPORT_KWARGS = {"format": "onnx", "nms": False, "dynamic": False, "opset": 12}
 _DISABLE_EXPORT_ENV = "AUTOPTZ_NO_MODEL_EXPORT"
@@ -680,19 +697,40 @@ class ModelManager:
         return self._cache_dir / "insightface" / "models" / self._face_model_name()
 
     @staticmethod
-    def _face_pack_onnx(pack: Path) -> list[Path]:
-        """The pack's ``.onnx`` files, or [] — treated as *complete* only when there
-        are at least two (a lone leftover file from an interrupted download must not
-        read as a usable pack; a real buffalo_l pack ships several)."""
+    def _face_pack_onnx(pack: Path, model: str = "") -> list[Path]:
+        """The pack's ``.onnx`` files, or [] unless the pack looks *complete
+        enough* for AutoPTZ's own use.
+
+        Both checks are necessarily POST-hoc — see the module-level comment
+        above :data:`_KNOWN_FACE_PACKS` for why there is no pre-download hook:
+
+        1. At least two ``.onnx`` files overall (a lone leftover file from an
+           interrupted download must not read as a usable pack).
+        2. For a *known* pack name, at least one file matching each of
+           :data:`_FACE_PACK_REQUIRED_PREFIXES` — the detection/recognition
+           sub-models this app actually loads — so a partial extract that left
+           only the (unused) auxiliary files behind is correctly reported
+           incomplete instead of a false "present".
+        """
         try:
             onnx = sorted(pack.glob("*.onnx")) if pack.is_dir() else []
         except OSError:
             return []
-        return onnx if len(onnx) >= 2 else []
+        if len(onnx) < 2:
+            return []
+        if model in _KNOWN_FACE_PACKS:
+            names = [p.name.lower() for p in onnx]
+            has_required = all(
+                any(name.startswith(prefix) for name in names)
+                for prefix in _FACE_PACK_REQUIRED_PREFIXES
+            )
+            if not has_required:
+                return []
+        return onnx
 
     def _face_status_at(self, location: str, root: Path, model: str) -> dict[str, Any]:
         pack = root / "models" / model
-        onnx = self._face_pack_onnx(pack)
+        onnx = self._face_pack_onnx(pack, model)
         return {
             "model": model,
             "location": location,
@@ -745,6 +783,20 @@ class ModelManager:
         Delegates to :func:`autoptz.engine.pipeline.identify.ensure_face_model`
         (which triggers insightface's own download) with the app-data root, so the
         pack lands where :meth:`remove_face_pack` and the packaging step expect it.
+
+        Unlike :meth:`_download_prebuilt` (AutoPTZ's own ``.part`` + SHA-256 +
+        atomic-rename path for the detector), there is no pre-download hook here:
+        ``ensure_face_model`` hands the entire fetch — download, zip extraction,
+        final placement — to insightface's ``FaceAnalysis.prepare()``, so AutoPTZ
+        never sees the raw bytes or an intermediate temp file to verify/move
+        atomically, and there is no AutoPTZ-published checksum manifest for a
+        third-party model zoo asset we don't host.  Reimplementing that fetch
+        ourselves (to regain a pre-verification hook) would mean tracking
+        insightface's model-zoo URLs/versions independently — a maintenance
+        liability out of proportion to the risk.  :meth:`_face_pack_onnx`
+        instead strengthens the POST-hoc completeness check (see its docstring
+        and the module comment above :data:`_KNOWN_FACE_PACKS`) so an
+        interrupted/partial extract is still caught, just after the fact.
         """
         from autoptz.engine.pipeline.identify import ensure_face_model  # noqa: PLC0415
 

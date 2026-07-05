@@ -879,6 +879,39 @@ class TestFacePack:
         assert st["present"] is False
         assert st["location"] == "missing"
 
+    def test_partial_download_only_auxiliary_files_not_reported_present(self, tmp_path):
+        """A partial extract that left only the pack's (AutoPTZ-unused) auxiliary
+        landmark/attribute files behind must not read as complete either — the
+        old "≥2 onnx files" heuristic alone is fooled by exactly this case, since
+        it never checks WHICH files are present. FaceRecognizer restricts
+        insightface to allowed_modules=["detection", "recognition"], so a real
+        pack is only usable once its det_*/w600k_* files (the ones AutoPTZ
+        actually loads) exist — not just any two of the five shipped files."""
+        cache = tmp_path / "cache"
+        pack = cache / "insightface" / "models" / "buffalo_l"
+        pack.mkdir(parents=True)
+        (pack / "genderage.onnx").write_bytes(b"a" * 1024)
+        (pack / "2d106det.onnx").write_bytes(b"b" * 1024)
+        mgr = ModelManager(cache_dir=cache)
+        st = mgr.face_pack_status()
+        assert st["present"] is False
+        assert st["location"] == "missing"
+
+    def test_unknown_face_model_keeps_legacy_two_file_heuristic(self, tmp_path, monkeypatch):
+        """A custom/unlisted AUTOPTZ_FACE_MODEL pack has an unknown naming
+        convention, so the stricter detection/recognition prefix check must NOT
+        apply to it — otherwise a legitimate custom pack would be wrongly
+        reported as incomplete/broken with no way to fix it from the UI."""
+        monkeypatch.setenv("AUTOPTZ_FACE_MODEL", "custom_pack")
+        cache = tmp_path / "cache"
+        pack = cache / "insightface" / "models" / "custom_pack"
+        pack.mkdir(parents=True)
+        (pack / "modelA.onnx").write_bytes(b"a" * 1024)
+        (pack / "modelB.onnx").write_bytes(b"b" * 1024)
+        mgr = ModelManager(cache_dir=cache)
+        st = mgr.face_pack_status()
+        assert st["present"] is True
+
     def test_remove_prefers_appdata_over_home(self, tmp_path):
         cache = tmp_path / "cache"
         app_pack = self._write_pack(cache / "insightface")

@@ -1324,6 +1324,34 @@ class CameraWorker:
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s set_target_fps failed", self.camera_id, exc_info=True)
 
+    def _release_pool_cache(self) -> None:
+        """Release the INJECTED POOL's own cached detector/pose (getattr-guarded).
+
+        Mirrors ``Supervisor.release_model_sessions``'s generic
+        ``getattr(pool, method, None)`` dispatch for the one shared
+        :class:`InferencePool`.  For a threaded worker this duplicates that
+        release (harmless — ``release_detector``/``release_pose`` just drop a
+        ref and reset a "built" flag) because the supervisor already released
+        the SAME shared pool object directly, in-process, before this ever
+        runs.  For a model-server camera CHILD, though, ``self._pool`` is a
+        :class:`~autoptz.engine.pipeline.inference_server.RemotePool` living
+        only inside THIS process — the supervisor can never reach it — so this
+        is the only call that ever clears its cached pose / local-fallback-
+        detector session.  Without it, a Manage Models mutation never reaches a
+        model-server child, which keeps serving a stale session until the app
+        restarts.
+        """
+        pool = self._pool
+        if pool is None:
+            return
+        for method in ("release_detector", "release_pose"):
+            fn = getattr(pool, method, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:  # noqa: BLE001 — pool release must never break the worker
+                    log.debug("camera_id=%s pool %s failed", self.camera_id, method, exc_info=True)
+
     def _release_inference_models(self, include_face: bool = False) -> None:
         """Drop detector/pose refs *without* rebuilding so their ORT sessions free.
 
@@ -1343,6 +1371,7 @@ class CameraWorker:
         self._pose_kp_track_id = None
         if include_face and self._injected_face_stack is None:
             self._face = None
+        self._release_pool_cache()
 
     def _reload_inference_models(self, include_face: bool = False) -> None:
         """Force-drop + rebuild detector/pose to match the current model cache.
@@ -1357,6 +1386,7 @@ class CameraWorker:
         self._pose_probed = False
         self._pose_keypoints = None
         self._pose_kp_track_id = None
+        self._release_pool_cache()
         if include_face and self._injected_face_stack is None:
             self._face = None
             if self._feature("face_recognition"):

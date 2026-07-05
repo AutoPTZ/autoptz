@@ -272,6 +272,57 @@ class TestHandleProxy:
         assert ("set_features", ({"pose": False},), {}) in q.items
         assert ("set_target", ("track-7",), {}) in q.items
 
+    def test_release_and_reload_forward_include_face(self) -> None:
+        """Supervisor.release_model_sessions/rebuild_model_sessions call
+        worker.release_inference_models(wait=1.0, include_face=...) and
+        worker.reload_inference_models(include_face=...) — a model-server camera
+        child's handle must accept + relay ``include_face`` too, or a face-pack
+        download/remove never reaches the child's own face stack (it silently
+        falls back to the TypeError branch that omits include_face entirely)."""
+        h = self._handle()
+
+        class _FakeQ:
+            def __init__(self) -> None:
+                self.items: list = []
+
+            def put(self, item) -> None:
+                self.items.append(item)
+
+        q = _FakeQ()
+        h._cmd_q = q
+        h._started = True
+
+        h.release_inference_models(wait=1.0, include_face=True)
+        h.reload_inference_models(include_face=True)
+
+        # wait is deliberately NOT honoured across the process boundary (matches
+        # the existing "wait=0.0" behavior) — only include_face is new here.
+        assert ("release_inference_models", (), {"wait": 0.0, "include_face": True}) in q.items
+        assert ("reload_inference_models", (), {"include_face": True}) in q.items
+
+    def test_release_and_reload_default_include_face_false(self) -> None:
+        """A plain detector/pose cache op (the default) must not force
+        include_face=True onto the child — an unrelated op must never disturb
+        the face session."""
+        h = self._handle()
+
+        class _FakeQ:
+            def __init__(self) -> None:
+                self.items: list = []
+
+            def put(self, item) -> None:
+                self.items.append(item)
+
+        q = _FakeQ()
+        h._cmd_q = q
+        h._started = True
+
+        h.release_inference_models()
+        h.reload_inference_models()
+
+        assert ("release_inference_models", (), {"wait": 0.0, "include_face": False}) in q.items
+        assert ("reload_inference_models", (), {"include_face": False}) in q.items
+
     def test_injection_setters_are_noops(self) -> None:
         # The shared pool/service can't cross to a child; these must not raise.
         h = self._handle()
@@ -475,6 +526,35 @@ def test_child_drain_routes_ingest_identity() -> None:
     q.put((_STOP, (), {}))
     _drain_commands(_FakeWorker(), q)
     assert ingested == [rec.id]
+
+
+def test_child_drain_routes_release_and_reload_with_include_face() -> None:
+    """End-to-end: ProcessWorkerHandle enqueues (name, args, kwargs); _drain_commands
+    re-dispatches it verbatim onto the child's real CameraWorker via getattr — so
+    once the handle forwards include_face, the child's own
+    release_inference_models/reload_inference_models receive it too."""
+    import queue as _queue
+
+    from autoptz.engine.process_worker import _STOP, _drain_commands
+
+    calls: list = []
+
+    class _FakeWorker:
+        def release_inference_models(
+            self, *, wait: float = 0.0, include_face: bool = False
+        ) -> None:
+            calls.append(("release", wait, include_face))
+
+        def reload_inference_models(self, *, include_face: bool = False) -> None:
+            calls.append(("reload", include_face))
+
+    q: _queue.Queue = _queue.Queue()
+    q.put(("release_inference_models", (), {"wait": 0.0, "include_face": True}))
+    q.put(("reload_inference_models", (), {"include_face": True}))
+    q.put((_STOP, (), {}))
+    _drain_commands(_FakeWorker(), q)
+    assert ("release", 0.0, True) in calls
+    assert ("reload", True) in calls
 
 
 class TestIdentityRelay:

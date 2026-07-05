@@ -227,6 +227,45 @@ class RemotePool:
             self._pose = None
         return self._pose
 
+    # ── release (mirrors InferencePool's release_detector/release_pose) ─────────
+    #
+    # Supervisor.release_model_sessions/rebuild_model_sessions call these BY NAME
+    # (``getattr(pool, method, None)``) so a Manage Models mutation (detector tier
+    # switch, pose model swap) invalidates any cached session before the on-disk
+    # cache is mutated/rebuilt.  For a model-server camera child this pool is a
+    # per-PROCESS RemotePool the supervisor can never reach directly — the only
+    # thing that ever calls these is this same child's own
+    # ``CameraWorker._release_inference_models``/``_reload_inference_models``
+    # (see camera_worker.py), which mirrors the supervisor's generic dispatch for
+    # whatever pool it was given.  Matching InferencePool's method names/semantics
+    # here is what lets that one generic call site work for both pool types.
+
+    def release_detector(self) -> None:
+        """Drop the cached LOCAL fallback detector so it rebuilds on next use.
+
+        Detection itself is delegated to the shared model-server
+        (``self._client``, an IPC handle owned by the supervisor's server
+        process) — there is no local ORT session here to free in the normal
+        case.  The one piece of local, per-child state this pool DOES cache is
+        the R-3 degraded-mode fallback built by ``build_local_fn`` once the
+        supervisor marks the server ``failed`` (see :meth:`detector`).  Dropping
+        it here means a Manage Models mutation while a camera is running in
+        degraded/local-fallback mode doesn't leave it stuck on a stale local
+        detector session until the app restarts.
+        """
+        self._local = None
+
+    def release_pose(self) -> None:
+        """Drop the cached local pose estimator so :meth:`pose` rebuilds it.
+
+        Without this, swapping the pose model in Manage Models never invalidated
+        a model-server camera child's own cached ``self._pose``/
+        ``self._pose_built`` — every camera process kept the stale pose session
+        until a full app restart.
+        """
+        self._pose = None
+        self._pose_built = False
+
 
 def serve(
     req_q: Any,

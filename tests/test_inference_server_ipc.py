@@ -460,6 +460,84 @@ def test_remote_pool_pose_build_failure_degrades_to_none(monkeypatch) -> None:  
     writer.close()
 
 
+def test_remote_pool_release_pose_forces_rebuild(monkeypatch) -> None:  # noqa: ANN001
+    """RemotePool must expose release_pose(), mirroring InferencePool's contract
+    (drop the cached ref + built flag so the next pose() call rebuilds).
+
+    Without this, Supervisor.release_model_sessions/rebuild_model_sessions's
+    generic getattr(pool, "release_pose", None) has nothing to call on a
+    model-server camera child's pool — swapping the pose model in Manage Models
+    would never invalidate the child's cached self._pose/self._pose_built, so
+    every camera process would keep the stale pose session until a full app
+    restart.
+    """
+    import queue
+
+    import autoptz.engine.pipeline.pose as pose_mod
+
+    built = []
+
+    class _StubPose:
+        available = True
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            built.append(kwargs)
+
+    monkeypatch.setattr(pose_mod, "PoseEstimator", _StubPose)
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 16, 16)
+    client = InferenceClient("camA", queue.Queue(), queue.Queue(), writer)
+    pool = RemotePool(client)
+
+    first = pool.pose()
+    assert pool.pose() is first  # cached before release
+
+    pool.release_pose()
+    second = pool.pose()
+    assert second is not first  # rebuilt after release
+    assert len(built) == 2
+    writer.close()
+
+
+def test_remote_pool_release_detector_clears_stale_local_fallback() -> None:
+    """RemotePool must expose release_detector(), mirroring InferencePool.
+
+    Detection itself is delegated to the server (self._client is just an IPC
+    handle, not an ORT session to free) — but the R-3 degraded-mode LOCAL
+    fallback detector (self._local, built once the server is marked ``failed``)
+    IS local per-child state. Without release_detector() a Manage Models swap
+    while a camera is running in degraded/local-fallback mode would leave it
+    stuck on the stale local detector session forever.
+    """
+    import queue
+    import threading
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 16, 16)
+    client = InferenceClient("camA", queue.Queue(), queue.Queue(), writer)
+    calls = []
+
+    def _build_local():
+        obj = object()
+        calls.append(obj)
+        return obj
+
+    failed = threading.Event()
+    failed.set()  # already in degraded/local-fallback mode
+    pool = RemotePool(client, failed=failed, build_local_fn=_build_local)
+
+    first = pool.detector()
+    assert first is calls[0]
+    assert pool.detector() is first  # cached
+
+    pool.release_detector()
+    second = pool.detector()
+    assert second is not first  # rebuilt after release
+    assert len(calls) == 2
+    writer.close()
+
+
 def test_respawned_server_reuses_same_queues_no_client_reconstruction() -> None:
     """(a)+(d) Kill the server-side thread mid-run, "respawn" it (a fresh serve()
     loop reusing the SAME req/resp queues and shm reader dict — exactly what the
@@ -612,3 +690,49 @@ def test_worker_telemetry_ep_follows_late_server_ep() -> None:
     det.ep = "model-server (CoreML)"  # server finished loading; client label enriched
     w._emit_telemetry(tracks=[], health=HealthState.OK, last_error=None)
     assert seen[-1].ep == "model-server (CoreML)"
+
+
+def test_worker_release_and_reload_propagate_to_pool_release_methods() -> None:
+    """CameraWorker._release_inference_models/_reload_inference_models must also
+    call the INJECTED POOL's own release_detector()/release_pose() (generic
+    getattr, mirroring Supervisor.release_model_sessions' pattern for the shared
+    InferencePool).
+
+    For a threaded worker this duplicates the supervisor's direct release of the
+    ONE shared InferencePool (harmless — release_* is idempotent, and the
+    supervisor already released it in-process before this ever runs). For a
+    model-server camera CHILD, though, the worker's pool is a RemotePool living
+    only inside that child's own process — the supervisor can never reach it
+    directly — so this is the ONLY call that can ever clear its cached
+    pose/local-fallback-detector session. Without it, a Manage Models swap never
+    reaches a model-server child's RemotePool (the bug this test pins).
+    """
+    from autoptz.config.models import CameraConfig
+    from autoptz.engine.camera_worker import CameraWorker
+
+    class _FakePool:
+        def __init__(self) -> None:
+            self.released: list[str] = []
+
+        def release_detector(self) -> None:
+            self.released.append("detector")
+
+        def release_pose(self) -> None:
+            self.released.append("pose")
+
+    w = CameraWorker(
+        "cam-pool-release",
+        CameraConfig(id="cam-pool-release", name="PoolReleaseCam"),
+        on_telemetry=lambda _m: None,
+    )
+    pool = _FakePool()
+    w.set_inference_pool(pool)
+
+    w._release_inference_models()
+    assert "detector" in pool.released
+    assert "pose" in pool.released
+
+    pool.released.clear()
+    w._reload_inference_models()
+    assert "detector" in pool.released
+    assert "pose" in pool.released
