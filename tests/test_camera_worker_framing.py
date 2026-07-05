@@ -92,6 +92,34 @@ def _locked_worker_with_pose(*, aim_body_mode: str = "torso", raised_arm_bbox=No
     return w, box
 
 
+def test_center_stage_composes_the_tracking_dot() -> None:
+    """The crop must FOLLOW the aim dot (the Center Stage contract): moving the
+    dot while the framing box stays put re-composes the crop toward it. The old
+    box-centred placement ignored the dot entirely — 'not trying to keep the
+    tracking dot centered at all'."""
+    import numpy as np
+
+    from autoptz.engine.ptz.digital import DigitalPTZBackend
+
+    w, _ = _locked_worker_with_pose()
+    w._ptz_backend = DigitalPTZBackend()
+    t = w._last_tracks[0]
+    t.is_target = True
+    t.aim_x, t.aim_y = 960.0, 600.0
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    for _ in range(120):
+        w._framed_output(frame)
+    x_before, y_before = w._last_digital_crop_rect[:2]
+
+    # Dot moves up 150 px and right 150 px; box and pose keypoints unchanged.
+    t.aim_x, t.aim_y = 1110.0, 450.0
+    for _ in range(120):
+        w._framed_output(frame)
+    x_after, y_after = w._last_digital_crop_rect[:2]
+    assert 110 < (y_before - y_after) < 190  # crop re-composed up with the dot
+    assert 110 < (x_after - x_before) < 190  # ... and right
+
+
 def test_center_stage_no_crop_when_tracking_disabled() -> None:
     """Center Stage must only crop while tracking is enabled: with the Track
     toggle off there is no framing target, so the crop eases to full frame."""

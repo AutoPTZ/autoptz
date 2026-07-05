@@ -51,13 +51,12 @@ class TestDesiredCrop:
         )
         assert h >= 0.34 * 1080 - 1
 
-    def test_anchor_slides_crop_up_to_keep_the_head_inside(self):
-        # A standing person taller than the max_frac-clamped crop, with a
-        # head-region anchor (face framing → 0.10 down the box). The old
-        # box-centred placement parked the crop on the body and CUT THE HEAD
-        # OFF above — even with plenty of room in the original frame. The
-        # anchor must sit inside the crop's comfort band instead.
-        bbox = (860, 100, 1060, 900)  # 800 px person, head anchor at y=180
+    def test_dot_anchored_placement_composes_the_dot(self):
+        # Dot-anchored composition (the Center Stage contract): the crop is
+        # positioned so the tracking DOT sits at the requested fraction of the
+        # crop — continuously, not only when some band is violated.
+        bbox = (860, 100, 1060, 900)  # sizes the crop
+        dot = (960.0, 260.0)
         x, y, w, h = desired_crop(
             bbox,
             1920,
@@ -67,33 +66,36 @@ class TestDesiredCrop:
             min_frac=0.18,
             max_frac=0.50,
             headroom=0.06,
-            anchor_frac=0.10,
+            anchor_xy=dot,
+            anchor_place=(0.5, 0.26),
         )
-        anchor_y = 100 + 800 * 0.10  # = 180
-        assert y + h * 0.10 - 1 <= anchor_y <= y + h * 0.75 + 1
-        # Specifically: the head region sits at the crop's top band, not cut off.
-        assert abs((y + h * 0.10) - anchor_y) < 2.0
+        assert abs((x + w * 0.5) - dot[0]) < 1.0  # dot horizontally centred
+        assert abs((y + h * 0.26) - dot[1]) < 1.0  # dot at the composed height
 
-    def test_anchor_noop_when_already_comfortable(self):
-        # When the anchor already sits inside the band, the composition must be
-        # byte-identical to the anchor-less call — no regression of the tuned
-        # centring/headroom for the everyday desk shot.
-        bbox = (860, 300, 1060, 700)  # 400 px subject, fits the crop easily
+    def test_dot_anchored_placement_follows_the_dot(self):
+        # The user-visible bug: moving the dot (head) while the box centre stays
+        # put (hips fixed) MUST move the crop 1:1 — the old box-centred placement
+        # ignored it entirely.
+        bbox = (860, 100, 1060, 900)
         kwargs = {
             "out_aspect": ASPECT,
             "fill": 0.65,
             "min_frac": 0.18,
             "max_frac": 0.50,
             "headroom": 0.06,
+            "anchor_place": (0.5, 0.26),
         }
-        assert desired_crop(bbox, 1920, 1080, anchor_frac=0.10, **kwargs) == desired_crop(
-            bbox, 1920, 1080, **kwargs
-        )
+        _, y1, _, _ = desired_crop(bbox, 1920, 1080, anchor_xy=(960.0, 400.0), **kwargs)
+        _, y2, _, _ = desired_crop(bbox, 1920, 1080, anchor_xy=(960.0, 300.0), **kwargs)
+        x1, _, _, _ = desired_crop(bbox, 1920, 1080, anchor_xy=(800.0, 400.0), **kwargs)
+        x2, _, _, _ = desired_crop(bbox, 1920, 1080, anchor_xy=(900.0, 400.0), **kwargs)
+        assert abs((y1 - y2) - 100.0) < 1.0  # crop follows the dot vertically
+        assert abs((x2 - x1) - 100.0) < 1.0  # ... and horizontally
 
-    def test_anchor_slides_crop_down_when_anchor_below_band(self):
-        # Anchor deep below the crop window (clamped small, parked high) → the
-        # crop slides down just enough to bring it into the band.
-        bbox = (860, 100, 1060, 900)
+    def test_dot_anchored_placement_clamped_at_frame_edges(self):
+        # A dot near the frame top can't be composed at 26% of the crop without
+        # leaving the frame — the crop clamps to the edge instead.
+        bbox = (860, 0, 1060, 800)
         x, y, w, h = desired_crop(
             bbox,
             1920,
@@ -101,12 +103,28 @@ class TestDesiredCrop:
             out_aspect=ASPECT,
             fill=0.65,
             min_frac=0.18,
-            max_frac=0.30,  # small crop window
-            headroom=0.0,
-            anchor_frac=0.95,  # near the feet
+            max_frac=0.50,
+            headroom=0.06,
+            anchor_xy=(960.0, 10.0),
+            anchor_place=(0.5, 0.26),
         )
-        anchor_y = 100 + 800 * 0.95  # = 860
-        assert y + h * 0.10 - 1 <= anchor_y <= y + h * 0.75 + 1
+        assert y == 0.0
+        assert x >= 0.0 and x + w <= 1920 + 1
+
+    def test_no_anchor_reproduces_box_centred_placement(self):
+        # Group unions (and any caller without a dot) keep the classic
+        # box-centred + headroom placement.
+        bbox = (860, 300, 1060, 700)
+        kwargs = {
+            "out_aspect": ASPECT,
+            "fill": 0.65,
+            "min_frac": 0.18,
+            "max_frac": 0.50,
+            "headroom": 0.06,
+        }
+        assert desired_crop(bbox, 1920, 1080, **kwargs) == desired_crop(
+            bbox, 1920, 1080, anchor_xy=None, **kwargs
+        )
 
     def test_far_subject_zooms_tighter_with_lower_min_frac(self):
         # The far-subject under-zoom fix: a person far from the camera (small in

@@ -121,6 +121,18 @@ _CENTERSTAGE_FRAMING: dict[str, tuple[float, float, float, float]] = {
     "full_body": (SUBJECT_HEIGHT_TARGETS["full_body"], 0.34, 0.94, 0.14),
 }
 
+# Where the tracking DOT sits in the Center Stage output, per preset — as
+# (x, y) fractions of the crop.  This is the crop's composition contract: the
+# crop is placed every tick so the aim dot rides at this point (horizontally
+# centred; head-centric presets put the dot in the upper third, full-body at
+# the middle).  Single-person targets only — group unions frame the union box.
+_CENTERSTAGE_DOT_PLACEMENT: dict[str, tuple[float, float]] = {
+    "face": (0.5, 0.26),
+    "head_shoulders": (0.5, 0.32),
+    "upper_body": (0.5, 0.38),
+    "full_body": (0.5, 0.50),
+}
+
 _DEFAULT_TELEMETRY_HZ = 10.0
 
 # How long a manual PTZ nudge suspends auto control before auto resumes.
@@ -740,6 +752,9 @@ class CameraWorker:
         # UNION box (which must fit-width); False for a single locked person (which
         # keeps the prior height-only sizing). Read by the Center Stage crop path.
         self._digital_target_is_group: bool = False
+        # Track id of the single framed person from the last
+        # _current_digital_target() — lets the crop read that track's aim dot.
+        self._digital_primary_track_id: int | None = None
         # Center Stage diagnostic log: last logged (target-present, tid) so the
         # line fires only on a state CHANGE, never as a periodic repeat.
         self._cs_last_logged_state: tuple[bool, int | None] | None = None
@@ -4167,20 +4182,21 @@ class CameraWorker:
         if target is not None:
             # fit_width only for a multi-person group UNION (so it auto-widens to
             # keep everyone in shot); a single locked/standalone person stays on
-            # the prior height-only sizing.  A single person also carries the
-            # framing-region ANCHOR (e.g. the head for the face preset) so a
-            # max_frac-clamped crop slides to keep the head in shot instead of
-            # parking on the body centre and cutting it off.
+            # the prior height-only sizing.  A single person is DOT-ANCHORED:
+            # the box only sizes the crop, and the crop is placed so the
+            # tracking dot (the aim point the operator sees) rides at the
+            # preset's composition point — move, and the crop glides to
+            # re-compose you.  Group unions keep the classic box-centred crop.
+            anchor = None
+            if not self._digital_target_is_group:
+                anchor = self._digital_aim_anchor(target, framing)
             x, y, cw, ch = framer.frame_for(
                 target,
                 w,
                 h,
                 fit_width=self._digital_target_is_group,
-                anchor_frac=(
-                    None
-                    if self._digital_target_is_group
-                    else AIM_REGION_FRACTION.get(framing, 0.5)
-                ),
+                anchor_xy=anchor,
+                anchor_place=_CENTERSTAGE_DOT_PLACEMENT.get(framing, (0.5, 0.38)),
             )
         else:
             x, y, cw, ch = framer.full_frame(w, h)
@@ -4252,16 +4268,50 @@ class CameraWorker:
         """
         if not (self._tracking_enabled and self._feature("tracking")):
             self._digital_target_is_group = False
+            self._digital_primary_track_id = None
             return None
         # Delegate to the shared framing-target selector so Center Stage and
         # physical PTZ frame the same subject the same way (see
         # autoptz.engine.framing_target).
         ft = self._select_framing_target()
         self._digital_target_is_group = ft.is_group
+        self._digital_primary_track_id = ft.primary_track_id
         if ft.bbox is None or ft.is_group:
             return ft.bbox
         torso = self._torso_stable_box(ft.primary_track_id)
         return torso if torso is not None else ft.bbox
+
+    def _digital_aim_anchor(
+        self,
+        box: tuple[float, float, float, float],
+        framing: str,
+    ) -> tuple[float, float]:
+        """The tracking DOT the Center Stage crop composes, in frame pixels.
+
+        Prefers the framed track's live aim point (``aim_x/aim_y`` — the same
+        engine-smoothed dot drawn on screen, pose-fused and arm-invariant), so
+        the crop and the visible dot can never disagree.  Falls back to the
+        framing-region point of *box* (its centre-x, ``AIM_REGION_FRACTION``
+        down) when no aim telemetry exists — e.g. the group-single path before
+        a lock.  Runs on the capture thread: reads are plain float attributes
+        (reference-swapped by the inference thread), same contract as the
+        overlay.
+        """
+        tid = self._digital_primary_track_id
+        if tid is not None:
+            for t in self._last_tracks:
+                if (
+                    t.track_id == tid
+                    and not getattr(t, "lost", False)
+                    and t.aim_x is not None
+                    and t.aim_y is not None
+                ):
+                    return (float(t.aim_x), float(t.aim_y))
+        x1, y1, x2, y2 = box
+        return (
+            (x1 + x2) * 0.5,
+            y1 + (y2 - y1) * AIM_REGION_FRACTION.get(framing, 0.5),
+        )
 
     def _note_good_kps(self, kps: list[Any], track_id: int, now: float) -> None:
         """Record a successful, consistency-checked pose estimate (sticky).
