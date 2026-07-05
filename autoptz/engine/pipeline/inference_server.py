@@ -190,7 +190,7 @@ class RemotePool:
 
     @property
     def detector_ep(self) -> str:
-        """"model-server", enriched to "model-server (CoreML)" once the server
+        """ "model-server", enriched to "model-server (CoreML)" once the server
         has reported its detector's real execution provider."""
         return str(getattr(self._client, "ep", "") or "model-server")
 
@@ -223,9 +223,7 @@ class RemotePool:
 
             self._pose = PoseEstimator(allow_download=False)
         except Exception:  # noqa: BLE001 — pose must never break the camera child
-            log.warning(
-                "camera-child pose estimator init failed; bbox aim only.", exc_info=True
-            )
+            log.warning("camera-child pose estimator init failed; bbox aim only.", exc_info=True)
             self._pose = None
         return self._pose
 

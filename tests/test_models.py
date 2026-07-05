@@ -801,9 +801,7 @@ class TestFacePack:
     def test_status_bundled_wins_and_not_removable(self, tmp_path, monkeypatch):
         bundled = tmp_path / "bundled"
         self._write_pack(bundled / "insightface")
-        monkeypatch.setattr(
-            "autoptz.engine.runtime.models.bundled_models_dir", lambda: bundled
-        )
+        monkeypatch.setattr("autoptz.engine.runtime.models.bundled_models_dir", lambda: bundled)
         cache = tmp_path / "cache"
         self._write_pack(cache / "insightface")  # app-data copy shadowed by bundled
         mgr = ModelManager(cache_dir=cache)
@@ -853,9 +851,7 @@ class TestFacePack:
             self._write_pack(Path(root))
             return None
 
-        monkeypatch.setattr(
-            "autoptz.engine.pipeline.identify.ensure_face_model", fake_ensure
-        )
+        monkeypatch.setattr("autoptz.engine.pipeline.identify.ensure_face_model", fake_ensure)
         mgr = ModelManager(cache_dir=cache)
         results = mgr.ensure_face_pack()
         assert seen["root"] == str(cache / "insightface")
@@ -905,9 +901,7 @@ class TestFacePack:
     def test_remove_never_touches_bundled(self, tmp_path, monkeypatch):
         bundled = tmp_path / "bundled"
         bundled_pack = self._write_pack(bundled / "insightface")
-        monkeypatch.setattr(
-            "autoptz.engine.runtime.models.bundled_models_dir", lambda: bundled
-        )
+        monkeypatch.setattr("autoptz.engine.runtime.models.bundled_models_dir", lambda: bundled)
         mgr = ModelManager(cache_dir=tmp_path / "cache")
         assert mgr.face_pack_status()["location"] == "bundled"
         assert mgr.remove_face_pack() == []  # nothing removed

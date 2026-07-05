@@ -334,9 +334,7 @@ class _FacePackRow(QFrame):
         if self.present and size:
             detail_bits.append(f"{size / 1e6:.0f} MB")
         detail_bits.append(str(status.get("path", "")))
-        detail = QLabel(
-            f"<span style='color:{T.CURRENT.subtext}'>{' · '.join(detail_bits)}</span>"
-        )
+        detail = QLabel(f"<span style='color:{T.CURRENT.subtext}'>{' · '.join(detail_bits)}</span>")
         detail.setTextFormat(Qt.TextFormat.RichText)
         detail.setWordWrap(True)
         lay.addWidget(detail, 2, 0, 1, 4)
@@ -627,9 +625,7 @@ class ModelManagerDialog(QDialog):
         external = []
         try:
             external = [
-                row
-                for row in (self._client.optionalComponents() or [])
-                if row.get("key") == "reid"
+                row for row in (self._client.optionalComponents() or []) if row.get("key") == "reid"
             ]
         except Exception:  # noqa: BLE001
             log.debug("optional component inventory failed", exc_info=True)

@@ -29,9 +29,7 @@ class OutputSender:
         self._cond = threading.Condition()
         self._pending: tuple[NDArray[np.uint8], list[Any]] | None = None
         self._stop = False
-        self._thread = threading.Thread(
-            target=self._run, name=f"{name}-output-sender", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name=f"{name}-output-sender", daemon=True)
         self._thread.start()
 
     def submit(self, frame: NDArray[np.uint8], sinks: list[Any]) -> None:

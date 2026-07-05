@@ -181,9 +181,10 @@ def test_stale_keys_pruned_from_persisted_dict(tmp_path: Any, monkeypatch: Any) 
     cleaned = store.get_setting("experimental_features", {})
     assert set(cleaned) == {"AUTOPTZ_PTZ_PUMP", "AUTOPTZ_REID_DEVICE"}
     # The excluded hardware var never reached the environment either.
-    assert "AUTOPTZ_FORCE_EP" not in os.environ or os.environ.get(
-        "AUTOPTZ_FORCE_EP"
-    ) != "CPUExecutionProvider"
+    assert (
+        "AUTOPTZ_FORCE_EP" not in os.environ
+        or os.environ.get("AUTOPTZ_FORCE_EP") != "CPUExecutionProvider"
+    )
 
 
 def test_prune_does_not_rewrite_a_clean_dict(tmp_path: Any, monkeypatch: Any) -> None:

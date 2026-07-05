@@ -601,9 +601,7 @@ def test_worker_telemetry_ep_follows_late_server_ep() -> None:
         ep = "model-server"
 
     seen = []
-    w = CameraWorker(
-        "cam-ep", CameraConfig(id="cam-ep", name="EpCam"), on_telemetry=seen.append
-    )
+    w = CameraWorker("cam-ep", CameraConfig(id="cam-ep", name="EpCam"), on_telemetry=seen.append)
     det = _LateEpDetector()
     w._detect = _DetectStack(detector=det, tracker=None, ep=det.ep)
     w._ep = det.ep

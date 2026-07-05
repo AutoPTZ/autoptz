@@ -1229,7 +1229,6 @@ class CameraTile(QWidget):
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
         return chip_w
 
-
     def _paint_banner(self, p: QPainter, rec: Any, streaming: bool) -> None:
         health = str(getattr(rec, "health", "ok"))
         text = ""

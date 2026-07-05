@@ -43,9 +43,7 @@ def _drive(worker, tracks):
     worker._ptz = _Ctrl()
     worker._tracking_enabled = True
     worker._publish_ptz = lambda ctrl, err, vel, height, *, track_active, now, log_label: (
-        published.append(
-            {"err": err, "height": height, "active": track_active, "label": log_label}
-        )
+        published.append({"err": err, "height": height, "active": track_active, "label": log_label})
     )
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
     worker._drive_ptz_auto(tracks, frame, now=1.0)

@@ -32,11 +32,15 @@ class _FakeMgr:
 
     def ensure_face_pack(self) -> list[dict[str, str]]:
         self.calls.append("ensure_face_pack")
-        return [{"name": "Face pack", "state": "downloaded", "path": "/x", "size": "1", "error": ""}]
+        return [
+            {"name": "Face pack", "state": "downloaded", "path": "/x", "size": "1", "error": ""}
+        ]
 
     def remove_face_pack(self) -> list[dict[str, str]]:
         self.calls.append("remove_face_pack")
-        return [{"name": "w.onnx", "state": "removed", "path": "/x/w.onnx", "size": "1", "error": ""}]
+        return [
+            {"name": "w.onnx", "state": "removed", "path": "/x/w.onnx", "size": "1", "error": ""}
+        ]
 
 
 def _client() -> SimpleNamespace:
@@ -88,14 +92,38 @@ def _dialog(qtapp, monkeypatch, face_status: dict[str, Any]):
     return dlg, mgr
 
 
-_MISSING = {"model": "buffalo_l", "location": "missing", "path": "/c", "present": False,
-            "removable": False, "size_bytes": 0}
-_APPDATA = {"model": "buffalo_l", "location": "app-data", "path": "/c", "present": True,
-            "removable": True, "size_bytes": 300_000_000}
-_BUNDLED = {"model": "buffalo_l", "location": "bundled", "path": "/b", "present": True,
-            "removable": False, "size_bytes": 300_000_000}
-_HOME = {"model": "buffalo_l", "location": "home", "path": "/h", "present": True,
-         "removable": True, "size_bytes": 300_000_000}
+_MISSING = {
+    "model": "buffalo_l",
+    "location": "missing",
+    "path": "/c",
+    "present": False,
+    "removable": False,
+    "size_bytes": 0,
+}
+_APPDATA = {
+    "model": "buffalo_l",
+    "location": "app-data",
+    "path": "/c",
+    "present": True,
+    "removable": True,
+    "size_bytes": 300_000_000,
+}
+_BUNDLED = {
+    "model": "buffalo_l",
+    "location": "bundled",
+    "path": "/b",
+    "present": True,
+    "removable": False,
+    "size_bytes": 300_000_000,
+}
+_HOME = {
+    "model": "buffalo_l",
+    "location": "home",
+    "path": "/h",
+    "present": True,
+    "removable": True,
+    "size_bytes": 300_000_000,
+}
 
 
 def test_face_row_download_enabled_when_missing(qtapp, monkeypatch) -> None:
