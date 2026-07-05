@@ -12,7 +12,7 @@ import logging
 import re
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
@@ -23,7 +23,13 @@ from PySide6.QtWidgets import (
 )
 
 from autoptz.ui import theme as T
-from autoptz.ui.widgets.common import HelpBadge, on_theme_changed, section_label
+from autoptz.ui.widgets.common import (
+    HelpBadge,
+    on_theme_changed,
+    scroll_chrome_width,
+    section_label,
+    visible_min_width,
+)
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +58,7 @@ class CameraInfoPanel(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         root.addWidget(scroll)
+        self._scroll = scroll
 
         body = QWidget()
         self._col = QVBoxLayout(body)
@@ -81,6 +88,35 @@ class CameraInfoPanel(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
         self._timer.start(1000)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        """The real floor: the live (font-metric-driven) group layout minimum.
+
+        No panel-level floor existed here before — Qt's default
+        ``minimumSizeHint()`` for a ``QVBoxLayout → QScrollArea`` tree is a
+        small, content-unrelated constant (``QScrollArea.minimumSizeHint()``
+        ignores its contained widget entirely; see
+        :func:`~autoptz.ui.widgets.common.scroll_content_min_width`), so this
+        panel relied entirely on the test's own hardcoded ``280`` floor — which
+        is a macOS/Linux-tuned guess with no headroom for a wider font
+        (Windows' default UI font measurably renders wider at the same point
+        size). ``self._groups`` starts hidden (no camera selected yet) and a
+        hidden widget's size is normally excluded from its PARENT layout's
+        (``self._col``) minimum — so it's measured directly via
+        :func:`~autoptz.ui.widgets.common.visible_min_width`, plus the margins
+        ``self._col`` wraps it in, so the real requirement counts whether or
+        not a camera happens to be selected yet.
+        """
+        scroll = getattr(self, "_scroll", None)
+        if scroll is None:
+            return super().minimumSizeHint()
+        body = scroll.widget()
+        content_w = visible_min_width(body) if body is not None else 0
+        groups = getattr(self, "_groups", None)
+        if groups is not None and body is not None and body.layout() is not None:
+            margins = body.layout().contentsMargins()
+            content_w = max(content_w, visible_min_width(groups) + margins.left() + margins.right())
+        return QSize(content_w + scroll_chrome_width(scroll), super().minimumSizeHint().height())
 
     def _restyle(self) -> None:
         """Re-apply literal-color styling (construction + theme change).

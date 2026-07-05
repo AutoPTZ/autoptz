@@ -46,6 +46,34 @@ class TestPreflight:
         assert ndi_sim_available() or s.source != "ndi"
         dlg.deleteLater()
 
+    def test_source_group_renamed_test_video(self, qtapp) -> None:
+        """The source group reads "Test video", not "Camera source" (which collided
+        with the main app's Add-Camera source types)."""
+        from PySide6.QtWidgets import QGroupBox
+
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+        titles = [b.title() for b in dlg.findChildren(QGroupBox)]
+        assert "Test video" in titles
+        assert "Camera source" not in titles
+        dlg.deleteLater()
+
+    def test_source_labels_plain_language(self, qtapp) -> None:
+        from autoptz.benchmark.ndi_sim import ndi_sim_available
+        from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
+
+        dlg = MarkPreflightDialog(defaults=MarkSession())
+        clip_text = dlg._clip_radio.text().lower()
+        assert "built-in clip" in clip_text
+        ndi_text = dlg._ndi_radio.text().lower()
+        # The NDI mode creates temporary local senders — not real network cameras.
+        assert "simulated ndi streams" in ndi_text
+        assert "network" not in ndi_text  # must not imply real network sources
+        if not ndi_sim_available():
+            assert "requires cyndilib" in ndi_text
+        dlg.deleteLater()
+
     def test_pose_profile_round_trip(self, qtapp) -> None:
         from autoptz.ui.widgets.dialogs.mark_preflight import MarkPreflightDialog
 

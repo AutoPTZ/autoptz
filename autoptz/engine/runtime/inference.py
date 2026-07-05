@@ -276,9 +276,9 @@ def _provider_options(ep: EP, prefs: HardwarePrefs | None) -> dict[str, object]:
         # from path"). Omit the on-disk cache in that process mode: the child
         # still runs on the ANE/GPU, it just recompiles its MLProgram each start.
         # The shared in-process path keeps the cache.
-        from autoptz.engine.runtime.flags import env_process_per_camera
+        from autoptz.engine.runtime.flags import env_model_server
 
-        if not env_process_per_camera():
+        if not env_model_server():
             coreml_opts["ModelCacheDirectory"] = _coreml_cache_dir()
         return coreml_opts
     if ep is EP.TENSORRT:

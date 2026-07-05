@@ -135,7 +135,7 @@ def face_status() -> dict[str, str]:
             "Face recognition",
             "warn",
             f"insightface installed but model {model!r} was not found at {model_dir} "
-            "· run tools.fetch_models or use a build with the bundled face pack",
+            "· download it in Manage Models (or run tools.fetch_models for offline setup)",
         )
     return _entry("face", "Face recognition", "ok", f"insightface SCRFD + ArcFace · {model_dir}")
 
@@ -208,8 +208,9 @@ def optional_components() -> list[dict[str, str]]:
             "path": str(cache / "reid"),
             "why": "Stable re-acquire after occlusion or crowds.",
             "managed": (
-                "Managed by boxmot/torch upstream caches; AutoPTZ never deletes the "
-                "files but unloads ReID from memory when its feature is off."
+                "Optional install — the OSNet weights are downloaded and cached by the "
+                "upstream boxmot/torch packages, so AutoPTZ never deletes them; it only "
+                "unloads ReID from memory when its feature is off."
             ),
             "network": "May contact package/model hosts when prepared.",
         }
@@ -243,10 +244,9 @@ def optional_components() -> list[dict[str, str]]:
             "path": face_path,
             "why": "Named-person confirmation and face identity matching.",
             "managed": (
-                "Loaded from INSIGHTFACE_HOME, the bundled AutoPTZ model pack, the "
-                "AutoPTZ model cache, or the upstream insightface cache. AutoPTZ "
-                "never deletes these files but unloads face recognition from memory "
-                "when its feature is off."
+                "Download or remove the pack in Manage Models when it lives in the "
+                "AutoPTZ app-data cache; packs bundled inside the app, set via "
+                "INSIGHTFACE_HOME, or in ~/.insightface are never deleted."
             ),
             "network": "tools.fetch_models can prefetch the pack for offline installers.",
         }

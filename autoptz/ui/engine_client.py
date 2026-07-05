@@ -193,6 +193,16 @@ class EngineClient(QObject):
         self._supervisor: Any | None = None
         self._supervisor_factory: Callable[[EngineClient], Any] | None = None
         self._engine_running: bool = False
+        # Whether the engine should auto-start on the next launch — the user's
+        # INTENT, not the momentary running state. Only a deliberate user Stop
+        # clears it; a never-started or failed engine leaves it alone, so a
+        # stopped engine is never "trapped off" across launches. Persisted under
+        # ``engine_autostart``; seeded from that setting at startup.
+        self._autostart_desired: bool = True
+        # Per-camera inference EP from telemetry — aggregated into the stable
+        # Engine label (mixed worker modes report different strings; see
+        # _on_telemetry_main).
+        self._camera_eps: dict[str, str] = {}
         self._engine_ep: str = ""
         self._startup_active: bool = False
         self._startup_phase: str = ""
@@ -373,7 +383,32 @@ class EngineClient(QObject):
         """
         self._supervisor_factory = factory
 
+    @property
+    def autostartDesired(self) -> bool:
+        """Whether the engine should auto-start next launch (the user's intent)."""
+        return self._autostart_desired
+
+    def set_autostart_desired(self, value: bool) -> None:
+        """Seed the auto-start intent (from the persisted setting at startup)."""
+        self._autostart_desired = bool(value)
+
     @Slot()
+    def userStartEngine(self) -> None:
+        """Start the engine from a user control — records intent to auto-start."""
+        self._autostart_desired = True
+        self.startEngine()
+
+    @Slot()
+    def userStopEngine(self) -> None:
+        """Stop the engine from a user control — records intent NOT to auto-start.
+
+        Distinct from :meth:`stopEngine` (called by shutdown, Mark suspend, and
+        restart), which must NOT change the auto-start intent — otherwise a
+        transient stop would trap the engine off on every future launch.
+        """
+        self._autostart_desired = False
+        self.stopEngine()
+
     def startEngine(self) -> None:
         """Create (if needed) and start the supervisor.  Idempotent."""
         if self._engine_running:
@@ -465,6 +500,7 @@ class EngineClient(QObject):
                 log.exception("Supervisor stop failed")
         self._engine_running = False
         self._engine_ep = ""
+        self._camera_eps.clear()
         self._set_startup_progress(active=False, phase="")
         # Detach the (now-stopped) engine's gallery; CRUD reverts to store-only.
         self._identity_service = None
@@ -1122,32 +1158,39 @@ class EngineClient(QObject):
         self.optionalComponentsChanged.emit()
 
     @Slot()
-    def releaseModelSessions(self) -> None:
+    def releaseModelSessions(self, include_face: bool = False) -> None:
         """Free the engine's ORT sessions *before* the model cache is mutated.
 
         The Model Manager calls this prior to a download/removal so onnxruntime
         no longer holds the files open — without it, delete/replace fails on
         Windows (POSIX tolerates unlink-while-open, which is why it only broke
-        there).  Safe no-op when the engine is stopped.
+        there).  Safe no-op when the engine is stopped.  ``include_face`` also
+        releases the shared face session — set only for a face-pack op.
         """
         sup = self._supervisor
         if self._engine_running and sup is not None:
             fn = getattr(sup, "release_model_sessions", None)
             if callable(fn):
                 try:
-                    fn()
+                    fn(include_face=include_face)
+                except TypeError:
+                    fn()  # older supervisor without include_face
                 except Exception:  # noqa: BLE001
                     log.debug("release_model_sessions failed", exc_info=True)
 
-    @Slot()
-    def rebuildModelSessions(self) -> None:
-        """Rebuild live models from the fresh cache after a download/removal."""
+    def rebuildModelSessions(self, include_face: bool = False) -> None:
+        """Rebuild live models from the fresh cache after a download/removal.
+
+        ``include_face`` also rebuilds the face stack — set only for a face-pack op.
+        """
         sup = self._supervisor
         if self._engine_running and sup is not None:
             fn = getattr(sup, "rebuild_model_sessions", None)
             if callable(fn):
                 try:
-                    fn()
+                    fn(include_face=include_face)
+                except TypeError:
+                    fn()  # older supervisor without include_face
                 except Exception:  # noqa: BLE001
                     log.debug("rebuild_model_sessions failed", exc_info=True)
         self.optionalComponentsChanged.emit()
@@ -1750,6 +1793,15 @@ class EngineClient(QObject):
 
         self._identity_model.update_identity(updated)
         self.identitiesChanged.emit()
+        # Engine sync: a rename-to-current-name "touch" relays the record (with
+        # its new enabled state) to process-mode children's galleries.
+        self._enqueue(
+            RenameIdentityCmd(
+                camera_id=None,
+                identity_id=identity_id,
+                new_name=getattr(updated, "name", "") or "",
+            )
+        )
 
     @Slot(str, str)
     def mergeIdentities(self, keep_id: str, drop_id: str) -> None:
@@ -1784,6 +1836,16 @@ class EngineClient(QObject):
         self._identity_model.update_identity(merged)
         self._identity_model.remove_identity(drop_id)
         self.identitiesChanged.emit()
+        # Engine sync (process-mode children hold their own galleries): touch the
+        # kept identity so the merged record is relayed, and drop the folded one.
+        self._enqueue(
+            RenameIdentityCmd(
+                camera_id=None,
+                identity_id=keep_id,
+                new_name=getattr(merged, "name", "") or "",
+            )
+        )
+        self._enqueue(DeleteIdentityCmd(camera_id=None, identity_id=drop_id))
 
     @Slot(str, str)
     def setTargetIdentity(self, camera_id: str, identity_id: str) -> None:
@@ -2197,14 +2259,21 @@ class EngineClient(QObject):
     def _on_telemetry_main(self, msg: TelemetryMsg) -> None:
         """Apply telemetry on the owning (GUI) thread."""
         self._model.update_telemetry(msg)
-        # Surface the actually-active inference EP reported by the worker.  Without
-        # this the status bar / camera-info panel showed a blank EP on every
-        # platform (the value was only ever seeded empty); the user noticed it on
-        # Windows.  Telemetry carries the real provider (CoreML / Dml / CPU / …).
+        # Surface the actually-active inference EP(s). Workers can legitimately
+        # report DIFFERENT strings at the same time — cameras on the shared
+        # detection server say "model-server" while cameras on the threaded path
+        # say the real provider (CoreML / Dml / CPU) — so last-writer-wins made
+        # the Engine label flap between the two at telemetry rate. Aggregate per
+        # camera instead and compose a stable, honest label ("model-server",
+        # "CoreML", or "CoreML + model-server" when mixed).
         ep = (getattr(msg, "ep", "") or "").replace("ExecutionProvider", "")
-        if ep and ep != self._engine_ep:
-            self._engine_ep = ep
-            self.engineStateChanged.emit()
+        if ep:
+            self._camera_eps[str(getattr(msg, "camera_id", "") or "")] = ep
+            live_ids = set(self._model.camera_ids())
+            composed = " + ".join(sorted({v for k, v in self._camera_eps.items() if k in live_ids}))
+            if composed and composed != self._engine_ep:
+                self._engine_ep = composed
+                self.engineStateChanged.emit()
         # Fan out to additive observers (Mark quality / ground-truth accumulators).
         # Guarded so a bad observer never breaks telemetry delivery.
         for observer in self._telemetry_observers:

@@ -18,7 +18,7 @@ from autoptz.engine.process_worker import (
     _STOP,
     ProcessWorkerHandle,
     WorkerSpec,
-    process_per_camera_enabled,
+    model_server_workers_enabled,
 )
 
 
@@ -66,19 +66,27 @@ class TestEnabledFlag:
     def test_disabled_by_default(self, monkeypatch) -> None:
         monkeypatch.delenv("AUTOPTZ_PROCESS_PER_CAMERA", raising=False)
         monkeypatch.delenv("AUTOPTZ_MODEL_SERVER", raising=False)
-        assert process_per_camera_enabled() is False
+        assert model_server_workers_enabled() is False
 
     def test_standalone_process_flag_is_retired(self, monkeypatch) -> None:
         for val in ("1", "true", "on", "YES"):
             monkeypatch.setenv("AUTOPTZ_PROCESS_PER_CAMERA", val)
             monkeypatch.delenv("AUTOPTZ_MODEL_SERVER", raising=False)
-            assert process_per_camera_enabled() is False
+            assert model_server_workers_enabled() is False
 
     def test_model_server_enables_process_workers(self, monkeypatch) -> None:
         for val in ("1", "true", "on", "YES"):
             monkeypatch.delenv("AUTOPTZ_PROCESS_PER_CAMERA", raising=False)
             monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", val)
-            assert process_per_camera_enabled() is True
+            assert model_server_workers_enabled() is True
+
+    def test_no_process_per_camera_alias_left(self) -> None:
+        """The retired process-per-camera naming is fully gone from the codebase."""
+        import autoptz.engine.process_worker as pw
+        import autoptz.engine.runtime.flags as flags
+
+        assert not hasattr(flags, "env_process_per_camera")
+        assert not hasattr(pw, "process_per_camera_enabled")
 
 
 class TestRelayIdentityLockFree:
@@ -111,7 +119,7 @@ class TestRelayIdentityLockFree:
         sentinel = object()
         # Patch at the source module so the local import inside the method picks up the mock.
         with patch(
-            "autoptz.engine.process_worker.process_per_camera_enabled",
+            "autoptz.engine.process_worker.model_server_workers_enabled",
             return_value=False,
         ) as mock_gate:
             sup._relay_identity_to_siblings("cam-source", sentinel)
@@ -263,6 +271,57 @@ class TestHandleProxy:
         assert ("enable_tracking", (True,), {}) in q.items
         assert ("set_features", ({"pose": False},), {}) in q.items
         assert ("set_target", ("track-7",), {}) in q.items
+
+    def test_release_and_reload_forward_include_face(self) -> None:
+        """Supervisor.release_model_sessions/rebuild_model_sessions call
+        worker.release_inference_models(wait=1.0, include_face=...) and
+        worker.reload_inference_models(include_face=...) — a model-server camera
+        child's handle must accept + relay ``include_face`` too, or a face-pack
+        download/remove never reaches the child's own face stack (it silently
+        falls back to the TypeError branch that omits include_face entirely)."""
+        h = self._handle()
+
+        class _FakeQ:
+            def __init__(self) -> None:
+                self.items: list = []
+
+            def put(self, item) -> None:
+                self.items.append(item)
+
+        q = _FakeQ()
+        h._cmd_q = q
+        h._started = True
+
+        h.release_inference_models(wait=1.0, include_face=True)
+        h.reload_inference_models(include_face=True)
+
+        # wait is deliberately NOT honoured across the process boundary (matches
+        # the existing "wait=0.0" behavior) — only include_face is new here.
+        assert ("release_inference_models", (), {"wait": 0.0, "include_face": True}) in q.items
+        assert ("reload_inference_models", (), {"include_face": True}) in q.items
+
+    def test_release_and_reload_default_include_face_false(self) -> None:
+        """A plain detector/pose cache op (the default) must not force
+        include_face=True onto the child — an unrelated op must never disturb
+        the face session."""
+        h = self._handle()
+
+        class _FakeQ:
+            def __init__(self) -> None:
+                self.items: list = []
+
+            def put(self, item) -> None:
+                self.items.append(item)
+
+        q = _FakeQ()
+        h._cmd_q = q
+        h._started = True
+
+        h.release_inference_models()
+        h.reload_inference_models()
+
+        assert ("release_inference_models", (), {"wait": 0.0, "include_face": False}) in q.items
+        assert ("reload_inference_models", (), {"include_face": False}) in q.items
 
     def test_injection_setters_are_noops(self) -> None:
         # The shared pool/service can't cross to a child; these must not raise.
@@ -467,6 +526,35 @@ def test_child_drain_routes_ingest_identity() -> None:
     q.put((_STOP, (), {}))
     _drain_commands(_FakeWorker(), q)
     assert ingested == [rec.id]
+
+
+def test_child_drain_routes_release_and_reload_with_include_face() -> None:
+    """End-to-end: ProcessWorkerHandle enqueues (name, args, kwargs); _drain_commands
+    re-dispatches it verbatim onto the child's real CameraWorker via getattr — so
+    once the handle forwards include_face, the child's own
+    release_inference_models/reload_inference_models receive it too."""
+    import queue as _queue
+
+    from autoptz.engine.process_worker import _STOP, _drain_commands
+
+    calls: list = []
+
+    class _FakeWorker:
+        def release_inference_models(
+            self, *, wait: float = 0.0, include_face: bool = False
+        ) -> None:
+            calls.append(("release", wait, include_face))
+
+        def reload_inference_models(self, *, include_face: bool = False) -> None:
+            calls.append(("reload", include_face))
+
+    q: _queue.Queue = _queue.Queue()
+    q.put(("release_inference_models", (), {"wait": 0.0, "include_face": True}))
+    q.put(("reload_inference_models", (), {"include_face": True}))
+    q.put((_STOP, (), {}))
+    _drain_commands(_FakeWorker(), q)
+    assert ("release", 0.0, True) in calls
+    assert ("reload", True) in calls
 
 
 class TestIdentityRelay:
@@ -692,3 +780,239 @@ class TestEndToEndSpawn:
             _cleanup_shm(shm_name)
 
         assert not proc.is_alive(), "child process did not stop on the _STOP sentinel"
+
+
+# ── model-server children must keep a DB-backed identity gallery ─────────────
+
+
+class TestModelServerChildIdentity:
+    """Model-server-mode children must still get a DB-backed identity gallery.
+
+    PR #139 regression: the model-server branch of ``run_camera_process`` replaced
+    the whole ``_wire_models_and_identity`` call (to skip the local detector), which
+    silently dropped the identity half — every child matched faces against an empty
+    in-memory gallery, so enrolled names never loaded ("Person N" forever), face-DB
+    edits were invisible until restart, and the sibling ``ingest_identity`` relay
+    no-op'd (it targets the injected service).
+    """
+
+    def test_model_server_child_wires_db_backed_identity(self, monkeypatch) -> None:
+        from pathlib import Path
+
+        import autoptz.config.store as store_mod
+        import autoptz.engine.camera_worker as cw_mod
+        import autoptz.engine.identity.service as svc_mod
+        import autoptz.engine.pipeline.inference_server as inf_mod
+        import autoptz.engine.runtime.shm as shm_mod
+        from autoptz.engine import process_worker as pw
+
+        captured: dict[str, object] = {}
+        sentinel_service = object()
+
+        class _FakeStore:
+            def __init__(self, db_path=None, **_kw) -> None:  # noqa: ANN001
+                captured["db_path"] = db_path
+
+        monkeypatch.setattr(store_mod, "ConfigStore", _FakeStore)
+        monkeypatch.setattr(svc_mod, "IdentityService", lambda _s: sentinel_service)
+
+        class _FakeWorker:
+            def __init__(self, *_a, **_k) -> None:
+                pass
+
+            def set_inference_pool(self, pool) -> None:  # noqa: ANN001
+                captured["pool"] = pool
+
+            def set_identity_service(self, svc) -> None:  # noqa: ANN001
+                captured["service"] = svc
+
+            def set_features(self, _f) -> None:  # noqa: ANN001
+                pass
+
+            def start(self) -> None:
+                captured["started"] = True
+
+            def stop(self) -> None:
+                pass
+
+        class _FakeShm:
+            def __init__(self, *_a, **_k) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        monkeypatch.setattr(cw_mod, "CameraWorker", _FakeWorker)
+        monkeypatch.setattr(shm_mod, "ShmWriter", _FakeShm)
+        monkeypatch.setattr(inf_mod, "InferenceClient", lambda *_a, **_k: object())
+        monkeypatch.setattr(inf_mod, "RemotePool", lambda *_a, **_k: object())
+        monkeypatch.setattr(pw, "_install_parent_death_watchdog", lambda *_a, **_k: None)
+        monkeypatch.setattr(pw, "_apply_child_thread_caps", lambda: None)
+        monkeypatch.setattr(pw, "_configure_child_logging", lambda: None)
+
+        class _StopQ:
+            def get(self):  # noqa: ANN201
+                return (_STOP, (), {})
+
+        class _NullQ:
+            def put_nowait(self, _item) -> None:  # noqa: ANN001
+                pass
+
+        spec = WorkerSpec(camera_id="cam-ms", config=_config("cam-ms"), db_path="/tmp/ident.db")
+        pw.run_camera_process(
+            spec,
+            _StopQ(),
+            _NullQ(),
+            _NullQ(),
+            infer_req_q=object(),
+            infer_resp_q=object(),
+        )
+
+        assert captured.get("started") is True, "sanity: the fake worker must have run"
+        assert captured.get("service") is sentinel_service, (
+            "a model-server-mode child must wire a DB-backed IdentityService "
+            "(otherwise faces match an empty in-memory gallery forever)"
+        )
+        assert captured.get("db_path") == Path("/tmp/ident.db")
+
+
+# ── UI identity CRUD must reach process-mode children live ───────────────────
+
+
+class TestIdentityCrudBroadcast:
+    """Rename/label/delete in the UI must converge every child's gallery live.
+
+    The supervisor used to drop RENAME_IDENTITY / DELETE_IDENTITY on the floor
+    ("UI/store concerns"), so process-mode children only learned about face-DB
+    edits on restart.
+    """
+
+    class _FakeHandle:
+        _is_process_worker = True
+
+        registry: dict[str, TestIdentityCrudBroadcast._FakeHandle] = {}
+
+        def __init__(self, camera_id, config, on_telemetry) -> None:  # noqa: ANN001
+            self.camera_id = camera_id
+            self.shm_name = f"cam_{camera_id[:8]}_preview"
+            self.ingested: list = []
+            self.deleted: list = []
+            type(self).registry[camera_id] = self
+
+        def is_alive(self) -> bool:
+            return True
+
+        def set_identity_service(self, _s) -> None: ...  # noqa: ANN001
+        def set_identity_callback(self, _cb) -> None: ...  # noqa: ANN001
+        def set_inference_pool(self, _p) -> None: ...  # noqa: ANN001
+        def set_features(self, _f) -> None: ...  # noqa: ANN001
+
+        def ingest_identity(self, record) -> None:  # noqa: ANN001
+            self.ingested.append(record)
+
+        def delete_identity(self, identity_id: str) -> None:
+            self.deleted.append(identity_id)
+
+        def start(self) -> None: ...
+        def stop(self) -> None: ...
+
+    def _build(self, qapp, monkeypatch):  # noqa: ANN001, ANN201
+        from autoptz.engine.supervisor import Supervisor
+        from autoptz.ui.engine_client import EngineClient
+
+        monkeypatch.setenv("AUTOPTZ_MODEL_SERVER", "1")
+        self._FakeHandle.registry = {}
+        client = EngineClient()
+        cid_a = client.addCamera("usb://0", "CrudA")
+        cid_b = client.addCamera("usb://0", "CrudB")
+        client.drain_commands()
+        sup = Supervisor(client, store=None, worker_factory=self._FakeHandle)
+        sup.start()
+        return sup, cid_a, cid_b
+
+    def test_rename_relays_updated_record_to_all_process_workers(self, qapp, monkeypatch) -> None:  # noqa: ANN001
+        from autoptz.config.models import IdentityRecord
+        from autoptz.engine.runtime.messages import RenameIdentityCmd
+
+        sup, cid_a, cid_b = self._build(qapp, monkeypatch)
+        try:
+            service = sup._ensure_identity_service()
+            rec = IdentityRecord(name="Person 1", enabled=True, labeled=True)
+            service.ingest_record(rec)
+
+            sup._route(RenameIdentityCmd(identity_id=rec.id, new_name="prince"))
+
+            assert service.get(rec.id).name == "prince"
+            for cid in (cid_a, cid_b):
+                handle = self._FakeHandle.registry[cid]
+                assert [r.name for r in handle.ingested] == ["prince"], (
+                    f"worker {cid} must receive the renamed record"
+                )
+        finally:
+            sup.stop()
+
+    def test_delete_broadcasts_to_all_process_workers(self, qapp, monkeypatch) -> None:  # noqa: ANN001
+        from autoptz.config.models import IdentityRecord
+        from autoptz.engine.runtime.messages import DeleteIdentityCmd
+
+        sup, cid_a, cid_b = self._build(qapp, monkeypatch)
+        try:
+            service = sup._ensure_identity_service()
+            rec = IdentityRecord(name="Joey", enabled=True, labeled=True)
+            service.ingest_record(rec)
+
+            sup._route(DeleteIdentityCmd(identity_id=rec.id))
+
+            assert service.get(rec.id) is None
+            for cid in (cid_a, cid_b):
+                handle = self._FakeHandle.registry[cid]
+                assert handle.deleted == [rec.id], (
+                    f"worker {cid} must be told to drop the deleted identity"
+                )
+        finally:
+            sup.stop()
+
+
+class TestDeleteIdentityProxy:
+    def test_delete_identity_enqueues_command(self) -> None:
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        h = ProcessWorkerHandle(cid, _config(cid), on_telemetry=lambda _m: None, db_path="")
+
+        class _FakeQ:
+            def __init__(self) -> None:
+                self.items: list = []
+
+            def put(self, item) -> None:  # noqa: ANN001
+                self.items.append(item)
+
+        q = _FakeQ()
+        h._cmd_q = q
+        h._started = True
+        h.delete_identity("ident-1")
+        assert any(
+            name == "delete_identity" and args == ("ident-1",) for (name, args, _k) in q.items
+        )
+
+    def test_delete_identity_noop_before_start(self) -> None:
+        cid = "proc-" + uuid.uuid4().hex[:8]
+        h = ProcessWorkerHandle(cid, _config(cid), on_telemetry=lambda _m: None, db_path="")
+        h.delete_identity("ident-1")  # no queue yet -> must not raise
+
+
+def test_camera_worker_delete_identity_removes_from_gallery() -> None:
+    from autoptz.config.models import IdentityRecord
+    from autoptz.engine.camera_worker import CameraWorker
+    from autoptz.engine.identity.service import IdentityService
+
+    worker = CameraWorker("cw-del", _config("cw-del"), lambda _m: None)
+    service = IdentityService()
+    worker.set_identity_service(service)
+    rec = IdentityRecord(name="Person 1", enabled=False, labeled=False)
+    service.ingest_record(rec)
+
+    worker.delete_identity(rec.id)
+
+    assert service.get(rec.id) is None
+    # A worker with no injected service must not raise (identity features off).
+    bare = CameraWorker("cw-del2", _config("cw-del2"), lambda _m: None)
+    bare.delete_identity("whatever")

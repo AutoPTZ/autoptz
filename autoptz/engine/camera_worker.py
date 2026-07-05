@@ -39,6 +39,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from autoptz.config.models import AIM_REGION_FRACTION
+from autoptz.engine.framing_target import SUBJECT_HEIGHT_TARGETS
 from autoptz.engine.runtime.messages import (
     BBox,
     FaceBox,
@@ -59,6 +60,7 @@ from autoptz.engine.runtime.messages import (
 
 if TYPE_CHECKING:
     from autoptz.config.models import CameraConfig, IdentityRecord
+    from autoptz.engine.framing_target import FramingTarget
     from autoptz.engine.runtime.shm import ShmWriter
 
 log = logging.getLogger(__name__)
@@ -106,11 +108,29 @@ def _push_due(now: float, last: float, min_period: float) -> bool:
 # framings allow a tighter crop; full_body stays conservative so a whole-person
 # shot doesn't over-zoom. True specks are already dropped upstream by
 # ``tracking.min_detection_size_frac``, so a low floor here is safe.
+# ``fill`` comes from the SHARED composition table (framing_target.
+# SUBJECT_HEIGHT_TARGETS) so the Center Stage crop and the physical auto-zoom
+# compose the SAME shot per preset — the crop is sized so the subject occupies
+# exactly the fraction of it that physical PTZ zooms the subject to occupy of
+# the frame.  (The old per-actuator fills 0.86/0.80/… framed noticeably tighter
+# than physical and were user-reported as "intense".)
 _CENTERSTAGE_FRAMING: dict[str, tuple[float, float, float, float]] = {
-    "face": (0.86, 0.12, 0.50, 0.06),  # tight head/face closeup, zooms in on far faces
-    "head_shoulders": (0.80, 0.16, 0.62, 0.08),  # head + shoulders
-    "upper_body": (0.70, 0.22, 0.74, 0.10),  # head + chest — default midpoint
-    "full_body": (0.58, 0.34, 0.94, 0.14),  # whole person, conservative min zoom
+    "face": (SUBJECT_HEIGHT_TARGETS["face"], 0.18, 0.50, 0.06),
+    "head_shoulders": (SUBJECT_HEIGHT_TARGETS["head_shoulders"], 0.20, 0.62, 0.08),
+    "upper_body": (SUBJECT_HEIGHT_TARGETS["upper_body"], 0.22, 0.74, 0.10),
+    "full_body": (SUBJECT_HEIGHT_TARGETS["full_body"], 0.34, 0.94, 0.14),
+}
+
+# Where the tracking DOT sits in the Center Stage output, per preset — as
+# (x, y) fractions of the crop.  This is the crop's composition contract: the
+# crop is placed every tick so the aim dot rides at this point (horizontally
+# centred; head-centric presets put the dot in the upper third, full-body at
+# the middle).  Single-person targets only — group unions frame the union box.
+_CENTERSTAGE_DOT_PLACEMENT: dict[str, tuple[float, float]] = {
+    "face": (0.5, 0.26),
+    "head_shoulders": (0.5, 0.32),
+    "upper_body": (0.5, 0.38),
+    "full_body": (0.5, 0.50),
 }
 
 _DEFAULT_TELEMETRY_HZ = 10.0
@@ -270,6 +290,29 @@ def _appearance_guarded(method: Callable) -> Callable:
 # stale torso point is fine and far cheaper than per-frame pose inference).
 _POSE_INTERVAL_S = 0.2
 _POSE_TTL_S = 0.12
+# How long cached torso keypoints stay eligible for the Center Stage crop box
+# ("Ignore arms"). Generous vs _POSE_INTERVAL_S (keypoints refresh every 0.2 s
+# while the target is live) but tight enough that a stalled inference thread
+# falls back to raw-bbox framing instead of freezing the crop on a stale torso.
+_POSE_FRAMING_TTL_S = 1.0
+
+# Head-recovery tilt assist: when a head-centric framing preset is active, the
+# pose sees a torso but no head landmark, and the detection box is clipped at
+# the very top of the frame, the head is above the field of view — bias the
+# tilt error up to at least this value so the PTZ recovers the shot instead of
+# parking on the body. The box must start within this fraction of the frame
+# height from the top to count as "clipped".
+_HEAD_RECOVERY_FRAMINGS = frozenset({"face", "head_shoulders", "upper_body"})
+_HEAD_RECOVERY_EY = 0.30
+_HEAD_CLIP_TOP_FRAC = 0.02
+# Hysteresis: once recovery is active, releasing it needs a CLEARLY visible
+# head landmark (base keypoint floor + this margin) and a bigger un-clipped
+# gap, so borderline confidences can't flap the tilt bias on/off.
+_HEAD_RECOVERY_EXIT_CONF_MARGIN = 0.10
+_HEAD_CLIP_EXIT_FRAC = 0.04
+
+# Time constant for smoothing the pose-derived framing box (seconds).
+_TORSO_BOX_TAU_S = 0.35
 
 # How often (seconds) to run OSNet appearance ReID: refresh the target's template
 # while it's visible, or attempt recovery while it's lost.  Throttled because the
@@ -441,6 +484,12 @@ class CameraWorker:
         self._injected_shm = shm_writer
         self._telemetry_period = 1.0 / max(1.0, telemetry_hz)
 
+        # Worker-owned source reconnect state (see ``_maybe_reopen_source``); the
+        # capture loop re-arms these on every delivered frame.
+        self._last_frame_t = 0.0
+        self._reopen_backoff = config.reconnect.backoff_initial_s
+        self._reopen_next_t = 0.0
+
         # ── face / identity wiring ──────────────────────────────────────────────
         # The face stack (insightface + the gallery service) is built lazily in
         # the worker thread unless injected (tests).  When a worker-thread face
@@ -453,6 +502,7 @@ class CameraWorker:
         self._last_face_t = 0.0
         self._last_preview_push_t = 0.0
         self._last_vcam_push_t = 0.0
+        self._last_ndi_push_t = 0.0
         self._last_harvest_t = 0.0
         self._last_crop_t = 0.0
         # Most recent face→identity bindings seen this tick: track_id → (id, conf).
@@ -530,6 +580,27 @@ class CameraWorker:
         self._pose_keypoints: list[Any] | None = None  # last keypoints (reused)
         self._pose_kp_track_id: int | None = None  # track they belong to
         self._last_pose_t = 0.0
+        # Sticky last-GOOD pose cache: unlike _pose_keypoints (cleared by any
+        # single failed/inconsistent estimate — pose quality dips exactly while
+        # the subject gestures), these survive momentary dropouts so framing
+        # holds the torso box instead of snapping to the arms-inflated bbox.
+        # Written only on successful estimates; cleared on target change/loss.
+        self._last_good_kps: list[Any] | None = None
+        self._last_good_kps_track_id: int | None = None
+        self._last_pose_good_t = 0.0
+        # Throttle for the head-out-of-view recovery log line.
+        self._last_head_recover_log_t = 0.0
+        # Head-recovery hysteresis state (see _head_recovery_bias).
+        self._head_recovery_active = False
+        # Last logged 'Ignore arms' framing source ("torso"/"bbox"), change-only.
+        self._framing_source = ""
+        # Continuous smoother for the pose-derived framing box (lazy).  Mutated
+        # from BOTH the capture thread (Center Stage crop, _current_digital_target)
+        # and the inference thread (physical PTZ aim, _track_error; also reset on
+        # target change/loss) — guard every read-modify-write with this lock so a
+        # reset() can never land inside update()'s compound self._t access.
+        self._torso_box_smoother: Any | None = None
+        self._torso_box_smoother_lock = threading.Lock()
         self._last_pose_overlay_t = 0.0
         self._last_pose_overlay_frame_id = 0
         self._last_pose_emitted_frame_id = -1
@@ -679,12 +750,23 @@ class CameraWorker:
         self._source: FrameSource | None = None
         self._shm: ShmWriter | None = None
         self._vcam: Any | None = None  # VirtualCamSink (lazily created when vcam_out enabled)
+        self._ndi: Any | None = None  # NDISendSink (lazily created when ndi_out enabled)
+        self._output_sender: Any | None = None  # OutputSender pump (lazy, off-capture-thread)
         self._digital_framer: Any | None = None  # Center Stage auto-framer (lazy)
         # True when the last _current_digital_target() returned a multi-person group
         # UNION box (which must fit-width); False for a single locked person (which
         # keeps the prior height-only sizing). Read by the Center Stage crop path.
         self._digital_target_is_group: bool = False
-        self._cs_diag_t: float = 0.0  # throttle for the Center Stage diagnostic log
+        # Track id of the single framed person from the last
+        # _current_digital_target() — lets the crop read that track's aim dot.
+        self._digital_primary_track_id: int | None = None
+        # Center Stage diagnostic log: last logged (target-present, tid) so the
+        # line fires only on a state CHANGE, never as a periodic repeat.
+        self._cs_last_logged_state: tuple[bool, int | None] | None = None
+        # Whether the last inference-backpressure window was ≥50% skipped — the
+        # "inference behind" line logs at INFO only on the enter/recover
+        # transitions (steady-state repeats go to DEBUG).
+        self._inference_behind = False
         # The active Center-Stage digital crop (x, y, w, h) in full-frame pixels
         # for the most recently framed output, or None when Center Stage is not
         # driving the painted frame. Stamped onto each TelemetryMsg so the UI can
@@ -819,9 +901,16 @@ class CameraWorker:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=timeout)
         self._thread = None
+        # Stop the output pump BEFORE closing its sinks (it may be mid-send).
+        if self._output_sender is not None:
+            self._output_sender.close()
+            self._output_sender = None
         if self._vcam is not None:
             self._vcam.close()
             self._vcam = None
+        if self._ndi is not None:
+            self._ndi.close()
+            self._ndi = None
 
     @property
     def is_running(self) -> bool:
@@ -953,6 +1042,18 @@ class CameraWorker:
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s ingest_identity failed", self.camera_id, exc_info=True)
 
+    def delete_identity(self, identity_id: str) -> None:
+        """Drop an identity deleted in the UI from this worker's gallery (process mode).
+
+        Best-effort: a missing identity service (identity features off) is a no-op.
+        """
+        service = self._injected_identity_service
+        if service is not None and hasattr(service, "delete"):
+            try:
+                service.delete(identity_id)
+            except Exception:  # noqa: BLE001
+                log.debug("camera_id=%s delete_identity failed", self.camera_id, exc_info=True)
+
     def set_inference_pool(self, pool: Any | None) -> None:
         """Inject the process-wide shared inference pool (heavy models once).
 
@@ -967,19 +1068,20 @@ class CameraWorker:
         with self._cmd_lock:
             self._cmd_queue.append(("refresh_detector", None))
 
-    def reload_inference_models(self) -> None:
+    def reload_inference_models(self, *, include_face: bool = False) -> None:
         """Drop + rebuild detector/pose after the on-disk model cache changed.
 
         Unlike ``refresh_detector_from_pool`` (a hot-swap that keeps the old
         model if the new one isn't ready), this force-drops the worker's model
         references so a *removed* model truly stops drawing boxes, then rebuilds
         from the (now-refreshed) shared pool — yielding the new model, or nothing
-        when the files were deleted.
+        when the files were deleted.  ``include_face`` also cycles the face stack
+        (only for a face-pack op).
         """
         with self._cmd_lock:
-            self._cmd_queue.append(("reload_models", None))
+            self._cmd_queue.append(("reload_models", {"include_face": include_face}))
 
-    def release_inference_models(self, *, wait: float = 0.0) -> None:
+    def release_inference_models(self, *, wait: float = 0.0, include_face: bool = False) -> None:
         """Drop the worker's detector/pose refs so their ORT sessions can be freed.
 
         Unlike :meth:`reload_inference_models` this does *not* rebuild — it only
@@ -987,10 +1089,11 @@ class CameraWorker:
         is mutated (delete/replace fails on Windows while a handle is open).  Pass
         ``wait > 0`` to block until the inference thread confirms the release (or
         the timeout elapses); the caller then GCs and mutates the files.
+        ``include_face`` also drops the face ref (only for a face-pack op).
         """
         done = threading.Event() if wait > 0 else None
         with self._cmd_lock:
-            self._cmd_queue.append(("release_models", done))
+            self._cmd_queue.append(("release_models", {"done": done, "include_face": include_face}))
         if done is not None:
             done.wait(timeout=wait)
 
@@ -1173,11 +1276,20 @@ class CameraWorker:
         elif kind == "refresh_detector":
             self._refresh_detector_from_pool()
         elif kind == "reload_models":
-            self._reload_inference_models()
+            self._reload_inference_models(
+                include_face=bool(payload.get("include_face"))
+                if isinstance(payload, dict)
+                else False
+            )
         elif kind == "release_models":
-            self._release_inference_models()
-            if isinstance(payload, threading.Event):
-                payload.set()
+            done = payload.get("done") if isinstance(payload, dict) else payload
+            self._release_inference_models(
+                include_face=bool(payload.get("include_face"))
+                if isinstance(payload, dict)
+                else False
+            )
+            if isinstance(done, threading.Event):
+                done.set()
         elif kind == "save_ptz_preset":
             self._save_ptz_preset(int(payload))
         elif kind == "recall_ptz_preset":
@@ -1212,12 +1324,43 @@ class CameraWorker:
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s set_target_fps failed", self.camera_id, exc_info=True)
 
-    def _release_inference_models(self) -> None:
+    def _release_pool_cache(self) -> None:
+        """Release the INJECTED POOL's own cached detector/pose (getattr-guarded).
+
+        Mirrors ``Supervisor.release_model_sessions``'s generic
+        ``getattr(pool, method, None)`` dispatch for the one shared
+        :class:`InferencePool`.  For a threaded worker this duplicates that
+        release (harmless — ``release_detector``/``release_pose`` just drop a
+        ref and reset a "built" flag) because the supervisor already released
+        the SAME shared pool object directly, in-process, before this ever
+        runs.  For a model-server camera CHILD, though, ``self._pool`` is a
+        :class:`~autoptz.engine.pipeline.inference_server.RemotePool` living
+        only inside THIS process — the supervisor can never reach it — so this
+        is the only call that ever clears its cached pose / local-fallback-
+        detector session.  Without it, a Manage Models mutation never reaches a
+        model-server child, which keeps serving a stale session until the app
+        restarts.
+        """
+        pool = self._pool
+        if pool is None:
+            return
+        for method in ("release_detector", "release_pose"):
+            fn = getattr(pool, method, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:  # noqa: BLE001 — pool release must never break the worker
+                    log.debug("camera_id=%s pool %s failed", self.camera_id, method, exc_info=True)
+
+    def _release_inference_models(self, include_face: bool = False) -> None:
         """Drop detector/pose refs *without* rebuilding so their ORT sessions free.
 
         Called before the on-disk model cache is mutated: once these refs and the
         shared pool's are gone (and GC runs), Windows can delete/replace the files
         that onnxruntime had open.  The subsequent ``reload_models`` rebuilds.
+        ``include_face`` also drops the face ref (only for a face-pack op, so an
+        unrelated detector/pose op never disturbs the ~1.3 GB face pack).  An
+        INJECTED face stack (tests) is left alone — it isn't ours to drop.
         """
         self._detect = None
         self._unified_pose_active = False
@@ -1226,9 +1369,16 @@ class CameraWorker:
         self._pose_probed = False
         self._pose_keypoints = None
         self._pose_kp_track_id = None
+        if include_face and self._injected_face_stack is None:
+            self._face = None
+        self._release_pool_cache()
 
-    def _reload_inference_models(self) -> None:
-        """Force-drop + rebuild detector/pose to match the current model cache."""
+    def _reload_inference_models(self, include_face: bool = False) -> None:
+        """Force-drop + rebuild detector/pose to match the current model cache.
+
+        ``include_face`` also cycles the face stack — set only for a face-pack op,
+        so a detector/pose cache change never force-reloads the ~1.3 GB face pack.
+        """
         self._detect = None
         self._unified_pose_active = False
         self._last_detections = []
@@ -1236,6 +1386,11 @@ class CameraWorker:
         self._pose_probed = False
         self._pose_keypoints = None
         self._pose_kp_track_id = None
+        self._release_pool_cache()
+        if include_face and self._injected_face_stack is None:
+            self._face = None
+            if self._feature("face_recognition"):
+                self._ensure_face_stack()
         if self._feature("detection"):
             self._ensure_detect_stack()
             model = (
@@ -1591,15 +1746,40 @@ class CameraWorker:
             except Exception:  # noqa: BLE001
                 log.debug("camera_id=%s ptz auto step failed", self.camera_id, exc_info=True)
         else:
-            # No target → drop the velocity estimate so a re-acquire starts clean.
-            self._prev_aim_err = None
-            self._aim_vel = (0.0, 0.0)
-            try:
-                self._publish_ptz(
-                    ctrl, (0.0, 0.0), (0.0, 0.0), 0.0, track_active=False, now=now, log_label=None
-                )
-            except Exception:  # noqa: BLE001
-                log.debug("camera_id=%s ptz auto idle step failed", self.camera_id, exc_info=True)
+            # No locked target. Parity with Center Stage: if group framing is on and
+            # nobody is locked, aim the camera at the confident group. Otherwise drop
+            # the velocity estimate so a re-acquire starts clean and idle the loop.
+            group_box = (
+                self._group_ptz_target(tracks)
+                if frame is not None and self._tracking_enabled and tracking_on
+                else None
+            )
+            if group_box is not None:
+                err, height = self._group_error(group_box, frame)
+                vel = self._estimate_aim_velocity(err, now)
+                try:
+                    self._publish_ptz(
+                        ctrl, err, vel, height, track_active=True, now=now, log_label="group"
+                    )
+                except Exception:  # noqa: BLE001
+                    log.debug("camera_id=%s ptz group step failed", self.camera_id, exc_info=True)
+            else:
+                self._prev_aim_err = None
+                self._aim_vel = (0.0, 0.0)
+                try:
+                    self._publish_ptz(
+                        ctrl,
+                        (0.0, 0.0),
+                        (0.0, 0.0),
+                        0.0,
+                        track_active=False,
+                        now=now,
+                        log_label=None,
+                    )
+                except Exception:  # noqa: BLE001
+                    log.debug(
+                        "camera_id=%s ptz auto idle step failed", self.camera_id, exc_info=True
+                    )
 
     def _update_ego_motion(
         self,
@@ -1722,6 +1902,56 @@ class CameraWorker:
             if t.track_id == self._target_track_id:
                 return t
         return None
+
+    def _ndi_output_name(self) -> str:
+        """The NDI source name for this camera's output feed.
+
+        Uses the configured ``ndi_output_name`` when set, else ``"AutoPTZ <name>"``;
+        NDI advertises it on the network as ``"<HOST> (AutoPTZ <name>)"``.
+        """
+        configured = str(getattr(self.config.ptz, "ndi_output_name", "") or "").strip()
+        if configured:
+            return configured
+        return f"AutoPTZ {self.config.name}".strip()
+
+    def _group_ptz_target(
+        self, tracks: list[TrackInfo]
+    ) -> tuple[float, float, float, float] | None:
+        """The group box physical PTZ should frame when NO person is locked.
+
+        Parity with Center Stage: with group framing on and nobody explicitly
+        locked, aim the camera at the confident group (union, or the single
+        confident person) instead of doing nothing.  Returns None when a person is
+        locked (the normal single-target path owns that), group framing is off, or
+        no one is present — so default behaviour (group framing off) is unchanged.
+        """
+        if self._target_track_id is not None or self._target_identity_id is not None:
+            return None
+        if not bool(getattr(self.config.tracking, "group_framing", False)):
+            return None
+        from autoptz.engine.framing_target import select_framing_target
+
+        ft = select_framing_target(
+            tracks,
+            target_track_id=None,
+            target_identity_id=None,
+            trusted_bbox=None,
+            group_framing=True,
+        )
+        return ft.bbox
+
+    def _group_error(
+        self,
+        box: tuple[float, float, float, float],
+        frame: NDArray[np.uint8],
+    ) -> tuple[tuple[float, float], float]:
+        """Normalized aim error + height for a group box (no pose fusion)."""
+        from autoptz.engine.framing_target import aim_error_for_box
+
+        h, w = frame.shape[:2]
+        framing_name = _resolve_framing(self.config.tracking)
+        aim_fraction = AIM_REGION_FRACTION.get(framing_name, 0.5)
+        return aim_error_for_box(box, int(w), int(h), float(aim_fraction))
 
     def _commit_target_track(
         self,
@@ -2431,11 +2661,12 @@ class CameraWorker:
         grows the YOLO box but does **not** move the aim.  The point is
         EMA-smoothed to suppress keypoint jitter.
 
-        The **arms toggle** (``aim_body_mode``) changes only the *zoom* source,
-        not the aim centre:
+        The **arms toggle** (``aim_body_mode``):
 
-        - ``torso`` (ignore arms) → zoom on the stable shoulder→hip span, so an
-          extended arm does not make the camera zoom out.
+        - ``torso`` (ignore arms) → zoom on the stable shoulder→hip span, AND the
+          box anchor itself is the pose-torso framing box when fresh torso
+          keypoints are cached — so even the ``(1 - pose_conf)`` bbox share of the
+          fused aim is arm-invariant and an extended arm cannot pan the camera.
         - ``full_silhouette`` (include arms) → zoom on the full detection-box
           height, so the shot widens to fit outstretched arms.
 
@@ -2466,8 +2697,18 @@ class CameraWorker:
         framing_name = _resolve_framing(self.config.tracking)
 
         # ── bbox anchor — always available (centre-x, framing fraction down) ─────
-        ax_bbox = (bb.x1 + bb.x2) * 0.5
-        ay_bbox = bb.y1 + (bb.y2 - bb.y1) * AIM_REGION_FRACTION.get(framing_name, 0.5)
+        # "Ignore arms": when fresh torso keypoints are cached for this track,
+        # the anchor comes from the arm-invariant torso framing box (same box
+        # Center Stage crops around) so the raw arms-inflated detection box never
+        # steers the camera — not even through the (1 - pose_conf) blend share.
+        anchor = (bb.x1, bb.y1, bb.x2, bb.y2)
+        if now is not None and ignore_arms:
+            tb = self._torso_stable_box(track.track_id)
+            if tb is not None:
+                anchor = tb
+                bbox_height = (tb[3] - tb[1]) / h
+        ax_bbox = (anchor[0] + anchor[2]) * 0.5
+        ay_bbox = anchor[1] + (anchor[3] - anchor[1]) * AIM_REGION_FRACTION.get(framing_name, 0.5)
         ax, ay = ax_bbox, ay_bbox
         subject_height = bbox_height
         aim_source = "bbox"
@@ -2518,6 +2759,10 @@ class CameraWorker:
 
         ex = (ax - w * 0.5) / (w * 0.5)  # [-1, 1] right-positive
         ey = -((ay - h * 0.5) / (h * 0.5))  # [-1, 1] up-positive
+        if now is not None:
+            # Head cut off above the frame while a head-centric preset is active →
+            # bias the tilt up so the camera recovers the head automatically.
+            ey = self._head_recovery_bias(track, ey, float(h))
         ex = max(-1.0, min(1.0, ex))
         ey = max(-1.0, min(1.0, ey))
         subject_height = max(0.0, min(1.0, subject_height))
@@ -2782,6 +3027,7 @@ class CameraWorker:
                 self._pose_kp_track_id = track.track_id
                 self._last_pose_overlay_t = now
                 self._last_pose_overlay_frame_id = max(1, self._current_inference_frame_id)
+                self._note_good_kps(kps, track.track_id, now)
             else:
                 self._pose_keypoints = None
                 self._pose_kp_track_id = None
@@ -2811,13 +3057,15 @@ class CameraWorker:
     ) -> None:
         """Populate the tracked target's pose keypoints for the overlay + aim.
 
-        Pose is tied strictly to the **tracked subject** (the locked/selected
-        target), so the skeleton and the green aim circle always describe the
-        same one person — a skeleton never appears on someone with no aim circle.
-        Selecting a person (clicking their box) sets the target, which is enough
-        to see their skeleton; no PTZ follow required.  Throttled + cached inside
-        ``_pose_aim`` (``_POSE_INTERVAL_S``), so the later aim call this tick
-        reuses the same keypoints (no double inference).
+        Pose is tied to the **framed subject**: the locked/selected target, or —
+        with group framing on and no lock — the lone confident person (they are
+        the framing subject too, so their torso must be pose-stable exactly like
+        a locked target's).  The skeleton and the green aim circle always
+        describe the same one person — a skeleton never appears on someone with
+        no aim circle.  Selecting a person (clicking their box) sets the target,
+        which is enough to see their skeleton; no PTZ follow required.
+        Throttled + cached inside ``_pose_aim`` (``_POSE_INTERVAL_S``), so the
+        later aim call this tick reuses the same keypoints (no double inference).
         """
         if frame is None or not self._feature("pose"):
             self._pose_keypoints = None
@@ -2827,10 +3075,22 @@ class CameraWorker:
             self._last_pose_emitted_frame_id = -1
             return
         target = self._resolve_target_track(tracks)
+        if target is None and self._target_track_id is None:
+            target = self._group_single_track(tracks)
         if target is None or target.lost:
             self._reset_pose_aim()
             return
         self._pose_aim(target, frame, now, tracks=tracks)  # side effect: fills _pose_keypoints
+
+    def _group_single_track(self, tracks: list[TrackInfo]) -> TrackInfo | None:
+        """The lone confident person when group framing is on and nothing is
+        locked — the framing subject of the group-single path, or None."""
+        if self._target_identity_id is not None:
+            return None
+        if not bool(getattr(self.config.tracking, "group_framing", False)):
+            return None
+        confident = [t for t in tracks if not t.lost and t.bbox is not None]
+        return confident[0] if len(confident) == 1 else None
 
     def _ensure_pose(self) -> Any | None:
         """Return the pose estimator (shared pool's first, else per-worker build).
@@ -2889,6 +3149,16 @@ class CameraWorker:
         """Clear the pose aim smoother + cached keypoints (on target change)."""
         self._pose_keypoints = None
         self._pose_kp_track_id = None
+        self._last_good_kps = None
+        self._last_good_kps_track_id = None
+        self._last_pose_good_t = 0.0
+        self._head_recovery_active = False
+        with self._torso_box_smoother_lock:
+            if self._torso_box_smoother is not None:
+                try:
+                    self._torso_box_smoother.reset()
+                except Exception:  # noqa: BLE001
+                    pass
         self._last_pose_overlay_t = 0.0
         self._last_pose_overlay_frame_id = 0
         self._last_pose_emitted_frame_id = -1
@@ -2938,6 +3208,12 @@ class CameraWorker:
             fps_window_start = time.monotonic()
             fps_window_frames = 0
             self._next_drop_log_t = time.monotonic() + _DROP_LOG_INTERVAL_S
+            # Worker-owned reconnect state: the ingest adapters' own stall/reconnect
+            # loop never runs here (the worker drives _open/_read_frame directly),
+            # so the capture loop must reopen a dead/stalled source itself.
+            self._last_frame_t = time.monotonic()
+            self._reopen_backoff = self.config.reconnect.backoff_initial_s
+            self._reopen_next_t = 0.0
             last_health = HealthState.OK if self._source is not None else HealthState.ERROR
             last_error = None if self._source is not None else "frame source unavailable"
 
@@ -2989,6 +3265,9 @@ class CameraWorker:
                         self._push_frame(frame)
                         fps_window_frames += 1
                         miss_streak = 0  # got a frame → drop back to fast retries
+                        self._last_frame_t = now
+                        self._reopen_backoff = self.config.reconnect.backoff_initial_s
+                        self._reopen_next_t = 0.0
                         last_health = HealthState.OK
                         last_error = None
 
@@ -3031,6 +3310,14 @@ class CameraWorker:
                     # to the cap so a stalled/offline/denied camera doesn't spin the
                     # capture thread.
                     if frame is None:
+                        # A sustained stall (or a source that never opened) gets a
+                        # full close+rebuild+reopen — read() alone can NEVER revive
+                        # a session that stopped delivering (e.g. a Continuity
+                        # Camera that was asleep at service start).
+                        if self._maybe_reopen_source(now):
+                            last_health = HealthState.RECONNECTING
+                            if self._source is None:
+                                last_error = "frame source unavailable; retrying"
                         miss_streak += 1
                         if miss_streak <= _RECONNECT_FAST_RETRIES:
                             wait = 0.01
@@ -3344,6 +3631,74 @@ class CameraWorker:
         # inference thread (see ``_build_inference_stacks``).
         self._build_ptz_stack()
         self._maybe_start_ptz_pump()
+
+    def _maybe_reopen_source(self, now: float) -> bool:
+        """Rebuild + reopen a dead/stalled frame source (worker-owned reconnect).
+
+        The ingest adapters carry their own stall/reconnect loop, but it only runs
+        on the adapter's own thread — which this worker never starts (it drives
+        ``_open``/``_read_frame`` directly to feed detection).  Without this, a
+        source that failed to open at startup, or a session that stopped
+        delivering frames (a Continuity Camera that was asleep at service start),
+        stayed dead until a full service restart.
+
+        Called from the capture loop's no-frame branch.  Attempts fire when the
+        source is missing or ``reconnect.stall_timeout_s`` has passed without a
+        frame, paced by exponential backoff (``backoff_initial_s`` doubling up to
+        ``backoff_max_s``; a delivered frame resets it).  Injected sources
+        (tests / synthetic children) are never rebuilt.  Returns ``True`` when an
+        attempt was made — successful or not — so the loop can surface
+        RECONNECTING health.  Never raises.
+        """
+        if self._injected_source is not None:
+            return False
+        reconnect = self.config.reconnect
+        stalled = (now - self._last_frame_t) >= reconnect.stall_timeout_s
+        if self._source is not None and not stalled:
+            return False
+        if now < self._reopen_next_t:
+            return False
+        self._reopen_next_t = now + self._reopen_backoff
+        self._reopen_backoff = min(self._reopen_backoff * 2.0, reconnect.backoff_max_s)
+
+        old = self._source
+        self._source = None
+        if old is not None:
+            try:
+                old.close()
+            except Exception:  # noqa: BLE001
+                log.debug("camera_id=%s stale source close failed", self.camera_id, exc_info=True)
+            log.warning(
+                "camera_id=%s no frames for %.1fs; reopening frame source",
+                self.camera_id,
+                now - self._last_frame_t,
+            )
+        try:
+            source = build_frame_source(self.camera_id, self.config)
+            if source is not None and source.open():
+                self._source = source
+                # Fresh stall window: give the new session a full stall_timeout
+                # before it can be torn down again.
+                self._last_frame_t = now
+                log.info("camera_id=%s frame source reopened", self.camera_id)
+            else:
+                if source is not None:
+                    try:
+                        source.close()
+                    except Exception:  # noqa: BLE001
+                        log.debug(
+                            "camera_id=%s failed-open source close failed",
+                            self.camera_id,
+                            exc_info=True,
+                        )
+                log.info(
+                    "camera_id=%s frame source reopen failed; next attempt in %.1fs",
+                    self.camera_id,
+                    self._reopen_next_t - now,
+                )
+        except Exception:  # noqa: BLE001 — reopen is best-effort, never kills capture
+            log.warning("camera_id=%s frame source reopen raised", self.camera_id, exc_info=True)
+        return True
 
     def _build_inference_stacks(self) -> None:
         """Build the detect + face stacks ON the inference thread.
@@ -3797,19 +4152,31 @@ class CameraWorker:
         self._last_logged_inf_captured = self._frames_captured
         self._last_logged_inf_inferred = self._frames_inferred
         skipped = cap_delta - inf_delta
-        if cap_delta > 0 and skipped > 0:
-            ratio = skipped / cap_delta
-            if ratio >= 0.5:  # only shout when the inference thread is well behind
-                log.info(
-                    "camera_id=%s inference behind: processed %d/%d frames (%.0f%% skipped) "
-                    "in the last %.0fs; cadence=%s",
-                    self.camera_id,
-                    inf_delta,
-                    cap_delta,
-                    ratio * 100.0,
-                    _DROP_LOG_INTERVAL_S,
-                    self._quality_active,
-                )
+        ratio = (skipped / cap_delta) if cap_delta > 0 else 0.0
+        behind = cap_delta > 0 and ratio >= 0.5
+        if behind:
+            # INFO only when ENTERING the behind state; a steady-state repeat every
+            # window said nothing new and, at 5 cameras, spammed a line every ~2 s.
+            emit = log.info if not self._inference_behind else log.debug
+            emit(
+                "camera_id=%s inference behind: processed %d/%d frames (%.0f%% skipped) "
+                "in the last %.0fs; cadence=%s",
+                self.camera_id,
+                inf_delta,
+                cap_delta,
+                ratio * 100.0,
+                _DROP_LOG_INTERVAL_S,
+                self._quality_active,
+            )
+        elif self._inference_behind and cap_delta > 0:
+            log.info(
+                "camera_id=%s inference caught up: processed %d/%d frames in the last %.0fs",
+                self.camera_id,
+                inf_delta,
+                cap_delta,
+                _DROP_LOG_INTERVAL_S,
+            )
+        self._inference_behind = behind
 
     def _framed_output(self, frame: NDArray[np.uint8]) -> NDArray[np.uint8]:
         """Center Stage: crop+scale the frame to auto-frame the target.
@@ -3851,13 +4218,31 @@ class CameraWorker:
         if target is not None:
             # fit_width only for a multi-person group UNION (so it auto-widens to
             # keep everyone in shot); a single locked/standalone person stays on
-            # the prior height-only sizing.
-            x, y, cw, ch = framer.frame_for(target, w, h, fit_width=self._digital_target_is_group)
+            # the prior height-only sizing.  A single person is DOT-ANCHORED:
+            # the box only sizes the crop, and the crop is placed so the
+            # tracking dot (the aim point the operator sees) rides at the
+            # preset's composition point — move, and the crop glides to
+            # re-compose you.  Group unions keep the classic box-centred crop.
+            anchor = None
+            if not self._digital_target_is_group:
+                anchor = self._digital_aim_anchor(target, framing)
+            x, y, cw, ch = framer.frame_for(
+                target,
+                w,
+                h,
+                fit_width=self._digital_target_is_group,
+                anchor_xy=anchor,
+                anchor_place=_CENTERSTAGE_DOT_PLACEMENT.get(framing, (0.5, 0.38)),
+            )
         else:
             x, y, cw, ch = framer.full_frame(w, h)
-        nowm = time.monotonic()
-        if nowm - self._cs_diag_t > 2.0:
-            self._cs_diag_t = nowm
+        # Log ONLY on a state change (target appears/vanishes or the tid flips):
+        # the previous 2-second repeat of an unchanged state spammed the console
+        # and the in-app Logs panel — 5 cameras produced a line every ~400 ms
+        # while saying nothing new.
+        cs_state = (target is not None, self._target_track_id)
+        if cs_state != self._cs_last_logged_state:
+            self._cs_last_logged_state = cs_state
             log.info(
                 "camera_id=%s center-stage: target=%s crop=%dx%d of %dx%d (tid=%s)",
                 self.camera_id,
@@ -3903,43 +4288,223 @@ class CameraWorker:
         person present the crop frames the UNION of their boxes (auto-widening,
         capped by ``max_frac``). One person, or the toggle off, is the single
         target's box exactly as before.
+
+        **"Ignore arms"** (``aim_body_mode == "torso"``, the default): a single
+        locked person is framed on the pose-torso-derived box instead of the raw
+        detection bbox, so raised/extended arms — which inflate the YOLO box and
+        drag its centre — no longer grow or shift the crop.  Falls back to the
+        raw bbox whenever fresh torso keypoints for *this* track aren't cached
+        (pose off/unavailable/stale), and never applies to a group union.
+
+        **Tracking gate**: Center Stage only crops while tracking is active —
+        the per-camera Track toggle (``_tracking_enabled``) AND the global
+        tracking feature switch, the same pair that gates the physical PTZ
+        drive.  With either off there is no target, so the crop eases back to
+        the full frame.
         """
-        self._digital_target_is_group = False
-        tid = self._target_track_id
-        explicit_lock = tid is not None or self._target_identity_id is not None
+        if not (self._tracking_enabled and self._feature("tracking")):
+            self._digital_target_is_group = False
+            self._digital_primary_track_id = None
+            return None
+        # Delegate to the shared framing-target selector so Center Stage and
+        # physical PTZ frame the same subject the same way (see
+        # autoptz.engine.framing_target).
+        ft = self._select_framing_target()
+        self._digital_target_is_group = ft.is_group
+        self._digital_primary_track_id = ft.primary_track_id
+        if ft.bbox is None or ft.is_group:
+            return ft.bbox
+        torso = self._torso_stable_box(ft.primary_track_id)
+        return torso if torso is not None else ft.bbox
+
+    def _digital_aim_anchor(
+        self,
+        box: tuple[float, float, float, float],
+        framing: str,
+    ) -> tuple[float, float]:
+        """The tracking DOT the Center Stage crop composes, in frame pixels.
+
+        Prefers the framed track's live aim point (``aim_x/aim_y`` — the same
+        engine-smoothed dot drawn on screen, pose-fused and arm-invariant), so
+        the crop and the visible dot can never disagree.  Falls back to the
+        framing-region point of *box* (its centre-x, ``AIM_REGION_FRACTION``
+        down) when no aim telemetry exists — e.g. the group-single path before
+        a lock.  Runs on the capture thread: reads are plain float attributes
+        (reference-swapped by the inference thread), same contract as the
+        overlay.
+        """
+        tid = self._digital_primary_track_id
         if tid is not None:
-            for t in self._last_tracks or ():
+            for t in self._last_tracks:
                 if (
                     t.track_id == tid
                     and not getattr(t, "lost", False)
-                    and getattr(t, "bbox", None) is not None
+                    and t.aim_x is not None
+                    and t.aim_y is not None
                 ):
-                    bb = t.bbox
-                    return (bb.x1, bb.y1, bb.x2, bb.y2)
-        # Fallback: the last trusted target box (set whenever a target is locked,
-        # by track id OR by identity), so the crop holds through brief track gaps.
-        if explicit_lock:
-            tb = getattr(self._target_lock, "trusted_bbox", None)
-            if tb is not None:
-                return (tb.x1, tb.y1, tb.x2, tb.y2)
-            # An explicit lock ALWAYS wins: never fall through to the group union
-            # just because the locked track is momentarily absent (transient — e.g.
-            # the first frame(s) after selecting a target, before trusted_bbox is
-            # populated). Returning None holds the prior crop / full frame instead.
+                    return (float(t.aim_x), float(t.aim_y))
+        x1, y1, x2, y2 = box
+        return (
+            (x1 + x2) * 0.5,
+            y1 + (y2 - y1) * AIM_REGION_FRACTION.get(framing, 0.5),
+        )
+
+    def _note_good_kps(self, kps: list[Any], track_id: int, now: float) -> None:
+        """Record a successful, consistency-checked pose estimate (sticky).
+
+        Framing reads this cache instead of the strict per-tick one so a single
+        bad estimate — common exactly while the subject gestures — cannot snap
+        the shot back to the raw bbox.
+        """
+        self._last_good_kps = kps
+        self._last_good_kps_track_id = track_id
+        self._last_pose_good_t = now
+
+    def _fresh_target_kps(self, track_id: int | None) -> list[Any] | None:
+        """The last GOOD pose keypoints iff they belong to *track_id* and a
+        successful estimate happened within ``_POSE_FRAMING_TTL_S``.
+
+        Safe from any thread: the keypoints are written by the inference thread
+        (reference swap — GIL-atomic, same contract as the overlay).  The
+        freshness gate means a sustained pose outage (dead estimator, stalled
+        inference thread) degrades to raw-bbox behaviour instead of acting on a
+        stale torso — but a momentary dropout does NOT.
+        """
+        kps = self._last_good_kps
+        if not kps or track_id is None or self._last_good_kps_track_id != track_id:
             return None
+        if time.monotonic() - self._last_pose_good_t > _POSE_FRAMING_TTL_S:
+            return None
+        return kps
 
-        # No explicit lock: optionally frame the whole confident group as a union.
-        if bool(getattr(self.config.tracking, "group_framing", False)):
-            boxes = self._confident_person_boxes(self._last_tracks)
-            if not boxes:
-                return None
-            # fit-width only when the union actually spans MORE THAN ONE person; a
-            # single confident person keeps the prior height-only single-target feel.
-            self._digital_target_is_group = len(boxes) > 1
-            from autoptz.engine.pipeline.digital_framer import union_bbox
+    def _torso_stable_box(self, track_id: int | None) -> tuple[float, float, float, float] | None:
+        """The cached pose-torso framing box for *track_id*, or None.
 
-            return union_bbox(boxes)
+        Only in "Ignore arms" mode (``aim_body_mode == "torso"``); falls back to
+        None — raw-bbox framing — whenever fresh owned keypoints are missing.
+        Transitions between the two sources are logged (throttled by
+        change-only) so a field run shows whether pose is actually protecting
+        the framing or it silently degraded to the raw box.
+        """
+        if getattr(self.config.tracking, "aim_body_mode", "torso") != "torso":
+            return None
+        kps = self._fresh_target_kps(track_id)
+        box = None
+        if kps is not None:
+            try:
+                from autoptz.engine.pipeline import framing
+
+                box = framing.torso_framing_box(kps)
+            except Exception:  # noqa: BLE001
+                box = None
+        if box is not None:
+            # Pose estimates arrive as discrete ~0.2 s samples with keypoint
+            # noise — smooth them into a continuous signal so the framing
+            # target (and the PTZ velocity feed-forward differentiating it)
+            # never sees a step.  Shared by BOTH actuators (capture thread via
+            # Center Stage, inference thread via physical PTZ aim) — the lock
+            # makes their sub-steps and _reset_pose_aim's reset() mutually
+            # exclusive instead of racing on the smoother's internal state.
+            with self._torso_box_smoother_lock:
+                if self._torso_box_smoother is None:
+                    from autoptz.engine.pipeline import framing
+
+                    self._torso_box_smoother = framing.BoxSmoother(tau=_TORSO_BOX_TAU_S)
+                smoothed = self._torso_box_smoother.update(box, time.monotonic())
+            self._note_framing_source("torso")
+            return smoothed if smoothed is not None else box
+        self._note_framing_source(
+            "bbox",
+            reason="no fresh pose keypoints" if kps is None else "torso landmarks unavailable",
+        )
         return None
+
+    def _note_framing_source(self, source: str, *, reason: str = "") -> None:
+        """Log 'Ignore arms' framing-source transitions (change-only)."""
+        if source == self._framing_source:
+            return
+        self._framing_source = source
+        if source == "torso":
+            log.info(
+                "camera_id=%s framing source → torso (pose-stable; arms ignored)",
+                self.camera_id,
+            )
+        else:
+            log.info(
+                "camera_id=%s framing source → bbox (%s) — arm motion CAN move "
+                "the shot until pose recovers",
+                self.camera_id,
+                reason or "pose unavailable",
+            )
+
+    def _head_recovery_bias(self, track: TrackInfo, ey: float, frame_h: float) -> float:
+        """Tilt-up bias when the head is out of view above the frame.
+
+        The smart "we're accidentally framing the body" check: the framing
+        preset expects the head (face / head_shoulders / upper_body), the pose
+        sees a torso but NO head landmark, and the detection box is clipped at
+        the very top of the frame — i.e. the head is above the field of view.
+        Returns *ey* raised to at least ``_HEAD_RECOVERY_EY`` so the controller
+        tilts up until the head re-enters the frame.  Occlusions mid-frame
+        (head behind an object, box not top-clipped) never trigger it, so it
+        cannot oscillate against a blocked view.  HYSTERESIS: once active,
+        releasing needs a *clearly* visible head landmark (confidence floor +
+        ``_HEAD_RECOVERY_EXIT_CONF_MARGIN``) and a wider un-clipped gap — a
+        borderline nose flickering around the floor can't flap the bias on/off
+        (which read as tilt jitter).
+        """
+        active = self._head_recovery_active
+        framing_name = _resolve_framing(self.config.tracking)
+        if framing_name not in _HEAD_RECOVERY_FRAMINGS:
+            self._head_recovery_active = False
+            return ey
+        clip_frac = _HEAD_CLIP_EXIT_FRAC if active else _HEAD_CLIP_TOP_FRAC
+        if float(track.bbox.y1) > frame_h * clip_frac:
+            self._head_recovery_active = False
+            return ey
+        kps = self._fresh_target_kps(track.track_id)
+        if kps is None:
+            self._head_recovery_active = False
+            return ey
+        try:
+            from autoptz.engine.pipeline import framing
+
+            head_conf = framing.DEFAULT_KP_CONF + (
+                _HEAD_RECOVERY_EXIT_CONF_MARGIN if active else 0.0
+            )
+            if framing.head_point(kps, min_conf=head_conf) is not None:
+                self._head_recovery_active = False
+                return ey  # head is visible — normal aim math owns the tilt
+            if framing.shoulder_midpoint(kps) is None and framing.hip_midpoint(kps) is None:
+                self._head_recovery_active = False
+                return ey  # no body evidence either — don't invent a direction
+        except Exception:  # noqa: BLE001
+            return ey
+        self._head_recovery_active = True
+        now = time.monotonic()
+        if now - self._last_head_recover_log_t >= _TICK_WARN_INTERVAL_S:
+            self._last_head_recover_log_t = now
+            log.info(
+                "camera_id=%s head out of view above frame (torso visible, no head "
+                "landmark, box top-clipped) — biasing tilt up to recover the %s shot",
+                self.camera_id,
+                framing_name,
+            )
+        return max(ey, _HEAD_RECOVERY_EY)
+
+    def _select_framing_target(self) -> FramingTarget:
+        """This tick's shared framing target (used by Center Stage AND physical PTZ)."""
+        from autoptz.engine.framing_target import select_framing_target
+
+        tb = getattr(self._target_lock, "trusted_bbox", None)
+        trusted = (tb.x1, tb.y1, tb.x2, tb.y2) if tb is not None else None
+        return select_framing_target(
+            self._last_tracks,
+            target_track_id=self._target_track_id,
+            target_identity_id=self._target_identity_id,
+            trusted_bbox=trusted,
+            group_framing=bool(getattr(self.config.tracking, "group_framing", False)),
+        )
 
     @staticmethod
     def _confident_person_boxes(
@@ -3975,24 +4540,31 @@ class CameraWorker:
             return
         now = time.monotonic()
         vcam_on = bool(getattr(self.config.ptz, "vcam_out", False))
-        # Two INDEPENDENT rate gates:
+        ndi_on = bool(getattr(self.config.ptz, "ndi_out", False))
+        # Independent rate gates:
         #  • preview (~20 fps) — the SHM monitoring tile only; capping it skips the
         #    per-frame resize/copy on faster sources (overlays come from telemetry).
-        #  • vcam (~30 fps) — a real product feed, so it is NOT throttled to the
-        #    preview rate; it sends up to 30 fps when ``vcam_out`` is on.
+        #  • vcam / ndi (~30 fps) — real product feeds, so NOT throttled to the
+        #    preview rate; each sends up to 30 fps when its toggle is on.
         preview_due = _push_due(now, self._last_preview_push_t, _PREVIEW_PUSH_MIN_PERIOD_S)
         vcam_due = vcam_on and _push_due(now, self._last_vcam_push_t, _VCAM_PUSH_MIN_PERIOD_S)
+        ndi_due = ndi_on and _push_due(now, self._last_ndi_push_t, _VCAM_PUSH_MIN_PERIOD_S)
 
-        # Release the device promptly once output is turned off (so it disconnects
-        # from Zoom/OBS instead of lingering on a frozen frame) regardless of gates.
+        # Release each output promptly once turned off (so it disconnects from
+        # Zoom/OBS / NDI receivers instead of lingering on a frozen frame).
         if not vcam_on and self._vcam is not None:
             try:
                 self._vcam.close()
             finally:
                 self._vcam = None
+        if not ndi_on and self._ndi is not None:
+            try:
+                self._ndi.close()
+            finally:
+                self._ndi = None
 
-        # CPU savings preserved: if neither sink is due this tick, do no framing.
-        if not preview_due and not vcam_due:
+        # CPU savings preserved: if no sink is due this tick, do no framing.
+        if not preview_due and not vcam_due and not ndi_due:
             return
 
         try:
@@ -4001,6 +4573,11 @@ class CameraWorker:
             if preview_due:
                 self._last_preview_push_t = now
                 self._shm.push(self._fit_frame(framed))
+            # Output sinks (vcam / NDI) send on their own pump thread: the
+            # BGR→RGBA conversion + SDK hand-off cost milliseconds per frame,
+            # and paying them here — on the CAPTURE thread — surfaced as random
+            # frame drops under load. The capture thread only parks the frame.
+            sinks: list[Any] = []
             if vcam_due:
                 self._last_vcam_push_t = now
                 ow = int(getattr(self.config.ptz, "digital_output_w", 1280))
@@ -4009,7 +4586,26 @@ class CameraWorker:
                     from autoptz.engine.pipeline.vcam import VirtualCamSink
 
                     self._vcam = VirtualCamSink(ow, oh)
-                self._vcam.send_bgr(framed)
+                sinks.append(self._vcam)
+            if ndi_due:
+                self._last_ndi_push_t = now
+                ow = int(getattr(self.config.ptz, "digital_output_w", 1280))
+                oh = int(getattr(self.config.ptz, "digital_output_h", 720))
+                if self._ndi is None:
+                    from autoptz.engine.pipeline.ndi_send import NDISendSink
+
+                    self._ndi = NDISendSink(ow, oh, self._ndi_output_name())
+                sinks.append(self._ndi)
+            if sinks:
+                if self._output_sender is None:
+                    from autoptz.engine.pipeline.output_sender import OutputSender
+
+                    self._output_sender = OutputSender(name=self.camera_id[:8])
+                # The passthrough path hands out the adapter's own buffer, which
+                # the next capture tick may overwrite — copy it for the pump.
+                # The Center Stage crop path returns a fresh array (no copy).
+                safe = framed if framed is not frame else np.ascontiguousarray(frame).copy()
+                self._output_sender.submit(safe, sinks)
         except Exception:  # noqa: BLE001
             # Was DEBUG-only: a broken preview pipe (shm/vcam) left the operator
             # staring at a frozen preview with an empty log.  Surface it as a
@@ -4237,6 +4833,13 @@ class CameraWorker:
             # Still keep identity-targeting honest even without the face stack:
             # if an explicit identity target can't be resolved we leave the
             # current track lock untouched (manual box-tracking still works).
+            return
+        # Nobody detected → a face couldn't bind to any track (matching, targeting
+        # and harvest all key off a containing track), so skip the whole pass —
+        # the SCRFD full-frame scan is pure CPU burn on an empty scene. The timer
+        # is NOT stamped, so the pass runs immediately once someone appears.
+        if not tracks and not self._pending_enroll:
+            self._clear_face_overlay()
             return
         self._last_face_t = now
 
@@ -5374,6 +5977,13 @@ class CameraWorker:
         # a streaming-but-box-blind camera has no tracks.
         if last_error is None and self._infer_last_error is not None:
             last_error = self._infer_last_error
+        # The model-server client's ``ep`` enriches itself ("model-server (CoreML)")
+        # only after the server's BACKGROUND model load reports in — re-read the live
+        # detector so the label follows, instead of freezing the build-time snapshot.
+        if self._detect is not None:
+            live_ep = str(getattr(self._detect.detector, "ep", "") or "")
+            if live_ep:
+                self._ep = live_ep
         # Phase 0a — per-source frame-delivery telemetry (NDI-only real values;
         # other sources return {} and fall back to the worker's own counters).
         dm = self._delivery_metrics()

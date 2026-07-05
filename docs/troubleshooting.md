@@ -26,16 +26,15 @@ falls back to a built-in IoU tracker).
 
 Face recognition is optional, but when enabled the Services panel should show
 where the InsightFace `buffalo_l` pack is being loaded from. If it reports a
-missing model path, run:
+missing model path, open **Engine → Models…** and click **Download** on the
+"Face recognition pack" row (or, headlessly / for offline installers, run
+`python -m tools.fetch_models`).
 
-```bash
-python -m tools.fetch_models
-```
-
-Packaged builds should bundle the pack under `autoptz/models/insightface`.
-Source/dev runs can also set `INSIGHTFACE_HOME` to a directory containing
-`models/buffalo_l/*.onnx`. Manual click-to-track still works without face
-recognition.
+Packaged builds bundle the pack under `autoptz/models/insightface`. Source/dev
+runs can also set `INSIGHTFACE_HOME` to a directory containing
+`models/buffalo_l/*.onnx`. The Model Manager can **remove** the pack only when it
+lives in the AutoPTZ app-data cache — a bundled or `~/.insightface` copy is never
+deleted. Manual click-to-track still works without face recognition.
 
 ## Running on CPU when a GPU is present
 

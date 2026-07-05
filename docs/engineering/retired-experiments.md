@@ -207,7 +207,20 @@ Only promote after it passes the same release gates as production: 6 and 8 fake
 NDI streams, CPU/RAM stability, clean shutdown, and no app-induced capture drops.
 
 > **Reconsidered 2026-07-03:** the curated Experimental Features dialog is
-> mounted again (Engine → Experimental Features…), by explicit user decision for
+> mounted again (Help → Experimental Features…), by explicit user decision for
 > the 2.2.0 release. The 2026-06-29 rationale above still governs the *shape* of
 > the surface — curated registry entries with honest descriptions and restart
 > semantics, never a generic dumping ground for research switches.
+
+## `AUTOPTZ_PROCESS_PER_CAMERA` alias removal (2026-07)
+
+The retired standalone model-per-child experiment left a compatibility alias
+behind: `flags.env_process_per_camera()` and
+`process_worker.process_per_camera_enabled()` both just forwarded to
+`env_model_server()`. That naming leaked the dead concept into logs and IDE
+tooltips (a user saw a model-server fallback message mention a "process-per-camera
+/ model-per-child process path"). The alias is deleted; the one live gate is
+`env_model_server()` / `process_worker.model_server_workers_enabled()`, and the
+fallback log messages now use plain language ("no shared-detection-server slot for
+this camera — running the built-in threaded pipeline; restart to attach"). The
+`AUTOPTZ_PROCESS_PER_CAMERA` env var remains ignored.

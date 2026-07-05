@@ -227,6 +227,27 @@ def _build_main_window(
     )
 
 
+def _engine_autostart_to_persist(window: Any, client: Any) -> bool:
+    """The auto-start intent to persist for next launch.
+
+    The user's intent (``desired_engine_running()`` / ``client.autostartDesired``),
+    NOT the momentary ``engineRunning``: only a deliberate user Stop records "off",
+    so a stopped/failed engine — or one suspended for a Mark run — never traps
+    auto-start off. Windows/clients without the accessor (older builds / test
+    fakes) fall back to a safe default of ON.
+    """
+    probe = getattr(window, "desired_engine_running", None)
+    if callable(probe):
+        try:
+            return bool(probe())
+        except Exception:  # noqa: BLE001
+            log.debug("desired_engine_running probe failed", exc_info=True)
+    try:
+        return bool(client.autostartDesired)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def run(argv: list[str] | None = None) -> int:
     """Launch the AutoPTZ UI.  Returns the process exit code.
 
@@ -439,9 +460,15 @@ def run(argv: list[str] | None = None) -> int:
         QTimer.singleShot(1200, window._start_mark)
 
     # ── engine auto-start ──────────────────────────────────────────────────────
-    # Restore the last on/off state (default ON) and start after the window is
-    # shown and exposed so the first paint happens before heavy ingest/ML work.
-    if bool(store.get_setting("engine_running", True)):
+    # Restore the user's auto-start INTENT (default ON) and start after the window
+    # is shown/exposed so the first paint happens before heavy ingest/ML work.
+    # Keyed on ``engine_autostart`` (not the retired ``engine_running``, whose value
+    # meant "was the engine running at shutdown" and self-trapped off: a stopped
+    # engine persisted "off", which then skipped auto-start forever). Seed the
+    # client so an untouched session round-trips the same intent.
+    autostart = bool(store.get_setting("engine_autostart", True))
+    client.set_autostart_desired(autostart)
+    if autostart:
 
         class _CameraAccessBridge(QObject):
             resolved = Signal(bool)
@@ -476,11 +503,11 @@ def run(argv: list[str] | None = None) -> int:
         # prevents entering a real event loop.
         exit_code = QApplication.exec(app)
 
-    # Persist the engine on/off state for the next launch.
+    # Persist the auto-start intent for the next launch.
     try:
-        store.set_setting("engine_running", bool(client.engineRunning))
+        store.set_setting("engine_autostart", _engine_autostart_to_persist(window, client))
     except Exception:  # noqa: BLE001
-        log.exception("Error persisting engine_running on shutdown")
+        log.exception("Error persisting engine_autostart on shutdown")
 
     # Orderly shutdown: stop the pump + engine before touching the store so no
     # worker thread is still pushing telemetry / draining commands.

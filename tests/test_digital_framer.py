@@ -51,6 +51,81 @@ class TestDesiredCrop:
         )
         assert h >= 0.34 * 1080 - 1
 
+    def test_dot_anchored_placement_composes_the_dot(self):
+        # Dot-anchored composition (the Center Stage contract): the crop is
+        # positioned so the tracking DOT sits at the requested fraction of the
+        # crop — continuously, not only when some band is violated.
+        bbox = (860, 100, 1060, 900)  # sizes the crop
+        dot = (960.0, 260.0)
+        x, y, w, h = desired_crop(
+            bbox,
+            1920,
+            1080,
+            out_aspect=ASPECT,
+            fill=0.65,
+            min_frac=0.18,
+            max_frac=0.50,
+            headroom=0.06,
+            anchor_xy=dot,
+            anchor_place=(0.5, 0.26),
+        )
+        assert abs((x + w * 0.5) - dot[0]) < 1.0  # dot horizontally centred
+        assert abs((y + h * 0.26) - dot[1]) < 1.0  # dot at the composed height
+
+    def test_dot_anchored_placement_follows_the_dot(self):
+        # The user-visible bug: moving the dot (head) while the box centre stays
+        # put (hips fixed) MUST move the crop 1:1 — the old box-centred placement
+        # ignored it entirely.
+        bbox = (860, 100, 1060, 900)
+        kwargs = {
+            "out_aspect": ASPECT,
+            "fill": 0.65,
+            "min_frac": 0.18,
+            "max_frac": 0.50,
+            "headroom": 0.06,
+            "anchor_place": (0.5, 0.26),
+        }
+        _, y1, _, _ = desired_crop(bbox, 1920, 1080, anchor_xy=(960.0, 400.0), **kwargs)
+        _, y2, _, _ = desired_crop(bbox, 1920, 1080, anchor_xy=(960.0, 300.0), **kwargs)
+        x1, _, _, _ = desired_crop(bbox, 1920, 1080, anchor_xy=(800.0, 400.0), **kwargs)
+        x2, _, _, _ = desired_crop(bbox, 1920, 1080, anchor_xy=(900.0, 400.0), **kwargs)
+        assert abs((y1 - y2) - 100.0) < 1.0  # crop follows the dot vertically
+        assert abs((x2 - x1) - 100.0) < 1.0  # ... and horizontally
+
+    def test_dot_anchored_placement_clamped_at_frame_edges(self):
+        # A dot near the frame top can't be composed at 26% of the crop without
+        # leaving the frame — the crop clamps to the edge instead.
+        bbox = (860, 0, 1060, 800)
+        x, y, w, h = desired_crop(
+            bbox,
+            1920,
+            1080,
+            out_aspect=ASPECT,
+            fill=0.65,
+            min_frac=0.18,
+            max_frac=0.50,
+            headroom=0.06,
+            anchor_xy=(960.0, 10.0),
+            anchor_place=(0.5, 0.26),
+        )
+        assert y == 0.0
+        assert x >= 0.0 and x + w <= 1920 + 1
+
+    def test_no_anchor_reproduces_box_centred_placement(self):
+        # Group unions (and any caller without a dot) keep the classic
+        # box-centred + headroom placement.
+        bbox = (860, 300, 1060, 700)
+        kwargs = {
+            "out_aspect": ASPECT,
+            "fill": 0.65,
+            "min_frac": 0.18,
+            "max_frac": 0.50,
+            "headroom": 0.06,
+        }
+        assert desired_crop(bbox, 1920, 1080, **kwargs) == desired_crop(
+            bbox, 1920, 1080, anchor_xy=None, **kwargs
+        )
+
     def test_far_subject_zooms_tighter_with_lower_min_frac(self):
         # The far-subject under-zoom fix: a person far from the camera (small in
         # frame) must zoom in MORE when the framing allows a lower min_frac. With a

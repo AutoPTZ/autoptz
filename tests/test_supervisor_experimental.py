@@ -161,3 +161,41 @@ def test_tracking_keys_in_dict_are_ignored_for_env(tmp_path: Any, monkeypatch: A
     sup._apply_experimental_env()
     # Non-env-flag keys never reach os.environ.
     assert "stage_spread" not in os.environ
+
+
+def test_stale_keys_pruned_from_persisted_dict(tmp_path: Any, monkeypatch: Any) -> None:
+    """Keys no longer in the registry (removed flags, the dead tracking defaults,
+    or excluded hardware vars) are dropped from the persisted dict at engine start."""
+    monkeypatch.delenv("AUTOPTZ_PTZ_PUMP", raising=False)
+    sup, store = _sup(tmp_path)
+    store.set_setting(
+        "experimental_features",
+        {
+            "AUTOPTZ_PTZ_PUMP": "1",  # registry key — kept
+            "AUTOPTZ_REID_DEVICE": "cpu",  # registry key — kept
+            "stage_spread": False,  # dead tracking default — dropped
+            "AUTOPTZ_FORCE_EP": "CPUExecutionProvider",  # excluded hardware var — dropped
+        },
+    )
+    sup._apply_experimental_env()
+    cleaned = store.get_setting("experimental_features", {})
+    assert set(cleaned) == {"AUTOPTZ_PTZ_PUMP", "AUTOPTZ_REID_DEVICE"}
+    # The excluded hardware var never reached the environment either.
+    assert (
+        "AUTOPTZ_FORCE_EP" not in os.environ
+        or os.environ.get("AUTOPTZ_FORCE_EP") != "CPUExecutionProvider"
+    )
+
+
+def test_prune_does_not_rewrite_a_clean_dict(tmp_path: Any, monkeypatch: Any) -> None:
+    """A dict that is already all-registry-keys is left byte-for-byte unchanged."""
+    monkeypatch.delenv("AUTOPTZ_PTZ_PUMP", raising=False)
+    sup, store = _sup(tmp_path)
+    clean = {"AUTOPTZ_PTZ_PUMP": "1"}
+    store.set_setting("experimental_features", dict(clean))
+    writes: list[Any] = []
+    orig = store.set_setting
+    store.set_setting = lambda k, v: (writes.append((k, v)), orig(k, v))[1]  # type: ignore[method-assign]
+    sup._apply_experimental_env()
+    assert writes == [], "clean dict must not be rewritten"
+    assert store.get_setting("experimental_features", {}) == clean

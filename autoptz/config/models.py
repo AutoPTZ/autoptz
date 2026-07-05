@@ -299,8 +299,11 @@ class PTZConfig(BaseModel, frozen=True):
     # / ``goto_preset(slot)`` drive.  Round-trips through JSON (keys are coerced
     # back to ``int`` on load).
     preset_slots: dict[int, PtzPresetSlot] = Field(default_factory=dict)
-    # Center Stage: emit the auto-framed crop as a virtual camera (Zoom/Teams/OBS).
+    # Center Stage: emit the auto-framed crop as a virtual camera (Zoom/Teams/OBS,
+    # this computer) and/or an NDI network source (any computer on the LAN).
     vcam_out: bool = False
+    ndi_out: bool = False
+    ndi_output_name: str = ""  # "" → default "AutoPTZ <camera name>"
     digital_output_w: int = Field(default=1280, ge=320, le=3840)
     digital_output_h: int = Field(default=720, ge=240, le=2160)
 

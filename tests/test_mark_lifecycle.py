@@ -83,6 +83,61 @@ def test_confirm_required_before_suspend(qtapp, monkeypatch) -> None:
     win.deleteLater()
 
 
+def test_desired_engine_running_reflects_intent(qtapp) -> None:
+    """desired_engine_running is the auto-start INTENT (default ON), not the live
+    running state — so a stopped engine is never persisted as 'don't auto-start'."""
+    win = _main(qtapp)
+    assert win.desired_engine_running() is True  # default intent ON
+    win._client.userStopEngine()  # deliberate stop
+    assert win.desired_engine_running() is False
+    win._client.userStartEngine()  # deliberate start
+    assert win.desired_engine_running() is True
+    win.deleteLater()
+
+
+def test_mark_suspend_does_not_change_intent(qtapp, monkeypatch) -> None:
+    """Suspending the engine for a Mark run is a system stop — it must NOT change
+    the auto-start intent."""
+    import autoptz.ui.widgets.main_window as mw
+
+    win = _main(qtapp)
+    monkeypatch.setattr(mw, "MarkPreflightDialog", _FakeDlg, raising=False)
+    win._client._engine_running = True  # engine running before Mark
+    win._start_mark()
+    assert win._client.engineRunning is False  # suspended (system stop)
+    assert win.desired_engine_running() is True  # intent unchanged → still ON
+    win._mark_window.close()
+
+
+def test_quit_from_mark_keeps_intent_on(qtapp, monkeypatch) -> None:
+    """The original bug: quitting from inside Mark used to persist OFF forever.
+    Mark never touches the auto-start intent now."""
+    from PySide6.QtWidgets import QApplication
+
+    import autoptz.ui.widgets.main_window as mw
+
+    win = _main(qtapp)
+    monkeypatch.setattr(mw, "MarkPreflightDialog", _FakeDlg, raising=False)
+    monkeypatch.setattr(QApplication, "quit", lambda *a: None)
+    win._client._engine_running = True
+    win._start_mark()
+    win._mark_window.request_quit()
+    assert win.desired_engine_running() is True
+
+
+def test_deliberate_stop_survives_a_mark_run(qtapp, monkeypatch) -> None:
+    """A user who deliberately stopped keeps 'off' across a Mark run too."""
+    import autoptz.ui.widgets.main_window as mw
+
+    win = _main(qtapp)
+    monkeypatch.setattr(mw, "MarkPreflightDialog", _FakeDlg, raising=False)
+    win._client.userStopEngine()  # deliberate off
+    win._start_mark()
+    win._mark_window.request_return()
+    assert win.desired_engine_running() is False  # intent honored
+    win.deleteLater()
+
+
 def test_enter_mark_hides_main_and_builds_isolated_window(qtapp, monkeypatch) -> None:
     import autoptz.ui.widgets.main_window as mw
 

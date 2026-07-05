@@ -28,6 +28,7 @@ from autoptz.ui.widgets.common import (
     HelpBadge,
     hline,
     on_theme_changed,
+    scroll_content_min_width,
     section_label,
 )
 
@@ -124,8 +125,15 @@ class ServicesPanel(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # With the bar hidden, Qt can still auto-scroll sideways (e.g. focusing a
+        # button wider than a narrow dock), which shows up as content clipped at
+        # the LEFT with no way back. Pin the hidden scrollbar to 0 so the panel
+        # content always starts at its left edge.
+        hsb = scroll.horizontalScrollBar()
+        hsb.valueChanged.connect(lambda v: hsb.setValue(0) if v else None)
         scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         outer.addWidget(scroll, 1)
+        self._scroll = scroll
 
         body = QWidget()
         body.setMinimumSize(0, 0)
@@ -135,7 +143,8 @@ class ServicesPanel(QWidget):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        # header + controls
+        # header (title row + its own controls row: keeps the panel's minimum
+        # width small enough that a narrow dock never clips/h-scrolls content)
         head = QHBoxLayout()
         head.setSpacing(6)
         title = QLabel("Services and Status")
@@ -148,17 +157,22 @@ class ServicesPanel(QWidget):
             )
         )
         head.addStretch(1)
+        root.addLayout(head)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(6)
         self._start = QPushButton("Start")
-        self._start.clicked.connect(client.startEngine)
+        self._start.clicked.connect(client.userStartEngine)
         self._stop = QPushButton("Stop")
-        self._stop.clicked.connect(client.stopEngine)
+        self._stop.clicked.connect(client.userStopEngine)
         self._restart = QPushButton("Restart")
         self._restart.clicked.connect(client.restartEngine)
         for b in (self._start, self._stop, self._restart):
             # min-height (not fixed) so vertical padding/descenders aren't clipped.
             b.setMinimumHeight(26)
-            head.addWidget(b)
-        root.addLayout(head)
+            controls.addWidget(b)
+        controls.addStretch(1)
+        root.addLayout(controls)
 
         # ── module switches ─────────────────────────────────────────────────────
         root.addWidget(hline())
@@ -229,22 +243,6 @@ class ServicesPanel(QWidget):
         root.addLayout(self._list)
         root.addStretch(1)
 
-        # ── footer (mirrors the Manage Models button pattern) ─────────────────────
-        root.addWidget(hline())
-        experimental_row = QHBoxLayout()
-        experimental_row.setSpacing(6)
-        self._experimental_btn = QPushButton("Experimental...")
-        self._experimental_btn.setToolTip(
-            "Toggle curated experimental engine flags (e.g. the shared detection "
-            "server) and per-camera tracking defaults for new cameras. Most "
-            "changes need a restart to take effect."
-        )
-        self._experimental_btn.clicked.connect(self._open_experimental_features)
-        experimental_row.addWidget(self._experimental_btn)
-        experimental_row.addWidget(HelpBadge(self._experimental_btn.toolTip()))
-        experimental_row.addStretch(1)
-        root.addLayout(experimental_row)
-
         self._restyle()
         on_theme_changed(client, self._restyle)
         _connect(client, "engineStateChanged", self.refresh)
@@ -257,7 +255,26 @@ class ServicesPanel(QWidget):
         self.refresh()
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(260, 220)
+        """The real floor: the scroll body's live layout minimum + scrollbar chrome.
+
+        Previously a flat ``QSize(300, 220)`` — "measured by the offscreen
+        layout audit" once, on macOS/Linux — which silently under-budgets on
+        any font that renders wider at the same point size (Windows' default
+        UI font measurably does; this is what broke on Windows CI, where the
+        trailing ON/OK/UNAVAILABLE pills and Restart/Enable-all buttons
+        clipped, while macOS/Linux stayed green). Computed instead from
+        :func:`~autoptz.ui.widgets.common.scroll_content_min_width`, which
+        reads the scrolled content's OWN (font-metric-driven) layout minimum —
+        correct on any platform/DPI. Falls back to the old constant only when
+        called before construction (``ServicesPanel.__new__`` without
+        ``__init__``, as in ``test_hud_and_status_fixes.py``'s bypass test —
+        touching any real Qt method there raises).  The main window enforces
+        this as a real dock floor after layout restore.
+        """
+        scroll = getattr(self, "_scroll", None)
+        if scroll is None:
+            return QSize(300, 220)
+        return QSize(scroll_content_min_width(scroll), 220)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(360, 520)
@@ -441,11 +458,6 @@ class ServicesPanel(QWidget):
         ModelManagerDialog(self._client, parent=self).exec()
         self._refresh_optional_components()
         self.refresh()
-
-    def _open_experimental_features(self) -> None:
-        from autoptz.ui.widgets.dialogs.experimental import ExperimentalFeaturesDialog
-
-        ExperimentalFeaturesDialog(self._client, parent=self).exec()
 
     def _ensure_row(self, key: str) -> None:
         if key in self._rows:

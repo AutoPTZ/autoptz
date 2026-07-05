@@ -17,7 +17,7 @@ import logging
 import threading
 from typing import Any
 
-from PySide6.QtCore import QByteArray, QObject, Qt, Signal
+from PySide6.QtCore import QByteArray, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -94,6 +94,10 @@ class MainWindow(QMainWindow):
         # window (or None) and whether the main engine was running when we suspended
         # into Mark (so Return-to-AutoPTZ can restore that exact state).
         self._mark_window: Any | None = None
+        # Whether the engine was running just before a Mark run suspended it, so
+        # Return-to-AutoPTZ can restore that exact state. (Auto-start persistence
+        # uses the client's auto-start intent, which Mark's system-level stop/start
+        # never touches — so no separate "suspended" latch is needed.)
         self._engine_was_running = False
         # Set if this (suspended) main window is itself closed while a Mark swap is
         # active — a later Mark Return then has no live window to resume, so it quits
@@ -370,14 +374,14 @@ class MainWindow(QMainWindow):
         self._act_start = _action(
             self,
             "Start",
-            self._client.startEngine,
+            self._client.userStartEngine,
             "Ctrl+E",
             "Start the detection/tracking engine and open all enabled cameras.",
         )
         self._act_stop = _action(
             self,
             "Stop",
-            self._client.stopEngine,
+            self._client.userStopEngine,
             "Ctrl+Shift+E",
             "Stop the engine and release all cameras.",
         )
@@ -403,17 +407,6 @@ class MainWindow(QMainWindow):
                 ),
             )
         )
-        self._act_experimental = _action(
-            self,
-            "Experimental Features...",
-            self._open_experimental_features,
-            tip=(
-                "Toggle curated experimental engine flags (e.g. the shared "
-                "detection server) and per-camera tracking defaults for new "
-                "cameras. Most changes need a restart to take effect."
-            ),
-        )
-        engine.addAction(self._act_experimental)
         engine.addSeparator()
         self._act_stop_tracking = _action(
             self,
@@ -540,6 +533,16 @@ class MainWindow(QMainWindow):
                 tip="Benchmark this machine with simulated cameras (3DMark-style).",
             )
         )
+        self._act_experimental = _action(
+            self,
+            "Experimental Features…",
+            self._open_experimental_features,
+            tip=(
+                "Turn optional engine features on or off (e.g. the shared "
+                "detection server). Most changes apply after a restart."
+            ),
+        )
+        helpm.addAction(self._act_experimental)
         helpm.addAction(_action(self, "About AutoPTZ", self._show_about))
 
     def _build_scale_menu(self, view: QMenu) -> None:
@@ -680,11 +683,30 @@ class MainWindow(QMainWindow):
         else:
             # List discovered sources directly (check to add, uncheck to remove),
             # exactly like USB — populated from the background discovery cache.
-            sources = list(self._ndi_sources_cache)
+            # This machine's OWN AutoPTZ NDI outputs are hidden: adding one as a
+            # camera re-ingests our own broadcast (a feedback loop that can nest
+            # and eats CPU with encode+decode of the same pixels). Another
+            # machine's AutoPTZ output remains listed — that's a legitimate use.
+            all_sources = list(self._ndi_sources_cache)
+            sources = [
+                s
+                for s in all_sources
+                if not _is_own_ndi_output(str(s.get("name", s.get("uri", ""))))
+            ]
+            hidden = len(all_sources) - len(sources)
             if not sources:
                 msg = "Scanning for NDI sources…" if self._ndi_scanning else "No NDI sources found"
                 placeholder = ndi.addAction(msg)
                 placeholder.setEnabled(False)
+            if hidden:
+                note = ndi.addAction(
+                    f"{hidden} AutoPTZ output(s) from this Mac hidden (feedback loop)"
+                )
+                note.setEnabled(False)
+                note.setToolTip(
+                    "These are AutoPTZ's own NDI output feeds from this computer. "
+                    "Re-adding them as cameras would make AutoPTZ watch itself."
+                )
             for src in sources:
                 name = str(src.get("name", src.get("uri", "?")))
                 uri = str(src.get("uri", ""))
@@ -941,6 +963,16 @@ class MainWindow(QMainWindow):
                 self._client.startEngine()
             except Exception:  # noqa: BLE001
                 log.debug("resume engine after mark failed", exc_info=True)
+
+    def desired_engine_running(self) -> bool:
+        """Whether the engine should auto-start next launch — the user's intent.
+
+        This is the persisted auto-start choice, not the momentary ``engineRunning``:
+        only a deliberate user Stop clears it, so a stopped/failed engine (or one
+        suspended for a Mark run — Mark stops/starts the engine at the system level,
+        which never touches the intent) is never trapped off across launches.
+        """
+        return bool(_safe(lambda: self._client.autostartDesired, True))
 
     def _open_model_manager(
         self,
@@ -1392,6 +1424,29 @@ class MainWindow(QMainWindow):
         if not self._has_visible_window_frame():
             self.resize(1320, 820)
             self._center_on_primary_screen()
+        # Saved layouts can restore docks NARROWER than their panels' minimums
+        # (Qt only enforces minimums on interactive drags) — widen them once the
+        # restored sizes are actually applied.
+        QTimer.singleShot(0, self._enforce_dock_minimums)
+
+    def _enforce_dock_minimums(self) -> None:
+        """Widen any dock the restored layout left narrower than its panel needs.
+
+        ``restoreState`` re-applies saved dock sizes verbatim — including sizes
+        saved before a panel's minimum width existed (or grew). A too-narrow dock
+        clips its panel's right edge (cost chips / help badges vanish, captions
+        hard-cut). Runs one event-loop turn after restore so widths are real.
+        """
+        for dock in self._docks.values():
+            widget = dock.widget()
+            if widget is None or not dock.isVisible() or dock.isFloating():
+                continue
+            need = max(widget.minimumSizeHint().width(), widget.minimumWidth())
+            if need > 0 and dock.width() < need:
+                try:
+                    self.resizeDocks([dock], [need], Qt.Orientation.Horizontal)
+                except Exception:  # noqa: BLE001
+                    log.debug("dock minimum enforcement failed", exc_info=True)
 
     def showEvent(self, event: Any) -> None:  # noqa: N802
         # Qt can defer creating the dock tab bar until first show; restyle it
@@ -1402,11 +1457,12 @@ class MainWindow(QMainWindow):
         if not self._has_visible_window_frame():
             self.resize(1320, 820)
             self._center_on_primary_screen()
+        # Docks aren't visible until the window shows, so the post-restore
+        # minimum enforcement skipped them — run it (again) now that they are.
+        QTimer.singleShot(0, self._enforce_dock_minimums)
         # Fire the throttled update check once, deferred so first paint isn't blocked.
         if not self._startup_update_checked:
             self._startup_update_checked = True
-            from PySide6.QtCore import QTimer
-
             QTimer.singleShot(900, self._maybe_show_model_setup_on_startup)
             QTimer.singleShot(2500, self._updates.maybe_check_on_startup)
 
@@ -1483,6 +1539,17 @@ class MainWindow(QMainWindow):
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _is_own_ndi_output(name: str, host: str | None = None) -> bool:
+    """True when *name* is THIS machine's own AutoPTZ NDI output feed.
+
+    Thin wrapper over the shared engine-side helper so the NDI menu filter and
+    the supervisor's feedback-loop warning can never disagree.
+    """
+    from autoptz.engine.discovery.ndi import is_own_autoptz_output
+
+    return is_own_autoptz_output(name, host)
 
 
 class _ScanTask(QObject):

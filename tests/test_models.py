@@ -758,3 +758,184 @@ def test_camera_worker_resolve_model_path_never_raises(monkeypatch) -> None:
         id="cam-abcd1234", name="C", source=SourceConfig(type="usb", address="usb://0")
     )
     assert camera_worker._resolve_model_path(cfg) is None
+
+
+class TestFacePack:
+    """ModelManager owns download/remove of the insightface face pack in its own
+    app-data cache (never the bundled or ~/.insightface copies)."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("INSIGHTFACE_HOME", raising=False)
+        monkeypatch.delenv("AUTOPTZ_FACE_MODEL", raising=False)
+        # No bundled pack and an empty fake home by default; tests opt into each.
+        self._home = tmp_path / "home"
+        self._home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: self._home)
+
+    def _write_pack(self, insightface_root: Path, model: str = "buffalo_l") -> Path:
+        """Write a fake pack at ``<insightface_root>/models/<model>/*.onnx``."""
+        pack = insightface_root / "models" / model
+        pack.mkdir(parents=True)
+        (pack / "w600k_r50.onnx").write_bytes(b"x" * 2048)
+        (pack / "det_10g.onnx").write_bytes(b"y" * 1024)
+        return pack
+
+    def test_status_missing(self, tmp_path):
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        st = mgr.face_pack_status()
+        assert st["present"] is False
+        assert st["location"] == "missing"
+        assert st["removable"] is False
+
+    def test_status_app_data(self, tmp_path):
+        cache = tmp_path / "cache"
+        self._write_pack(cache / "insightface")
+        mgr = ModelManager(cache_dir=cache)
+        st = mgr.face_pack_status()
+        assert st["present"] is True
+        assert st["location"] == "app-data"
+        assert st["removable"] is True
+        assert st["size_bytes"] == 2048 + 1024
+
+    def test_status_bundled_wins_and_not_removable(self, tmp_path, monkeypatch):
+        bundled = tmp_path / "bundled"
+        self._write_pack(bundled / "insightface")
+        monkeypatch.setattr("autoptz.engine.runtime.models.bundled_models_dir", lambda: bundled)
+        cache = tmp_path / "cache"
+        self._write_pack(cache / "insightface")  # app-data copy shadowed by bundled
+        mgr = ModelManager(cache_dir=cache)
+        st = mgr.face_pack_status()
+        assert st["location"] == "bundled"
+        assert st["removable"] is False
+
+    def test_status_home_is_removable(self, tmp_path):
+        """The user's own ~/.insightface cache can be removed (they own it)."""
+        self._write_pack(self._home / ".insightface")
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        st = mgr.face_pack_status()
+        assert st["location"] == "home"
+        assert st["removable"] is True
+
+    def test_insightface_home_is_terminal_when_present(self, tmp_path, monkeypatch):
+        env = tmp_path / "custom"
+        self._write_pack(env)
+        monkeypatch.setenv("INSIGHTFACE_HOME", str(env))
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        st = mgr.face_pack_status()
+        assert st["location"] == "custom"
+        assert st["present"] is True
+        assert st["removable"] is False
+
+    def test_insightface_home_empty_reports_missing_not_a_shadowed_pack(
+        self, tmp_path, monkeypatch
+    ):
+        """When INSIGHTFACE_HOME is set but empty, the engine loads from it
+        (unconditionally) and finds nothing — so status must NOT fall through to a
+        lower-priority present pack and falsely report the pack as available."""
+        env = tmp_path / "empty_custom"
+        env.mkdir()
+        self._write_pack(self._home / ".insightface")  # a present fallback exists
+        monkeypatch.setenv("INSIGHTFACE_HOME", str(env))
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        st = mgr.face_pack_status()
+        assert st["location"] == "custom"
+        assert st["present"] is False  # matches what the engine actually loads
+
+    def test_ensure_uses_appdata_root(self, tmp_path, monkeypatch):
+        cache = tmp_path / "cache"
+        seen = {}
+
+        def fake_ensure(root=None, model_name="buffalo_l"):
+            seen["root"] = root
+            self._write_pack(Path(root))
+            return None
+
+        monkeypatch.setattr("autoptz.engine.pipeline.identify.ensure_face_model", fake_ensure)
+        mgr = ModelManager(cache_dir=cache)
+        results = mgr.ensure_face_pack()
+        assert seen["root"] == str(cache / "insightface")
+        assert results[0]["state"] == "downloaded"
+
+    def test_ensure_failure_reports_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "autoptz.engine.pipeline.identify.ensure_face_model",
+            lambda root=None, model_name="buffalo_l": "OSError: offline",
+        )
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        results = mgr.ensure_face_pack()
+        assert results[0]["state"] == "failed"
+        assert "offline" in results[0]["error"]
+
+    def test_partial_download_single_onnx_not_reported_present(self, tmp_path):
+        """A single leftover .onnx from an interrupted download must not read as a
+        complete/usable pack (which would wrongly disable Download)."""
+        cache = tmp_path / "cache"
+        pack = cache / "insightface" / "models" / "buffalo_l"
+        pack.mkdir(parents=True)
+        (pack / "det_10g.onnx").write_bytes(b"x" * 1024)  # only one of several files
+        mgr = ModelManager(cache_dir=cache)
+        st = mgr.face_pack_status()
+        assert st["present"] is False
+        assert st["location"] == "missing"
+
+    def test_partial_download_only_auxiliary_files_not_reported_present(self, tmp_path):
+        """A partial extract that left only the pack's (AutoPTZ-unused) auxiliary
+        landmark/attribute files behind must not read as complete either — the
+        old "≥2 onnx files" heuristic alone is fooled by exactly this case, since
+        it never checks WHICH files are present. FaceRecognizer restricts
+        insightface to allowed_modules=["detection", "recognition"], so a real
+        pack is only usable once its det_*/w600k_* files (the ones AutoPTZ
+        actually loads) exist — not just any two of the five shipped files."""
+        cache = tmp_path / "cache"
+        pack = cache / "insightface" / "models" / "buffalo_l"
+        pack.mkdir(parents=True)
+        (pack / "genderage.onnx").write_bytes(b"a" * 1024)
+        (pack / "2d106det.onnx").write_bytes(b"b" * 1024)
+        mgr = ModelManager(cache_dir=cache)
+        st = mgr.face_pack_status()
+        assert st["present"] is False
+        assert st["location"] == "missing"
+
+    def test_unknown_face_model_keeps_legacy_two_file_heuristic(self, tmp_path, monkeypatch):
+        """A custom/unlisted AUTOPTZ_FACE_MODEL pack has an unknown naming
+        convention, so the stricter detection/recognition prefix check must NOT
+        apply to it — otherwise a legitimate custom pack would be wrongly
+        reported as incomplete/broken with no way to fix it from the UI."""
+        monkeypatch.setenv("AUTOPTZ_FACE_MODEL", "custom_pack")
+        cache = tmp_path / "cache"
+        pack = cache / "insightface" / "models" / "custom_pack"
+        pack.mkdir(parents=True)
+        (pack / "modelA.onnx").write_bytes(b"a" * 1024)
+        (pack / "modelB.onnx").write_bytes(b"b" * 1024)
+        mgr = ModelManager(cache_dir=cache)
+        st = mgr.face_pack_status()
+        assert st["present"] is True
+
+    def test_remove_prefers_appdata_over_home(self, tmp_path):
+        cache = tmp_path / "cache"
+        app_pack = self._write_pack(cache / "insightface")
+        home_pack = self._write_pack(self._home / ".insightface")
+        mgr = ModelManager(cache_dir=cache)
+        results = mgr.remove_face_pack()
+        assert results and all(r["state"] == "removed" for r in results)
+        assert not any(app_pack.glob("*.onnx"))  # app-data (resolved) pack gone
+        assert list(home_pack.glob("*.onnx"))  # home pack untouched (not resolved)
+
+    def test_remove_deletes_home_pack_when_it_is_resolved(self, tmp_path):
+        """The user's own ~/.insightface pack can be deleted (their blocker)."""
+        home_pack = self._write_pack(self._home / ".insightface")
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        assert mgr.face_pack_status()["location"] == "home"
+        results = mgr.remove_face_pack()
+        assert results and all(r["state"] == "removed" for r in results)
+        assert not any(home_pack.glob("*.onnx"))  # home pack deleted
+
+    def test_remove_never_touches_bundled(self, tmp_path, monkeypatch):
+        bundled = tmp_path / "bundled"
+        bundled_pack = self._write_pack(bundled / "insightface")
+        monkeypatch.setattr("autoptz.engine.runtime.models.bundled_models_dir", lambda: bundled)
+        mgr = ModelManager(cache_dir=tmp_path / "cache")
+        assert mgr.face_pack_status()["location"] == "bundled"
+        assert mgr.remove_face_pack() == []  # nothing removed
+        assert list(bundled_pack.glob("*.onnx"))  # bundled pack intact

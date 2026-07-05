@@ -18,9 +18,10 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFrame,
     QGridLayout,
-    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -28,11 +29,13 @@ from PySide6.QtWidgets import (
 
 from autoptz.engine.runtime.experimental_flags import (
     EXPERIMENTAL_FLAGS,
-    TRACKING_DEFAULT_FIELDS,
     ExperimentalFlag,
 )
 from autoptz.ui import theme as T
-from autoptz.ui.widgets.common import HelpBadge, hline, section_label
+from autoptz.ui.widgets.common import HelpBadge, scroll_content_min_width, section_label
+
+# Section headers, in display order.
+_SECTION_ORDER = ("Experiments", "Devices & tuning", "Model overrides", "Diagnostics")
 
 log = logging.getLogger(__name__)
 
@@ -63,20 +66,20 @@ class ExperimentalFeaturesDialog(QDialog):
         self._client = client
         self.setWindowTitle("Experimental Features")
         self.setModal(True)
-        self.setMinimumWidth(560)
+        self.resize(720, 620)
 
         self._bool_boxes: dict[str, QCheckBox] = {}
         self._choice_combos: dict[str, QComboBox] = {}
-        self._tracking_boxes: dict[str, QCheckBox] = {}
+        self._text_fields: dict[str, QLineEdit] = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 20, 20, 20)
         outer.setSpacing(8)
 
         intro = QLabel(
-            "These features are experimental and may change or be removed. Most "
-            "are read when the engine starts, so a restart is needed for changes "
-            "to take effect."
+            "Optional engine features and overrides, grouped by area. They are read "
+            "when the engine starts, so use Apply and restart when prompted for "
+            "changes to take effect."
         )
         intro.setWordWrap(True)
         intro.setStyleSheet(f"color: {T.CURRENT.subtext};")
@@ -85,30 +88,36 @@ class ExperimentalFeaturesDialog(QDialog):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         outer.addWidget(scroll, 1)
         body = QWidget()
         scroll.setWidget(body)
         root = QVBoxLayout(body)
         root.setContentsMargins(2, 2, 2, 2)
-        root.setSpacing(4)
+        root.setSpacing(12)
 
-        root.addWidget(section_label("Engine flags"))
+        by_section: dict[str, list[ExperimentalFlag]] = {}
         for flag in EXPERIMENTAL_FLAGS:
-            root.addWidget(self._build_flag_row(flag))
-
-        root.addWidget(hline())
-        th = QHBoxLayout()
-        th.addWidget(section_label("New-camera tracking defaults"))
-        th.addWidget(
-            HelpBadge(
-                "These set the defaults applied to cameras you add from now on. "
-                "Existing cameras keep their current per-camera setting."
+            by_section.setdefault(flag.section, []).append(flag)
+        # Known sections in fixed order, then any unexpected section appended.
+        ordered = [s for s in _SECTION_ORDER if s in by_section]
+        ordered += [s for s in by_section if s not in _SECTION_ORDER]
+        for section in ordered:
+            # Each section is a distinct elevated card so the four groups read as
+            # separate panels rather than one flat list.
+            card = QFrame()
+            card.setObjectName("expCard")
+            card.setStyleSheet(
+                f"QFrame#expCard {{ background: {T.CURRENT.surface_alt};"
+                f" border: 1px solid {T.CURRENT.border}; border-radius: 10px; }}"
             )
-        )
-        th.addStretch(1)
-        root.addLayout(th)
-        for name, label, desc, default in TRACKING_DEFAULT_FIELDS:
-            root.addWidget(self._build_tracking_row(name, label, desc, default))
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(14, 12, 14, 12)
+            cl.setSpacing(2)
+            cl.addWidget(section_label(section))
+            for flag in by_section[section]:
+                cl.addWidget(self._build_flag_row(flag))
+            root.addWidget(card)
         root.addStretch(1)
 
         note = QLabel("Some changes need a restart to take effect.")
@@ -133,6 +142,18 @@ class ExperimentalFeaturesDialog(QDialog):
         # — drives whether Apply offers a restart (no nag when nothing changed).
         self._applied_snapshot = self._collect()
 
+        # Real floor: the scrolled content's live layout minimum (a row is
+        # [label + editor + Browse + help + "Restart required" badge]) plus
+        # this layout's own margins and the scroll area's chrome. Previously a
+        # flat ``setMinimumWidth(680)`` — a guess "measured" once on
+        # macOS/Linux — which silently under-budgets on any font that renders
+        # wider at the same point size (Windows' default UI font measurably
+        # does; this is what clipped section captions/badges on Windows CI
+        # while macOS/Linux stayed green). Computed AFTER every section row is
+        # built, so it reflects the real (font-metric-driven) requirement.
+        m = outer.contentsMargins()
+        self.setMinimumWidth(scroll_content_min_width(scroll) + m.left() + m.right())
+
     # ── row builders ─────────────────────────────────────────────────────────
 
     def _build_flag_row(self, flag: ExperimentalFlag) -> QFrame:
@@ -145,7 +166,7 @@ class ExperimentalFeaturesDialog(QDialog):
             box.setToolTip(flag.description)
             self._bool_boxes[flag.env_key] = box
             lay.addWidget(box, 0, 0)
-        else:
+        elif flag.kind == "choice":
             lay.addWidget(QLabel(f"<b>{flag.label}</b>"), 0, 0)
             combo = QComboBox()
             for choice in flag.choices:
@@ -153,37 +174,36 @@ class ExperimentalFeaturesDialog(QDialog):
             combo.setToolTip(flag.description)
             self._choice_combos[flag.env_key] = combo
             lay.addWidget(combo, 0, 1, Qt.AlignmentFlag.AlignLeft)
-        lay.addWidget(HelpBadge(flag.description), 0, 2)
+        else:  # text / path — free-form line edit (path adds a Browse button)
+            lay.addWidget(QLabel(f"<b>{flag.label}</b>"), 0, 0)
+            edit = QLineEdit()
+            edit.setToolTip(flag.description)
+            edit.setPlaceholderText("(default)")
+            self._text_fields[flag.env_key] = edit
+            lay.addWidget(edit, 0, 1)
+            if flag.kind == "path":
+                browse = QPushButton("Browse…")
+                browse.clicked.connect(lambda _=False, e=edit: self._browse_path(e))
+                lay.addWidget(browse, 0, 2, Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(HelpBadge(flag.description), 0, 4)
         if flag.restart_required:
-            lay.addWidget(_restart_badge(), 0, 3, Qt.AlignmentFlag.AlignRight)
+            lay.addWidget(_restart_badge(), 0, 5, Qt.AlignmentFlag.AlignRight)
         desc = QLabel(
             f"<span style='color:{T.CURRENT.subtext}'>{flag.description}"
             f" Default: {'(auto)' if flag.default == '' else flag.default}.</span>"
         )
         desc.setTextFormat(Qt.TextFormat.RichText)
         desc.setWordWrap(True)
-        lay.addWidget(desc, 1, 0, 1, 4)
-        lay.setColumnStretch(0, 1)
+        lay.addWidget(desc, 1, 0, 1, 6)
+        lay.setColumnStretch(1, 1)
         return row
 
-    def _build_tracking_row(self, name: str, label: str, desc: str, default: bool) -> QFrame:
-        row = QFrame()
-        lay = QGridLayout(row)
-        lay.setContentsMargins(4, 6, 4, 6)
-        box = QCheckBox(label)
-        box.setToolTip(desc)
-        self._tracking_boxes[name] = box
-        lay.addWidget(box, 0, 0)
-        lay.addWidget(HelpBadge(desc), 0, 1, Qt.AlignmentFlag.AlignRight)
-        detail = QLabel(
-            f"<span style='color:{T.CURRENT.subtext}'>{desc} Default: "
-            f"{'on' if default else 'off'}.</span>"
-        )
-        detail.setTextFormat(Qt.TextFormat.RichText)
-        detail.setWordWrap(True)
-        lay.addWidget(detail, 1, 0, 1, 2)
-        lay.setColumnStretch(0, 1)
-        return row
+    def _browse_path(self, edit: QLineEdit) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a model file")
+        if path:
+            edit.setText(path)
 
     # ── state <-> widgets ──────────────────────────────────────────────────────
 
@@ -197,22 +217,22 @@ class ExperimentalFeaturesDialog(QDialog):
             value = str(saved.get(flag.env_key, flag.default))
             if flag.kind == "bool":
                 self._bool_boxes[flag.env_key].setChecked(value not in ("0", "", "false"))
-            else:
+            elif flag.kind == "choice":
                 combo = self._choice_combos[flag.env_key]
                 idx = combo.findData(value)
                 combo.setCurrentIndex(idx if idx >= 0 else combo.findData(flag.default))
-        for name, _label, _desc, default in TRACKING_DEFAULT_FIELDS:
-            self._tracking_boxes[name].setChecked(bool(saved.get(name, default)))
+            else:
+                self._text_fields[flag.env_key].setText(value)
 
     def _collect(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for flag in EXPERIMENTAL_FLAGS:
             if flag.kind == "bool":
                 out[flag.env_key] = "1" if self._bool_boxes[flag.env_key].isChecked() else "0"
-            else:
+            elif flag.kind == "choice":
                 out[flag.env_key] = self._choice_combos[flag.env_key].currentData()
-        for name, _label, _desc, _default in TRACKING_DEFAULT_FIELDS:
-            out[name] = bool(self._tracking_boxes[name].isChecked())
+            else:
+                out[flag.env_key] = self._text_fields[flag.env_key].text().strip()
         return out
 
     def _apply(self) -> None:
@@ -286,10 +306,10 @@ class ExperimentalFeaturesDialog(QDialog):
         for flag in EXPERIMENTAL_FLAGS:
             if flag.kind == "bool":
                 self._bool_boxes[flag.env_key].setChecked(flag.default not in ("0", "", "false"))
-            else:
+            elif flag.kind == "choice":
                 combo = self._choice_combos[flag.env_key]
                 combo.setCurrentIndex(combo.findData(flag.default))
-        for name, _label, _desc, default in TRACKING_DEFAULT_FIELDS:
-            self._tracking_boxes[name].setChecked(bool(default))
+            else:
+                self._text_fields[flag.env_key].setText(flag.default)
         self._apply()
         self._applied_snapshot = self._collect()

@@ -395,6 +395,149 @@ def test_remote_pool_falls_back_to_local_detector_once_failed() -> None:
     writer.close()
 
 
+def test_remote_pool_provides_local_pose_estimator(monkeypatch) -> None:  # noqa: ANN001
+    """Model-server mode must not silently kill pose-stable framing.
+
+    Only DETECTION is delegated to the server; pose runs locally in the camera
+    child on the target's crop a few times a second.  Regression this pins:
+    ``RemotePool`` had no ``pose()`` at all, so ``CameraWorker._ensure_pose``
+    caught the AttributeError and permanently cached ``pose = None`` — every
+    pose-derived behaviour (arm-invariant aim, torso framing box, skeleton
+    overlay) silently degraded to the raw arms-inflated detection bbox.
+    """
+    import queue
+
+    import autoptz.engine.pipeline.pose as pose_mod
+
+    built = []
+
+    class _StubPose:
+        available = True
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            built.append(kwargs)
+
+    monkeypatch.setattr(pose_mod, "PoseEstimator", _StubPose)
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 16, 16)
+    client = InferenceClient("camA", queue.Queue(), queue.Queue(), writer)
+    pool = RemotePool(client)
+
+    pose = pool.pose()
+    assert isinstance(pose, _StubPose)
+    assert pool.pose() is pose  # cached — exactly one session per camera child
+    assert len(built) == 1
+    # Children never download models (mirrors the local-detector fallback);
+    # provisioning happens via Manage Models / fetch_models in the parent.
+    assert built[0].get("allow_download") is False
+    writer.close()
+
+
+def test_remote_pool_pose_build_failure_degrades_to_none(monkeypatch) -> None:  # noqa: ANN001
+    """A pose build failure in the child degrades to bbox aim (None), cached —
+    it must not raise into the worker or retry-build on every call."""
+    import queue
+
+    import autoptz.engine.pipeline.pose as pose_mod
+
+    calls = []
+
+    def _boom(**kwargs):  # noqa: ANN003
+        calls.append(True)
+        raise RuntimeError("no pose model")
+
+    monkeypatch.setattr(pose_mod, "PoseEstimator", _boom)
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 16, 16)
+    client = InferenceClient("camA", queue.Queue(), queue.Queue(), writer)
+    pool = RemotePool(client)
+
+    assert pool.pose() is None
+    assert pool.pose() is None
+    assert len(calls) == 1  # failure cached, not retried per tick
+    writer.close()
+
+
+def test_remote_pool_release_pose_forces_rebuild(monkeypatch) -> None:  # noqa: ANN001
+    """RemotePool must expose release_pose(), mirroring InferencePool's contract
+    (drop the cached ref + built flag so the next pose() call rebuilds).
+
+    Without this, Supervisor.release_model_sessions/rebuild_model_sessions's
+    generic getattr(pool, "release_pose", None) has nothing to call on a
+    model-server camera child's pool — swapping the pose model in Manage Models
+    would never invalidate the child's cached self._pose/self._pose_built, so
+    every camera process would keep the stale pose session until a full app
+    restart.
+    """
+    import queue
+
+    import autoptz.engine.pipeline.pose as pose_mod
+
+    built = []
+
+    class _StubPose:
+        available = True
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            built.append(kwargs)
+
+    monkeypatch.setattr(pose_mod, "PoseEstimator", _StubPose)
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 16, 16)
+    client = InferenceClient("camA", queue.Queue(), queue.Queue(), writer)
+    pool = RemotePool(client)
+
+    first = pool.pose()
+    assert pool.pose() is first  # cached before release
+
+    pool.release_pose()
+    second = pool.pose()
+    assert second is not first  # rebuilt after release
+    assert len(built) == 2
+    writer.close()
+
+
+def test_remote_pool_release_detector_clears_stale_local_fallback() -> None:
+    """RemotePool must expose release_detector(), mirroring InferencePool.
+
+    Detection itself is delegated to the server (self._client is just an IPC
+    handle, not an ORT session to free) — but the R-3 degraded-mode LOCAL
+    fallback detector (self._local, built once the server is marked ``failed``)
+    IS local per-child state. Without release_detector() a Manage Models swap
+    while a camera is running in degraded/local-fallback mode would leave it
+    stuck on the stale local detector session forever.
+    """
+    import queue
+    import threading
+
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 16, 16)
+    client = InferenceClient("camA", queue.Queue(), queue.Queue(), writer)
+    calls = []
+
+    def _build_local():
+        obj = object()
+        calls.append(obj)
+        return obj
+
+    failed = threading.Event()
+    failed.set()  # already in degraded/local-fallback mode
+    pool = RemotePool(client, failed=failed, build_local_fn=_build_local)
+
+    first = pool.detector()
+    assert first is calls[0]
+    assert pool.detector() is first  # cached
+
+    pool.release_detector()
+    second = pool.detector()
+    assert second is not first  # rebuilt after release
+    assert len(calls) == 2
+    writer.close()
+
+
 def test_respawned_server_reuses_same_queues_no_client_reconstruction() -> None:
     """(a)+(d) Kill the server-side thread mid-run, "respawn" it (a fresh serve()
     loop reusing the SAME req/resp queues and shm reader dict — exactly what the
@@ -454,3 +597,142 @@ def test_respawned_server_reuses_same_queues_no_client_reconstruction() -> None:
             t2.join(timeout=1.0)
     finally:
         writer.close()
+
+
+# ── real execution provider surfaces through the model-server label ──────────
+#
+# "model-server" alone hides WHAT is actually running the model (CoreML? CPU?).
+# The server knows its detector's real EP; it tags each reply with it, the client
+# folds it into its ``ep`` label, and the UI shows "model-server (CoreML)".
+
+
+def test_server_ep_flows_into_client_ep_label() -> None:
+    import queue
+
+    cam = "camA"
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 64, 64)
+    reader = ShmReader(name, 64, 64)
+    req_q: queue.Queue = queue.Queue()
+    resp_q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+
+    t = threading.Thread(
+        target=serve,
+        args=(req_q, {cam: resp_q}, {cam: reader}, lambda f: [], stop),
+        kwargs={"ep_fn": lambda: "CoreMLExecutionProvider"},
+        daemon=True,
+    )
+    t.start()
+    try:
+        client = InferenceClient(cam, req_q, resp_q, writer, timeout_s=2.0)
+        assert client.ep == "model-server"  # server hasn't spoken yet
+        client.detect(_frame(1))
+        assert client.ep == "model-server (CoreML)"
+        # RemotePool relays the enriched label to the worker's diagnostics.
+        assert RemotePool(client).detector_ep == "model-server (CoreML)"
+    finally:
+        stop.set()
+        t.join(timeout=1.0)
+        writer.close()
+        reader.close()
+
+
+def test_client_ep_stays_plain_when_server_does_not_report() -> None:
+    """A server without an ep_fn (old build / detector still loading → empty ep)
+    keeps the plain label — never 'model-server ()'."""
+    import queue
+
+    cam = "camA"
+    name = f"itest_{uuid.uuid4().hex[:8]}"
+    writer = ShmWriter(name, 64, 64)
+    reader = ShmReader(name, 64, 64)
+    req_q: queue.Queue = queue.Queue()
+    resp_q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+
+    t = threading.Thread(
+        target=serve, args=(req_q, {cam: resp_q}, {cam: reader}, lambda f: [], stop), daemon=True
+    )
+    t.start()
+    try:
+        client = InferenceClient(cam, req_q, resp_q, writer, timeout_s=2.0)
+        client.detect(_frame(1))
+        assert client.ep == "model-server"
+        assert RemotePool(client).detector_ep == "model-server"
+    finally:
+        stop.set()
+        t.join(timeout=1.0)
+        writer.close()
+        reader.close()
+
+
+def test_worker_telemetry_ep_follows_late_server_ep() -> None:
+    """The worker snapshots ``ep`` when the detect stack is built — but the
+    model-server loads its detector in the BACKGROUND, so the real EP arrives
+    later. Telemetry must re-read the live detector's ep, not the stale snapshot."""
+    from autoptz.config.models import CameraConfig
+    from autoptz.engine.camera_worker import CameraWorker, _DetectStack
+    from autoptz.engine.runtime.messages import HealthState
+
+    class _LateEpDetector:
+        ep = "model-server"
+
+    seen = []
+    w = CameraWorker("cam-ep", CameraConfig(id="cam-ep", name="EpCam"), on_telemetry=seen.append)
+    det = _LateEpDetector()
+    w._detect = _DetectStack(detector=det, tracker=None, ep=det.ep)
+    w._ep = det.ep
+
+    w._emit_telemetry(tracks=[], health=HealthState.OK, last_error=None)
+    assert seen[-1].ep == "model-server"
+
+    det.ep = "model-server (CoreML)"  # server finished loading; client label enriched
+    w._emit_telemetry(tracks=[], health=HealthState.OK, last_error=None)
+    assert seen[-1].ep == "model-server (CoreML)"
+
+
+def test_worker_release_and_reload_propagate_to_pool_release_methods() -> None:
+    """CameraWorker._release_inference_models/_reload_inference_models must also
+    call the INJECTED POOL's own release_detector()/release_pose() (generic
+    getattr, mirroring Supervisor.release_model_sessions' pattern for the shared
+    InferencePool).
+
+    For a threaded worker this duplicates the supervisor's direct release of the
+    ONE shared InferencePool (harmless — release_* is idempotent, and the
+    supervisor already released it in-process before this ever runs). For a
+    model-server camera CHILD, though, the worker's pool is a RemotePool living
+    only inside that child's own process — the supervisor can never reach it
+    directly — so this is the ONLY call that can ever clear its cached
+    pose/local-fallback-detector session. Without it, a Manage Models swap never
+    reaches a model-server child's RemotePool (the bug this test pins).
+    """
+    from autoptz.config.models import CameraConfig
+    from autoptz.engine.camera_worker import CameraWorker
+
+    class _FakePool:
+        def __init__(self) -> None:
+            self.released: list[str] = []
+
+        def release_detector(self) -> None:
+            self.released.append("detector")
+
+        def release_pose(self) -> None:
+            self.released.append("pose")
+
+    w = CameraWorker(
+        "cam-pool-release",
+        CameraConfig(id="cam-pool-release", name="PoolReleaseCam"),
+        on_telemetry=lambda _m: None,
+    )
+    pool = _FakePool()
+    w.set_inference_pool(pool)
+
+    w._release_inference_models()
+    assert "detector" in pool.released
+    assert "pose" in pool.released
+
+    pool.released.clear()
+    w._reload_inference_models()
+    assert "detector" in pool.released
+    assert "pose" in pool.released

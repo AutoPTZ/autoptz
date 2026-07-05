@@ -312,6 +312,7 @@ def build_stylesheet(pal: Palette, accent: QColor, selection: QColor) -> str:
     QPushButton[danger="true"] {{ background: transparent; color: {ERROR}; border: 1px solid {pal.border}; }}
     QPushButton[danger="true"]:hover {{ background: {ERROR}; color: {ACCENT_TEXT}; border-color: {ERROR}; }}
     QPushButton[danger="true"]:pressed {{ background: {DANGER_HOVER}; color: {ACCENT_TEXT}; }}
+    QPushButton[danger="true"]:disabled {{ background: transparent; color: {pal.muted}; border-color: {pal.border}; }}
     /* icon-only square button (IconButton): borderless, subtle hover fill */
     QToolButton#iconButton {{ background: transparent; border: none; border-radius: {r}px;
         padding: 0; color: {pal.subtext}; }}
@@ -394,8 +395,8 @@ def build_stylesheet(pal: Palette, accent: QColor, selection: QColor) -> str:
     QToolButton#collGroupHeader:hover {{ color: {pal.text}; }}
 
     /* palette-driven shared widgets (common.py) — track light/dark for free */
-    QLabel#sectionCaption {{ color: {pal.subtext}; font-size: {fs(10)}px;
-        font-weight: 700; letter-spacing: 1px; }}
+    QLabel#sectionCaption {{ color: {pal.text}; font-size: {fs(11)}px;
+        font-weight: 800; letter-spacing: 1px; }}
     QFrame#hline {{ background: {pal.border}; border: none; }}
     QLabel#helpBadge {{ color: {pal.muted}; background: {pal.surface_alt};
         border: 1px solid {pal.border}; border-radius: {fs(8)}px;

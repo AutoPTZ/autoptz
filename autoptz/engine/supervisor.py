@@ -17,9 +17,9 @@ The :class:`Supervisor` is the engine's top-level orchestrator.  It:
 Threading
 ---------
 Each camera runs on its own threads (capture + inference) in this process.
-The retired model-per-child process mode is not a product path. The only retained
-process boundary is the explicit model-server candidate, where camera children
-use shm/msgpack transport and delegate detector inference to one shared server.
+The only path that crosses a process boundary is the shared detection server
+candidate, where camera children use shm/msgpack transport and delegate detector
+inference to one shared server.
 
 The command pump can either be driven externally (``tick()`` from a GUI-thread
 ``QTimer`` — the default the UI uses) or by an internal daemon thread
@@ -75,6 +75,11 @@ _MAX_RESTART_ATTEMPTS = 5  # give up after this many consecutive failures
 # treated as failed. Polled across ticks (never awaited) so a slow spawn cannot
 # block the GUI thread — see Supervisor._scan_model_server_health.
 _MS_SPAWN_TIMEOUT_S = 30.0
+# How long a late-camera attach waits for the OLD server to drain out on the stop
+# event before escalating to terminate().  Typical exit is ~0.2s (the serve loop's
+# get() timeout); the window is generous because terminate() on a queue consumer
+# poisons the shared request queue (see _attach_camera_to_model_server).
+_MS_DRAIN_TIMEOUT_S = 3.0
 # A worker can be ALIVE yet HUNG (capture/inference threads stuck, no telemetry).
 # Treat it as unhealthy and respawn it through the same backoff path once its
 # telemetry is older than this.  Deliberately above the 2.0 s inference-stall
@@ -188,6 +193,11 @@ class Supervisor:
         # respawn is currently in flight.
         self._ms_ready_ev: Any | None = None
         self._ms_spawn_deadline: float | None = None
+        # Non-blocking DRAIN bookkeeping for a late-camera attach's old-server
+        # drain (see _attach_camera_to_model_server / _poll_model_server_drain).
+        # Both None when no drain is in flight.
+        self._ms_drain_proc: Any | None = None
+        self._ms_drain_deadline: float | None = None
 
         # Global ML-subsystem switches (detection / tracking / face_recognition /
         # pose), broadcast via SetFeaturesCmd and applied to every worker.
@@ -338,6 +348,8 @@ class Supervisor:
         self._model_server_camera_ids = []
         self._ms_ready_ev = None
         self._ms_spawn_deadline = None
+        self._ms_drain_proc = None
+        self._ms_drain_deadline = None
         if proc is not None:
             try:
                 if stop_ev is not None:
@@ -593,7 +605,7 @@ class Supervisor:
         surface reports.
 
         Only in-process (threaded) ``CameraWorker`` instances expose the
-        inference-thread health surface; process-per-camera handles
+        inference-thread health surface; model-server process handles
         (``_is_process_worker``) are monitored by their own liveness path
         (``is_alive()`` on the child process) and are never subject to this
         predicate.
@@ -729,7 +741,9 @@ class Supervisor:
 
         ``tick()`` (and therefore this scan) runs on the GUI thread in the shipped
         app, so a respawn attempt must never block it: starting the child and
-        waiting for its ready-handshake are split across ticks. ``_ms_spawn_deadline``
+        waiting for its ready-handshake are split across ticks, and so is draining
+        the OLD process out before a late-camera attach's restart (see
+        :meth:`_poll_model_server_drain`, dispatched first). ``_ms_spawn_deadline``
         is None when no respawn is in flight; while it is set, this method only
         POLLS the ready Event (never ``.wait()`` with a timeout) and otherwise
         no-ops until the deadline passes. ``_model_server_down`` stays set for the
@@ -748,6 +762,10 @@ class Supervisor:
         from autoptz.engine.runtime.flags import env_model_server
 
         if not env_model_server() or self._model_server_proc is None:
+            return
+
+        if self._ms_drain_proc is not None:
+            self._poll_model_server_drain(now)
             return
 
         if self._ms_spawn_deadline is not None:
@@ -779,8 +797,8 @@ class Supervisor:
         if new_attempts >= _MAX_RESTART_ATTEMPTS:
             self._ms_restart_state = (new_attempts, now + backoff, True)
             log.error(
-                "model-server permanently failed: %d auto-restart attempts exhausted "
-                "— falling back to local per-camera detectors.",
+                "shared detection server permanently failed: %d auto-restart attempts "
+                "exhausted — cameras continue with their own built-in detectors.",
                 new_attempts,
             )
             if self._model_server_failed_ev is not None:
@@ -812,6 +830,16 @@ class Supervisor:
             self._ms_restart_state = (0, 0.0, False)
             if self._model_server_down is not None:
                 self._model_server_down.clear()
+            if self._model_server_failed_ev is not None and self._model_server_failed_ev.is_set():
+                # A PRIOR budget exhaustion had latched every RemotePool onto its
+                # local-fallback detector (see RemotePool.detector()); this fresh
+                # server is confirmed healthy (ready-handshake just arrived), so
+                # clear the flag or every camera — including one added after this
+                # very respawn, via _attach_camera_to_model_server — would stay on
+                # local fallback forever despite a working shared server.
+                self._model_server_failed_ev.clear()
+                self._refresh_model_server_workers()
+                log.info("shared detection server recovered — resuming for all cameras.")
             log.info("model-server respawned successfully — resuming shared detection.")
             return
 
@@ -842,8 +870,8 @@ class Supervisor:
         if attempts >= _MAX_RESTART_ATTEMPTS:
             self._ms_restart_state = (attempts, now + backoff, True)
             log.error(
-                "model-server permanently failed: %d auto-restart attempts exhausted "
-                "— falling back to local per-camera detectors.",
+                "shared detection server permanently failed: %d auto-restart attempts "
+                "exhausted — cameras continue with their own built-in detectors.",
                 attempts,
             )
             if self._model_server_failed_ev is not None:
@@ -893,6 +921,124 @@ class Supervisor:
             # routes to fallback (budget exhausted) — see
             # _scan_model_server_health / _poll_model_server_spawn.
 
+    def _attach_camera_to_model_server(self, camera_id: str) -> Any | None:
+        """Give a camera added AFTER the shared server started its own IPC slot.
+
+        The server's response-queue set is fixed at spawn (an ``mp.Queue`` can only
+        cross the process boundary via spawn args), so a late camera — including a
+        remove + re-add, which mints a NEW camera id — gets a slot by restarting
+        the server process with the updated queue dict. This reuses the R-3 respawn
+        machinery: the down-gate holds while the fresh server boots, every existing
+        camera's ``InferenceClient`` fast-fails (serving empty) instead of blocking,
+        and predictive coast keeps their tracking smooth through the ~2s swap.
+
+        This method itself never blocks: it registers the new queue/slot and the
+        graceful stop signal (all cheap), then hands the OLD process off to
+        :meth:`_poll_model_server_drain` — ticked from :meth:`_scan_model_server_health`
+        — instead of joining here. ``_on_add_camera`` (this method's only caller) runs
+        on the GUI-thread ``tick()``, so a slow-to-exit old server must not stall it;
+        the down-gate already set below means every camera (including the new one)
+        fast-fails on detection until the drain+respawn actually completes a beat
+        later, exactly like the existing crash-respawn window.
+
+        Returns the new response queue, or ``None`` when there is no live server to
+        attach to (the caller then falls back to the threaded pipeline, as before).
+        """
+        if self._infer_req_q is None or self._model_server_proc is None:
+            return None
+        try:
+            import multiprocessing as mp
+
+            ctx = mp.get_context("spawn")
+            q = ctx.Queue()
+            self._infer_resp_qs[camera_id] = q
+            if camera_id not in self._model_server_camera_ids:
+                self._model_server_camera_ids.append(camera_id)
+            log.info(
+                "camera %s added after the shared detection server started — "
+                "restarting the server with an updated slot set (other cameras "
+                "coast briefly).",
+                camera_id,
+            )
+            if self._model_server_down is not None:
+                self._model_server_down.set()
+            old_proc = self._model_server_proc
+            stop_ev = self._model_server_stop
+            if stop_ev is not None:
+                try:
+                    stop_ev.set()  # graceful: serve() drains out on its own
+                except Exception:  # noqa: BLE001
+                    log.debug("model-server stop event set failed", exc_info=True)
+            # Drain, do NOT kill, on THIS call: the old server is parked in
+            # ``req_q.get()``, and terminating a process inside a
+            # multiprocessing.Queue read poisons the SHARED request queue (the dead
+            # reader holds the queue's reader lock / leaves a partial length-prefixed
+            # message in the pipe) — the respawned server then never receives a
+            # single request and every camera loses detection until the app
+            # restarts.  The serve loop polls the stop event every ≤0.2s, so it
+            # typically exits in ~a quarter second; terminate() stays only as the
+            # escalation _poll_model_server_drain applies for a truly wedged
+            # process.  Handing the deadline off (instead of joining here) is what
+            # keeps this call non-blocking.
+            self._ms_drain_proc = old_proc
+            self._ms_drain_deadline = time.monotonic() + _MS_DRAIN_TIMEOUT_S
+        except Exception:  # noqa: BLE001 — attach is best-effort; threaded fallback below
+            log.warning(
+                "late model-server attach for camera %s failed — falling back to "
+                "the threaded pipeline.",
+                camera_id,
+                exc_info=True,
+            )
+            self._infer_resp_qs.pop(camera_id, None)
+            return None
+        return q
+
+    def _poll_model_server_drain(self, now: float) -> None:
+        """Non-blocking continuation of an in-flight old-server drain.
+
+        Dispatched from :meth:`_scan_model_server_health` on every health-scan tick
+        while ``_ms_drain_proc`` is set (a late-camera attach is waiting for the OLD
+        server to exit before :meth:`_respawn_model_server` starts the new one).
+        Only ever polls ``is_alive()`` — never ``.join()`` with a nonzero timeout —
+        so a slow-to-exit old server cannot stall the GUI thread's ``tick()``.
+        """
+        proc = self._ms_drain_proc
+        if proc is None:
+            return
+        deadline = self._ms_drain_deadline
+        assert deadline is not None  # guarded by caller
+
+        try:
+            alive = bool(proc.is_alive())
+        except Exception:  # noqa: BLE001
+            alive = False
+        if not alive:
+            self._ms_drain_proc = None
+            self._ms_drain_deadline = None
+            self._respawn_model_server(now)
+            return
+
+        if now < deadline:
+            return  # still draining; check again next tick
+
+        log.warning(
+            "old model-server did not drain within %.1fs — terminating; the "
+            "shared request queue may be poisoned (cameras may need an "
+            "engine restart to regain detection).",
+            _MS_DRAIN_TIMEOUT_S,
+        )
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001
+            log.debug("old model-server terminate failed", exc_info=True)
+        try:
+            proc.join(timeout=0.5)
+        except Exception:  # noqa: BLE001
+            log.debug("old model-server join failed", exc_info=True)
+        self._ms_drain_proc = None
+        self._ms_drain_deadline = None
+        self._respawn_model_server(now)
+
     def _refresh_model_server_workers(self) -> None:
         """Ask every model-server-mode camera worker to re-pull its detector from
         the pool — the seam RemotePool uses to swap in a local detector once the
@@ -941,9 +1087,13 @@ class Supervisor:
             self._on_update_config(cmd)
         elif kind == CmdKind.ENROLL_IDENTITY:
             self._on_enroll_identity(cmd)
-        # Remaining commands (named-preset, identities, layouts) are UI/store
-        # concerns with no per-worker effect yet; they are intentionally ignored
-        # here so the pump never errors on them.
+        elif kind == CmdKind.RENAME_IDENTITY:
+            self._on_rename_identity(cmd)
+        elif kind == CmdKind.DELETE_IDENTITY:
+            self._on_delete_identity(cmd)
+        # Remaining commands (named-preset, layouts) are UI/store concerns with
+        # no per-worker effect yet; they are intentionally ignored here so the
+        # pump never errors on them.
 
     def _on_add_camera(self, cmd: AddCameraCmd) -> None:
         # _spawn_worker dedupes + registers under the lock and starts the worker
@@ -959,6 +1109,15 @@ class Supervisor:
         self._restart_state.pop(cid, None)
         self._last_telemetry_t.pop(cid, None)
         self._spawn_t.pop(cid, None)
+        # Drop the camera's model-server slot: each leaked mp.Queue holds pipe fds
+        # + a feeder thread, and the next server respawn would re-pickle queues for
+        # cameras that no longer exist.  (The running server keeps its own copy of
+        # the dict and safely ignores requests for unknown cameras.)
+        self._infer_resp_qs.pop(cid, None)
+        try:
+            self._model_server_camera_ids.remove(cid)
+        except ValueError:
+            pass
         if worker is not None:
             try:
                 worker.stop()
@@ -1005,6 +1164,59 @@ class Supervisor:
                 getattr(cmd, "click_x", None),
                 getattr(cmd, "click_y", None),
             )
+
+    def _on_rename_identity(self, cmd: Any) -> None:
+        """Apply a rename/label/touch to the shared gallery, then relay the
+        updated record to every process-mode child.
+
+        The UI already mutated the shared (parent) gallery, so the rename here is
+        an idempotent re-apply; the point of the handler is the relay — each
+        process child holds its OWN gallery and would otherwise only learn about
+        face-DB edits on restart.  ``merge`` and enable/disable arrive as a
+        rename-to-the-current-name "touch": the relayed record carries the merged
+        embeddings / new enabled state.
+        """
+        if not cmd.identity_id:
+            return
+        service = self._ensure_identity_service()
+        if service is None:
+            return
+        try:
+            service.rename(cmd.identity_id, cmd.new_name)
+        except Exception:  # noqa: BLE001
+            log.debug("identity rename in shared gallery failed", exc_info=True)
+        try:
+            record = service.get(cmd.identity_id)
+        except Exception:  # noqa: BLE001
+            record = None
+        if record is not None:
+            # source_cid="" → no worker matches, so this relays to ALL process
+            # children (a UI edit has no source camera).
+            self._relay_identity_to_siblings("", record)
+
+    def _on_delete_identity(self, cmd: Any) -> None:
+        """Delete from the shared gallery, then tell every process-mode child.
+
+        Without the broadcast a process child keeps matching (and following) an
+        identity the user deleted until its next restart.
+        """
+        if not cmd.identity_id:
+            return
+        service = self._ensure_identity_service()
+        if service is not None:
+            try:
+                service.delete(cmd.identity_id)
+            except Exception:  # noqa: BLE001
+                log.debug("identity delete in shared gallery failed", exc_info=True)
+        with self._lock:
+            workers = [w for w in self._workers.values() if getattr(w, "_is_process_worker", False)]
+        for worker in workers:
+            drop = getattr(worker, "delete_identity", None)
+            if callable(drop):
+                try:
+                    drop(cmd.identity_id)
+                except Exception:  # noqa: BLE001
+                    log.debug("identity delete relay failed", exc_info=True)
 
     def _on_ptz_nudge(self, cmd: PtzNudgeCmd) -> None:
         worker = self._get(cmd.camera_id)
@@ -1081,8 +1293,8 @@ class Supervisor:
                 except Exception:  # noqa: BLE001
                     log.debug("pool %s failed", method, exc_info=True)
 
-    def release_model_sessions(self) -> None:
-        """Free every detector/pose ORT session (pool + workers) before a cache mutation.
+    def release_model_sessions(self, *, include_face: bool = False) -> None:
+        """Free detector/pose ORT sessions (pool + workers) before a cache mutation.
 
         Windows refuses to delete/replace a model file while onnxruntime still has
         it open, so the UI calls this *before* downloading/removing files: the pool
@@ -1090,12 +1302,19 @@ class Supervisor:
         then a ``gc.collect()`` finalises the sessions so the OS handles are gone.
         POSIX tolerates unlink-while-open, which is why the old (release-after)
         order only failed on Windows.
+
+        ``include_face`` additionally releases the shared insightface face session —
+        set ONLY for a face-pack download/remove.  Left False for detector/pose ops
+        so an unrelated cache change never drops and reloads the ~1.3 GB face pack.
         """
         if not self._running:
             return
         pool = self._inference_pool
         if pool is not None:
-            for method in ("release_detector", "release_pose"):
+            methods = ["release_detector", "release_pose"]
+            if include_face:
+                methods.append("release_face")
+            for method in methods:
                 fn = getattr(pool, method, None)
                 if callable(fn):
                     try:
@@ -1110,18 +1329,21 @@ class Supervisor:
                 try:
                     # Block briefly so the inference thread actually drops its refs
                     # before we GC + mutate; the file-op retry covers any residual.
-                    release(wait=1.0)
+                    release(wait=1.0, include_face=include_face)
+                except TypeError:
+                    release(wait=1.0)  # older/test workers without include_face
                 except Exception:  # noqa: BLE001
                     log.debug("worker model release failed", exc_info=True)
         import gc
 
         gc.collect()
 
-    def rebuild_model_sessions(self) -> None:
+    def rebuild_model_sessions(self, *, include_face: bool = False) -> None:
         """Rebuild detector/pose from the (now-refreshed) cache after a mutation.
 
         Each worker force-reloads from the shared pool — yielding the new model, or
-        live-preview-only when the files were removed.  Pairs with
+        live-preview-only when the files were removed.  ``include_face`` also
+        rebuilds the face stack (only for a face-pack op).  Pairs with
         :meth:`release_model_sessions`.
         """
         if not self._running:
@@ -1132,7 +1354,9 @@ class Supervisor:
             reload = getattr(worker, "reload_inference_models", None)
             if callable(reload):
                 try:
-                    reload()
+                    reload(include_face=include_face)
+                except TypeError:
+                    reload()  # older/test workers without include_face
                 except Exception:  # noqa: BLE001
                     log.debug("worker model reload failed", exc_info=True)
 
@@ -1350,12 +1574,12 @@ class Supervisor:
 
         Read once at engine start (from inside :meth:`_apply_hardware_env`, before
         any worker spawns) so the flags take effect on the next engine run.  Only
-        keys persisted in the ``experimental_features`` dict by legacy UI/dev tools
-        are managed: for each such env-flag key, set the env var when the saved
-        value differs from the flag's engine default, or pop it (clearing a stale
-        value from a prior selection) when it equals the default.  Keys in the
-        saved dict that are not env flags (the per-camera ``TrackingConfig``
-        defaults) are ignored here — they are consumed when a NEW camera is added.
+        keys registered in ``EXPERIMENTAL_FLAGS`` are managed: for each such key,
+        set the env var when the saved value differs from the flag's engine
+        default, or pop it (clearing a stale value from a prior selection) when it
+        equals the default.  Unknown keys in the saved dict (a flag that was
+        removed, an excluded hardware var, the dead per-camera tracking defaults)
+        are ignored for env and pruned from the persisted dict.
 
         A key the user never persisted is left UNTOUCHED: an absent / empty /
         unreadable dict is the feature-inactive baseline, and any env var set
@@ -1379,6 +1603,17 @@ class Supervisor:
                 os.environ[flag.env_key] = str(value)
             else:
                 os.environ.pop(flag.env_key, None)
+
+        # Prune keys that are no longer in the registry so the persisted dict does
+        # not accumulate dead flags across upgrades.  Only rewrite when something
+        # actually changed, to avoid a needless store write on every engine start.
+        known = {flag.env_key for flag in EXPERIMENTAL_FLAGS}
+        cleaned = {k: v for k, v in saved.items() if k in known}
+        if self._store is not None and cleaned != saved:
+            try:
+                self._store.set_setting("experimental_features", cleaned)
+            except Exception:  # noqa: BLE001 — pruning is best-effort
+                log.debug("pruning stale experimental_features keys failed", exc_info=True)
 
     def _make_telemetry_callback(self, camera_id: str) -> Callable[[Any], None]:
         """Wrap push_telemetry so the supervisor records a per-camera last-seen time.
@@ -1412,9 +1647,9 @@ class Supervisor:
         process workers are active every worker shares the same in-process gallery,
         so no relay is necessary and we avoid touching the supervisor RLock.
         """
-        from autoptz.engine.process_worker import process_per_camera_enabled
+        from autoptz.engine.process_worker import model_server_workers_enabled
 
-        if not process_per_camera_enabled():
+        if not model_server_workers_enabled():
             return
         with self._lock:
             siblings = [
@@ -1433,18 +1668,36 @@ class Supervisor:
     def _make_worker(self, camera_id: str, config: CameraConfig) -> Any:
         """Build a camera worker.
 
-        Production uses the threaded worker.  The only remaining process-worker
-        path is the explicit model-server architecture: camera children may run in
-        separate processes only when a shared inference request queue and a
-        per-camera response queue are ready.  If the model-server did not start or
-        the camera was added after its fixed queue set was built, fall back to the
-        normal threaded worker instead of recreating the retired model-per-child
-        experiment.
+        Production uses the threaded worker.  The only path that crosses a process
+        boundary is the shared detection server: camera children run in separate
+        processes only when a shared inference request queue and a per-camera
+        response queue are ready.  If the server did not start, or the camera was
+        added after its fixed queue set was built, fall back to the built-in
+        threaded worker.
         """
         on_telemetry = self._make_telemetry_callback(camera_id)
+        # Transparency: a configured NDI camera that ingests THIS machine's own
+        # AutoPTZ output is a feedback loop (encode + re-decode of our own
+        # pixels, possibly nested) — a major, easy-to-miss CPU/frame-drop source.
+        # The NDI menu hides these now, but cameras added earlier persist.
+        src = getattr(config, "source", None)
+        if src is not None and str(getattr(src, "type", "")) == "ndi":
+            from autoptz.engine.discovery.ndi import is_own_autoptz_output
+
+            addr = str(getattr(src, "address", "") or "").removeprefix("ndi://")
+            cam_name = str(getattr(config, "name", "") or "")
+            if is_own_autoptz_output(addr) or is_own_autoptz_output(cam_name):
+                log.warning(
+                    "camera_id=%s ingests this machine's OWN AutoPTZ NDI output (%s) — "
+                    "a feedback loop that re-encodes and re-decodes the same pixels. "
+                    "Expect heavy CPU and frame drops; remove this camera unless "
+                    "intentional.",
+                    camera_id,
+                    addr or cam_name,
+                )
         from autoptz.engine.process_worker import (
             ProcessWorkerHandle,
-            process_per_camera_enabled,
+            model_server_workers_enabled,
         )
 
         # ``==`` (not ``is``): ``self._default_worker_factory`` is a bound method, and
@@ -1453,15 +1706,22 @@ class Supervisor:
         # opt-in process path.  Bound methods compare equal by (instance, function),
         # so ``==`` is True only when no custom/test factory was injected.
         use_process = (
-            self._worker_factory == self._default_worker_factory and process_per_camera_enabled()
+            self._worker_factory == self._default_worker_factory and model_server_workers_enabled()
         )
         if not use_process:
             return self._worker_factory(camera_id, config, on_telemetry)
         infer_resp_q = self._infer_resp_qs.get(camera_id)
+        if self._infer_req_q is not None and infer_resp_q is None:
+            # Camera added (or removed + re-added, which mints a new id) after the
+            # server built its fixed queue set — give it a slot via a controlled
+            # server restart instead of silently degrading to the threaded
+            # pipeline inside the GUI process.
+            infer_resp_q = self._attach_camera_to_model_server(camera_id)
         if self._infer_req_q is None or infer_resp_q is None:
             log.warning(
-                "model-server process worker unavailable for %s; using the normal "
-                "threaded worker instead of the retired model-per-child process path.",
+                "shared detection server unavailable for camera %s — this camera "
+                "runs the built-in threaded pipeline; restart the engine to attach "
+                "it to the shared server.",
                 camera_id,
             )
             return self._worker_factory(camera_id, config, on_telemetry)

@@ -552,3 +552,49 @@ class TestLayoutListModel:
         found = m.get_layout(lo.id)
         assert found is not None
         assert found.name == "Stage"
+
+
+# ── merge / enable must sync the engine (process-mode children) ──────────────
+
+
+class TestIdentityEngineSyncCommands:
+    """Merge and enable/disable change what the matcher does, so they must
+    enqueue engine commands too — otherwise process-mode children (isolated
+    galleries) never learn about them until restart."""
+
+    def _client_with_identity(self):
+        client, _ = make_client()
+        cid = client.addCamera("usb://0", "X")
+        client.enrollIdentity(cid, "Alice", 1)
+        iid = client._identity_model.get_all()[0].id
+        client.drain_commands()
+        return client, cid, iid
+
+    def test_merge_enqueues_engine_sync_commands(self):
+        client, cid, keep_id = self._client_with_identity()
+        client.enrollIdentity(cid, "Bob", 2)
+        drop_id = next(r.id for r in client._identity_model.get_all() if r.id != keep_id)
+        client.drain_commands()
+
+        client.mergeIdentities(keep_id, drop_id)
+
+        cmds = client.drain_commands()
+        renames = [c for c in cmds if c.kind == CmdKind.RENAME_IDENTITY]
+        deletes = [c for c in cmds if c.kind == CmdKind.DELETE_IDENTITY]
+        assert [(c.identity_id, c.new_name) for c in renames] == [(keep_id, "Alice")], (
+            "merge must touch the kept identity so the merged record is relayed"
+        )
+        assert [c.identity_id for c in deletes] == [drop_id], (
+            "merge must tell the engine to drop the folded identity"
+        )
+
+    def test_set_enabled_enqueues_touch_command(self):
+        client, _cid, iid = self._client_with_identity()
+
+        client.setIdentityEnabled(iid, False)
+
+        cmds = client.drain_commands()
+        renames = [c for c in cmds if c.kind == CmdKind.RENAME_IDENTITY]
+        assert [(c.identity_id, c.new_name) for c in renames] == [(iid, "Alice")], (
+            "toggling enabled must touch the identity so the new state is relayed"
+        )

@@ -191,6 +191,10 @@ class CameraTile(QWidget):
         # so it's available without hovering.
         self._info_badge = HelpBadge("Per-stage performance", self)
         self._info_badge.setObjectName("helpBadge")
+        # Whether the top-left target label painted this frame (set by
+        # _draw_target_label, reset each paintEvent) — the state chip skips
+        # painting when it did, so the two never overlap.
+        self._target_label_drawn = False
 
     # ── overlay (per-tile tracking control) ──────────────────────────────────────
 
@@ -531,6 +535,13 @@ class CameraTile(QWidget):
         kind = src.get("source_label") or src.get("type") or ""
         res = f"{w}×{h}" if w and h else "—"
         lines.append(f"Source: {res}" + (f" · {kind}" if kind else ""))
+        # Auto-quality cadence (the old on-tile "×N" chip, now worded here where
+        # there's room to say what it means; the Properties panel shows it too).
+        deg = _degradation_chip_info(rec)
+        if deg.get("visible"):
+            reason = str(deg.get("tooltip", "") or "").strip()
+            line = f"Auto quality: detector cadence relaxed {deg.get('text')}"
+            lines.append(f"{line} ({reason})" if reason else line)
         return "\n".join(lines)
 
     # ── painting ───────────────────────────────────────────────────────────────
@@ -575,16 +586,15 @@ class CameraTile(QWidget):
 
         # HUD overlays (only meaningful once we have a frame/telemetry)
         if rec is not None:
+            self._target_label_drawn = False
             self._paint_tracks(p, rec)
             self._paint_name_pill(p, rec)
             self._paint_fps_chip(p, rec)
-            # Resolved once and shared: the degradation chip's x-position depends
-            # on whether the state chip drew (same row), so it needs this result
-            # too — computing it twice per paint would double the (cheap but
-            # unnecessary) dict-building work in ``_state_chip_info``.
-            state_info = _state_chip_info(rec)
-            state_chip_w = self._paint_state_chip(p, state_info)
-            self._paint_degradation_chip(p, rec, state_chip_width=state_chip_w)
+            # One status surface at a time: when a target label drew at top-left
+            # (it carries the same state as its headline, plus identity and
+            # confidence), the state chip would paint on top of it — skip it.
+            if not self._target_label_drawn:
+                self._paint_state_chip(p, _state_chip_info(rec))
             self._paint_banner(p, rec, streaming)
 
         # Selection glow is separate from tracking; tracking is shown on the target marker.
@@ -1063,6 +1073,8 @@ class CameraTile(QWidget):
         detail: str = "",
     ) -> None:
         """Draw the active target label as a readable tile chip, not a bbox chip."""
+        # The state chip skips painting when this label drew (same top-left spot).
+        self._target_label_drawn = True
         f = QFont(self.font())
         f.setPixelSize(12)
         f.setBold(True)
@@ -1185,21 +1197,16 @@ class CameraTile(QWidget):
     }
 
     def _paint_state_chip(self, p: QPainter, info: dict[str, Any]) -> float:
-        """Small colored chip showing the live tracking state (name-pill row).
+        """Small colored chip showing the live tracking state (below the name pill).
 
         Same scrim-pill treatment as ``_paint_fps_chip``/``_paint_name_pill``:
         no per-frame allocation beyond the QColor/QFont/QRectF Qt itself needs
         to paint text, matching the rest of the HUD. Chip is display-only —
         no config, no interaction — it reflects ``tracking_status.state``
         exactly as the engine reports it (project rule: configured→effective,
-        never silently hidden). ``info`` is the pre-resolved
-        ``_state_chip_info(rec)`` result (shared with ``_paint_degradation_chip``
-        for its same-row positioning, so it's resolved once in ``paintEvent``).
-
-        Returns the painted chip's pixel width (0.0 when hidden) so the
-        degradation chip can offset off the *actual* label instead of a
-        hardcoded guess — labels vary (LOCKED/COASTING/STANDBY/MANUAL/
-        DEGRADED/...) and a fixed offset would misplace the second chip.
+        never silently hidden). Painted only when no target label drew this
+        frame (the label occupies the same top-left spot and already carries
+        the state in its headline), so the two surfaces never overlap.
         """
         if not info.get("visible"):
             return 0.0
@@ -1221,41 +1228,6 @@ class CameraTile(QWidget):
         p.setPen(color)
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
         return chip_w
-
-    def _paint_degradation_chip(
-        self, p: QPainter, rec: Any, *, state_chip_width: float = 0.0
-    ) -> None:
-        """Small ``×2``/``×4`` chip when the auto quality ladder has relaxed the
-        detector cadence below what's configured (transparency for the "auto
-        scales but stays visible" rule) — hidden at the configured cadence.
-
-        ``state_chip_width`` is the pixel width ``_paint_state_chip`` just
-        painted (0.0 if that chip is hidden), so this chip sits immediately
-        to the right of whatever the state chip actually rendered.
-        """
-        info = _degradation_chip_info(rec)
-        if not info.get("visible"):
-            return
-        text = str(info.get("text", ""))
-        f = QFont(self.font())
-        f.setPixelSize(10)
-        f.setBold(True)
-        p.setFont(f)
-        fm = QFontMetrics(f)
-        tw = fm.horizontalAdvance(text)
-        # Sits to the right of the state chip, same row.
-        x = 8 + state_chip_width + 6 if state_chip_width > 0 else 8
-        rect = QRectF(x, 35, tw + 16, 20)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(T.VIDEO_SCRIM)
-        p.drawRoundedRect(rect, 5, 5)
-        p.setPen(QColor(T.WARNING))
-        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
-        tip = str(info.get("tooltip", ""))
-        if tip and self.toolTip() != tip:
-            # Reuse the widget tooltip as the "detail carrying the reason" the
-            # brief asks for; cheap to set only when it actually changes.
-            self.setToolTip(tip)
 
     def _paint_banner(self, p: QPainter, rec: Any, streaming: bool) -> None:
         health = str(getattr(rec, "health", "ok"))

@@ -193,18 +193,27 @@ class MarkPreflightDialog(QDialog):
         # Only two sources: the bundled clip (real decode) and real NDI senders.
         # The old "Synthetic — drawn people" option is removed — the drawn scene now
         # survives only as the env-gated ground-truth scene, never a user source.
-        source_box = QGroupBox("Camera source")
+        source_box = QGroupBox("Test video")
         source_col = QVBoxLayout(source_box)
         self._source_group = QButtonGroup(self)
         clip_label = (
-            "Bundled clip — real people (real decode)"
+            "Built-in clip — real people (recommended)"
             if clip_ok
-            else "Bundled clip — not installed (uses drawn people)"
+            else "Built-in clip — not installed (uses drawn people)"
         )
         self._clip_radio = QRadioButton(clip_label)
         ndi_ok = ndi_sim_available()
-        ndi_text = "Real NDI sources" if ndi_ok else "Real NDI sources  (requires cyndilib)"
+        ndi_text = (
+            "Simulated NDI streams (created on this computer)"
+            if ndi_ok
+            else "Simulated NDI streams (requires cyndilib)"
+        )
         self._ndi_radio = QRadioButton(ndi_text)
+        self._ndi_radio.setToolTip(
+            "Broadcasts temporary NDI senders on this computer and receives them "
+            "through the real NDI pipeline — it does NOT use NDI cameras already on "
+            "your network. Measures the actual NDI decode + capture path at scale."
+        )
         self._ndi_radio.setEnabled(ndi_ok)
         self._source_group.addButton(self._clip_radio)
         self._source_group.addButton(self._ndi_radio)

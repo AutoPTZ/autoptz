@@ -29,7 +29,9 @@ def _make_worker(*, group_framing: bool = False, identity_id: str | None = None)
         config = config.model_copy(
             update={"target": config.target.model_copy(update={"identity_id": identity_id})}
         )
-    return CameraWorker("test-cam-group12345", config, on_telemetry=lambda m: None)
+    w = CameraWorker("test-cam-group12345", config, on_telemetry=lambda m: None)
+    w._tracking_enabled = True  # Center Stage only crops while tracking is on
+    return w
 
 
 def _track(track_id: int, x1: float, y1: float, x2: float, y2: float) -> TrackInfo:

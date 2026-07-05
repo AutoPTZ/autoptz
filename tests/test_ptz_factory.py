@@ -381,9 +381,12 @@ class TestFramingTargetMap:
         assert t["face"] > t["head_shoulders"] > t["upper_body"] > t["full_body"] > t["wide"]
 
     def test_expected_values(self) -> None:
+        # face/head_shoulders softened from 0.80/0.60 (user-reported "intense")
+        # and now sourced from the shared framing_target.SUBJECT_HEIGHT_TARGETS
+        # so Center Stage composes the same shot.
         t = _ZOOM_FRAMING_TARGETS
-        assert t["face"] == pytest.approx(0.80)
-        assert t["head_shoulders"] == pytest.approx(0.60)
+        assert t["face"] == pytest.approx(0.65)
+        assert t["head_shoulders"] == pytest.approx(0.52)
         assert t["upper_body"] == pytest.approx(0.45)
         assert t["full_body"] == pytest.approx(0.30)
         assert t["wide"] == pytest.approx(0.20)

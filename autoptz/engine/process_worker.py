@@ -17,8 +17,8 @@ How the boundary is crossed (the scaffolding the engine was designed around):
   picklable pydantic models, so no hand-rolled framing is needed.
 - **Models** are not loaded per child in the supported process path.  The camera
   child receives model-server IPC queues and uses a shared detector server; if
-  those queues are missing, the supervisor falls back to the normal threaded
-  worker instead of reviving the retired model-per-child mode.
+  those queues are missing, the supervisor falls back to the built-in threaded
+  worker.
 
 **Identity:** labeled identities converge through the shared SQLite DB (each child
 opens its own connection).  *Unlabeled* auto-harvested faces are propagated live
@@ -198,6 +198,11 @@ def _configure_child_logging() -> None:
     """
     import sys
 
+    from autoptz.logsetup import suppress_noisy_dependency_warnings
+
+    # Children run face alignment on the hot path; without this every child
+    # floods stderr with insightface's skimage FutureWarning.
+    suppress_noisy_dependency_warnings()
     root = logging.getLogger()
     root.setLevel(logging.WARNING)
     if not root.handlers:
@@ -295,6 +300,12 @@ def run_camera_process(
                 RemotePool(client, failed=infer_failed_ev, build_local_fn=_build_local_detector)
             )
             worker._infer_shm_writer = _infer_writer  # keep the shm alive for the worker's life
+            # Only DETECTION is delegated to the server — this child still owns its
+            # face matching, so it needs the DB-backed gallery like any other worker.
+            # Without it the face stack falls back to an empty in-memory gallery:
+            # enrolled names never load ("Person N" forever) and the sibling
+            # ingest_identity relay no-ops (it targets the injected service).
+            _wire_identity(worker, spec)
         elif not spec.synthetic:
             _wire_models_and_identity(worker, spec)
 
@@ -343,6 +354,11 @@ def _wire_models_and_identity(worker: Any, spec: WorkerSpec) -> None:
     except Exception:  # noqa: BLE001 — pool is an optimisation, never load-bearing
         log.warning("camera process %s: inference pool init failed", spec.camera_id, exc_info=True)
 
+    _wire_identity(worker, spec)
+
+
+def _wire_identity(worker: Any, spec: WorkerSpec) -> None:
+    """Build this child's DB-backed identity gallery and inject it (both modes)."""
     try:
         from pathlib import Path
 
@@ -604,6 +620,10 @@ class ProcessWorkerHandle:
         """Relay an identity harvested in another process into this child's gallery."""
         self._send("ingest_identity", (record,))
 
+    def delete_identity(self, identity_id: str) -> None:
+        """Drop an identity deleted in the UI from this child's gallery."""
+        self._send("delete_identity", (identity_id,))
+
     def enroll_track(self, *args: Any) -> None:
         self._send("enroll_track", args)
 
@@ -632,13 +652,23 @@ class ProcessWorkerHandle:
     def refresh_detector_from_pool(self) -> None:
         self._send("refresh_detector_from_pool")
 
-    def reload_inference_models(self) -> None:
-        self._send("reload_inference_models")
+    def reload_inference_models(self, *, include_face: bool = False) -> None:
+        # include_face must reach the child verbatim: the child rebuilds its OWN
+        # local face stack (_wire_identity / _build_face_stack) — it is not the
+        # shared pool's face session, so Supervisor's generic
+        # `reload(include_face=include_face)` call needs this kwarg accepted here,
+        # not silently swallowed by the caller's `except TypeError` fallback.
+        self._send("reload_inference_models", (), {"include_face": bool(include_face)})
 
-    def release_inference_models(self, *, wait: float = 0.0) -> None:
+    def release_inference_models(self, *, wait: float = 0.0, include_face: bool = False) -> None:
         # Best-effort across the process boundary (the on-disk model-cache mutation
         # retry in models.py covers any residual lock); the wait is not honoured.
-        self._send("release_inference_models", (), {"wait": 0.0})
+        # include_face IS honoured — it must reach the child's own
+        # release_inference_models so a face-pack op drops ITS OWN FaceRecognizer
+        # session (see reload_inference_models above for why).
+        self._send(
+            "release_inference_models", (), {"wait": 0.0, "include_face": bool(include_face)}
+        )
 
     # ── child → parent event pump ───────────────────────────────────────────────
 
@@ -680,8 +710,13 @@ class ProcessWorkerHandle:
                 continue
 
 
-def process_per_camera_enabled() -> bool:
-    """True only for model-server mode; the model-per-child flag is retired."""
-    from autoptz.engine.runtime.flags import env_process_per_camera
+def model_server_workers_enabled() -> bool:
+    """Whether camera workers run as model-server child processes.
 
-    return env_process_per_camera()
+    True only when the shared detection server (``AUTOPTZ_MODEL_SERVER``) is on;
+    each camera process then delegates detection to that one server instead of
+    loading its own model set.  The default threaded path returns False.
+    """
+    from autoptz.engine.runtime.flags import env_model_server
+
+    return env_model_server()

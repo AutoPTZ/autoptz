@@ -67,3 +67,57 @@ class TestInstallConsoleLogging:
         for h in list(logging.getLogger().handlers):
             if getattr(h, "_autoptz_console", False):
                 logging.getLogger().removeHandler(h)
+
+
+# ── third-party warning spam ──────────────────────────────────────────────────
+#
+# insightface's face_align triggers a skimage FutureWarning ("`estimate` is
+# deprecated…") on EVERY alignment call attribution point; with 5 camera child
+# processes the console drowns in it. Both the app console setup and the camera
+# child logging setup must suppress FutureWarnings attributed to insightface —
+# and ONLY insightface, so our own deprecation signals stay visible.
+
+
+def _emit_insightface_future_warning() -> None:
+    import warnings
+
+    warnings.warn_explicit(
+        "`estimate` is deprecated since version 0.26 and will be removed",
+        FutureWarning,
+        filename="/site-packages/insightface/utils/face_align.py",
+        lineno=23,
+        module="insightface.utils.face_align",
+    )
+
+
+def test_install_console_logging_suppresses_insightface_future_warnings() -> None:
+    import warnings
+
+    from autoptz.logsetup import install_console_logging
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        install_console_logging()
+        _emit_insightface_future_warning()
+        # Our own FutureWarnings must NOT be swallowed.
+        warnings.warn_explicit(
+            "autoptz thing deprecated",
+            FutureWarning,
+            filename="/autoptz/engine/foo.py",
+            lineno=1,
+            module="autoptz.engine.foo",
+        )
+    msgs = [str(w.message) for w in rec if issubclass(w.category, FutureWarning)]
+    assert msgs == ["autoptz thing deprecated"]
+
+
+def test_child_logging_suppresses_insightface_future_warnings() -> None:
+    import warnings
+
+    from autoptz.engine.process_worker import _configure_child_logging
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        _configure_child_logging()
+        _emit_insightface_future_warning()
+    assert [w for w in rec if issubclass(w.category, FutureWarning)] == []

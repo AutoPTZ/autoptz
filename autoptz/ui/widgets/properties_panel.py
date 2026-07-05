@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -42,6 +43,7 @@ from autoptz.ui.widgets.common import (
     HelpBadge,
     data_uri_to_pixmap,
     on_theme_changed,
+    scroll_content_min_width,
 )
 from autoptz.ui.widgets.joystick import JoystickPad
 from autoptz.ui.widgets.properties_helpers import (  # noqa: F401  re-exported
@@ -79,6 +81,15 @@ _TRACKING_MODE_CHOICES = [
     ("stable", "Stable target"),
     ("responsive", "Responsive"),
 ]
+
+# Base tooltip for the "Track person" combo when nothing identity-specific is
+# selected ("— Anyone —"). Overridden with the full, unelided identity name
+# whenever a specific person is selected — see _update_target_combo_tooltip.
+_TARGET_COMBO_HELP = (
+    "Lock tracking to a registered person — the camera follows them "
+    "whenever they're recognized. Choose “— Anyone —” to follow whoever "
+    "is detected."
+)
 
 _TRACKER_HELP = {
     "botsort": "BoT-SORT: best default for people. Uses motion plus optional appearance cues; steady but medium cost.",
@@ -242,6 +253,10 @@ class PropertiesPanel(QWidget):
         super().__init__(parent)
         self.setObjectName("propertiesPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # Width floor so nothing EVER clips horizontally, whatever a saved
+        # layout restored: see :meth:`minimumSizeHint`, computed from the real
+        # (font-metric-driven) content layout rather than a flat guess — the
+        # invariant is pinned by tests/test_panel_min_width_no_clip.py.
         self._client = client
         # Optional live-frame handle (a ``ShmFrameSource`` like the camera tiles
         # use).  When supplied, "Save preset" grabs the current frame as a JPEG
@@ -269,6 +284,14 @@ class PropertiesPanel(QWidget):
         self._scroll = QScrollArea(self)
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        # Never scroll sideways: the form fits the panel width; content-hungry
+        # fields (combos/line edits) are constrained below so labels aren't
+        # truncated behind a horizontal scrollbar in a narrow dock.
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # And pin the hidden bar to 0 — Qt can still auto-scroll sideways (focus
+        # navigation), which reads as content clipped at the left edge.
+        hsb = self._scroll.horizontalScrollBar()
+        hsb.valueChanged.connect(lambda v: hsb.setValue(0) if v else None)
         root.addWidget(self._scroll)
 
         body = QWidget()
@@ -277,6 +300,7 @@ class PropertiesPanel(QWidget):
         self._col.setSpacing(6)
         self._build_controls()
         self._col.addStretch(1)
+        self._constrain_field_widths(body)
         self._scroll.setWidget(body)
         self._scroll.setVisible(False)
 
@@ -310,6 +334,43 @@ class PropertiesPanel(QWidget):
         # Re-render preset tiles when this camera's config changes (e.g. after a
         # save/clear writes the new ``preset_slots`` back asynchronously).
         _connect(self._client, "configChanged", self._on_config_changed)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        """The real floor: the scroll body's live layout minimum + scrollbar chrome.
+
+        Previously a flat ``setMinimumWidth(360)`` — "sized for the widest
+        expanded section" by eyeballing it once on macOS/Linux — which
+        silently under-budgets on any font that renders wider at the same
+        point size (Windows' default UI font measurably does; this is what
+        broke on Windows CI while macOS/Linux stayed green). Computed instead
+        from :func:`~autoptz.ui.widgets.common.scroll_content_min_width`, which
+        reads the scrolled content's OWN (font-metric-driven) layout minimum —
+        correct on any platform/DPI. ``CollapsibleGroup.minimumSizeHint``
+        already reports its EXPANDED content's width even while collapsed, so
+        this reflects the worst case regardless of which sections happen to be
+        open right now. ``root`` has zero contents margins, so no extra
+        padding is needed beyond the scroll area's own chrome.
+        """
+        scroll = getattr(self, "_scroll", None)
+        if scroll is None:
+            return super().minimumSizeHint()
+        return QSize(scroll_content_min_width(scroll), super().minimumSizeHint().height())
+
+    def _constrain_field_widths(self, body: QWidget) -> None:
+        """Let content-hungry fields shrink to the panel width.
+
+        QComboBox/QLineEdit report a content-sized minimum width; in a narrow dock
+        that pushes the form wider than the panel, truncating labels behind a
+        horizontal scrollbar. Give them an ``Ignored`` horizontal size policy so the
+        form's ``AllNonFixedFieldsGrow`` fills the available field column and nothing
+        overflows. Preset thumbnails / the fps readout keep their fixed sizes.
+        """
+        from PySide6.QtWidgets import QComboBox, QLineEdit
+
+        for field in (*body.findChildren(QComboBox), *body.findChildren(QLineEdit)):
+            vpol = field.sizePolicy().verticalPolicy()
+            field.setSizePolicy(QSizePolicy.Policy.Ignored, vpol)
+            field.setMinimumWidth(48)
 
     def _restyle_all(self) -> None:
         """Re-apply EVERY per-widget literal-color style from the LIVE palette.
@@ -485,24 +546,28 @@ class PropertiesPanel(QWidget):
         # detector cadence is degraded when the quality ladder has engaged —
         # same "configured→effective(reason)" transparency as the Detection
         # section's ``_quality_effective``/``_detect_effective`` rows below.
-        self._track_state = QLabel("")
-        self._track_state.setWordWrap(True)
+        # Both captions are ALWAYS visible, single-line, and elided — text-only
+        # updates, never show/hide — so the panel below them doesn't jump every
+        # time the state or the quality ladder changes (which is frequent under
+        # load). The full text lives in the tooltip. CRITICAL: a non-wrapping
+        # QLabel's minimum width is its FULL text width, which would silently
+        # widen the whole scroll body past the dock (clipping every row's right
+        # edge) — an Ignored horizontal policy keeps them from inflating the
+        # layout, so they take exactly the width the panel gives them.
+        self._track_state = QLabel(" ")
+        self._track_state.setWordWrap(False)
+        self._track_state.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._muted_captions.append(self._track_state)
-        self._track_state.setVisible(False)
         tr.add_widget(self._track_state)
-        self._track_reason = QLabel("")
-        self._track_reason.setWordWrap(True)
+        self._track_reason = QLabel(" ")
+        self._track_reason.setWordWrap(False)
+        self._track_reason.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._muted_captions.append(self._track_reason)
-        self._track_reason.setVisible(False)
         tr.add_widget(self._track_reason)
 
         tf = _form()
         self._target_combo = QComboBox()
-        self._target_combo.setToolTip(
-            "Lock tracking to a registered person — the camera follows them "
-            "whenever they're recognized. Choose “— Anyone —” to follow whoever "
-            "is detected."
-        )
+        self._target_combo.setToolTip(_TARGET_COMBO_HELP)
         self._target_combo.currentIndexChanged.connect(self._on_target_changed)
         tf.addRow(
             "Track person",
@@ -576,7 +641,7 @@ class PropertiesPanel(QWidget):
         )
         tf.addRow("Frame on", _with_chip(self._framing, framing_help))
         # Builder, part 2 — whether arms are ignored (steady) or included (widen).
-        self._ignore_arms = QCheckBox("Ignore arms (steadier framing)")
+        self._ignore_arms = QCheckBox("Ignore arms (steadier)")
         self._ignore_arms.setToolTip(
             "On: the aim sits on the body (pose torso) and the zoom stays steady "
             "when arms move — raising a hand won't yank or widen the shot. "
@@ -608,7 +673,7 @@ class PropertiesPanel(QWidget):
         # Center Stage: the user-facing toggle for software auto-framing. When on,
         # this camera uses the digital backend (crop-follow) instead of hardware PTZ;
         # the raw transport selector (moved to Advanced below) is then overridden.
-        self._center_stage = QCheckBox("Center Stage — auto-frame this camera (no PTZ hardware)")
+        self._center_stage = QCheckBox("Center Stage — auto-frame (no PTZ)")
         self._center_stage.setToolTip(
             "Software auto-framing: digitally pans and zooms a crop to follow the "
             "selected target, for cameras without motorised PTZ. Select a person to "
@@ -627,6 +692,23 @@ class PropertiesPanel(QWidget):
                 ),
             ),
         )
+        self._group_framing = QCheckBox("Frame the group when no one is locked")
+        self._group_framing.setToolTip(
+            "With several people in view and no one locked, frame everyone together "
+            "instead of one person. A person you explicitly lock always wins."
+        )
+        self._group_framing.toggled.connect(self._schedule)
+        pf.addRow(
+            "",
+            _with_chip(
+                self._group_framing,
+                HelpBadge(
+                    "When several people are present and you have not locked a target, "
+                    "widen the shot to frame the whole group rather than picking one "
+                    "subject. Locking a person always overrides this."
+                ),
+            ),
+        )
         self._auto_zoom = QCheckBox("Auto-zoom to frame the subject")
         self._auto_zoom.setToolTip(
             "Let the controller zoom in/out to keep the chosen Framing "
@@ -634,10 +716,28 @@ class PropertiesPanel(QWidget):
         )
         self._auto_zoom.toggled.connect(self._schedule)
         self._auto_zoom.setVisible(False)
-        self._vcam_out = QCheckBox("Virtual camera output")
+        self._ndi_out = QCheckBox("NDI output (other computers)")
+        self._ndi_out.setToolTip(
+            "Publish the framed feed as an NDI source on your network, so any "
+            "computer running an NDI receiver (OBS, vMix, a monitor) can pick it up."
+        )
+        self._ndi_out.toggled.connect(self._schedule)
+        pf.addRow(
+            "",
+            _with_chip(
+                self._ndi_out,
+                HelpBadge(
+                    "NDI sends the feed over the network — recommended for using it on "
+                    "OTHER computers. Any NDI receiver on the LAN sees "
+                    '"<this computer> (AutoPTZ <camera name>)". Free NDI Tools can also '
+                    "turn it into a webcam on the receiving machine."
+                ),
+            ),
+        )
+        self._vcam_out = QCheckBox("Virtual camera (this computer)")
         self._vcam_out.setToolTip(
-            "Publish the auto-framed crop as a virtual camera device "
-            "(Center Stage / digital backend only)."
+            "Publish the framed feed as a virtual camera device on THIS computer "
+            "(Zoom / Teams / OBS). Needs a system virtual-camera driver installed."
         )
         self._vcam_out.toggled.connect(self._schedule)
         pf.addRow(
@@ -645,9 +745,9 @@ class PropertiesPanel(QWidget):
             _with_chip(
                 self._vcam_out,
                 HelpBadge(
-                    "When the digital (Center Stage) backend is active, publish the "
-                    "auto-framed crop as a virtual camera device so apps like Zoom "
-                    "or OBS can pick it up without hardware PTZ."
+                    "A virtual camera appears in apps on THIS computer only, and needs a "
+                    "system virtual-camera driver. To reach other computers, use NDI "
+                    "output above."
                 ),
             ),
         )
@@ -1046,8 +1146,6 @@ class PropertiesPanel(QWidget):
                 _safe(lambda: self._client.getCameraConfig(self._camera_id), self._cfg) or self._cfg
             )
             self._refresh_presets()
-            # Mirror framing changes made on the tile (drag-resize) into the sliders.
-            self._sync_framing_sliders()
 
     def _build_fps_row(self) -> QWidget:
         """A frame-rate slider with a live value + measured-fps readout.
@@ -1081,6 +1179,11 @@ class PropertiesPanel(QWidget):
         col.addLayout(top)
         self._fps_measured = QLabel("")
         self._fps_measured.setObjectName("fpsMeasured")
+        # This caption grows a long suffix under load ("— source isn't reaching
+        # 30 fps") — it must WRAP, and must never widen the form (a QLabel's
+        # minimum width is otherwise its full text width).
+        self._fps_measured.setWordWrap(True)
+        self._fps_measured.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._restyle_fps_measured()
         col.addWidget(self._fps_measured)
         return holder
@@ -1140,6 +1243,9 @@ class PropertiesPanel(QWidget):
         self._scroll.setVisible(bool(self._camera_id))
         if self._camera_id:
             self._load()
+            # Elided values (Address, tracking captions) were set while the
+            # layout was still settling — re-elide once widths are real.
+            QTimer.singleShot(0, self._reelide_captions)
 
     # ── load / push ──────────────────────────────────────────────────────────────
 
@@ -1153,7 +1259,9 @@ class PropertiesPanel(QWidget):
             pz = cfg.get("ptz", {}) or {}
             self._name.setText(cfg.get("name", ""))
             self._source_type.setText(src.get("type", "—"))
-            self._address.setText(_short(src.get("address", "")))
+            # Long addresses (NDI names / RTSP URLs) are elided with the full
+            # value on the tooltip so they can never widen the form.
+            self._set_caption(self._address, _short(src.get("address", "")))
             self._refresh_substream_visibility(src)
             self._substream.setChecked(bool(src.get("substream", False)))
             cap = self._fps_cap()
@@ -1174,6 +1282,7 @@ class PropertiesPanel(QWidget):
                 tr.get("framing") or tr.get("aim_region") or "upper_body",
             )
             self._ignore_arms.setChecked((tr.get("aim_body_mode") or "torso") == "torso")
+            self._group_framing.setChecked(bool(tr.get("group_framing", False)))
             backend = pz.get("backend", "auto")
             is_center_stage = backend == "digital"
             self._center_stage.setChecked(is_center_stage)
@@ -1183,6 +1292,7 @@ class PropertiesPanel(QWidget):
             self._ptz_baud.setCurrentText(str(pz.get("baud", 9600)))
             self._auto_zoom.setChecked(bool(pz.get("auto_zoom", False)))
             self._vcam_out.setChecked(bool(pz.get("vcam_out", False)))
+            self._ndi_out.setChecked(bool(pz.get("ndi_out", False)))
             self._refresh_presets()
             # Tracking target + on/off (driven via dedicated client calls).
             enabled = _safe(
@@ -1295,6 +1405,7 @@ class PropertiesPanel(QWidget):
         cfg["tracking"]["aim_body_mode"] = (
             "torso" if self._ignore_arms.isChecked() else "full_silhouette"
         )
+        cfg["tracking"]["group_framing"] = self._group_framing.isChecked()
         cfg["ptz"]["backend"] = (
             "digital" if self._center_stage.isChecked() else self._backend.currentText()
         )
@@ -1305,6 +1416,7 @@ class PropertiesPanel(QWidget):
             cfg["ptz"]["baud"] = 9600
         cfg["ptz"]["auto_zoom"] = self._auto_zoom.isChecked()
         cfg["ptz"]["vcam_out"] = self._vcam_out.isChecked()
+        cfg["ptz"]["ndi_out"] = self._ndi_out.isChecked()
         cfg["ptz"]["zoom_framing"] = framing
         # Advanced PTZ internals are no longer normal-user controls. Preserve any
         # saved legacy values from ``_cfg``; do not rewrite speed/gain/dead-zone
@@ -1360,11 +1472,9 @@ class PropertiesPanel(QWidget):
         state = str(status.get("state", "") or "")
         if state and state != "idle":
             headline = str(status.get("headline", "") or "") or state.capitalize()
-            self._track_state.setText(f"State: {headline} ({state})")
-            self._track_state.setVisible(True)
+            self._set_caption(self._track_state, f"State: {headline} ({state})")
         else:
-            self._track_state.clear()
-            self._track_state.setVisible(False)
+            self._set_caption(self._track_state, "")
 
         qs = _safe(lambda: rec.quality_state_as_dict(), {}) if rec is not None else {}
         configured = int(qs.get("configured_interval", 1) or 1)
@@ -1372,11 +1482,48 @@ class PropertiesPanel(QWidget):
         if configured > 0 and effective > configured:
             multiplier = quality_multiplier(effective, configured)
             reason = str(qs.get("reason", "") or "") or "Auto quality ladder engaged."
-            self._track_reason.setText(f"Degraded ×{multiplier}: {reason}")
-            self._track_reason.setVisible(True)
+            self._set_caption(self._track_reason, f"Degraded ×{multiplier}: {reason}")
         else:
-            self._track_reason.clear()
-            self._track_reason.setVisible(False)
+            self._set_caption(self._track_reason, "")
+
+    @staticmethod
+    def _set_caption(label: QLabel, text: str) -> None:
+        """Update an always-visible one-line caption without moving the layout.
+
+        Empty text becomes a single space (keeps the line's height reserved);
+        long text is elided to the label's current width with the full string on
+        the tooltip (from which :meth:`resizeEvent` re-elides after a panel
+        resize, so the ellipsis tracks the real width). The label is never
+        shown/hidden, so surrounding widgets never shift when the state flips.
+        """
+        full = (text or "").strip()
+        if not full:
+            label.setText(" ")
+            label.setToolTip("")
+            return
+        fm = label.fontMetrics()
+        width = max(60, label.width() - 4)
+        label.setText(fm.elidedText(full, Qt.TextElideMode.ElideRight, width))
+        label.setToolTip(full)
+
+    def resizeEvent(self, event: Any) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        # Re-elide the one-line captions to the new width (their full text lives
+        # on the tooltip) so a narrower panel shows "…" instead of a hard cut.
+        # DEFERRED one event-loop turn: during resizeEvent the labels still
+        # report their OLD width, so an immediate elide targets a stale size
+        # (the bug that left a full-length Address hard-clipped in a narrow
+        # label). Same deferral after a camera load, when widths settle late.
+        QTimer.singleShot(0, self._reelide_captions)
+
+    def _reelide_captions(self) -> None:
+        for label in (
+            getattr(self, "_track_state", None),
+            getattr(self, "_track_reason", None),
+            getattr(self, "_address", None),
+        ):
+            if label is not None and label.toolTip():
+                self._set_caption(label, label.toolTip())
 
     def _update_effective_detection(self) -> None:
         """Echo what the engine is *actually* doing next to the configured values.
@@ -1493,6 +1640,26 @@ class PropertiesPanel(QWidget):
             self._target_combo.setCurrentIndex(idx if idx >= 0 else 0)
         finally:
             self._target_combo.blockSignals(False)
+        # setCurrentIndex() above ran signal-blocked, so _on_target_changed's
+        # tooltip refresh never fired for this (re)population — do it explicitly.
+        self._update_target_combo_tooltip()
+
+    def _update_target_combo_tooltip(self) -> None:
+        """Mirror the full identity name on the tooltip — the combo's version
+        of :meth:`_set_caption`'s elide+tooltip contract for labels.
+
+        A QComboBox has no built-in elide-on-paint for its closed-box text and
+        no tooltip that tracks the current selection. Combined with
+        ``_constrain_field_widths`` (every combo in this panel gets an
+        ``Ignored`` horizontal policy + a 48px floor so the form never widens a
+        narrow dock), a long registered name can render hard-clipped with no
+        way to recover the full value. Mirror the CURRENT selection's full,
+        untruncated name on the tooltip so it is always one hover away; fall
+        back to the descriptive help text for "— Anyone —" (nothing to show).
+        """
+        ident = self._target_combo.currentData() or ""
+        name = self._target_combo.currentText().strip()
+        self._target_combo.setToolTip(name if ident and name else _TARGET_COMBO_HELP)
 
     def _on_track_toggled(self, on: bool) -> None:
         self._apply_track_label(on)
@@ -1523,6 +1690,7 @@ class PropertiesPanel(QWidget):
         )
 
     def _on_target_changed(self, _index: int) -> None:
+        self._update_target_combo_tooltip()
         if self._loading or not self._camera_id:
             return
         ident = self._target_combo.currentData() or ""

@@ -86,6 +86,10 @@ class InferenceClient:
         # an outage. None (tests/no-recovery callers) → gate is always "up".
         self._server_down = server_down
         self._seq = 0  # per-request id so a timed-out reply can't desync the next call
+        # Real execution provider of the SERVER's detector (e.g. "CoreMLExecutionProvider").
+        # Arrives tagged on replies once the server's background model load finishes;
+        # until then the label is the plain "model-server".
+        self._server_ep = ""
         # The response queue may be reused across a worker restart; drop any replies
         # left by a previous (crashed) run so they can't be matched to a fresh request.
         try:
@@ -96,6 +100,11 @@ class InferenceClient:
 
     @property
     def ep(self) -> str:
+        """Diagnostics label: enriched with the server's REAL provider once known,
+        so the UI can say "model-server (CoreML)" instead of hiding the engine."""
+        if self._server_ep:
+            short = self._server_ep.replace("ExecutionProvider", "")
+            return f"model-server ({short})"
         return "model-server"
 
     def detect(self, frame: Any) -> Any:
@@ -131,7 +140,16 @@ class InferenceClient:
                 msg = self._resp_q.get(timeout=remaining)
             except Exception:  # noqa: BLE001 — server gone / timed out
                 return []
-            rseq, dets = msg if isinstance(msg, tuple) and len(msg) == 2 else (seq, msg)
+            if isinstance(msg, tuple) and len(msg) == 3:
+                # New replies carry the server detector's real EP; remember it for
+                # the ``ep`` label. Empty while the server is still loading its model.
+                rseq, dets, srv_ep = msg
+                if srv_ep:
+                    self._server_ep = str(srv_ep)
+            elif isinstance(msg, tuple) and len(msg) == 2:
+                rseq, dets = msg
+            else:
+                rseq, dets = seq, msg
             if rseq != seq:
                 continue  # stale reply from a prior (timed-out) request — discard
             if not dets:
@@ -156,8 +174,6 @@ class RemotePool:
     model-server worker to refresh — no new IPC, no protocol change.
     """
 
-    detector_ep = "model-server"
-
     def __init__(
         self,
         client: InferenceClient,
@@ -169,6 +185,14 @@ class RemotePool:
         self._failed = failed
         self._build_local_fn = build_local_fn
         self._local: Any | None = None
+        self._pose: Any | None = None
+        self._pose_built = False
+
+    @property
+    def detector_ep(self) -> str:
+        """ "model-server", enriched to "model-server (CoreML)" once the server
+        has reported its detector's real execution provider."""
+        return str(getattr(self._client, "ep", "") or "model-server")
 
     def detector(self) -> Any:
         if self._failed is not None and self._failed.is_set():
@@ -181,6 +205,67 @@ class RemotePool:
                 return self._local
         return self._client
 
+    def pose(self) -> Any | None:
+        """Local (per-child) pose estimator — only DETECTION is delegated to the
+        server.  Pose runs on the target's crop a few times a second, so a small
+        per-camera session is cheap; without this the worker's
+        ``_ensure_pose`` → ``pool.pose()`` raised AttributeError and permanently
+        disabled pose — every pose-derived behaviour (arm-invariant aim, torso
+        framing box, skeleton overlay) silently degraded to the raw
+        arms-inflated detection bbox.  Built lazily, cached (including a
+        ``None`` failure).  Never downloads models (children mirror the
+        local-detector fallback; provisioning belongs to the parent/UI)."""
+        if self._pose_built:
+            return self._pose
+        self._pose_built = True
+        try:
+            from autoptz.engine.pipeline.pose import PoseEstimator
+
+            self._pose = PoseEstimator(allow_download=False)
+        except Exception:  # noqa: BLE001 — pose must never break the camera child
+            log.warning("camera-child pose estimator init failed; bbox aim only.", exc_info=True)
+            self._pose = None
+        return self._pose
+
+    # ── release (mirrors InferencePool's release_detector/release_pose) ─────────
+    #
+    # Supervisor.release_model_sessions/rebuild_model_sessions call these BY NAME
+    # (``getattr(pool, method, None)``) so a Manage Models mutation (detector tier
+    # switch, pose model swap) invalidates any cached session before the on-disk
+    # cache is mutated/rebuilt.  For a model-server camera child this pool is a
+    # per-PROCESS RemotePool the supervisor can never reach directly — the only
+    # thing that ever calls these is this same child's own
+    # ``CameraWorker._release_inference_models``/``_reload_inference_models``
+    # (see camera_worker.py), which mirrors the supervisor's generic dispatch for
+    # whatever pool it was given.  Matching InferencePool's method names/semantics
+    # here is what lets that one generic call site work for both pool types.
+
+    def release_detector(self) -> None:
+        """Drop the cached LOCAL fallback detector so it rebuilds on next use.
+
+        Detection itself is delegated to the shared model-server
+        (``self._client``, an IPC handle owned by the supervisor's server
+        process) — there is no local ORT session here to free in the normal
+        case.  The one piece of local, per-child state this pool DOES cache is
+        the R-3 degraded-mode fallback built by ``build_local_fn`` once the
+        supervisor marks the server ``failed`` (see :meth:`detector`).  Dropping
+        it here means a Manage Models mutation while a camera is running in
+        degraded/local-fallback mode doesn't leave it stuck on a stale local
+        detector session until the app restarts.
+        """
+        self._local = None
+
+    def release_pose(self) -> None:
+        """Drop the cached local pose estimator so :meth:`pose` rebuilds it.
+
+        Without this, swapping the pose model in Manage Models never invalidated
+        a model-server camera child's own cached ``self._pose``/
+        ``self._pose_built`` — every camera process kept the stale pose session
+        until a full app restart.
+        """
+        self._pose = None
+        self._pose_built = False
+
 
 def serve(
     req_q: Any,
@@ -189,6 +274,7 @@ def serve(
     detect_fn: Any,
     stop_ev: Any,
     attach: Any = None,
+    ep_fn: Any = None,
 ) -> None:
     """Server loop: drain detection requests, read each camera's latest frame from
     shm, run ``detect_fn`` once, and reply ``(seq, dets)`` on that camera's response
@@ -208,7 +294,12 @@ def serve(
 
     def _reply(rq: Any, seq: int, dets: Any) -> None:
         try:
-            rq.put((seq, dets))
+            if ep_fn is not None:
+                # Tag the reply with the detector's real EP ("" while still loading)
+                # so clients can label themselves "model-server (CoreML)".
+                rq.put((seq, dets, str(ep_fn() or "")))
+            else:
+                rq.put((seq, dets))
         except Exception:  # noqa: BLE001 — client gone
             pass
 
@@ -350,9 +441,13 @@ def run_inference_server(
         det = holder["detector"]
         return det.detect(frame) if det is not None else []
 
+    def _detector_ep() -> str:
+        det = holder["detector"]
+        return str(getattr(det, "ep", "") or "") if det is not None else ""
+
     ready_ev.set()  # "accepting requests" — detector may still be loading in the background
     try:
-        serve(req_q, resp_qs, readers, _detect, stop_ev, attach=_attach)
+        serve(req_q, resp_qs, readers, _detect, stop_ev, attach=_attach, ep_fn=_detector_ep)
     finally:
         for r in readers.values():  # release attached shm views on shutdown
             try:

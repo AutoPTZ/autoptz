@@ -11,7 +11,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QFormLayout, QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QComboBox, QFormLayout, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from autoptz.ui import theme as T
 
@@ -56,6 +56,13 @@ def _ro_value() -> QLabel:
     lab = QLabel("—")
     lab.setStyleSheet(f"color: {T.CURRENT.text};")
     lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    # A read-only value can be arbitrarily long (an NDI source name, an RTSP
+    # URL) and a QLabel's minimum width is its FULL text width — without this,
+    # one long Address silently widens the whole form past the dock and every
+    # other row (Track button, sliders) stretches/clips with it. Ignored keeps
+    # the label at exactly the width the layout gives it; the caller elides
+    # long values with the full text on the tooltip.
+    lab.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     return lab
 
 

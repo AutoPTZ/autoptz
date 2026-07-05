@@ -14,7 +14,9 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
+    QStyle,
     QToolButton,
     QToolTip,
     QVBoxLayout,
@@ -72,6 +74,64 @@ def animate_widget_visibility(widget: QWidget, visible: bool, *, duration: int =
     anim.finished.connect(_finish)
     widget._autoptz_fade_anim = anim
     anim.start()
+
+
+# ── layout sizing ─────────────────────────────────────────────────────────────
+
+
+def visible_min_width(widget: QWidget) -> int:
+    """A widget's minimum width AS IF it were visible, even if currently hidden.
+
+    Qt layouts exclude a hidden widget's size from its PARENT layout's own
+    minimum-size calculation — correct for content that's gone for good, but
+    wrong for a panel that toggles an "empty state" vs. a "populated state"
+    (an accordion section while collapsed; an info panel's no-camera-selected
+    placeholder): the real content's width requirement must still count, or a
+    panel measured while collapsed/empty silently under-reports, then is too
+    narrow the instant real content appears (on expand, on selecting a camera,
+    or when a clip-audit test forces every section open). Querying the
+    widget's OWN layout directly sidesteps the exclusion, which only applies
+    where something ELSE queries this widget as a child of its parent's layout.
+    """
+    lay = widget.layout()
+    return lay.minimumSize().width() if lay is not None else widget.minimumSizeHint().width()
+
+
+def scroll_chrome_width(scroll: QScrollArea) -> int:
+    """The real frame + (possible) vertical-scrollbar overhead a scroll area adds.
+
+    Queried from the live style/frame rather than guessed, so it stays correct
+    on any platform/theme/DPI — not just whatever was on hand when someone last
+    hand-picked a replacement pixel constant.
+    """
+    chrome = scroll.frameWidth() * 2
+    if scroll.verticalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff:
+        chrome += scroll.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent, None, scroll)
+    return chrome
+
+
+def scroll_content_min_width(scroll: QScrollArea) -> int:
+    """The REAL minimum width a scroll area's content needs, from live metrics.
+
+    ``QScrollArea.minimumSizeHint()`` does **not** take its contained widget into
+    account — verified directly: a plain ``QScrollArea`` wrapping a 462px-wide
+    label still reports ``~90px``, a small style-driven constant that has zero
+    relationship to the content. Every side panel in this app is built as
+    ``QVBoxLayout(self) → QScrollArea(resizable) → body-with-real-content``, so
+    floating a panel's minimum width off the scroll area's (or the panel's own
+    default) ``minimumSizeHint()`` silently under-budgets — which is exactly
+    what happened: the previous code used flat pixel constants "measured" once
+    against macOS/Linux font metrics, with no headroom for a platform whose
+    default UI font renders wider at the same point size (Windows does).
+
+    Compute the floor from the scrolled content's OWN layout instead — that is
+    a bottom-up calculation from each child widget's real ``minimumSizeHint()``
+    (font-metric-driven, so it's correct on any platform/DPI/scale) — plus the
+    scroll area's real chrome (:func:`scroll_chrome_width`).
+    """
+    body = scroll.widget()
+    content_w = visible_min_width(body) if body is not None else 0
+    return content_w + scroll_chrome_width(scroll)
 
 
 # ── theme reactivity ──────────────────────────────────────────────────────────
@@ -370,6 +430,28 @@ class CollapsibleGroup(QWidget):
         self.body.addWidget(w)
         if self._expanded:
             self._content.setMaximumHeight(_QWIDGETSIZE_MAX)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        """Report the width the EXPANDED content needs, even while collapsed.
+
+        Collapsing an accordion section hides its HEIGHT — that's the entire
+        point — it must never silently shrink the reported WIDTH floor too.  A
+        panel built from several of these (most starting collapsed, e.g.
+        PropertiesPanel) that floors its own minimum width off "whatever's
+        visible right now" would under-report until the user (or a clip-audit
+        test) expands a section, at which point the panel would suddenly be
+        too narrow for its own content.  :func:`visible_min_width` reads
+        ``_content``'s layout directly, which is unaffected by ``_content``'s
+        own hidden flag (that flag only matters to whatever layout item
+        queries ``_content`` as a child of its OWN parent), so this always
+        reflects the real, font-metric-driven minimum regardless of the
+        current toggle state.
+        """
+        hdr_w = self._toggle.minimumSizeHint().width()
+        content = getattr(self, "_content", None)
+        content_w = visible_min_width(content) if content is not None else 0
+        height = super().minimumSizeHint().height()
+        return QSize(max(hdr_w, content_w), height)
 
 
 # ── thumbnails ──────────────────────────────────────────────────────────────────

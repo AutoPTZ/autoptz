@@ -1706,10 +1706,10 @@ class TestEngineLifecycleApi:
         order: list[str] = []
 
         class _SpyClient:
-            def releaseModelSessions(self):
+            def releaseModelSessions(self, include_face=False):
                 order.append("release")
 
-            def rebuildModelSessions(self):
+            def rebuildModelSessions(self, include_face=False):
                 order.append("rebuild")
 
         class _FakeManager:
@@ -1851,6 +1851,42 @@ class TestSupervisorModelLifecycle:
             assert "pose" in pool.released
             assert "face" not in pool.released  # face stayed on → not released
             assert captured[cid].features_calls[-1]["detection"] is False
+        finally:
+            sup.stop()
+
+    def test_release_model_sessions_releases_face_only_for_face_ops(self, qapp) -> None:
+        """A face-pack download/remove passes include_face=True, so the shared face
+        ORT session is released too (else Windows can't delete the pack files while
+        onnxruntime holds them open)."""
+        client = _make_client(qapp)
+        client.addCamera("usb://0", "A")
+        client.drain_commands()
+        sup = _make_supervisor(client, factory=_FeatureFakeWorker)
+        sup.start()
+        try:
+            pool = _FakePool()
+            sup._inference_pool = pool
+            sup.release_model_sessions(include_face=True)
+            assert "face" in pool.released
+            assert "detector" in pool.released and "pose" in pool.released
+        finally:
+            sup.stop()
+
+    def test_release_model_sessions_default_keeps_face(self, qapp) -> None:
+        """A detector/pose cache op (the default, include_face=False) must NOT touch
+        the shared face session — dropping the ~1.3 GB pack on an unrelated op is a
+        needless reload."""
+        client = _make_client(qapp)
+        client.addCamera("usb://0", "A")
+        client.drain_commands()
+        sup = _make_supervisor(client, factory=_FeatureFakeWorker)
+        sup.start()
+        try:
+            pool = _FakePool()
+            sup._inference_pool = pool
+            sup.release_model_sessions()  # default: detector/pose only
+            assert "face" not in pool.released
+            assert "detector" in pool.released and "pose" in pool.released
         finally:
             sup.stop()
 

@@ -21,6 +21,12 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
 
 
+# Default in-crop placement for a dot-anchored crop: dot horizontally centred,
+# vertically at the upper-body composition point.  Callers pass a per-preset
+# placement; this is only the fallback.
+_DEFAULT_ANCHOR_PLACE = (0.5, 0.38)
+
+
 def union_bbox(
     boxes: list[tuple[float, float, float, float]],
 ) -> tuple[float, float, float, float] | None:
@@ -51,6 +57,8 @@ def desired_crop(
     max_frac: float,
     headroom: float = 0.10,
     fit_width: bool = False,
+    anchor_xy: tuple[float, float] | None = None,
+    anchor_place: tuple[float, float] = _DEFAULT_ANCHOR_PLACE,
 ) -> tuple[float, float, float, float]:
     """The crop ``(x, y, w, h)`` (pixels) that frames *bbox*.
 
@@ -68,6 +76,15 @@ def desired_crop(
     multi-person *group framing* union, so the crop auto-widens to keep everyone
     in shot (still aspect-locked and capped at ``max_frac``). Single-person /
     non-group framing keeps ``fit_width=False`` for byte-identical prior behaviour.
+
+    ``anchor_xy`` is the tracking DOT (the aim point, frame pixels).  When given,
+    the crop is **dot-anchored**: *bbox* only sizes it, and the crop is placed so
+    the dot sits at ``anchor_place`` — ``(x_frac, y_frac)`` of the crop, e.g.
+    ``(0.5, 0.26)`` = horizontally centred, upper-third for a face shot —
+    continuously, every call.  This is the Center Stage contract: the output
+    composes the dot; move and the crop glides to re-compose (clamped at the
+    frame edges).  ``None`` keeps the classic box-centred + headroom placement
+    (group unions / callers without an aim point).
     """
     bx1, by1, bx2, by2 = (float(v) for v in bbox)
     subj_h = max(1.0, by2 - by1)
@@ -93,6 +110,12 @@ def desired_crop(
     if cw > fw:
         cw, ch = fw, fw / out_aspect
 
+    if anchor_xy is not None:
+        # Dot-anchored: place the crop so the tracking dot sits at anchor_place.
+        px, py = anchor_place
+        x = _clamp(anchor_xy[0] - cw * px, 0.0, max(0.0, fw - cw))
+        y = _clamp(anchor_xy[1] - ch * py, 0.0, max(0.0, fh - ch))
+        return (x, y, cw, ch)
     cy_adj = cy - headroom * ch
     x = _clamp(cx - cw * 0.5, 0.0, max(0.0, fw - cw))
     y = _clamp(cy_adj - ch * 0.5, 0.0, max(0.0, fh - ch))
@@ -162,11 +185,15 @@ class DigitalFramer:
         frame_h: int,
         *,
         fit_width: bool = False,
+        anchor_xy: tuple[float, float] | None = None,
+        anchor_place: tuple[float, float] = _DEFAULT_ANCHOR_PLACE,
     ) -> tuple[int, int, int, int]:
         """Smoothed integer crop framing *bbox*.
 
         ``fit_width=True`` widens the crop to cover a wide subject (the group-union
         box); the default keeps the prior height-only sizing for single people.
+        ``anchor_xy`` switches to dot-anchored placement — the crop composes the
+        tracking dot at ``anchor_place`` — see :func:`desired_crop`.
         """
         tgt = desired_crop(
             bbox,
@@ -178,6 +205,8 @@ class DigitalFramer:
             max_frac=self.max_frac,
             headroom=self.headroom,
             fit_width=fit_width,
+            anchor_xy=anchor_xy,
+            anchor_place=anchor_place,
         )
         tgt = self._apply_lead(bbox, tgt, frame_w, frame_h)
         return self._step(tgt)
