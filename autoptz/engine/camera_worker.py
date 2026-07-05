@@ -4167,8 +4167,21 @@ class CameraWorker:
         if target is not None:
             # fit_width only for a multi-person group UNION (so it auto-widens to
             # keep everyone in shot); a single locked/standalone person stays on
-            # the prior height-only sizing.
-            x, y, cw, ch = framer.frame_for(target, w, h, fit_width=self._digital_target_is_group)
+            # the prior height-only sizing.  A single person also carries the
+            # framing-region ANCHOR (e.g. the head for the face preset) so a
+            # max_frac-clamped crop slides to keep the head in shot instead of
+            # parking on the body centre and cutting it off.
+            x, y, cw, ch = framer.frame_for(
+                target,
+                w,
+                h,
+                fit_width=self._digital_target_is_group,
+                anchor_frac=(
+                    None
+                    if self._digital_target_is_group
+                    else AIM_REGION_FRACTION.get(framing, 0.5)
+                ),
+            )
         else:
             x, y, cw, ch = framer.full_frame(w, h)
         # Log ONLY on a state change (target appears/vanishes or the tid flips):
@@ -4230,7 +4243,16 @@ class CameraWorker:
         drag its centre — no longer grow or shift the crop.  Falls back to the
         raw bbox whenever fresh torso keypoints for *this* track aren't cached
         (pose off/unavailable/stale), and never applies to a group union.
+
+        **Tracking gate**: Center Stage only crops while tracking is active —
+        the per-camera Track toggle (``_tracking_enabled``) AND the global
+        tracking feature switch, the same pair that gates the physical PTZ
+        drive.  With either off there is no target, so the crop eases back to
+        the full frame.
         """
+        if not (self._tracking_enabled and self._feature("tracking")):
+            self._digital_target_is_group = False
+            return None
         # Delegate to the shared framing-target selector so Center Stage and
         # physical PTZ frame the same subject the same way (see
         # autoptz.engine.framing_target).

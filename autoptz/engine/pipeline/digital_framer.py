@@ -21,6 +21,17 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
 
 
+# Comfort band for the framing ANCHOR (the aim region — e.g. the head for the
+# face preset): the anchor must sit between these fractions of the crop height
+# from its top.  Only enforced when the default box-centred placement violates
+# it — e.g. the crop is max_frac-clamped smaller than a standing person, where
+# centring on the body used to CUT THE HEAD OFF above the crop even though the
+# original frame had plenty of room.  Wide enough that the tuned centring +
+# headroom of every preset already satisfies it for a subject that fits.
+_ANCHOR_BAND_TOP = 0.10
+_ANCHOR_BAND_BOTTOM = 0.75
+
+
 def union_bbox(
     boxes: list[tuple[float, float, float, float]],
 ) -> tuple[float, float, float, float] | None:
@@ -51,6 +62,7 @@ def desired_crop(
     max_frac: float,
     headroom: float = 0.10,
     fit_width: bool = False,
+    anchor_frac: float | None = None,
 ) -> tuple[float, float, float, float]:
     """The crop ``(x, y, w, h)`` (pixels) that frames *bbox*.
 
@@ -68,6 +80,14 @@ def desired_crop(
     multi-person *group framing* union, so the crop auto-widens to keep everyone
     in shot (still aspect-locked and capped at ``max_frac``). Single-person /
     non-group framing keeps ``fit_width=False`` for byte-identical prior behaviour.
+
+    ``anchor_frac`` names the framing ANCHOR — the aim region, as a fraction down
+    the subject box (e.g. 0.10 = the head for the face preset).  When given, the
+    crop is slid vertically (after the normal centring + headroom) just enough to
+    keep that anchor inside the ``[_ANCHOR_BAND_TOP, _ANCHOR_BAND_BOTTOM]`` band
+    of the crop — so a max_frac-clamped crop follows the HEAD instead of parking
+    on the body centre and cutting the head off.  ``None`` (and any anchor already
+    inside the band) reproduces the prior placement exactly.
     """
     bx1, by1, bx2, by2 = (float(v) for v in bbox)
     subj_h = max(1.0, by2 - by1)
@@ -96,6 +116,15 @@ def desired_crop(
     cy_adj = cy - headroom * ch
     x = _clamp(cx - cw * 0.5, 0.0, max(0.0, fw - cw))
     y = _clamp(cy_adj - ch * 0.5, 0.0, max(0.0, fh - ch))
+    if anchor_frac is not None:
+        anchor_y = by1 + (by2 - by1) * anchor_frac
+        lo = y + ch * _ANCHOR_BAND_TOP
+        hi = y + ch * _ANCHOR_BAND_BOTTOM
+        if anchor_y < lo:
+            y = anchor_y - ch * _ANCHOR_BAND_TOP
+        elif anchor_y > hi:
+            y = anchor_y - ch * _ANCHOR_BAND_BOTTOM
+        y = _clamp(y, 0.0, max(0.0, fh - ch))
     return (x, y, cw, ch)
 
 
@@ -162,11 +191,14 @@ class DigitalFramer:
         frame_h: int,
         *,
         fit_width: bool = False,
+        anchor_frac: float | None = None,
     ) -> tuple[int, int, int, int]:
         """Smoothed integer crop framing *bbox*.
 
         ``fit_width=True`` widens the crop to cover a wide subject (the group-union
         box); the default keeps the prior height-only sizing for single people.
+        ``anchor_frac`` keeps the aim region (e.g. the head) inside the crop's
+        comfort band — see :func:`desired_crop`.
         """
         tgt = desired_crop(
             bbox,
@@ -178,6 +210,7 @@ class DigitalFramer:
             max_frac=self.max_frac,
             headroom=self.headroom,
             fit_width=fit_width,
+            anchor_frac=anchor_frac,
         )
         tgt = self._apply_lead(bbox, tgt, frame_w, frame_h)
         return self._step(tgt)

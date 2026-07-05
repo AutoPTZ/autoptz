@@ -79,6 +79,7 @@ def _locked_worker_with_pose(*, aim_body_mode: str = "torso", raised_arm_bbox=No
         tracking=TrackingConfig(aim_body_mode=aim_body_mode),
     )
     w = CameraWorker("cam-fr", cfg, on_telemetry=lambda m: None)
+    w._tracking_enabled = True  # Center Stage only crops while tracking is on
     box = raised_arm_bbox or (60.0, 20.0, 340.0, 640.0)  # arms up: tall + wide
     w._last_tracks = [TrackInfo(track_id=1, bbox=BBox(x1=box[0], y1=box[1], x2=box[2], y2=box[3]))]
     w._target_track_id = 1
@@ -89,6 +90,22 @@ def _locked_worker_with_pose(*, aim_body_mode: str = "torso", raised_arm_bbox=No
     w._last_pose_t = time.monotonic()
     w._note_good_kps(_standing_kps(), 1, time.monotonic())
     return w, box
+
+
+def test_center_stage_no_crop_when_tracking_disabled() -> None:
+    """Center Stage must only crop while tracking is enabled: with the Track
+    toggle off there is no framing target, so the crop eases to full frame."""
+    w, _ = _locked_worker_with_pose()
+    w._tracking_enabled = False
+    assert w._current_digital_target() is None
+
+
+def test_center_stage_no_crop_when_tracking_feature_off() -> None:
+    """The global tracking feature switch gates the crop like the per-camera
+    Track toggle does."""
+    w, _ = _locked_worker_with_pose()
+    w.set_features({"tracking": False})
+    assert w._current_digital_target() is None
 
 
 def test_center_stage_torso_box_when_ignore_arms() -> None:

@@ -52,6 +52,7 @@ def test_framed_output_frames_the_target_when_digital_backend_active():
     )
     w = CameraWorker("cam-dig-000001", cfg, on_telemetry=lambda m: None)
     w._ptz_backend = DigitalPTZBackend()
+    w._tracking_enabled = True  # Center Stage only crops while tracking is on
     # A selected target occupying ~25% of a 1280x720 frame → the auto-framer crops
     # onto it (zoomed in) and the output is scaled to the configured size.
     w._target_track_id = 7

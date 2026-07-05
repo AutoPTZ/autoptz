@@ -51,6 +51,63 @@ class TestDesiredCrop:
         )
         assert h >= 0.34 * 1080 - 1
 
+    def test_anchor_slides_crop_up_to_keep_the_head_inside(self):
+        # A standing person taller than the max_frac-clamped crop, with a
+        # head-region anchor (face framing → 0.10 down the box). The old
+        # box-centred placement parked the crop on the body and CUT THE HEAD
+        # OFF above — even with plenty of room in the original frame. The
+        # anchor must sit inside the crop's comfort band instead.
+        bbox = (860, 100, 1060, 900)  # 800 px person, head anchor at y=180
+        x, y, w, h = desired_crop(
+            bbox,
+            1920,
+            1080,
+            out_aspect=ASPECT,
+            fill=0.65,
+            min_frac=0.18,
+            max_frac=0.50,
+            headroom=0.06,
+            anchor_frac=0.10,
+        )
+        anchor_y = 100 + 800 * 0.10  # = 180
+        assert y + h * 0.10 - 1 <= anchor_y <= y + h * 0.75 + 1
+        # Specifically: the head region sits at the crop's top band, not cut off.
+        assert abs((y + h * 0.10) - anchor_y) < 2.0
+
+    def test_anchor_noop_when_already_comfortable(self):
+        # When the anchor already sits inside the band, the composition must be
+        # byte-identical to the anchor-less call — no regression of the tuned
+        # centring/headroom for the everyday desk shot.
+        bbox = (860, 300, 1060, 700)  # 400 px subject, fits the crop easily
+        kwargs = {
+            "out_aspect": ASPECT,
+            "fill": 0.65,
+            "min_frac": 0.18,
+            "max_frac": 0.50,
+            "headroom": 0.06,
+        }
+        assert desired_crop(bbox, 1920, 1080, anchor_frac=0.10, **kwargs) == desired_crop(
+            bbox, 1920, 1080, **kwargs
+        )
+
+    def test_anchor_slides_crop_down_when_anchor_below_band(self):
+        # Anchor deep below the crop window (clamped small, parked high) → the
+        # crop slides down just enough to bring it into the band.
+        bbox = (860, 100, 1060, 900)
+        x, y, w, h = desired_crop(
+            bbox,
+            1920,
+            1080,
+            out_aspect=ASPECT,
+            fill=0.65,
+            min_frac=0.18,
+            max_frac=0.30,  # small crop window
+            headroom=0.0,
+            anchor_frac=0.95,  # near the feet
+        )
+        anchor_y = 100 + 800 * 0.95  # = 860
+        assert y + h * 0.10 - 1 <= anchor_y <= y + h * 0.75 + 1
+
     def test_far_subject_zooms_tighter_with_lower_min_frac(self):
         # The far-subject under-zoom fix: a person far from the camera (small in
         # frame) must zoom in MORE when the framing allows a lower min_frac. With a
