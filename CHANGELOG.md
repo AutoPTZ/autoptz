@@ -10,12 +10,15 @@ follow [Semantic Versioning](https://semver.org/).
 
 > Stable release. Headline: **predictive tracking through occlusion** (the camera
 > now follows a briefly-occluded moving subject instead of freezing and whipping
-> on re-acquire) plus **self-healing reliability** (a dead inference thread or a
+> on re-acquire), **self-healing reliability** (a dead inference thread or a
 > crashed shared model-server now recovers automatically instead of silently
-> killing detection forever). Every change below was TDD'd RED-first and passed
-> an adversarial per-task review before merge; the release was gated on a fresh
-> 30-minute 8×1080p30 NDI full-profile model-server soak with a **live mid-run
-> model-server kill** to prove recovery on real hardware.
+> killing detection forever), and **pose-stable Center Stage framing** (the
+> on-screen crop now composes the tracking dot itself, arm-invariant, instead of
+> chasing the raw arm-inflated detection box). Every change below was TDD'd
+> RED-first and passed an adversarial per-task review before merge; the release
+> was gated on a fresh 30-minute 8×1080p30 NDI full-profile model-server soak
+> with a **live mid-run model-server kill** to prove recovery on real hardware,
+> plus live validation on real cameras across multiple sessions.
 
 ### Added
 
@@ -30,6 +33,12 @@ follow [Semantic Versioning](https://semver.org/).
   pattern: mismatches delete the file and error; releases without a `SHA256SUMS`
   manifest log a warning and proceed (hard-fail comes once all published releases
   carry manifests). Locally generated files (INT8 quantization, exports) are exempt.
+- **First-class face-pack management** in Model Manager: download/remove the
+  insightface recognition pack directly from the UI, with a completeness check
+  before it's reported "present."
+- **Per-camera NDI output** for the Center Stage feed, and a per-camera
+  **group-framing** checkbox (Properties → PTZ) so the digital crop can widen to
+  keep multiple confident people in shot instead of following a single target.
 
 ### Changed
 
@@ -37,9 +46,28 @@ follow [Semantic Versioning](https://semver.org/).
   Features…, also linked from the Services panel), now including the **shared
   detection server** toggle; dead `AUTOPTZ_INFERENCE_SCHEDULER` references were
   removed and the full `AUTOPTZ_*` flag surface is documented in `docs/flags.md`.
+- **Center Stage now composes the tracking dot, not the detection box.** The
+  digital crop used to be placed from the framing box's centre (roughly the
+  hips for a standing person) — moving your head while your torso stayed still
+  barely moved the crop. The crop is now **dot-anchored**: the box only sizes
+  it; position is computed every tick so the same engine-smoothed, pose-fused
+  aim point drawn on screen rides at a fixed point of the output (e.g. the
+  upper third for Face framing). Center Stage also only crops while tracking is
+  actually enabled — it no longer keeps following the last target with the
+  Track toggle off.
 
 ### Fixed
 
+- **Pose-stable framing was silently dead whenever the shared detection server
+  was on** (`AUTOPTZ_MODEL_SERVER=1`). The camera child's pool never implemented
+  a pose estimator, so every pose-derived behavior — the arm-invariant aim, the
+  stable torso framing box, the skeleton overlay, head recovery — silently
+  degraded to the raw detection bbox: an extended arm could visibly drag the
+  tracking dot and the Center Stage crop. Fixed by building a local pose
+  estimator in the camera child; corrected two follow-on gaps found during
+  validation (the torso framing box also needs to degrade gracefully when hips
+  are out of frame — a desk/webcam shot — instead of falling back to the raw
+  box, and a stale anthropometric constant).
 - **Camera bounce through occlusion (root cause).** LOST tracks used to freeze
   their box and emit zero velocity; the first re-detection after an N-frame gap
   then reported the whole gap as one frame of motion (measured 40 px/frame for a
@@ -62,12 +90,42 @@ follow [Semantic Versioning](https://semver.org/).
   (return no detections immediately) during the outage instead of stalling
   2 s/frame; after the restart budget is exhausted, a queryable failed-flag is
   set and workers rebuild local detectors so detection continues degraded.
-  Respawn is non-blocking on the GUI thread.
+  Respawn is non-blocking on the GUI thread — including a late-camera-attach
+  server restart, previously the one respawn path that could still freeze the
+  UI for up to ~3.5 s, and the failed-flag now correctly clears once a fresh
+  respawn is confirmed healthy (it used to latch permanently, wasting an
+  already-recovered server).
+- **Model-server children now actually receive Manage Models changes.** A
+  face-pack or pose-model swap used to silently never reach a running
+  model-server camera child's own cached session — it kept serving the stale
+  model until a full app restart.
+- **Model-server children get the real face database** instead of an empty
+  in-memory gallery (enrolled names no longer show as "Person N" forever), with
+  live identity add/rename/remove synced to every running camera; adding or
+  re-adding a camera no longer leaves the shared model-server deaf to it; a
+  dead or stalled capture source now reopens instead of staying dead until an
+  engine restart.
+- **A long registered identity name** assigned as the tracking target could
+  render hard-clipped in the Properties panel with no way to see the full
+  value — it now shows on the tooltip.
+- **Windows-only layout clipping** in the Properties, Services, and Camera Info
+  panels and the Experimental Features dialog: their minimum-width floors were
+  hardcoded pixel constants tuned once against macOS/Linux font metrics, with
+  no headroom for Windows' wider default UI font. Floors are now computed from
+  the real, font-metric-driven layout minimum on whatever platform is running.
 
 ### Internal
 
 - The wsdiscovery-unavailable test no longer performs a live WS-Discovery scan
   on LANs where the real package is installed.
+- A `BoxSmoother` (the pose-derived framing box's continuous smoothing) snapped
+  instead of holding when two updates landed on an identical timestamp —
+  Windows' coarser default clock resolution makes this common; a genuine
+  correctness fix, caught by Windows-only CI on this release's own PR.
+- A `_torso_box_smoother` race between the capture and inference threads (no
+  lock protecting a shared compound read-modify-write) is now guarded; found by
+  adversarial review and pinned with a deterministic interleaving test after a
+  raw thread-hammer failed to reliably reproduce it.
 
 ## [2.2.0-rc9] — 2026-06-30
 
