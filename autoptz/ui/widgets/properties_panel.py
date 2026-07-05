@@ -43,6 +43,7 @@ from autoptz.ui.widgets.common import (
     HelpBadge,
     data_uri_to_pixmap,
     on_theme_changed,
+    scroll_content_min_width,
 )
 from autoptz.ui.widgets.joystick import JoystickPad
 from autoptz.ui.widgets.properties_helpers import (  # noqa: F401  re-exported
@@ -80,6 +81,15 @@ _TRACKING_MODE_CHOICES = [
     ("stable", "Stable target"),
     ("responsive", "Responsive"),
 ]
+
+# Base tooltip for the "Track person" combo when nothing identity-specific is
+# selected ("— Anyone —"). Overridden with the full, unelided identity name
+# whenever a specific person is selected — see _update_target_combo_tooltip.
+_TARGET_COMBO_HELP = (
+    "Lock tracking to a registered person — the camera follows them "
+    "whenever they're recognized. Choose “— Anyone —” to follow whoever "
+    "is detected."
+)
 
 _TRACKER_HELP = {
     "botsort": "BoT-SORT: best default for people. Uses motion plus optional appearance cues; steady but medium cost.",
@@ -243,12 +253,10 @@ class PropertiesPanel(QWidget):
         super().__init__(parent)
         self.setObjectName("propertiesPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        # Floor the panel width so nothing EVER clips horizontally, whatever a
-        # saved layout restored: sized for the widest expanded section — the
-        # PTZ manual-control cluster (~326) — plus body margins and the styled
-        # vertical scrollbar, all of which eat into the scroll viewport. The
+        # Width floor so nothing EVER clips horizontally, whatever a saved
+        # layout restored: see :meth:`minimumSizeHint`, computed from the real
+        # (font-metric-driven) content layout rather than a flat guess — the
         # invariant is pinned by tests/test_panel_min_width_no_clip.py.
-        self.setMinimumWidth(360)
         self._client = client
         # Optional live-frame handle (a ``ShmFrameSource`` like the camera tiles
         # use).  When supplied, "Save preset" grabs the current frame as a JPEG
@@ -326,6 +334,27 @@ class PropertiesPanel(QWidget):
         # Re-render preset tiles when this camera's config changes (e.g. after a
         # save/clear writes the new ``preset_slots`` back asynchronously).
         _connect(self._client, "configChanged", self._on_config_changed)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        """The real floor: the scroll body's live layout minimum + scrollbar chrome.
+
+        Previously a flat ``setMinimumWidth(360)`` — "sized for the widest
+        expanded section" by eyeballing it once on macOS/Linux — which
+        silently under-budgets on any font that renders wider at the same
+        point size (Windows' default UI font measurably does; this is what
+        broke on Windows CI while macOS/Linux stayed green). Computed instead
+        from :func:`~autoptz.ui.widgets.common.scroll_content_min_width`, which
+        reads the scrolled content's OWN (font-metric-driven) layout minimum —
+        correct on any platform/DPI. ``CollapsibleGroup.minimumSizeHint``
+        already reports its EXPANDED content's width even while collapsed, so
+        this reflects the worst case regardless of which sections happen to be
+        open right now. ``root`` has zero contents margins, so no extra
+        padding is needed beyond the scroll area's own chrome.
+        """
+        scroll = getattr(self, "_scroll", None)
+        if scroll is None:
+            return super().minimumSizeHint()
+        return QSize(scroll_content_min_width(scroll), super().minimumSizeHint().height())
 
     def _constrain_field_widths(self, body: QWidget) -> None:
         """Let content-hungry fields shrink to the panel width.
@@ -538,11 +567,7 @@ class PropertiesPanel(QWidget):
 
         tf = _form()
         self._target_combo = QComboBox()
-        self._target_combo.setToolTip(
-            "Lock tracking to a registered person — the camera follows them "
-            "whenever they're recognized. Choose “— Anyone —” to follow whoever "
-            "is detected."
-        )
+        self._target_combo.setToolTip(_TARGET_COMBO_HELP)
         self._target_combo.currentIndexChanged.connect(self._on_target_changed)
         tf.addRow(
             "Track person",
@@ -1615,6 +1640,26 @@ class PropertiesPanel(QWidget):
             self._target_combo.setCurrentIndex(idx if idx >= 0 else 0)
         finally:
             self._target_combo.blockSignals(False)
+        # setCurrentIndex() above ran signal-blocked, so _on_target_changed's
+        # tooltip refresh never fired for this (re)population — do it explicitly.
+        self._update_target_combo_tooltip()
+
+    def _update_target_combo_tooltip(self) -> None:
+        """Mirror the full identity name on the tooltip — the combo's version
+        of :meth:`_set_caption`'s elide+tooltip contract for labels.
+
+        A QComboBox has no built-in elide-on-paint for its closed-box text and
+        no tooltip that tracks the current selection. Combined with
+        ``_constrain_field_widths`` (every combo in this panel gets an
+        ``Ignored`` horizontal policy + a 48px floor so the form never widens a
+        narrow dock), a long registered name can render hard-clipped with no
+        way to recover the full value. Mirror the CURRENT selection's full,
+        untruncated name on the tooltip so it is always one hover away; fall
+        back to the descriptive help text for "— Anyone —" (nothing to show).
+        """
+        ident = self._target_combo.currentData() or ""
+        name = self._target_combo.currentText().strip()
+        self._target_combo.setToolTip(name if ident and name else _TARGET_COMBO_HELP)
 
     def _on_track_toggled(self, on: bool) -> None:
         self._apply_track_label(on)
@@ -1645,6 +1690,7 @@ class PropertiesPanel(QWidget):
         )
 
     def _on_target_changed(self, _index: int) -> None:
+        self._update_target_combo_tooltip()
         if self._loading or not self._camera_id:
             return
         ident = self._target_combo.currentData() or ""
