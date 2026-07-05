@@ -32,7 +32,7 @@ from autoptz.engine.runtime.experimental_flags import (
     ExperimentalFlag,
 )
 from autoptz.ui import theme as T
-from autoptz.ui.widgets.common import HelpBadge, section_label
+from autoptz.ui.widgets.common import HelpBadge, scroll_content_min_width, section_label
 
 # Section headers, in display order.
 _SECTION_ORDER = ("Experiments", "Devices & tuning", "Model overrides", "Diagnostics")
@@ -66,9 +66,6 @@ class ExperimentalFeaturesDialog(QDialog):
         self._client = client
         self.setWindowTitle("Experimental Features")
         self.setModal(True)
-        # Wide enough that a row (label + editor + Browse + help + "Restart
-        # required" badge) fits without clipping the badge / a horizontal scrollbar.
-        self.setMinimumWidth(680)
         self.resize(720, 620)
 
         self._bool_boxes: dict[str, QCheckBox] = {}
@@ -144,6 +141,18 @@ class ExperimentalFeaturesDialog(QDialog):
         # Baseline for "did the user change anything since this was last applied?"
         # — drives whether Apply offers a restart (no nag when nothing changed).
         self._applied_snapshot = self._collect()
+
+        # Real floor: the scrolled content's live layout minimum (a row is
+        # [label + editor + Browse + help + "Restart required" badge]) plus
+        # this layout's own margins and the scroll area's chrome. Previously a
+        # flat ``setMinimumWidth(680)`` — a guess "measured" once on
+        # macOS/Linux — which silently under-budgets on any font that renders
+        # wider at the same point size (Windows' default UI font measurably
+        # does; this is what clipped section captions/badges on Windows CI
+        # while macOS/Linux stayed green). Computed AFTER every section row is
+        # built, so it reflects the real (font-metric-driven) requirement.
+        m = outer.contentsMargins()
+        self.setMinimumWidth(scroll_content_min_width(scroll) + m.left() + m.right())
 
     # ── row builders ─────────────────────────────────────────────────────────
 

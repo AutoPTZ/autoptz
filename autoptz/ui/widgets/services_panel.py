@@ -28,6 +28,7 @@ from autoptz.ui.widgets.common import (
     HelpBadge,
     hline,
     on_theme_changed,
+    scroll_content_min_width,
     section_label,
 )
 
@@ -132,6 +133,7 @@ class ServicesPanel(QWidget):
         hsb.valueChanged.connect(lambda v: hsb.setValue(0) if v else None)
         scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         outer.addWidget(scroll, 1)
+        self._scroll = scroll
 
         body = QWidget()
         body.setMinimumSize(0, 0)
@@ -253,12 +255,26 @@ class ServicesPanel(QWidget):
         self.refresh()
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        # 300, not 260: at 260 the styled vertical scrollbar + margins push the
-        # whole body 22px past the viewport, clipping the trailing ON/OK pills
-        # and the Restart / Enable-all buttons off the right edge (measured by
-        # the offscreen layout audit; clean at 300). The main window enforces
-        # this as a real dock floor after layout restore.
-        return QSize(300, 220)
+        """The real floor: the scroll body's live layout minimum + scrollbar chrome.
+
+        Previously a flat ``QSize(300, 220)`` — "measured by the offscreen
+        layout audit" once, on macOS/Linux — which silently under-budgets on
+        any font that renders wider at the same point size (Windows' default
+        UI font measurably does; this is what broke on Windows CI, where the
+        trailing ON/OK/UNAVAILABLE pills and Restart/Enable-all buttons
+        clipped, while macOS/Linux stayed green). Computed instead from
+        :func:`~autoptz.ui.widgets.common.scroll_content_min_width`, which
+        reads the scrolled content's OWN (font-metric-driven) layout minimum —
+        correct on any platform/DPI. Falls back to the old constant only when
+        called before construction (``ServicesPanel.__new__`` without
+        ``__init__``, as in ``test_hud_and_status_fixes.py``'s bypass test —
+        touching any real Qt method there raises).  The main window enforces
+        this as a real dock floor after layout restore.
+        """
+        scroll = getattr(self, "_scroll", None)
+        if scroll is None:
+            return QSize(300, 220)
+        return QSize(scroll_content_min_width(scroll), 220)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(360, 520)
