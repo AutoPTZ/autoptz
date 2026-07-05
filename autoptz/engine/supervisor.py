@@ -193,6 +193,11 @@ class Supervisor:
         # respawn is currently in flight.
         self._ms_ready_ev: Any | None = None
         self._ms_spawn_deadline: float | None = None
+        # Non-blocking DRAIN bookkeeping for a late-camera attach's old-server
+        # drain (see _attach_camera_to_model_server / _poll_model_server_drain).
+        # Both None when no drain is in flight.
+        self._ms_drain_proc: Any | None = None
+        self._ms_drain_deadline: float | None = None
 
         # Global ML-subsystem switches (detection / tracking / face_recognition /
         # pose), broadcast via SetFeaturesCmd and applied to every worker.
@@ -343,6 +348,8 @@ class Supervisor:
         self._model_server_camera_ids = []
         self._ms_ready_ev = None
         self._ms_spawn_deadline = None
+        self._ms_drain_proc = None
+        self._ms_drain_deadline = None
         if proc is not None:
             try:
                 if stop_ev is not None:
@@ -734,7 +741,9 @@ class Supervisor:
 
         ``tick()`` (and therefore this scan) runs on the GUI thread in the shipped
         app, so a respawn attempt must never block it: starting the child and
-        waiting for its ready-handshake are split across ticks. ``_ms_spawn_deadline``
+        waiting for its ready-handshake are split across ticks, and so is draining
+        the OLD process out before a late-camera attach's restart (see
+        :meth:`_poll_model_server_drain`, dispatched first). ``_ms_spawn_deadline``
         is None when no respawn is in flight; while it is set, this method only
         POLLS the ready Event (never ``.wait()`` with a timeout) and otherwise
         no-ops until the deadline passes. ``_model_server_down`` stays set for the
@@ -753,6 +762,10 @@ class Supervisor:
         from autoptz.engine.runtime.flags import env_model_server
 
         if not env_model_server() or self._model_server_proc is None:
+            return
+
+        if self._ms_drain_proc is not None:
+            self._poll_model_server_drain(now)
             return
 
         if self._ms_spawn_deadline is not None:
@@ -817,6 +830,16 @@ class Supervisor:
             self._ms_restart_state = (0, 0.0, False)
             if self._model_server_down is not None:
                 self._model_server_down.clear()
+            if self._model_server_failed_ev is not None and self._model_server_failed_ev.is_set():
+                # A PRIOR budget exhaustion had latched every RemotePool onto its
+                # local-fallback detector (see RemotePool.detector()); this fresh
+                # server is confirmed healthy (ready-handshake just arrived), so
+                # clear the flag or every camera — including one added after this
+                # very respawn, via _attach_camera_to_model_server — would stay on
+                # local fallback forever despite a working shared server.
+                self._model_server_failed_ev.clear()
+                self._refresh_model_server_workers()
+                log.info("shared detection server recovered — resuming for all cameras.")
             log.info("model-server respawned successfully — resuming shared detection.")
             return
 
@@ -909,6 +932,15 @@ class Supervisor:
         camera's ``InferenceClient`` fast-fails (serving empty) instead of blocking,
         and predictive coast keeps their tracking smooth through the ~2s swap.
 
+        This method itself never blocks: it registers the new queue/slot and the
+        graceful stop signal (all cheap), then hands the OLD process off to
+        :meth:`_poll_model_server_drain` — ticked from :meth:`_scan_model_server_health`
+        — instead of joining here. ``_on_add_camera`` (this method's only caller) runs
+        on the GUI-thread ``tick()``, so a slow-to-exit old server must not stall it;
+        the down-gate already set below means every camera (including the new one)
+        fast-fails on detection until the drain+respawn actually completes a beat
+        later, exactly like the existing crash-respawn window.
+
         Returns the new response queue, or ``None`` when there is no live server to
         attach to (the caller then falls back to the threaded pipeline, as before).
         """
@@ -930,47 +962,26 @@ class Supervisor:
             )
             if self._model_server_down is not None:
                 self._model_server_down.set()
-            proc = self._model_server_proc
+            old_proc = self._model_server_proc
             stop_ev = self._model_server_stop
             if stop_ev is not None:
                 try:
                     stop_ev.set()  # graceful: serve() drains out on its own
                 except Exception:  # noqa: BLE001
                     log.debug("model-server stop event set failed", exc_info=True)
-            # Drain, do NOT kill: the old server is parked in ``req_q.get()``, and
-            # terminating a process inside a multiprocessing.Queue read poisons the
-            # SHARED request queue (the dead reader holds the queue's reader lock /
-            # leaves a partial length-prefixed message in the pipe) — the respawned
-            # server then never receives a single request and every camera loses
-            # detection until the app restarts.  The serve loop polls the stop
-            # event every ≤0.2s, so this join typically returns in ~a quarter
-            # second; terminate() stays only as the escalation for a truly wedged
-            # process (accepting the poisoning risk over hanging the add forever).
-            try:
-                proc.join(timeout=_MS_DRAIN_TIMEOUT_S)
-            except Exception:  # noqa: BLE001
-                log.debug("old model-server drain join failed", exc_info=True)
-            still_alive = False
-            try:
-                still_alive = bool(proc.is_alive())
-            except Exception:  # noqa: BLE001
-                still_alive = False
-            if still_alive:
-                log.warning(
-                    "old model-server did not drain within %.1fs — terminating; the "
-                    "shared request queue may be poisoned (cameras may need an "
-                    "engine restart to regain detection).",
-                    _MS_DRAIN_TIMEOUT_S,
-                )
-                try:
-                    proc.terminate()
-                except Exception:  # noqa: BLE001
-                    log.debug("old model-server terminate failed", exc_info=True)
-                try:
-                    proc.join(timeout=0.5)
-                except Exception:  # noqa: BLE001
-                    log.debug("old model-server join failed", exc_info=True)
-            self._respawn_model_server(time.monotonic())
+            # Drain, do NOT kill, on THIS call: the old server is parked in
+            # ``req_q.get()``, and terminating a process inside a
+            # multiprocessing.Queue read poisons the SHARED request queue (the dead
+            # reader holds the queue's reader lock / leaves a partial length-prefixed
+            # message in the pipe) — the respawned server then never receives a
+            # single request and every camera loses detection until the app
+            # restarts.  The serve loop polls the stop event every ≤0.2s, so it
+            # typically exits in ~a quarter second; terminate() stays only as the
+            # escalation _poll_model_server_drain applies for a truly wedged
+            # process.  Handing the deadline off (instead of joining here) is what
+            # keeps this call non-blocking.
+            self._ms_drain_proc = old_proc
+            self._ms_drain_deadline = time.monotonic() + _MS_DRAIN_TIMEOUT_S
         except Exception:  # noqa: BLE001 — attach is best-effort; threaded fallback below
             log.warning(
                 "late model-server attach for camera %s failed — falling back to "
@@ -981,6 +992,52 @@ class Supervisor:
             self._infer_resp_qs.pop(camera_id, None)
             return None
         return q
+
+    def _poll_model_server_drain(self, now: float) -> None:
+        """Non-blocking continuation of an in-flight old-server drain.
+
+        Dispatched from :meth:`_scan_model_server_health` on every health-scan tick
+        while ``_ms_drain_proc`` is set (a late-camera attach is waiting for the OLD
+        server to exit before :meth:`_respawn_model_server` starts the new one).
+        Only ever polls ``is_alive()`` — never ``.join()`` with a nonzero timeout —
+        so a slow-to-exit old server cannot stall the GUI thread's ``tick()``.
+        """
+        proc = self._ms_drain_proc
+        if proc is None:
+            return
+        deadline = self._ms_drain_deadline
+        assert deadline is not None  # guarded by caller
+
+        try:
+            alive = bool(proc.is_alive())
+        except Exception:  # noqa: BLE001
+            alive = False
+        if not alive:
+            self._ms_drain_proc = None
+            self._ms_drain_deadline = None
+            self._respawn_model_server(now)
+            return
+
+        if now < deadline:
+            return  # still draining; check again next tick
+
+        log.warning(
+            "old model-server did not drain within %.1fs — terminating; the "
+            "shared request queue may be poisoned (cameras may need an "
+            "engine restart to regain detection).",
+            _MS_DRAIN_TIMEOUT_S,
+        )
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001
+            log.debug("old model-server terminate failed", exc_info=True)
+        try:
+            proc.join(timeout=0.5)
+        except Exception:  # noqa: BLE001
+            log.debug("old model-server join failed", exc_info=True)
+        self._ms_drain_proc = None
+        self._ms_drain_deadline = None
+        self._respawn_model_server(now)
 
     def _refresh_model_server_workers(self) -> None:
         """Ask every model-server-mode camera worker to re-pull its detector from

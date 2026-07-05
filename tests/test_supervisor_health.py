@@ -16,6 +16,7 @@ from autoptz.engine.supervisor import (
     _INFER_RESTART_S,
     _MAX_BACKOFF_S,
     _MAX_RESTART_ATTEMPTS,
+    _MS_DRAIN_TIMEOUT_S,
     _MS_SPAWN_TIMEOUT_S,
     _WORKER_HANG_S,
     _WORKER_WARMUP_GRACE_S,
@@ -899,6 +900,49 @@ class TestModelServerHealthScan:
         finally:
             sup.stop()
 
+    def test_failed_flag_clears_once_a_fresh_respawn_is_confirmed_healthy(
+        self, qapp, monkeypatch
+    ) -> None:
+        """Once permanently failed, every RemotePool.detector() latches onto its
+        local fallback FOREVER unless model_server_failed_ev is cleared — but
+        nothing ever cleared it. A camera added later restarts the server (via
+        _attach_camera_to_model_server, which respawns unconditionally, bypassing
+        the exhausted-attempts cap) — once THAT fresh server's ready-handshake
+        actually arrives, the flag must clear and every worker must be told to
+        re-pull the (now healthy) shared client, or the new server sits unused."""
+        sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
+        try:
+            now = 1000.0
+            for _attempt in range(_MAX_RESTART_ATTEMPTS):
+                sup._model_server_proc._alive = False
+                now += _MAX_BACKOFF_S + 1.0
+                sup._scan_model_server_health(now)
+                now += _MS_SPAWN_TIMEOUT_S + 0.1
+                sup._scan_model_server_health(now)
+            assert sup.model_server_failed() is True
+            assert factory_log[0].refresh_calls == 1
+
+            # A camera added later restarts the server unconditionally.
+            sup._attach_camera_to_model_server("cam-late")
+            now += 0.1
+            sup._scan_model_server_health(now)  # drains the (already-dead) old proc
+            assert sup._ms_spawn_deadline is not None  # fresh respawn now in flight
+
+            # The fresh server's ready-handshake arrives.
+            sup._model_server_proc._alive = True
+            sup._ms_ready_ev.set()
+            sup._scan_model_server_health(now + 0.1)
+
+            assert sup.model_server_failed() is False, (
+                "a confirmed-healthy respawn must clear the latched failed flag"
+            )
+            assert factory_log[0].refresh_calls == 2, (
+                "workers must be told to re-pull the pool's detector a second time "
+                "so RemotePool resumes the shared client instead of local fallback"
+            )
+        finally:
+            sup.stop()
+
     def test_healthy_server_is_not_touched(self, qapp, monkeypatch) -> None:
         sup, client, factory_log, proc_log, cid = self._build_ms(qapp, monkeypatch)
         try:
@@ -1314,21 +1358,63 @@ class TestLateCameraAttach:
             cid_b = client.addCamera("usb://1", "B")
             sup.tick()  # route ADD_CAMERA
 
-            # B got its own IPC slot, the server restarted with the updated queue
-            # set, and B runs as a PROCESS worker — never the threaded fallback.
+            # B got its own IPC slot and runs as a PROCESS worker (never the
+            # threaded fallback) — all decided synchronously by the attach call
+            # (it registers the slot and returns immediately; see
+            # test_attach_registers_slot_and_returns_without_blocking below).
             assert cid_b in sup._infer_resp_qs
             assert cid_b in sup._model_server_camera_ids
-            assert len(proc_log) == 2
-            assert proc_log[0].terminate_calls >= 1
             assert len(_FakeProcessHandle.created) == 2
             assert _FakeProcessHandle.created[-1].camera_id == cid_b
             assert threaded_log == []
+            assert sup._model_server_down.is_set()
 
-            # Down-gate held for the swap; the ready handshake clears it on a tick.
+            # The OLD server's actual drain — and therefore the restart — is NOT
+            # done yet: it is polled asynchronously via _scan_model_server_health,
+            # never blocked on inside the attach call above.
+            assert len(proc_log) == 1
+            assert proc_log[0].terminate_calls == 0
+            assert sup._ms_drain_proc is proc_log[0]
+
+            # _FakeModelServerProc never "drains" on its own (join() is a no-op) —
+            # advancing past the drain deadline must escalate to terminate, then
+            # start the replacement server.
+            sup._scan_model_server_health(time.monotonic() + _MS_DRAIN_TIMEOUT_S + 0.1)
+            assert sup._ms_drain_proc is None
+            assert proc_log[0].terminate_calls >= 1
+            assert len(proc_log) == 2
+
+            # Down-gate held for the whole swap; the ready handshake clears it.
             assert sup._model_server_down.is_set()
             sup._ms_ready_ev.set()
             sup._scan_model_server_health(time.monotonic())
             assert not sup._model_server_down.is_set()
+        finally:
+            sup.stop()
+
+    def test_attach_registers_slot_and_returns_without_blocking(self, qapp, monkeypatch) -> None:
+        """The attach call itself must never join()/block on the OLD server —
+        _on_add_camera runs on the GUI-thread tick(), and _MS_DRAIN_TIMEOUT_S
+        (3.0s) blocking there is exactly the multi-second UI stutter this
+        non-blocking drain redesign exists to remove."""
+        sup, client, _threaded_log, proc_log, _cid_a = self._build(qapp, monkeypatch)
+        try:
+            join_calls: list[float | None] = []
+            real_join = proc_log[0].join
+
+            def recording_join(timeout: float | None = None) -> None:
+                join_calls.append(timeout)
+                real_join(timeout)
+
+            proc_log[0].join = recording_join  # type: ignore[method-assign]
+
+            cid_b = client.addCamera("usb://1", "B")
+            sup.tick()  # route ADD_CAMERA -> _attach_camera_to_model_server
+
+            assert join_calls == [], (
+                f"attach must not join() the old server synchronously, got {join_calls}"
+            )
+            assert cid_b in sup._infer_resp_qs  # slot registration IS synchronous
         finally:
             sup.stop()
 
