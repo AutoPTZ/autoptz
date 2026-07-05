@@ -594,8 +594,13 @@ class CameraWorker:
         self._head_recovery_active = False
         # Last logged 'Ignore arms' framing source ("torso"/"bbox"), change-only.
         self._framing_source = ""
-        # Continuous smoother for the pose-derived framing box (lazy).
+        # Continuous smoother for the pose-derived framing box (lazy).  Mutated
+        # from BOTH the capture thread (Center Stage crop, _current_digital_target)
+        # and the inference thread (physical PTZ aim, _track_error; also reset on
+        # target change/loss) — guard every read-modify-write with this lock so a
+        # reset() can never land inside update()'s compound self._t access.
         self._torso_box_smoother: Any | None = None
+        self._torso_box_smoother_lock = threading.Lock()
         self._last_pose_overlay_t = 0.0
         self._last_pose_overlay_frame_id = 0
         self._last_pose_emitted_frame_id = -1
@@ -3118,11 +3123,12 @@ class CameraWorker:
         self._last_good_kps_track_id = None
         self._last_pose_good_t = 0.0
         self._head_recovery_active = False
-        if self._torso_box_smoother is not None:
-            try:
-                self._torso_box_smoother.reset()
-            except Exception:  # noqa: BLE001
-                pass
+        with self._torso_box_smoother_lock:
+            if self._torso_box_smoother is not None:
+                try:
+                    self._torso_box_smoother.reset()
+                except Exception:  # noqa: BLE001
+                    pass
         self._last_pose_overlay_t = 0.0
         self._last_pose_overlay_frame_id = 0
         self._last_pose_emitted_frame_id = -1
@@ -4365,13 +4371,16 @@ class CameraWorker:
             # Pose estimates arrive as discrete ~0.2 s samples with keypoint
             # noise — smooth them into a continuous signal so the framing
             # target (and the PTZ velocity feed-forward differentiating it)
-            # never sees a step.  Shared by BOTH actuators; time-aware, so the
-            # two calling threads just add smoothing sub-steps.
-            if self._torso_box_smoother is None:
-                from autoptz.engine.pipeline import framing
+            # never sees a step.  Shared by BOTH actuators (capture thread via
+            # Center Stage, inference thread via physical PTZ aim) — the lock
+            # makes their sub-steps and _reset_pose_aim's reset() mutually
+            # exclusive instead of racing on the smoother's internal state.
+            with self._torso_box_smoother_lock:
+                if self._torso_box_smoother is None:
+                    from autoptz.engine.pipeline import framing
 
-                self._torso_box_smoother = framing.BoxSmoother(tau=_TORSO_BOX_TAU_S)
-            smoothed = self._torso_box_smoother.update(box, time.monotonic())
+                    self._torso_box_smoother = framing.BoxSmoother(tau=_TORSO_BOX_TAU_S)
+                smoothed = self._torso_box_smoother.update(box, time.monotonic())
             self._note_framing_source("torso")
             return smoothed if smoothed is not None else box
         self._note_framing_source(

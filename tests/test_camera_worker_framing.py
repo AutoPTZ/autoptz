@@ -92,6 +92,76 @@ def _locked_worker_with_pose(*, aim_body_mode: str = "torso", raised_arm_bbox=No
     return w, box
 
 
+def test_torso_box_smoother_update_and_reset_are_mutually_exclusive() -> None:
+    """_torso_stable_box (capture thread: Center Stage crop, AND inference
+    thread: physical PTZ aim) and _reset_pose_aim (inference thread, on target
+    change/loss) both mutate the shared _torso_box_smoother. Without a lock,
+    reset() can land between update()'s read of self._t and its use, raising
+    TypeError (framing.py: `t - self._t` with self._t suddenly None) —
+    swallowed by _torso_stable_box's broad except, silently dropping that
+    tick's Center Stage crop.
+
+    A raw thread-hammer doesn't reliably hit the few-instruction race window
+    (confirmed: passes even against the unlocked code across repeated runs).
+    So this widens the window deliberately — patch BoxSmoother.update to block
+    partway through on an Event, matching the 'read self._t, then use it' shape
+    of the real bug — and proves a concurrent reset() cannot run its real body
+    until that update() call has fully returned (i.e. the two are serialized
+    by a lock at the CameraWorker level, not just individually thread-safe).
+    """
+    import threading
+    from unittest import mock
+
+    from autoptz.engine.pipeline import framing
+
+    w, _ = _locked_worker_with_pose()
+    w._torso_stable_box(1)  # seed the smoother so update() takes the blend path
+    assert w._torso_box_smoother is not None
+
+    update_entered = threading.Event()
+    release_update = threading.Event()
+    reset_ran = threading.Event()
+    reset_ran_before_release = threading.Event()
+    real_update = framing.BoxSmoother.update
+    real_reset = framing.BoxSmoother.reset
+
+    def slow_update(self, box, t):  # noqa: ANN001
+        update_entered.set()
+        release_update.wait(timeout=2.0)
+        return real_update(self, box, t)
+
+    def tracked_reset(self):  # noqa: ANN001
+        if not release_update.is_set():
+            reset_ran_before_release.set()
+        reset_ran.set()
+        return real_reset(self)
+
+    def do_update() -> None:
+        w._torso_stable_box(1)
+
+    def do_reset() -> None:
+        update_entered.wait(timeout=2.0)
+        w._reset_pose_aim()
+
+    with mock.patch.multiple(framing.BoxSmoother, update=slow_update, reset=tracked_reset):
+        updater = threading.Thread(target=do_update)
+        resetter = threading.Thread(target=do_reset)
+        updater.start()
+        resetter.start()
+        update_entered.wait(timeout=2.0)
+        # Give the resetter thread a real window to (wrongly) run concurrently
+        # if nothing serializes it — generous vs. thread-wakeup latency.
+        reset_ran.wait(timeout=0.3)
+        release_update.set()
+        updater.join(timeout=2.0)
+        resetter.join(timeout=2.0)
+
+    assert reset_ran.is_set()  # sanity: the reset path actually executed
+    assert not reset_ran_before_release.is_set(), (
+        "reset() ran its real body while update() was still in flight — not mutually exclusive"
+    )
+
+
 def test_center_stage_composes_the_tracking_dot() -> None:
     """The crop must FOLLOW the aim dot (the Center Stage contract): moving the
     dot while the framing box stays put re-composes the crop toward it. The old
@@ -294,21 +364,32 @@ def test_head_recovery_has_hysteresis_against_flapping() -> None:
     )
     w._pose_aim = lambda *a, **k: (None, 0.0, 0.0)
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    # Explicit, distinct per-tick timestamps: _track_error memoizes its result
+    # by (now, track_id) so a real inference loop's single call per tick
+    # doesn't double-step the aim smoother. Production always advances `now`
+    # between ticks by construction; bare back-to-back time.monotonic() calls
+    # in a fast test do NOT reliably advance under Windows' coarser default
+    # clock resolution (~15.6 ms) — two calls a few microseconds apart can
+    # read back the SAME value there, which would silently replay tick 2's
+    # cached result on "tick 3" instead of evaluating it fresh.
+    now = time.monotonic()
     # Tick 1: head fully missing → recovery activates.
-    (_, ey1), _ = w._track_error(w._last_tracks[0], frame, time.monotonic(), tracks=w._last_tracks)
+    (_, ey1), _ = w._track_error(w._last_tracks[0], frame, now, tracks=w._last_tracks)
     assert ey1 >= 0.30
     # Tick 2: nose flickers in at conf 0.40 (visible by the 0.35 floor, but not
     # CLEARLY visible) — recovery must hold, not flap off.
+    now += 0.05
     kps = list(_standing_kps())
     kps[KP_NOSE] = Keypoint(200.0, 60.0, 0.40)
-    w._note_good_kps(kps, 1, time.monotonic())
-    (_, ey2), _ = w._track_error(w._last_tracks[0], frame, time.monotonic(), tracks=w._last_tracks)
+    w._note_good_kps(kps, 1, now)
+    (_, ey2), _ = w._track_error(w._last_tracks[0], frame, now, tracks=w._last_tracks)
     assert ey2 >= 0.30
     # Tick 3: nose clearly visible (0.60) → recovery releases.
+    now += 0.05
     kps2 = list(_standing_kps())
     kps2[KP_NOSE] = Keypoint(200.0, 60.0, 0.60)
-    w._note_good_kps(kps2, 1, time.monotonic())
-    (_, ey3), _ = w._track_error(w._last_tracks[0], frame, time.monotonic(), tracks=w._last_tracks)
+    w._note_good_kps(kps2, 1, now)
+    (_, ey3), _ = w._track_error(w._last_tracks[0], frame, now, tracks=w._last_tracks)
     assert ey3 < 0.30
 
 

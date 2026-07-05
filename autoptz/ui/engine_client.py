@@ -383,7 +383,6 @@ class EngineClient(QObject):
         """
         self._supervisor_factory = factory
 
-    @Slot()
     @property
     def autostartDesired(self) -> bool:
         """Whether the engine should auto-start next launch (the user's intent)."""

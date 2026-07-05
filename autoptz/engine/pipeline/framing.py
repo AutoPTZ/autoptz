@@ -65,13 +65,15 @@ NON_ARM_KEYPOINTS: tuple[int, ...] = (
 _BODY_EXTENT_PAD = 1.08
 
 # Hips-hidden (desk/webcam) stature estimate, from two ARM-INVARIANT anchors:
-# the vertical head→shoulder span is ≈ 1/10 of standing height, the biacromial
-# (shoulder) width ≈ 1/4.1.  max() of the two is robust to both failure modes —
-# tilting the head shrinks the span but not the width; turning sideways shrinks
-# the width but not the span.  Composition only needs a STABLE ballpark (the
-# framer clamps to min/max crop fractions), so modest anthropometric error is
-# fine; following the raw bbox is not.
-_HEAD_SHOULDER_SPAN_TO_HEIGHT = 10.0
+# the vertical head→shoulder span is ≈ 1/11.8 of standing height (nose height
+# ≈ 90% of stature, acromion/shoulder height ≈ 81%, per standard standing
+# anthropometric tables — a ≈8.5% span), the biacromial (shoulder) width ≈
+# 1/4.1.  max() of the two is robust to both failure modes — tilting the head
+# shrinks the span but not the width; turning sideways shrinks the width but
+# not the span.  Composition only needs a STABLE ballpark (the framer clamps
+# to min/max crop fractions), so modest anthropometric error is fine;
+# following the raw bbox is not.
+_HEAD_SHOULDER_SPAN_TO_HEIGHT = 11.8
 _SHOULDER_WIDTH_TO_HEIGHT = 4.1
 # Hips-hidden framing box: its top sits this fraction of the height above the
 # head point (crown + hair margin), mirroring where the hips-based box lands.
@@ -471,7 +473,13 @@ class BoxSmoother:
         """Blend *box* (at time *t*, seconds) into the running estimate."""
         if box is None:
             return self._value
-        if self._value is None or self._t is None or t <= self._t:
+        if self._value is None or self._t is None or t < self._t:
+            # First sample, or a genuine backward time jump — snap. An
+            # IDENTICAL t (below) is not this case: two calls can land on the
+            # same tick under a coarse clock (Windows' default
+            # ``time.monotonic()`` resolution is ~15.6 ms — common there, all
+            # but impossible on macOS/Linux's finer-grained clock) and must
+            # hold instead of snapping onto the new box.
             self._value = box
             self._t = t
             return self._value

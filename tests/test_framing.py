@@ -226,10 +226,10 @@ class TestHipsHiddenFallback:
     shot even with pose healthy)."""
 
     def test_subject_height_from_head_and_shoulders(self) -> None:
-        # span head→shoulders = 40 → 400; shoulder width = 60 → 246; max wins.
+        # span head→shoulders = 40 → 472; shoulder width = 60 → 246; max wins.
         h = subject_height_from_pose(_desk_pose())
         assert h is not None
-        assert math.isclose(h, 40.0 * 10.0)
+        assert math.isclose(h, 40.0 * 11.8)
 
     def test_shoulder_width_floors_the_estimate(self) -> None:
         # Head tilted down (nose close to the shoulder line): the span estimate
@@ -252,7 +252,7 @@ class TestHipsHiddenFallback:
         box = torso_framing_box(_desk_pose())
         assert box is not None
         x1, y1, x2, y2 = box
-        height = 40.0 * 10.0
+        height = 40.0 * 11.8
         assert math.isclose(y2 - y1, height)
         assert math.isclose((x1 + x2) * 0.5, 200.0)  # shoulder-centred x
         # Top sits a crown-pad above the head point so the head stays inside.
@@ -301,6 +301,21 @@ class TestBoxSmoother:
         s.update((0.0, 0.0, 100.0, 200.0), t=10.0)
         out = s.update((50.0, 0.0, 150.0, 200.0), t=10.001)  # 1 ms later
         assert abs(out[0] - 0.0) < 1.0  # nearly unmoved
+
+    def test_identical_timestamp_holds_instead_of_snapping(self) -> None:
+        """Two calls can land on the EXACT same ``t`` — Windows' default
+        ``time.monotonic()`` resolution (~15.6 ms) makes this common for two
+        fast back-to-back calls, where macOS/Linux's higher resolution
+        practically never collides. dt=0 must mean 'no time passed, hold the
+        smoothed value' (alpha=0), not 'first sample, snap onto the new box' —
+        the same bug this exact collision caused in
+        test_camera_worker_framing.py::test_torso_box_is_smoothed_not_stepped
+        on Windows CI (green on macOS/Linux, where the collision never
+        happens in practice)."""
+        s = self._smoother()
+        s.update((0.0, 0.0, 100.0, 200.0), t=10.0)
+        out = s.update((80.0, 0.0, 180.0, 200.0), t=10.0)  # identical t
+        assert out == (0.0, 0.0, 100.0, 200.0)  # held, not snapped to the new box
 
     def test_large_dt_converges(self) -> None:
         s = self._smoother()
