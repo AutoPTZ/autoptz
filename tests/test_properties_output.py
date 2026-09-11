@@ -60,3 +60,18 @@ def test_ndi_out_loads_saved_value(qtapp, tmp_path) -> None:
         assert panel._ndi_out.isChecked() is True
     finally:
         panel.deleteLater()
+
+
+def test_visca_udp_transport_persists_via_push(qtapp, tmp_path) -> None:
+    client, cid, panel = _panel_with_camera(tmp_path)
+    try:
+        panel.set_camera(cid)
+        panel._backend.setCurrentText("visca_ip")
+        panel._ptz_address.setText("192.0.2.20:52381")
+        panel._visca_transport.setCurrentText("udp")
+        panel._push()
+
+        ptz = client.getCameraConfig(cid)["ptz"]
+        assert ptz["visca_transport"] == "udp"
+    finally:
+        panel.deleteLater()
