@@ -129,6 +129,24 @@ class TestFactoryDispatch:
         build_backend(_cfg(backend="visca_ip", address="cam.local"))
         assert seen["port"] == factory._DEFAULT_VISCA_IP_PORT
 
+    def test_visca_ip_dispatch_passes_udp_transport(self, monkeypatch) -> None:
+        seen: dict[str, object] = {}
+
+        def fake_ctor(host, port, *a, **kwargs):
+            seen["transport"] = kwargs.get("transport")
+            return RecordingBackend()
+
+        monkeypatch.setattr("autoptz.engine.ptz.visca_ip.ViscaIPBackend", fake_ctor)
+        b = build_backend(
+            _cfg(
+                backend="visca_ip",
+                address="192.168.1.50:52381",
+                visca_transport="udp",
+            )
+        )
+        assert b is not None
+        assert seen["transport"] == "udp"
+
     def test_ndi_dispatch_with_receiver(self, monkeypatch) -> None:
         seen: dict[str, object] = {}
         monkeypatch.setattr(

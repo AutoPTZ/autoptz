@@ -165,12 +165,19 @@ def _build_visca_ip(ptz: PTZConfig) -> PTZBackend | None:
     if not host:
         log.warning("visca_ip requested but no host in address; PTZ disabled.")
         return None
+    transport = str(getattr(ptz, "visca_transport", "tcp") or "tcp").lower()
     try:
-        backend = ViscaIPBackend(host, port)
+        backend = ViscaIPBackend(host, port, transport=transport)
     except Exception:  # noqa: BLE001 - unreachable device / connection refused
-        log.warning("ViscaIP %s:%d unreachable; PTZ disabled.", host, port, exc_info=True)
+        log.warning(
+            "ViscaIP %s://%s:%d unavailable; PTZ disabled.",
+            transport,
+            host,
+            port,
+            exc_info=True,
+        )
         return None
-    log.info("PTZ backend: VISCA-IP on %s:%d", host, port)
+    log.info("PTZ backend: VISCA-IP on %s://%s:%d", transport, host, port)
     return backend
 
 
