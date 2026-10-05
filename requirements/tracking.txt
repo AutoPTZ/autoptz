@@ -12,5 +12,31 @@
 # Also provides the OSNet ReID backend used by engine/pipeline/reid.py for
 # body-appearance recovery after occlusion (weights auto-download on first use).
 # Optional at import time — Tracker / BodyReID degrade gracefully if absent.
-# Pin to a specific release once a stable wheel is available for all platforms.
-boxmot>=10.0.91
+#
+# Pinned to 19.0.0: this is the newest release that both keeps the tracker API
+# engine/pipeline/track.py uses (`from boxmot.trackers import BotSort, ByteTrack,
+# DeepOcSort` with the reid_model / with_reid constructor) AND installs on every
+# target platform. In 22.x those classes are no longer importable from
+# `boxmot.trackers` (they now live in tracker-specific submodules like
+# `boxmot.trackers.botsort` / `bytetrack` / `deepocsort`), so this import path
+# breaks. 20.x/21.x keep the API but require numpy>=2.2, which has no compatible
+# torch wheel on x86_64 macOS (last Intel torch is 2.2.2, needs numpy<2). Revisit
+# when track.py adopts the newer boxmot import layout and/or platform wheel
+# constraints change.
+boxmot==19.0.0
+
+# torch comes in transitively via boxmot, but pin it explicitly by platform so
+# the extra resolves on x86_64 macOS: the last Intel-mac torch wheel is 2.2.2
+# (which needs numpy<2, see the numpy split in base.txt). Every other platform
+# takes a numpy-2-compatible torch>=2.3.1. The >=2.3.1 floor matters: torch
+# wheels declare no numpy upper bound, so without it pip can pick an older torch
+# and pair it with numpy 2, an ABI mismatch that crashes at runtime.
+#
+# Repeat the numpy split here so this file is installable on its own
+# (`pip install -r requirements/tracking.txt`) without relying on base.txt.
+numpy==1.26.4; platform_system == "Darwin" and platform_machine == "x86_64"
+numpy==2.2.6; platform_system != "Darwin" or platform_machine != "x86_64"
+torch==2.2.2; platform_system == "Darwin" and platform_machine == "x86_64"
+torchvision==0.17.2; platform_system == "Darwin" and platform_machine == "x86_64"
+torch>=2.3.1,<3; platform_system != "Darwin" or platform_machine != "x86_64"
+torchvision>=0.18.1,<1; platform_system != "Darwin" or platform_machine != "x86_64"
