@@ -36,7 +36,7 @@ boxmot==19.0.0
 # (`pip install -r requirements/tracking.txt`) without relying on base.txt.
 numpy==1.26.4; platform_system == "Darwin" and platform_machine == "x86_64"
 numpy==2.2.6; platform_system != "Darwin" or platform_machine != "x86_64"
-torch==2.2.2; platform_system == "Darwin" and platform_machine == "x86_64"
+torch==2.13.0; platform_system == "Darwin" and platform_machine == "x86_64"
 torchvision==0.17.2; platform_system == "Darwin" and platform_machine == "x86_64"
 torch>=2.3.1,<3; platform_system != "Darwin" or platform_machine != "x86_64"
 torchvision>=0.18.1,<1; platform_system != "Darwin" or platform_machine != "x86_64"
