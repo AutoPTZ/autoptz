@@ -226,6 +226,11 @@ class Supervisor:
         # Per-camera monotonic spawn timestamp, used to grant a warmup grace
         # window before hang detection arms (model build emits no telemetry).
         self._spawn_t: dict[str, float] = {}
+        # Cameras whose current worker's start() has RETURNED. The health scan
+        # only judges these: a worker still inside start() (e.g. spawning its
+        # process) reports is_alive() False and used to be "restarted" mid-start,
+        # orphaning the original once its start() completed.
+        self._started_ids: set[str] = set()
 
     # ── lifecycle ───────────────────────────────────────────────────────────────
 
@@ -314,6 +319,7 @@ class Supervisor:
             self._restart_state.clear()
             self._last_telemetry_t.clear()
             self._spawn_t.clear()
+            self._started_ids.clear()
 
         # Join the pump outside the lock (it may call tick→lock).
         if pump is not None and pump is not threading.current_thread():
@@ -637,6 +643,10 @@ class Supervisor:
             snapshot = list(self._workers.items())
 
         for cid, worker in snapshot:
+            with self._lock:
+                starting = cid not in self._started_ids
+            if starting:
+                continue  # still inside start(): not judgeable yet
             alive = False
             try:
                 alive = bool(worker.is_alive())
@@ -701,6 +711,7 @@ class Supervisor:
                 # this re-check is belt-and-suspenders against external direct calls.
                 if cid in self._workers:
                     del self._workers[cid]
+                    self._started_ids.discard(cid)
                 else:
                     # Removed concurrently — clear state and skip the respawn.
                     self._restart_state.pop(cid, None)
@@ -1109,6 +1120,7 @@ class Supervisor:
         self._restart_state.pop(cid, None)
         self._last_telemetry_t.pop(cid, None)
         self._spawn_t.pop(cid, None)
+        self._started_ids.discard(cid)
         # Drop the camera's model-server slot: each leaked mp.Queue holds pipe fds
         # + a feeder thread, and the next server respawn would re-pickle queues for
         # cameras that no longer exist.  (The running server keeps its own copy of
@@ -1773,6 +1785,7 @@ class Supervisor:
             if not self._running or camera_id in self._workers:
                 return
             self._workers[camera_id] = worker
+            self._started_ids.discard(camera_id)
             self._spawn_t[camera_id] = time.monotonic()
             self._last_telemetry_t.pop(camera_id, None)
             worker_count = len(self._workers)
@@ -1825,6 +1838,12 @@ class Supervisor:
             worker.start()
         except Exception:  # noqa: BLE001
             log.warning("worker for %s failed to start", camera_id, exc_info=True)
+        finally:
+            # Only now may the health scan judge it (dead after a failed start is
+            # still restarted on the next scan).
+            with self._lock:
+                if self._workers.get(camera_id) is worker:
+                    self._started_ids.add(camera_id)
         # Ask the UI to attach the live-preview provider AFTER start() — the
         # worker creates its ShmWriter synchronously in start(), so by now the
         # segment exists and the provider's (self-healing) reader can open it.

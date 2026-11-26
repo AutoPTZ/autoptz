@@ -153,7 +153,9 @@ class TestMacOSCameraPreflight:
         assert client.starts == 1
         assert client.errors == []
 
-    def test_reports_denied_without_starting(self, monkeypatch) -> None:
+    def test_reports_denied_but_still_starts_engine(self, monkeypatch) -> None:
+        """Denied camera access must not block the engine: NDI/RTSP/ONVIF sources
+        need no camera permission, and USB capture degrades to no-signal itself."""
         import autoptz.ui.app as app_mod
 
         fake = types.ModuleType("AVFoundation")
@@ -171,9 +173,36 @@ class TestMacOSCameraPreflight:
 
         app_mod._start_engine_after_macos_camera_preflight(client, object())
 
-        assert client.starts == 0
+        assert client.starts == 1
         # Message wording differs for packaged ("denied") vs source runs ("from
-        # source"), but both must surface a camera-access error and not start.
+        # source"), but both must surface a camera-access warning.
+        assert "Camera access" in client.errors[-1]
+        assert "NDI" in client.errors[-1]
+
+    def test_denied_after_prompt_still_starts_engine(self, monkeypatch) -> None:
+        import autoptz.ui.app as app_mod
+
+        bridge = _PreflightBridge()
+        fake = types.ModuleType("AVFoundation")
+        fake.AVMediaTypeVideo = "video"
+
+        class _CaptureDevice:
+            @staticmethod
+            def authorizationStatusForMediaType_(_media):
+                return 0
+
+            @staticmethod
+            def requestAccessForMediaType_completionHandler_(_media, handler):
+                handler(False)
+
+        fake.AVCaptureDevice = _CaptureDevice
+        monkeypatch.setattr(app_mod.sys, "platform", "darwin")
+        monkeypatch.setitem(sys.modules, "AVFoundation", fake)
+        client = _PreflightClient()
+
+        app_mod._start_engine_after_macos_camera_preflight(client, bridge)
+
+        assert client.starts == 1
         assert "Camera access" in client.errors[-1]
 
     def test_requests_access_then_starts_when_granted(self, monkeypatch) -> None:

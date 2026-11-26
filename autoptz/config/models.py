@@ -291,6 +291,21 @@ class PTZConfig(BaseModel, frozen=True):
     # Upper bound on the learned command→image gain (normalised img-vel per unit
     # command); clamps the online regression so a bad sample can't run away.
     ego_comp_gain_max: float = Field(default=8.0, ge=0.0, le=64.0)
+    # Dead-time (Smith predictor) compensation: learn the camera's command→video
+    # delay + gain from observed motion and correct the follow error for motion
+    # already commanded but not yet visible. Stops the swing-past/ring on network
+    # PTZs (NDI measured ~0.6 s). Inactive until the fit is confident.
+    deadtime_comp_enabled: bool = True
+    # Move/settle: the subject must stay outside the hold zone this long before a
+    # move starts (rejects aim blips). Large offsets / frame-edge still move now.
+    move_confirm_ms: int = Field(default=300, ge=0, le=2000)
+    # Head-anchored tilt: tilt follows the (stable) head position; the torso/box
+    # framing offset is only low-passed in, so box-bottom/pose flicker can't tilt.
+    tilt_head_anchor: bool = True
+    # Tilt only for sustained vertical shifts: tilt moves only while the MEDIAN
+    # vertical error over this window is outside the zone (sit/stand), not for
+    # bobbing / leaning / hands-up that averages out. 0 = off. Frame-edge: always.
+    tilt_settle_ms: int = Field(default=1500, ge=0, le=5000)
     # Quick-recall hardware preset slots, shown in the Properties → PTZ section as
     # label + snapshot tiles.  Maps a slot index (0-based, 0..5) to a
     # :class:`PtzPresetSlot` (label + thumbnail); an absent slot is "empty" (no

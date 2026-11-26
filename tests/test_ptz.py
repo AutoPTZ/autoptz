@@ -482,7 +482,9 @@ class TestZoneGeometry:
 
     def test_commands_sent_to_backend(self) -> None:
         backend = MockBackend()
-        ctrl = PTZController(backend, _cfg(kp=0.6))
+        # Plumbing test (both axes reach the backend): the tilt sustained-shift
+        # gate would hold a single in-zone vertical sample, so turn it off here.
+        ctrl = PTZController(backend, _cfg(kp=0.6, tilt_settle_ms=0))
         ctrl.step((0.4, 0.2), (0.0, 0.0), 0.45, True, t=0.0)
         assert len(backend.velocity_calls) >= 1
         pan_sent, tilt_sent, _ = backend.velocity_calls[-1]

@@ -997,3 +997,76 @@ class TestWorkerAutoHarvest:
         w._maybe_identify(_gray(4), [track], now=400.0)
         assert harvested == []
         assert w._track_identity == {}
+
+
+class TestFaceToTrackAssociation:
+    """Field bug (live NDI, 2026-11-26): an occluded person's face sat inside the
+    front person's body box, got bound to the FRONT track, and the identity
+    target ("Pastor John") locked the camera onto the guitarist in front of him —
+    the label flipped Pastor John ↔ the guitarist's own identity every ~1 s.
+    A face must bind to the track whose HEAD region it occupies, one face per
+    track per pass."""
+
+    def _worker(self, service, recognizer):
+        from autoptz.engine.camera_worker import CameraWorker, _FaceStack
+
+        w = CameraWorker(
+            "cam-test-1234abcd",
+            _worker_config(),
+            on_telemetry=lambda m: None,
+            on_identity=lambda r: None,
+            face_stack=_FaceStack(recognizer=recognizer, service=service),
+        )
+        w._face = _FaceStack(recognizer=recognizer, service=service)
+        return w
+
+    def test_occluded_face_in_front_box_corner_does_not_bind_to_front_track(self):
+        service, _ = _make_service()
+        guitar_emb, pastor_emb = _vec(901), _vec(902)
+        guitarist = service.enroll("Guitarist", guitar_emb)
+        pastor = service.enroll("Pastor John", pastor_emb)
+        # Front person's box; the person behind has NO box of their own (occluded).
+        front = _StubTrack(3, (200, 100, 440, 470))
+        app = _FakeApp(
+            [
+                _FakeFace((290, 125, 330, 175), guitar_emb),  # front person's own head
+                _FakeFace((400, 95, 440, 145), pastor_emb),  # head behind, top-right corner
+            ]
+        )
+        w = self._worker(service, FaceRecognizer(_app=app, match_threshold=0.4))
+        w._target_identity_id = pastor.id
+
+        for i in range(4):
+            w._maybe_identify(_gray(903), [front], now=300.0 + i)
+
+        assert w._track_identity[3][0] == guitarist.id
+        assert w._target_track_id != 3  # never lock the pastor target onto the guitarist
+
+    def test_face_binds_to_its_own_box_not_the_box_with_nearer_centre(self):
+        service, _ = _make_service()
+        pastor_emb = _vec(904)
+        pastor = service.enroll("Pastor John", pastor_emb)
+        # Tall box behind (centre far below the face) vs a front box whose centre
+        # is closer to the face — old "nearest box centre" rule picked the front.
+        front = _StubTrack(3, (200, 100, 440, 470))
+        behind = _StubTrack(9, (330, 80, 560, 900))
+        app = _FakeApp([_FakeFace((400, 95, 440, 145), pastor_emb)])
+        w = self._worker(service, FaceRecognizer(_app=app, match_threshold=0.4))
+
+        w._maybe_identify(_gray(905), [front, behind], now=310.0)
+
+        assert w._track_identity.get(9, (None,))[0] == pastor.id
+        assert 3 not in w._track_identity
+
+    def test_face_low_in_a_box_is_not_that_boxs_head(self):
+        service, _ = _make_service()
+        emb = _vec(906)
+        service.enroll("Alice", emb)
+        tall = _StubTrack(4, (100, 50, 300, 450))
+        # Face centre at 85% of the box height — someone else's head, not this person's.
+        app = _FakeApp([_FakeFace((180, 370, 220, 410), emb)])
+        w = self._worker(service, FaceRecognizer(_app=app, match_threshold=0.4))
+
+        w._maybe_identify(_gray(907), [tall], now=320.0)
+
+        assert 4 not in w._track_identity

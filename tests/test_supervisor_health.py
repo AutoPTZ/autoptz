@@ -1432,3 +1432,54 @@ class TestLateCameraAttach:
             assert len(proc_log) == 1  # no restart attempted
         finally:
             sup.stop()
+
+
+class TestSpawnStartRace:
+    """Field bug (2026-11-26): the health scan ran while a freshly registered
+    worker was still inside start() (process spawning), saw is_alive() False,
+    called stop() (a no-op — nothing running yet) and spawned a replacement; the
+    original then finished starting with nobody owning it. Two camera processes
+    pulled the same NDI stream and one streamed orphan telemetry."""
+
+    def test_scan_during_start_does_not_respawn_or_orphan(self, qapp) -> None:
+        sup, client, factory_log, _cid = _build(qapp)
+        try:
+            cid2 = client.addCamera("usb://1", "Y")
+            client.drain_commands()
+
+            class _SlowStart(_HealthFakeWorker):
+                def __init__(self, *a) -> None:
+                    super().__init__(*a)
+                    self._alive = False  # not running until start() returns
+
+                def start(self) -> None:
+                    self.start_calls += 1
+                    # The concurrent health scan lands mid-start.
+                    sup._scan_worker_health(time.monotonic() + 1000.0)
+                    self._alive = True
+
+            def factory(camera_id, config, on_tel):
+                w = _SlowStart(camera_id, config, on_tel)
+                factory_log.append(w)
+                return w
+
+            sup._worker_factory = factory
+            before = len(factory_log)
+            sup._spawn_worker(cid2)
+            # (The far-future scan clock may legitimately restart the fixture's
+            # other, now-"stale" camera; only count workers for the new one.)
+            spawned = [w for w in factory_log[before:] if w.camera_id == cid2]
+            assert len(spawned) == 1, "scan mid-start must not spawn a replacement"
+            assert spawned[0].stop_calls == 0
+            assert sup._workers[cid2] is spawned[0]
+        finally:
+            sup.stop()
+
+    def test_worker_that_dies_after_starting_is_still_restarted(self, qapp) -> None:
+        sup, client, factory_log, cid = _build(qapp)
+        try:
+            factory_log[0]._alive = False
+            sup._scan_worker_health(time.monotonic() + 1000.0)
+            assert len(factory_log) == 2
+        finally:
+            sup.stop()

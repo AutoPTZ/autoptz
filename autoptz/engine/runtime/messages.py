@@ -90,6 +90,12 @@ class PTZState(BaseModel):
     moving: bool = False
     backend: str = ""
     state: str = "idle"
+    # Dead-time compensation: learned command→video delay (ms), whether the
+    # correction is active (fit confident + enabled), and the correction applied
+    # to the last follow error (error-space units).
+    dead_time_ms: float = 0.0
+    dead_time_active: bool = False
+    dead_time_correction: tuple[float, float] = (0.0, 0.0)
 
 
 class TrackingStatusInfo(BaseModel):

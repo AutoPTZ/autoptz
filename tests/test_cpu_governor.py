@@ -341,3 +341,92 @@ def test_high_system_cpu_relaxes_even_when_local_cost_low():
     w.set_system_cpu_pressure(95.0)
     w._effective_detect_interval()
     assert w._quality_active in ("balanced", "low")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Auto detector-cadence governor must not oscillate
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestAutoCadenceStability:
+    """The measured cost is amortized by the *current* interval, so judging an
+    upgrade by the current-cadence cost is self-referential: at interval 4 the
+    cost looks cheap, it upgrades to 2, which is over budget, so it drops to 4 —
+    field telemetry showed ~7 flips/s (512 in 70 s) on a live NDI camera."""
+
+    @staticmethod
+    def _costs(worker, monkeypatch, **ms: float) -> None:
+        monkeypatch.setattr(worker, "_stage_avg", lambda key: float(ms.get(key, 0.0)))
+
+    def test_constant_load_settles_without_flapping(self, worker, monkeypatch) -> None:
+        # 30 fps → 33.3 ms budget. interval 2: (40/2 + 20)/33.3 = 1.20 (over);
+        # interval 4: (40/4 + 20)/33.3 = 0.90 — the old code flipped 4↔2 forever.
+        self._costs(worker, monkeypatch, detect=40.0, track=20.0)
+        intervals = [worker._effective_detect_interval() for _ in range(30)]
+        assert intervals[-1] == 4
+        flips = sum(1 for a, b in zip(intervals, intervals[1:], strict=False) if a != b)
+        assert flips <= 2, intervals
+        quality_events = [e for e in worker._runtime_events if e.kind == "quality"]
+        assert len(quality_events) <= 3
+
+    def test_recovers_full_cadence_when_load_drops(self, worker, monkeypatch) -> None:
+        self._costs(worker, monkeypatch, detect=40.0, track=20.0)
+        for _ in range(5):
+            worker._effective_detect_interval()
+        assert worker._quality_interval == 4
+        self._costs(worker, monkeypatch, detect=10.0, track=3.0)  # (10+3)/33.3 = 0.39
+        intervals = [worker._effective_detect_interval() for _ in range(10)]
+        assert intervals[-1] == 1
+        assert worker._quality_active == "high"
+
+    def test_upgrades_only_when_next_cadence_fits(self, worker, monkeypatch) -> None:
+        # At interval 4 cost is 0.6, but interval 2 would be (30/2+18)/33.3 = 0.99:
+        # still too close to the 1.10 downgrade line → stay low (no ping-pong).
+        self._costs(worker, monkeypatch, detect=30.0, track=18.0)
+        worker._quality_interval, worker._quality_active = 4, "low"
+        assert all(worker._effective_detect_interval() == 4 for _ in range(10))
+
+    def test_async_face_not_charged_to_frame_budget(self, worker, monkeypatch) -> None:
+        # Field numbers (live NDI): face ran 190 ms on the appearance thread at
+        # 4 Hz. Off the frame path, it must not push the detector to every 4th
+        # frame. Its CPU cost is still covered by the system-CPU-pressure clamp.
+        self._costs(worker, monkeypatch, detect=27.0, track=5.0, pose=17.0, face=190.0)
+        worker._async_appearance = True
+        for _ in range(5):
+            worker._effective_detect_interval()
+        assert worker._quality_interval == 2
+
+    def test_sync_face_is_charged_to_frame_budget(self, worker, monkeypatch) -> None:
+        self._costs(worker, monkeypatch, detect=27.0, track=5.0, pose=17.0, face=190.0)
+        worker._async_appearance = False  # inline face really blocks the frame
+        for _ in range(5):
+            worker._effective_detect_interval()
+        assert worker._quality_interval == 4
+
+    def test_frame_backlog_relaxes_cadence_and_holds(self, worker, monkeypatch) -> None:
+        # Live NDI, 6+ people: projected cost looked fine (async face excluded) but
+        # frames aged to p90 ~165 ms at full cadence. Measured frame age is the
+        # ground truth: relax, and don't re-upgrade until a cooldown passes.
+        import autoptz.engine.camera_worker as cw
+
+        clock = [1000.0]
+        monkeypatch.setattr(cw, "_governor_clock", lambda: clock[0])
+        self._costs(worker, monkeypatch, detect=10.0, track=3.0, age=90.0)
+        worker._effective_detect_interval()
+        assert worker._quality_interval >= 2
+        relaxed = worker._quality_interval
+
+        # Backlog clears, but we're inside the cooldown → no upgrade yet.
+        self._costs(worker, monkeypatch, detect=10.0, track=3.0, age=20.0)
+        clock[0] += 3.0
+        assert worker._effective_detect_interval() == relaxed
+
+        # After the cooldown, light load + no backlog → full cadence again.
+        clock[0] += cw._BACKLOG_UPGRADE_COOLDOWN_S + 0.1
+        for _ in range(3):
+            worker._effective_detect_interval()
+        assert worker._quality_interval == 1
+
+    def test_no_backlog_no_change(self, worker, monkeypatch) -> None:
+        self._costs(worker, monkeypatch, detect=10.0, track=3.0, age=25.0)
+        assert worker._effective_detect_interval() == 1

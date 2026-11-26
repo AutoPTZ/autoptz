@@ -70,6 +70,20 @@ def _no_serial_autoprobe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUTOPTZ_PTZ_SERIAL_AUTOPROBE", "0")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_app_data(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Never read/write the user's real config dir during tests.
+
+    Per-camera learned state (e.g. the PTZ dead-time model in
+    ``ptz_deadtime.json``) lives next to the config DB; point that at a temp
+    dir so a test-built PTZ stack can't seed from, or persist into, real data.
+    Tests that pass an explicit db_path are unaffected.
+    """
+    monkeypatch.setenv("AUTOPTZ_DB_PATH", str(tmp_path_factory.mktemp("appdata") / "autoptz.db"))
+
+
 @pytest.fixture(scope="session")
 def qapp() -> Generator[object]:
     """One process-wide QApplication object for headless tests."""

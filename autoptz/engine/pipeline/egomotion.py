@@ -57,6 +57,11 @@ class EgoMotion:
     vy: float = 0.0
     source: str = "none"  # "flow" | "command" | "none"
     confidence: float = 0.0  # 0..1 — how much to trust this estimate
+    # Unsmoothed measurement + the frame interval it spans (the EMA above lags,
+    # which would bias a dead-time fit). Zero unless ``source == "flow"``.
+    raw_vx: float = 0.0
+    raw_vy: float = 0.0
+    dt: float = 0.0
 
     @property
     def is_moving(self) -> bool:
@@ -169,7 +174,16 @@ class EgoMotionEstimator:
             ego_vy = -fdy_norm / dt
             if conf >= _FLOW_TRUST:
                 self._learn_gain(ego_vx, ego_vy, pan, tilt)
-                return self._emit(ego_vx, ego_vy, "flow", conf)
+                ego = self._emit(ego_vx, ego_vy, "flow", conf)
+                return EgoMotion(
+                    vx=ego.vx,
+                    vy=ego.vy,
+                    source=ego.source,
+                    confidence=ego.confidence,
+                    raw_vx=ego_vx,
+                    raw_vy=ego_vy,
+                    dt=dt,
+                )
 
         # Flow unusable → predict from the command through the learned gain.
         cmd = self._from_command(pan, tilt)

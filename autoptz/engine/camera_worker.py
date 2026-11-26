@@ -143,6 +143,17 @@ _MANUAL_OVERRIDE_WINDOW_S = 1.5
 _FACE_INTERVAL_S = 0.25
 _FACE_TTL_S = 0.12
 _STAGE_WINDOW = 60
+# Auto-quality backlog guard: when frames reach the end of inference older than
+# this many frame budgets, the pipeline is falling behind regardless of what the
+# per-stage cost model projects (e.g. async face/ReID competing for CPU/GIL).
+_BACKLOG_RELAX_BUDGETS = 1.5
+_BACKLOG_UPGRADE_COOLDOWN_S = 10.0
+
+
+def _governor_clock() -> float:
+    return time.monotonic()
+
+
 _STAGE_FRESH_S = 2.0
 # Inference-hang watchdog: if the inference thread hasn't completed a tick in
 # this many seconds, the capture thread halts PTZ motion and surfaces a
@@ -349,6 +360,24 @@ _POSE_JUMP_SCALE = 0.65
 _POSE_TARGET_LOCK_MIN_CONF = 0.45
 _FACE_LEARN_MATCH_THRESHOLD = 0.58
 _FACE_TARGET_MATCH_THRESHOLD = 0.52
+# Face→body association: a face is a track's head only inside this band of the
+# box (|dx| in half-widths from centre; rel_y as a fraction of height from top).
+_FACE_HEAD_HALF_WIDTH = 0.55
+_FACE_HEAD_MAX_REL_Y = 0.45
+_FACE_HEAD_ANCHOR_REL_Y = 0.10
+# Head-anchored tilt: time constant (s) for the torso/box framing offset that
+# rides on top of the head position (see _head_anchored_tilt).
+_TILT_ANCHOR_TAU_S = 2.5
+# Impossible-jump guard: a same-target aim change larger than this (error-space
+# half-frames, after removing the camera's own measured motion) within one tick
+# is held until the new position repeats for _AIM_JUMP_CONFIRM ticks.
+# Head clipped by the frame top: tilt gently UP at this steady error (just past
+# the tilt hold zone) to reveal it; hold tilt when the subject fills the frame.
+_CLIPPED_HEAD_TILT_UP = 0.35
+_FILLS_FRAME_FRAC = 0.9
+_AIM_JUMP_MAX = 0.5
+_AIM_JUMP_CONFIRM = 3
+_AIM_JUMP_NEAR = 0.15
 _REID_RECOVERY_CONFIRM_STABLE = 3
 _REID_RECOVERY_CONFIRM_RESPONSIVE = 1
 _REID_RECOVERY_MARGIN = 0.08
@@ -543,10 +572,16 @@ class CameraWorker:
         # controller's own loop emits commands at its rate_hz and _drive_ptz_auto
         # only publishes the latest target via update(); when OFF the worker drives
         # the controller inline via step() each inference tick (legacy behaviour).
+        from autoptz.engine.ptz.deadtime import DeadTimeModel
+
+        self._deadtime: DeadTimeModel | None = None
         self._ptz_pump = _ptz_pump_enabled()
         if ptz_controller is not None:
             if hasattr(ptz_controller, "step"):
                 self._ptz = ptz_controller
+                model = getattr(ptz_controller, "deadtime", None)
+                if isinstance(model, DeadTimeModel) and config.ptz.backend != "digital":
+                    self._deadtime = model
                 if self._ptz_backend is None:
                     self._ptz_backend = getattr(ptz_controller, "_backend", None)
             else:
@@ -561,7 +596,11 @@ class CameraWorker:
         self._ptz_last_cmd: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
         # tracking state
-        self._tracking_enabled = config.target.mode != "off"
+        # PTZ follow starts DISARMED: a saved target restores *who* to follow, not
+        # that follow is on. The UI restores every camera with follow off (green
+        # box) and arms it with an explicit enable_tracking (red). Starting armed
+        # here drove the camera while the operator saw green.
+        self._tracking_enabled = False
         # Set True by the capture-thread watchdog when inference appears hung;
         # cleared automatically when inference resumes.
         self._watchdog_stalled: bool = False
@@ -843,6 +882,15 @@ class CameraWorker:
         self._tracker_switch: SwitchStateInfo | None = None
         self._last_applied_fps: float | None = None
         self._quality_active = "auto"
+        self._quality_backlog_until = 0.0
+        # Head-anchored tilt state: (track_id, ref_kind, offset, last_t, last_out).
+        self._tilt_anchor: tuple[int, str, float, float, float] | None = None
+        # Impossible-jump guard: (track_id, last accepted err, t) + pending jump.
+        self._aim_jump_last: tuple[int, tuple[float, float], float] | None = None
+        self._aim_jump_pending: tuple[tuple[float, float], int] | None = None
+        # Dead-time model persistence (per camera): last save time + payload.
+        self._deadtime_saved_t = -1e9
+        self._deadtime_saved: dict[str, float] | None = None
         self._quality_reason = "Auto quality monitoring."
         self._quality_interval = max(1, int(getattr(config.tracking, "detect_interval", 1) or 1))
 
@@ -1536,6 +1584,8 @@ class CameraWorker:
             return
         try:
             backend.goto_preset(slot)
+            if self._deadtime is not None:
+                self._deadtime.note_uncommanded_motion(time.monotonic())
             log.info("camera_id=%s recalled PTZ preset slot=%d", self.camera_id, slot)
         except Exception:  # noqa: BLE001
             log.warning(
@@ -1556,6 +1606,8 @@ class CameraWorker:
         self._manual_override_until = time.monotonic() + _MANUAL_OVERRIDE_WINDOW_S
         try:
             backend.home()
+            if self._deadtime is not None:
+                self._deadtime.note_uncommanded_motion(time.monotonic())
             self._ptz_last_cmd = (0.0, 0.0, 0.0)
             log.info("camera_id=%s PTZ home", self.camera_id)
         except Exception:  # noqa: BLE001
@@ -1594,6 +1646,8 @@ class CameraWorker:
             return
         try:
             backend.move_velocity(pan, tilt, zoom)
+            if self._deadtime is not None:
+                self._deadtime.record_command(time.monotonic(), pan, tilt)
             self._ptz_last_cmd = (pan, tilt, zoom)
             log.debug(
                 "camera_id=%s ptz nudge backend=%s pan=%.3f tilt=%.3f zoom=%.3f",
@@ -1630,13 +1684,57 @@ class CameraWorker:
           the control math here and drives the backend synchronously, returning the
           command we mirror into ``_ptz_last_cmd`` and (for the active site) log.
         """
+        kwargs = {}
+        if self._deadtime is not None and self._current_inference_capture_ts > 0:
+            kwargs["capture_t"] = self._current_inference_capture_ts
+            now = time.monotonic()
+        self._maybe_persist_deadtime(time.monotonic())
         if self._ptz_pump:
-            ctrl.update(err, vel, height, track_active)
+            ctrl.update(err, vel, height, track_active, **kwargs)
             return
-        pan, tilt, zoom = ctrl.step(err, vel, height, track_active=track_active, t=now)
+        pan, tilt, zoom = ctrl.step(err, vel, height, track_active=track_active, t=now, **kwargs)
         self._ptz_last_cmd = (pan, tilt, zoom)
         if log_label is not None:
             self._log_ptz_cmd(log_label, pan, tilt, zoom)
+
+    def _seed_deadtime(self) -> None:
+        """Start dead-time compensation from this camera's last learned model.
+
+        The command→video delay is a property of the camera + network, so a
+        restart shouldn't relearn it from scratch (the first move after launch
+        used to overshoot a full frame while the model warmed up).
+        """
+        if self._deadtime is None:
+            return
+        try:
+            from autoptz.engine.ptz.deadtime import load_learned
+
+            snap = load_learned(self.camera_id)
+        except Exception:  # noqa: BLE001
+            snap = None
+        if snap:
+            self._deadtime.seed(snap)
+            self._deadtime_saved = snap
+            log.info(
+                "camera_id=%s PTZ dead-time seeded from last session: %.0f ms",
+                self.camera_id,
+                float(snap.get("delay_s", 0.0)) * 1000.0,
+            )
+
+    def _maybe_persist_deadtime(self, now: float) -> None:
+        if self._deadtime is None or now - self._deadtime_saved_t < 30.0:
+            return
+        self._deadtime_saved_t = now
+        try:
+            snap = self._deadtime.snapshot(now)
+            if not snap or snap == self._deadtime_saved:
+                return
+            from autoptz.engine.ptz.deadtime import save_learned
+
+            save_learned(self.camera_id, snap)
+            self._deadtime_saved = snap
+        except Exception:  # noqa: BLE001
+            log.debug("camera_id=%s dead-time persist failed", self.camera_id, exc_info=True)
 
     @_appearance_guarded
     def _drive_ptz_auto(
@@ -1720,6 +1818,7 @@ class CameraWorker:
                 # by definition not "fresh," that's the point of following it.
                 err, height = self._track_error(target, frame, now, tracks=tracks)
                 vel = self._estimate_aim_velocity(err, now)
+                err = self._head_anchored_tilt(target, err, frame, now)
                 active = True
             else:
                 fh = max(1, int(frame.shape[0]))
@@ -1728,8 +1827,14 @@ class CameraWorker:
                 occluded = usable and self._target_box_collapsed(box_h_frac)
                 if usable and not occluded:
                     err, height = self._track_error(target, frame, now, tracks=tracks)
-                    vel = self._estimate_aim_velocity(err, now)
-                    active = True
+                    if self._aim_jump_ok(target, err, now):
+                        vel = self._estimate_aim_velocity(err, now)
+                        err = self._head_anchored_tilt(target, err, frame, now)
+                        active = True
+                    else:
+                        # Impossible teleport (likely an id hand-off): hold this tick
+                        # rather than slam the head after it.
+                        err, height, vel, active = (0.0, 0.0), 0.0, (0.0, 0.0), False
                 else:
                     # Bad/partial boxes are not evidence.  Do not update aim velocity
                     # from them; tell the controller to hold/stop until a fresh target
@@ -1814,13 +1919,22 @@ class CameraWorker:
             if getattr(t, "bbox", None) is not None
         ]
         try:
-            ego = self._ego_estimator.estimate(frame, now, boxes=boxes, ptz_cmd=self._ptz_last_cmd)
+            capture_t = self._current_inference_capture_ts or now
+            ego = self._ego_estimator.estimate(
+                frame, capture_t, boxes=boxes, ptz_cmd=self._ptz_last_cmd
+            )
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s ego-motion estimate failed", self.camera_id, exc_info=True)
             self._ego_vel = (0.0, 0.0)
             self._ego_source = "none"
             self._ego_fresh = False
             return
+        if (
+            self._deadtime is not None
+            and self.config.ptz.deadtime_comp_enabled
+            and ego.source == "flow"
+        ):
+            self._deadtime.observe_motion(capture_t - 0.5 * ego.dt, ego.raw_vx, ego.raw_vy)
         self._ego_vel = (ego.vx, ego.vy)
         self._ego_source = ego.source
         self._ego_fresh = True
@@ -2638,6 +2752,100 @@ class CameraWorker:
         count = count + 1 if prev_id == track_id else 1
         self._reid_recover_candidate = (track_id, count)
         return count >= required
+
+    def _aim_jump_ok(self, track: TrackInfo, err: tuple[float, float], now: float) -> bool:
+        """False for a physically impossible one-tick jump of the target's aim.
+
+        A tracker can hand the target's id to another body (typically while the
+        camera itself is moving); the aim then teleports half a frame or more in
+        one tick and the controller slams the head after it. The camera's own
+        measured motion (ego) is removed first, so fast pans don't trip this.
+        The new position is accepted once it repeats for a few ticks (a real
+        re-acquisition), or immediately for a different target / after a gap.
+        """
+        last = self._aim_jump_last
+        if last is None or last[0] != track.track_id or not (0.0 < now - last[2] <= 0.35):
+            self._aim_jump_last = (track.track_id, err, now)
+            self._aim_jump_pending = None
+            return True
+        dt = now - last[2]
+        egx, egy = self._ego_vel
+        dx = err[0] - last[1][0] - egx * dt
+        dy = err[1] - last[1][1] - egy * dt
+        if max(abs(dx), abs(dy)) <= _AIM_JUMP_MAX:
+            self._aim_jump_last = (track.track_id, err, now)
+            self._aim_jump_pending = None
+            return True
+        pend = self._aim_jump_pending
+        if pend is not None and max(abs(err[0] - pend[0][0]), abs(err[1] - pend[0][1])) <= (
+            _AIM_JUMP_NEAR
+        ):
+            count = pend[1] + 1
+        else:
+            count = 1
+        if count >= _AIM_JUMP_CONFIRM:
+            self._aim_jump_last = (track.track_id, err, now)
+            self._aim_jump_pending = None
+            return True
+        self._aim_jump_pending = (err, count)
+        return False
+
+    def _head_anchored_tilt(
+        self,
+        track: TrackInfo,
+        err: tuple[float, float],
+        frame: NDArray[np.uint8],
+        now: float,
+    ) -> tuple[float, float]:
+        """Stabilise the PTZ tilt error on the subject's head (complementary filter).
+
+        The fused torso/box aim is the right *framing* but a poor *motion* signal:
+        its vertical point moves whenever pose confidence dips or the box bottom
+        flickers behind a pulpit/keyboard, while the head stays put. Here tilt
+        follows the head instantly and only low-passes (τ≈2.5 s) the fused aim's
+        offset from it — real head motion passes through, flicker doesn't.
+
+        Head = top of the arm-invariant torso box when pose is cached (raised arms
+        don't move it), else the detection-box top. Falls back to the raw error
+        when the head is clipped at the frame top (we must tilt up) or disabled.
+        Only the PTZ error is affected; the on-screen aim and framing logic are not.
+        """
+        if not getattr(self.config.ptz, "tilt_head_anchor", True):
+            return err
+        h = int(frame.shape[0]) if frame is not None else 0
+        if h <= 0:
+            return err
+        tb = None
+        if getattr(self.config.tracking, "aim_body_mode", "torso") == "torso":
+            try:
+                tb = self._torso_stable_box(track.track_id)
+            except Exception:  # noqa: BLE001
+                tb = None
+        top = float(tb[1]) if tb is not None else float(track.bbox.y1)
+        ref = "torso" if tb is not None else "bbox"
+        if float(track.bbox.y1) <= 2.0 or top <= 2.0:
+            # Head clipped by the frame top: there is no head to anchor on, and the
+            # torso/box aim is pure noise here (live: it jumped -0.7 ↔ +0.6, even
+            # off-frame). Tilt gently and steadily UP to reveal the head — unless
+            # the subject fills the frame, where tilting can't frame them: hold.
+            self._tilt_anchor = None
+            box_h = float(track.bbox.y2) - float(track.bbox.y1)
+            if box_h >= _FILLS_FRAME_FRAC * h:
+                return (err[0], 0.0)
+            return (err[0], _CLIPPED_HEAD_TILT_UP)
+        head_e = -((top - h * 0.5) / (h * 0.5))
+        ex, ey = err
+        st = self._tilt_anchor
+        if st is None or st[0] != track.track_id or now < st[3]:
+            offset = ey - head_e  # fresh target: start exactly on the raw error
+        elif st[1] != ref:
+            offset = st[4] - head_e  # reference switched: bumpless transfer
+        else:
+            alpha = 1.0 - math.exp(-max(0.0, now - st[3]) / _TILT_ANCHOR_TAU_S)
+            offset = st[2] + alpha * ((ey - head_e) - st[2])
+        out = head_e + offset
+        self._tilt_anchor = (track.track_id, ref, offset, now, out)
+        return (ex, out)
 
     def _track_error(
         self,
@@ -3939,6 +4147,7 @@ class CameraWorker:
             self._ptz = None
             self._ptz_backend = None
             self._ptz_owned = False
+            self._deadtime = None
             self._digital_framer = None  # fresh framer for the new backend
             self._build_ptz_stack()
             self._maybe_start_ptz_pump()
@@ -3985,6 +4194,9 @@ class CameraWorker:
                 self.config.ptz,
                 coast_window_ms=int(self.config.tracking.coast_window_ms),
             )
+            if self.config.ptz.backend != "digital":
+                self._deadtime = self._ptz.deadtime
+                self._seed_deadtime()
             self._ptz_owned = True
             log.info(
                 "camera_id=%s PTZ control active (%s)", self.camera_id, self.config.ptz.backend
@@ -4688,6 +4900,11 @@ class CameraWorker:
             self._track_ms = (_t2 - _t1) * 1000.0
             self._record_stage("detect", self._detect_ms)
             self._record_stage("track", self._track_ms)
+            if self._current_inference_capture_ts > 0:
+                # Frame age at end of detect+track: the governor's backlog signal.
+                self._record_stage(
+                    "age", (time.monotonic() - self._current_inference_capture_ts) * 1000.0
+                )
             # Detect/track succeeded this tick — clear any stale inference error so
             # a single transient failure does not pin last_error on every later
             # healthy telemetry (the camera would otherwise look permanently
@@ -4858,8 +5075,16 @@ class CameraWorker:
             tid: self._face_for_pending_enroll(frame, observations, tracks, tid, click)
             for tid, (_iid, _name, click) in self._pending_enroll.items()
         }
-        for obs in observations:
-            track = self._track_for_face(obs, tracks)
+        assigned = self._assign_faces(observations, tracks)
+        # An operator's click-to-enroll choice outranks the head-region heuristic.
+        by_id = {t.track_id: t for t in tracks}
+        clicked_track = {
+            id(obs): by_id[tid]
+            for tid, obs in pending_faces.items()
+            if obs is not None and tid in by_id
+        }
+        for obs, auto_track in zip(observations, assigned, strict=True):
+            track = clicked_track.get(id(obs), auto_track)
             # Click-to-assign: if this face sits on a track the operator named,
             # bind its embedding (+ a fresh crop) to that identity so the person
             # is recognised later, then keep showing the assigned name.
@@ -4999,8 +5224,7 @@ class CameraWorker:
         # only when the "Face boxes" overlay is enabled.
         faces_out: list[FaceBox] = []
         face_track_ids: set[int] = set()
-        for obs in observations:
-            tr = self._track_for_face(obs, tracks)
+        for obs, tr in zip(observations, self._assign_faces(observations, tracks), strict=True):
             if tr is None:
                 continue
             face_track_ids.add(tr.track_id)
@@ -5029,20 +5253,59 @@ class CameraWorker:
         obs: Any,
         tracks: list[TrackInfo],
     ) -> TrackInfo | None:
-        """Return the track whose bbox contains the face centre (closest wins)."""
-        best: TrackInfo | None = None
-        best_d = float("inf")
-        for t in tracks:
-            if getattr(t, "lost", False):
+        """Return the track whose HEAD region holds this face (see _assign_faces)."""
+        return CameraWorker._assign_faces([obs], tracks)[0]
+
+    @staticmethod
+    def _head_cost(obs: Any, track: TrackInfo) -> float | None:
+        """How well a face fits a track's head, or None if it can't be its head.
+
+        A face belongs at the top-centre of its own body box. Containment alone is
+        not enough: an occluded person's face often sits inside the front
+        person's box (or a box whose *centre* happens to be nearer), which bound
+        their identity to the wrong body and locked identity targets onto the
+        wrong person.
+        """
+        if getattr(track, "lost", False):
+            return None
+        bb = track.bbox
+        w = float(bb.x2 - bb.x1)
+        h = float(bb.y2 - bb.y1)
+        if w <= 0.0 or h <= 0.0:
+            return None
+        cx = (bb.x1 + bb.x2) * 0.5
+        dx = (float(obs.cx) - cx) / (w * 0.5)
+        rel_y = (float(obs.cy) - float(bb.y1)) / h
+        # Head band: central horizontal span, upper part of the box (loose enough
+        # for half-body / seated boxes where the head fills more of the height).
+        if abs(dx) > _FACE_HEAD_HALF_WIDTH or not (-0.05 <= rel_y <= _FACE_HEAD_MAX_REL_Y):
+            return None
+        dy = (rel_y - _FACE_HEAD_ANCHOR_REL_Y) / _FACE_HEAD_MAX_REL_Y
+        return dx * dx + dy * dy
+
+    @staticmethod
+    def _assign_faces(observations: list[Any], tracks: list[TrackInfo]) -> list[TrackInfo | None]:
+        """One-to-one face→track assignment by head-region fit (aligned to input).
+
+        Greedy on the best fit first; each track takes at most one face per pass,
+        so a second face inside the same box (someone standing behind) stays
+        unbound instead of overwriting that track's identity.
+        """
+        pairs: list[tuple[float, int, int]] = []
+        for oi, obs in enumerate(observations):
+            for ti, track in enumerate(tracks):
+                cost = CameraWorker._head_cost(obs, track)
+                if cost is not None:
+                    pairs.append((cost, oi, ti))
+        pairs.sort()
+        out: list[TrackInfo | None] = [None] * len(observations)
+        used_tracks: set[int] = set()
+        for _cost, oi, ti in pairs:
+            if out[oi] is not None or ti in used_tracks:
                 continue
-            bb = t.bbox
-            if bb.x1 <= obs.cx <= bb.x2 and bb.y1 <= obs.cy <= bb.y2:
-                tcx = (bb.x1 + bb.x2) * 0.5
-                tcy = (bb.y1 + bb.y2) * 0.5
-                d = (tcx - obs.cx) ** 2 + (tcy - obs.cy) ** 2
-                if d < best_d:
-                    best_d, best = d, t
-        return best
+            out[oi] = tracks[ti]
+            used_tracks.add(ti)
+        return out
 
     def _enroll_click_frame_point(
         self,
@@ -5359,10 +5622,20 @@ class CameraWorker:
         clock (``_FACE_INTERVAL_S`` / ``_POSE_INTERVAL_S``) so per-frame they cost
         proportionally less the higher the source fps.
         """
+        return self._projected_cost_ms(self._quality_interval)
+
+    def _projected_cost_ms(self, interval: int) -> float:
+        """Per-displayed-frame cost if the detector ran every ``interval`` frames."""
         fps = max(1.0, self._target_fps())
-        detect = self._stage_avg("detect") / max(1, self._quality_interval)
+        detect = self._stage_avg("detect") / max(1, interval)
         track = self._stage_avg("track")
-        face = self._stage_avg("face") * min(1.0, (1.0 / _FACE_INTERVAL_S) / fps)
+        # Face (+ReID) on the async appearance thread is off the frame path: it
+        # doesn't delay frames, so it must not throttle the detector. Its CPU
+        # cost is still felt via the system-CPU-pressure clamp.
+        if getattr(self, "_async_appearance", False):
+            face = 0.0
+        else:
+            face = self._stage_avg("face") * min(1.0, (1.0 / _FACE_INTERVAL_S) / fps)
         pose = self._stage_avg("pose") * min(1.0, (1.0 / _POSE_INTERVAL_S) / fps)
         return detect + track + face + pose
 
@@ -5386,22 +5659,58 @@ class CameraWorker:
             self._quality_interval = base
             return self._quality_interval
 
+        # Levels ordered best → cheapest. Each level's ratio is the PROJECTED
+        # cost at that level's cadence (not the cost measured at the current
+        # cadence — that is self-referential: relaxing the cadence makes the
+        # measured cost look cheap, which used to trigger an immediate upgrade
+        # back, flipping 2↔4 several times a second and shredding tracking).
+        # Downgrade when the current level is over its line; upgrade only when
+        # the NEXT better level would fit under a lower line (hysteresis).
         budget = self._frame_budget_ms()
-        cost = self._amortized_cost_ms()
-        ratio = cost / budget if budget > 0 else 0.0
-        if self._system_cpu_pressure >= 85.0:
-            ratio = max(ratio, 0.92)  # Machine is hot → push toward balanced/low.
-        prev = self._quality_active
-        if ratio >= 0.90 or (prev in ("balanced", "low") and ratio >= 0.70):
-            if ratio >= 1.10:
-                interval, active = max(base, 4), "low"
-                reason = "Auto quality: over frame budget; detector cadence relaxed."
-            else:
-                interval, active = max(base, 2), "balanced"
-                reason = "Auto quality: near frame budget; detector cadence balanced."
-        else:
-            interval, active = base, "high"
-            reason = "Auto quality: latency headroom stable; full cadence."
+        hot = self._system_cpu_pressure >= 85.0
+        levels = (
+            # (active, interval, downgrade_at, upgrade_below, reason)
+            ("high", base, 0.90, 0.70, "Auto quality: latency headroom stable; full cadence."),
+            (
+                "balanced",
+                max(base, 2),
+                1.10,
+                0.95,
+                "Auto quality: near frame budget; detector cadence balanced.",
+            ),
+            (
+                "low",
+                max(base, 4),
+                float("inf"),
+                0.0,
+                "Auto quality: over frame budget; detector cadence relaxed.",
+            ),
+        )
+
+        def _ratio(level: int) -> float:
+            r = self._projected_cost_ms(levels[level][1]) / budget if budget > 0 else 0.0
+            return max(r, 0.92) if hot else r  # Machine is hot → push toward cheaper.
+
+        names = [lv[0] for lv in levels]
+        idx = names.index(self._quality_active) if self._quality_active in names else 0
+        start = idx
+        # Walk down while the current level is over its line …
+        while idx < len(levels) - 1 and _ratio(idx) >= levels[idx][2]:
+            idx += 1
+        # Measured backlog overrides the model: frames ageing past the budget
+        # means we're falling behind → one level cheaper, and hold off upgrades.
+        now_g = _governor_clock()
+        backlog = budget > 0 and self._stage_avg("age") > _BACKLOG_RELAX_BUDGETS * budget
+        if backlog:
+            self._quality_backlog_until = now_g + _BACKLOG_UPGRADE_COOLDOWN_S
+            if idx == start and idx < len(levels) - 1:
+                idx += 1
+        # … then up while the better level fits. (Can't undo a step down: each
+        # level's upgrade line sits below its downgrade line.)
+        if idx == start and now_g >= getattr(self, "_quality_backlog_until", 0.0):
+            while idx > 0 and _ratio(idx - 1) < levels[idx - 1][3]:
+                idx -= 1
+        active, interval, _down, _up, reason = levels[idx]
         if interval != self._quality_interval or active != self._quality_active:
             self._add_event("quality", reason)
         self._quality_interval = interval
@@ -5957,6 +6266,8 @@ class CameraWorker:
                     try:
                         with self._ptz_lock:
                             backend.stop()
+                            if self._deadtime is not None:
+                                self._deadtime.record_command(time.monotonic(), 0.0, 0.0)
                     except Exception:  # noqa: BLE001
                         log.debug(
                             "camera_id=%s watchdog stop failed", self.camera_id, exc_info=True
@@ -6154,7 +6465,11 @@ class CameraWorker:
         else:
             state = "moving" if moving else "idle"
 
+        delay, active, correction = getattr(self._ptz, "deadtime_status", (0.0, False, (0.0, 0.0)))
         return PTZState(
+            dead_time_ms=delay,
+            dead_time_active=active,
+            dead_time_correction=correction,
             pan=float(pan),
             tilt=float(tilt),
             zoom=float(zoom),

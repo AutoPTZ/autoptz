@@ -154,8 +154,9 @@ def _start_engine_after_macos_camera_preflight(client: object, bridge: object | 
             # Packaged app: it has the camera-usage entitlement and can be granted
             # directly in the Camera privacy pane.
             message = (
-                f"Camera access is {reason}. Grant access in System Settings > "
-                "Privacy & Security > Camera, then restart AutoPTZ."
+                f"Camera access is {reason}, so USB cameras will show no signal "
+                "(NDI/RTSP/ONVIF cameras are unaffected). Grant access in System "
+                "Settings > Privacy & Security > Camera, then restart AutoPTZ."
             )
         else:
             # Source run: the bare Python binary has no NSCameraUsageDescription, so
@@ -164,17 +165,23 @@ def _start_engine_after_macos_camera_preflight(client: object, bridge: object | 
             # terminal app (Terminal / iTerm / VS Code / PyCharm …), or run the
             # packaged AutoPTZ app, then restart.
             message = (
-                "Camera access is unavailable when running AutoPTZ from source: the "
-                "Python interpreter can't request camera permission directly. Grant "
-                "camera access to the terminal app you launched it from (System "
-                "Settings > Privacy & Security > Camera), or use the packaged AutoPTZ "
-                "app, then restart."
+                "Camera access is unavailable when running AutoPTZ from source, so "
+                "USB cameras will show no signal (NDI/RTSP/ONVIF cameras are "
+                "unaffected). To use USB cameras, grant camera access to the "
+                "terminal app you launched it from (System Settings > Privacy & "
+                "Security > Camera), or use the packaged AutoPTZ app, then restart."
             )
         log.warning(message)
         try:
             client.errorOccurred.emit(message)  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             log.debug("could not surface camera-access error", exc_info=True)
+        # Camera permission only gates local (USB) capture, which already degrades
+        # to no-signal on its own (avf_capture.ensure_camera_access). Network
+        # sources need no permission, so never hold the whole engine hostage.
+        # Gating is only needed while the OS prompt is *pending*; once access is
+        # denied/unavailable no prompt can follow, so starting is safe.
+        client.startEngine()  # type: ignore[attr-defined]
 
     if status in (1, 2):  # restricted / denied
         _report_blocked("restricted" if status == 1 else "denied")
@@ -315,6 +322,10 @@ def run(argv: list[str] | None = None) -> int:
 
     client = EngineClient(store=store)
     frames = ShmFrameSource()
+
+    from autoptz.ui.telemetry_recorder import install_from_env  # noqa: PLC0415
+
+    install_from_env(client)  # opt-in: AUTOPTZ_TELEMETRY_LOG=/path.jsonl
 
     # ── in-app logging viewer ──────────────────────────────────────────────────
     # A ring-buffered model fed by a logging.Handler on the root logger; the Logs
