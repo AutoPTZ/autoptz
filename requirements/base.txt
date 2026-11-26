@@ -106,7 +106,12 @@ insightface>=0.7.3
 
 # ── utilities ─────────────────────────────────────────────────────────────────
 imutils==0.5.4
-scipy==1.15.3
+# scipy is split like numpy above: 1.18 needs numpy>=2, so Intel macOS (numpy
+# 1.26.4) stays on 1.15.3. Elsewhere 1.15.3's Fortran PROPACK extension is
+# rejected by newer macOS dyld ("__thread_bss zero-fill section"), which breaks
+# `import scipy.linalg` -> boxmot -> every tracker update; 1.16+ ships it in C.
+scipy==1.15.3; platform_system == "Darwin" and platform_machine == "x86_64"
+scipy==1.18.1; platform_system != "Darwin" or platform_machine != "x86_64"
 watchdog==6.0.0
 # psutil: live system/process CPU + memory metrics for the status bar and the
 # Services panel. Optional — diagnostics.system_metrics() degrades to
