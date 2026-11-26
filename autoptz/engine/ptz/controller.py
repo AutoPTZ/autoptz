@@ -21,6 +21,7 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
 
 from autoptz.engine.framing_target import SUBJECT_HEIGHT_TARGETS
+from autoptz.engine.ptz.deadtime import DeadTimeModel
 
 if TYPE_CHECKING:
     from autoptz.config.models import PTZConfig
@@ -276,6 +277,7 @@ class _TrackPayload:
     velocity: tuple[float, float] = (0.0, 0.0)
     subject_height: float = 0.0
     track_active: bool = False
+    capture_t: float | None = None
     seq: int = 0
 
 
@@ -305,6 +307,8 @@ class PTZController:
         coast_window_ms: int = 1500,
         rate_hz: float = 20.0,
     ) -> None:
+        self.deadtime = DeadTimeModel()
+        self.deadtime_status = (0.0, False, (0.0, 0.0))
         self._backend = backend
         self._cfg = cfg
         self._coast_window_s = coast_window_ms / 1000.0
@@ -458,6 +462,8 @@ class PTZController:
         velocity: tuple[float, float],
         subject_height: float,
         track_active: bool,
+        *,
+        capture_t: float | None = None,
     ) -> None:
         """Called from the inference thread with the latest tracking data."""
         with self._lock:
@@ -466,6 +472,7 @@ class PTZController:
                 velocity=velocity,
                 subject_height=subject_height,
                 track_active=track_active,
+                capture_t=capture_t,
                 seq=self._payload.seq + 1,
             )
         # Heartbeat: record recency so the background loop can detect a stalled
@@ -493,6 +500,8 @@ class PTZController:
         subject_height: float,
         track_active: bool,
         t: float | None = None,
+        *,
+        capture_t: float | None = None,
     ) -> tuple[float, float, float]:
         """Synchronous single tick (tests / manual drive).
 
@@ -503,9 +512,10 @@ class PTZController:
                 velocity=velocity,
                 subject_height=subject_height,
                 track_active=track_active,
+                capture_t=capture_t,
                 seq=self._payload.seq + 1,
             )
-        return self._tick(t=t if t is not None else time.perf_counter())
+        return self._tick(t=t if t is not None else time.monotonic())
 
     def goto_preset(self, idx: int) -> None:
         self._backend.goto_preset(idx)
@@ -529,6 +539,7 @@ class PTZController:
             self._thread = None
         try:
             self._backend.stop()
+            self.deadtime.record_command(time.monotonic(), 0.0, 0.0)
         except Exception:
             pass
 
@@ -556,7 +567,7 @@ class PTZController:
         self._last_update_t = time.monotonic()
         self._loop_running = True
         while not self._stop_event.is_set():
-            t0 = time.perf_counter()
+            t0 = time.monotonic()
             try:
                 self._tick(t=t0)
             except Exception as exc:  # noqa: BLE001
@@ -568,12 +579,13 @@ class PTZController:
                 if now - self._last_tick_warn_t >= _TICK_WARN_INTERVAL_S:
                     self._last_tick_warn_t = now
                     log.warning("PTZ control tick failed (%s); continuing", exc, exc_info=True)
-            elapsed = time.perf_counter() - t0
+            elapsed = time.monotonic() - t0
             self._stop_event.wait(max(0.0, interval - elapsed))
         self._loop_running = False
         # guarantee stop on thread exit
         try:
             self._backend.stop()
+            self.deadtime.record_command(time.monotonic(), 0.0, 0.0)
         except Exception:
             pass
 
@@ -590,6 +602,7 @@ class PTZController:
         with self._lock:
             payload = self._payload
 
+        self.deadtime_status = (0.0, False, (0.0, 0.0))
         pan_cmd, tilt_cmd, zoom_cmd = self._compute(payload, t)
 
         # only send if command changed meaningfully
@@ -604,6 +617,7 @@ class PTZController:
             send_t0 = time.perf_counter()
             self._backend.move_velocity(pan_cmd, tilt_cmd, zoom_cmd)
             self._last_cmd_send_ms = (time.perf_counter() - send_t0) * 1000.0
+            self.deadtime.record_command(t, pan_cmd, tilt_cmd)
             self._last_pan = pan_cmd
             self._last_tilt = tilt_cmd
             self._last_zoom = zoom_cmd
@@ -650,6 +664,7 @@ class PTZController:
         self._last_pan = self._last_tilt = self._last_zoom = 0.0
         try:
             self._backend.stop()
+            self.deadtime.record_command(time.monotonic(), 0.0, 0.0)
         except Exception:
             pass
         return 0.0, 0.0, 0.0
@@ -744,6 +759,16 @@ class PTZController:
     def _pd_step(self, p: _TrackPayload, t: float) -> tuple[float, float]:
         cfg = self._cfg
         ex, ey = p.error
+        if (
+            p.capture_t is not None
+            and self._cfg.deadtime_comp_enabled
+            and self._cfg.ego_comp_enabled
+        ):
+            fit = self.deadtime.estimate(t)
+            correction = self.deadtime.pending_motion(p.capture_t, t)
+            self.deadtime_status = (fit.delay_s * 1000, fit.confident, correction)
+            ex += correction[0]
+            ey += correction[1]
         vx, vy = p.velocity
 
         # 0. FRAMING — remap the measured error onto the framing setpoint.  With a

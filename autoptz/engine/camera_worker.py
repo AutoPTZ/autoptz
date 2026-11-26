@@ -559,10 +559,16 @@ class CameraWorker:
         # controller's own loop emits commands at its rate_hz and _drive_ptz_auto
         # only publishes the latest target via update(); when OFF the worker drives
         # the controller inline via step() each inference tick (legacy behaviour).
+        from autoptz.engine.ptz.deadtime import DeadTimeModel
+
+        self._deadtime: DeadTimeModel | None = None
         self._ptz_pump = _ptz_pump_enabled()
         if ptz_controller is not None:
             if hasattr(ptz_controller, "step"):
                 self._ptz = ptz_controller
+                model = getattr(ptz_controller, "deadtime", None)
+                if isinstance(model, DeadTimeModel) and config.ptz.backend != "digital":
+                    self._deadtime = model
                 if self._ptz_backend is None:
                     self._ptz_backend = getattr(ptz_controller, "_backend", None)
             else:
@@ -1557,6 +1563,8 @@ class CameraWorker:
             return
         try:
             backend.goto_preset(slot)
+            if self._deadtime is not None:
+                self._deadtime.note_uncommanded_motion(time.monotonic())
             log.info("camera_id=%s recalled PTZ preset slot=%d", self.camera_id, slot)
         except Exception:  # noqa: BLE001
             log.warning(
@@ -1577,6 +1585,8 @@ class CameraWorker:
         self._manual_override_until = time.monotonic() + _MANUAL_OVERRIDE_WINDOW_S
         try:
             backend.home()
+            if self._deadtime is not None:
+                self._deadtime.note_uncommanded_motion(time.monotonic())
             self._ptz_last_cmd = (0.0, 0.0, 0.0)
             log.info("camera_id=%s PTZ home", self.camera_id)
         except Exception:  # noqa: BLE001
@@ -1615,6 +1625,8 @@ class CameraWorker:
             return
         try:
             backend.move_velocity(pan, tilt, zoom)
+            if self._deadtime is not None:
+                self._deadtime.record_command(time.monotonic(), pan, tilt)
             self._ptz_last_cmd = (pan, tilt, zoom)
             log.debug(
                 "camera_id=%s ptz nudge backend=%s pan=%.3f tilt=%.3f zoom=%.3f",
@@ -1651,10 +1663,14 @@ class CameraWorker:
           the control math here and drives the backend synchronously, returning the
           command we mirror into ``_ptz_last_cmd`` and (for the active site) log.
         """
+        kwargs = {}
+        if self._deadtime is not None and self._current_inference_capture_ts > 0:
+            kwargs["capture_t"] = self._current_inference_capture_ts
+            now = time.monotonic()
         if self._ptz_pump:
-            ctrl.update(err, vel, height, track_active)
+            ctrl.update(err, vel, height, track_active, **kwargs)
             return
-        pan, tilt, zoom = ctrl.step(err, vel, height, track_active=track_active, t=now)
+        pan, tilt, zoom = ctrl.step(err, vel, height, track_active=track_active, t=now, **kwargs)
         self._ptz_last_cmd = (pan, tilt, zoom)
         if log_label is not None:
             self._log_ptz_cmd(log_label, pan, tilt, zoom)
@@ -1835,13 +1851,22 @@ class CameraWorker:
             if getattr(t, "bbox", None) is not None
         ]
         try:
-            ego = self._ego_estimator.estimate(frame, now, boxes=boxes, ptz_cmd=self._ptz_last_cmd)
+            capture_t = self._current_inference_capture_ts or now
+            ego = self._ego_estimator.estimate(
+                frame, capture_t, boxes=boxes, ptz_cmd=self._ptz_last_cmd
+            )
         except Exception:  # noqa: BLE001
             log.debug("camera_id=%s ego-motion estimate failed", self.camera_id, exc_info=True)
             self._ego_vel = (0.0, 0.0)
             self._ego_source = "none"
             self._ego_fresh = False
             return
+        if (
+            self._deadtime is not None
+            and self.config.ptz.deadtime_comp_enabled
+            and ego.source == "flow"
+        ):
+            self._deadtime.observe_motion(capture_t - 0.5 * ego.dt, ego.raw_vx, ego.raw_vy)
         self._ego_vel = (ego.vx, ego.vy)
         self._ego_source = ego.source
         self._ego_fresh = True
@@ -3960,6 +3985,7 @@ class CameraWorker:
             self._ptz = None
             self._ptz_backend = None
             self._ptz_owned = False
+            self._deadtime = None
             self._digital_framer = None  # fresh framer for the new backend
             self._build_ptz_stack()
             self._maybe_start_ptz_pump()
@@ -4006,6 +4032,8 @@ class CameraWorker:
                 self.config.ptz,
                 coast_window_ms=int(self.config.tracking.coast_window_ms),
             )
+            if self.config.ptz.backend != "digital":
+                self._deadtime = self._ptz.deadtime
             self._ptz_owned = True
             log.info(
                 "camera_id=%s PTZ control active (%s)", self.camera_id, self.config.ptz.backend
@@ -6075,6 +6103,8 @@ class CameraWorker:
                     try:
                         with self._ptz_lock:
                             backend.stop()
+                            if self._deadtime is not None:
+                                self._deadtime.record_command(time.monotonic(), 0.0, 0.0)
                     except Exception:  # noqa: BLE001
                         log.debug(
                             "camera_id=%s watchdog stop failed", self.camera_id, exc_info=True
@@ -6272,7 +6302,11 @@ class CameraWorker:
         else:
             state = "moving" if moving else "idle"
 
+        delay, active, correction = getattr(self._ptz, "deadtime_status", (0.0, False, (0.0, 0.0)))
         return PTZState(
+            dead_time_ms=delay,
+            dead_time_active=active,
+            dead_time_correction=correction,
             pan=float(pan),
             tilt=float(tilt),
             zoom=float(zoom),
