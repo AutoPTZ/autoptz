@@ -1,4 +1,4 @@
-"""VISCA over IP backend (TCP).
+"""VISCA over IP backend (TCP or UDP).
 
 Supports two wire formats:
   ``"sony"`` — 8-byte header per Sony/Panasonic VISCA-over-IP spec (port 52381).
@@ -53,12 +53,13 @@ _INQ_ZOOM = bytes([0x81, 0x09, 0x04, 0x47, 0xFF])
 
 
 class ViscaIPBackend(PTZBackend):
-    """VISCA-over-TCP PTZ backend.
+    """VISCA-over-IP PTZ backend.
 
     Args:
         host:    Camera IP address or hostname.
-        port:    TCP port (default 52381 for Sony; PTZOptics uses 5678).
+        port:    Network port (default 52381 for Sony; PTZOptics uses 5678).
         mode:    ``"sony"`` or ``"raw"`` framing (default ``"raw"``).
+        transport: ``"tcp"`` (default) or ``"udp"``.
         timeout: Socket connection/recv timeout in seconds.
     """
 
@@ -67,12 +68,16 @@ class ViscaIPBackend(PTZBackend):
         host: str,
         port: int = 52381,
         mode: str = "raw",
+        transport: str = "tcp",
         timeout: float = 2.0,
     ) -> None:
         super().__init__()
         if mode not in ("sony", "raw"):
             raise ValueError(f"mode must be 'sony' or 'raw', got {mode!r}")
+        if transport not in ("tcp", "udp"):
+            raise ValueError(f"transport must be 'tcp' or 'udp', got {transport!r}")
         self._mode = mode
+        self._transport = transport
         self._host = host
         self._port = port
         self._timeout = timeout
@@ -93,11 +98,24 @@ class ViscaIPBackend(PTZBackend):
     # ── connection management ─────────────────────────────────────────────────
 
     def _open(self) -> None:
-        """Open (or reopen) the TCP socket; sets _connected=True on success."""
-        self._sock = socket.create_connection((self._host, self._port), timeout=self._timeout)
+        """Open (or reopen) the selected transport socket."""
+        if self._transport == "udp":
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._sock.settimeout(self._timeout)
+            # A connected UDP socket keeps send/receive scoped to this camera
+            # while preserving datagram boundaries. No handshake is performed.
+            self._sock.connect((self._host, self._port))
+        else:
+            self._sock = socket.create_connection((self._host, self._port), timeout=self._timeout)
         self._sock.settimeout(self._timeout)
         self._connected = True
-        log.info("ViscaIP connected to %s:%d (%s mode)", self._host, self._port, self._mode)
+        log.info(
+            "ViscaIP connected to %s://%s:%d (%s mode)",
+            self._transport,
+            self._host,
+            self._port,
+            self._mode,
+        )
 
     def _close_sock(self) -> None:
         """Close the current socket without raising."""
@@ -176,6 +194,13 @@ class ViscaIPBackend(PTZBackend):
                     return None
                 self._sock.sendall(self._frame(visca_inq))
                 if self._mode == "sony":
+                    if self._transport == "udp":
+                        datagram = self._sock.recv(65535)
+                        if len(datagram) < 8:
+                            return None
+                        _ptype, plen, _seq = struct.unpack(">HHI", datagram[:8])
+                        payload = datagram[8:]
+                        return payload[:plen] if len(payload) >= plen else None
                     # Sony: 8-byte header before payload
                     hdr = self._sock.recv(8)
                     if len(hdr) < 8:

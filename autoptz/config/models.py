@@ -188,6 +188,9 @@ class PtzPresetSlot(BaseModel, frozen=True):
 class PTZConfig(BaseModel, frozen=True):
     backend: Literal["auto", "ndi", "visca_ip", "visca_usb", "onvif", "digital"] = "auto"
     address: str | None = None
+    # VISCA-over-IP cameras use either a stream (TCP) or datagram (UDP)
+    # transport. TCP remains the default for backwards compatibility.
+    visca_transport: Literal["tcp", "udp"] = "tcp"
     # VISCA-USB serial baud rate.  Most legacy Sony cameras are 9600; many newer
     # USB PTZ cameras run at 115200 and *silently ignore* every command at the
     # wrong rate.  Used by the ``visca_usb`` backend; the ``auto`` backend probes

@@ -32,7 +32,7 @@ device is missing (it always keeps live preview).
   (Apple CoreML, NVIDIA TensorRT/CUDA, Windows DirectML, Intel OpenVINO, CPU)
   with per-EP tuning (FP16, persistent TensorRT engine cache, full graph
   optimization). See [Performance](docs/performance.md).
-- **PTZ backends** — VISCA over USB, VISCA over IP, ONVIF, and NDI.
+- **PTZ backends** — VISCA over USB, VISCA over IP (TCP or UDP), ONVIF, and NDI.
 - **In-app updates** — checks GitHub Releases and downloads the matching asset for
   your OS to launch the installer/new AppImage. Stable builds by default; opt into
   pre-releases under **Help → Updates**.

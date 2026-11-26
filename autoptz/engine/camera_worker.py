@@ -1233,6 +1233,7 @@ class CameraWorker:
             prev_mode = getattr(self.config.tracking, "tracking_mode", "stable")
             prev_backend = getattr(self.config.ptz, "backend", "")
             prev_addr = getattr(self.config.ptz, "address", "")
+            prev_visca_transport = getattr(self.config.ptz, "visca_transport", "tcp")
             self.config = payload
             # Rebuild the PTZ backend live when the transport changes — e.g. toggling
             # Center Stage flips backend to/from "digital". Without this the digital
@@ -1240,7 +1241,12 @@ class CameraWorker:
             # until an app restart.
             new_backend = getattr(payload.ptz, "backend", "")
             new_addr = getattr(payload.ptz, "address", "")
-            if new_backend != prev_backend or new_addr != prev_addr:
+            new_visca_transport = getattr(payload.ptz, "visca_transport", "tcp")
+            if (
+                new_backend != prev_backend
+                or new_addr != prev_addr
+                or new_visca_transport != prev_visca_transport
+            ):
                 self._rebuild_ptz_backend()
             # Apply an fps change from a full-config push live too, so the UI's
             # fps slider takes effect whether it routes through updateCameraConfig

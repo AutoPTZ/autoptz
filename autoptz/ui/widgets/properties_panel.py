@@ -793,6 +793,22 @@ class PropertiesPanel(QWidget):
                 ),
             ),
         )
+        self._visca_transport = QComboBox()
+        self._visca_transport.addItems(["tcp", "udp"])
+        self._visca_transport.setToolTip(
+            "Network transport for VISCA-IP. Vaddio and some other cameras require UDP."
+        )
+        self._visca_transport.currentTextChanged.connect(self._schedule)
+        apf.addRow(
+            "VISCA transport",
+            _with_chip(
+                self._visca_transport,
+                HelpBadge(
+                    "Choose UDP when the camera manual specifies VISCA over UDP; otherwise "
+                    "leave the backwards-compatible TCP default."
+                ),
+            ),
+        )
         self._ptz_baud = QComboBox()
         self._ptz_baud.setEditable(True)
         self._ptz_baud.addItems(["9600", "38400", "115200"])
@@ -1289,6 +1305,7 @@ class PropertiesPanel(QWidget):
             _set_combo(self._backend, "auto" if is_center_stage else backend)
             self._backend.setEnabled(not is_center_stage)
             self._ptz_address.setText(pz.get("address") or "")
+            _set_combo(self._visca_transport, pz.get("visca_transport", "tcp"))
             self._ptz_baud.setCurrentText(str(pz.get("baud", 9600)))
             self._auto_zoom.setChecked(bool(pz.get("auto_zoom", False)))
             self._vcam_out.setChecked(bool(pz.get("vcam_out", False)))
@@ -1410,6 +1427,7 @@ class PropertiesPanel(QWidget):
             "digital" if self._center_stage.isChecked() else self._backend.currentText()
         )
         cfg["ptz"]["address"] = self._ptz_address.text().strip() or None
+        cfg["ptz"]["visca_transport"] = self._visca_transport.currentText()
         try:
             cfg["ptz"]["baud"] = int(str(self._ptz_baud.currentText()).strip())
         except (TypeError, ValueError):
