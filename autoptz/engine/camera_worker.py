@@ -368,6 +368,12 @@ _FACE_HEAD_ANCHOR_REL_Y = 0.10
 # Head-anchored tilt: time constant (s) for the torso/box framing offset that
 # rides on top of the head position (see _head_anchored_tilt).
 _TILT_ANCHOR_TAU_S = 2.5
+# Impossible-jump guard: a same-target aim change larger than this (error-space
+# half-frames, after removing the camera's own measured motion) within one tick
+# is held until the new position repeats for _AIM_JUMP_CONFIRM ticks.
+_AIM_JUMP_MAX = 0.5
+_AIM_JUMP_CONFIRM = 3
+_AIM_JUMP_NEAR = 0.15
 _REID_RECOVERY_CONFIRM_STABLE = 3
 _REID_RECOVERY_CONFIRM_RESPONSIVE = 1
 _REID_RECOVERY_MARGIN = 0.08
@@ -875,6 +881,9 @@ class CameraWorker:
         self._quality_backlog_until = 0.0
         # Head-anchored tilt state: (track_id, ref_kind, offset, last_t, last_out).
         self._tilt_anchor: tuple[int, str, float, float, float] | None = None
+        # Impossible-jump guard: (track_id, last accepted err, t) + pending jump.
+        self._aim_jump_last: tuple[int, tuple[float, float], float] | None = None
+        self._aim_jump_pending: tuple[tuple[float, float], int] | None = None
         # Dead-time model persistence (per camera): last save time + payload.
         self._deadtime_saved_t = -1e9
         self._deadtime_saved: dict[str, float] | None = None
@@ -1814,9 +1823,14 @@ class CameraWorker:
                 occluded = usable and self._target_box_collapsed(box_h_frac)
                 if usable and not occluded:
                     err, height = self._track_error(target, frame, now, tracks=tracks)
-                    vel = self._estimate_aim_velocity(err, now)
-                    err = self._head_anchored_tilt(target, err, frame, now)
-                    active = True
+                    if self._aim_jump_ok(target, err, now):
+                        vel = self._estimate_aim_velocity(err, now)
+                        err = self._head_anchored_tilt(target, err, frame, now)
+                        active = True
+                    else:
+                        # Impossible teleport (likely an id hand-off): hold this tick
+                        # rather than slam the head after it.
+                        err, height, vel, active = (0.0, 0.0), 0.0, (0.0, 0.0), False
                 else:
                     # Bad/partial boxes are not evidence.  Do not update aim velocity
                     # from them; tell the controller to hold/stop until a fresh target
@@ -2734,6 +2748,43 @@ class CameraWorker:
         count = count + 1 if prev_id == track_id else 1
         self._reid_recover_candidate = (track_id, count)
         return count >= required
+
+    def _aim_jump_ok(self, track: TrackInfo, err: tuple[float, float], now: float) -> bool:
+        """False for a physically impossible one-tick jump of the target's aim.
+
+        A tracker can hand the target's id to another body (typically while the
+        camera itself is moving); the aim then teleports half a frame or more in
+        one tick and the controller slams the head after it. The camera's own
+        measured motion (ego) is removed first, so fast pans don't trip this.
+        The new position is accepted once it repeats for a few ticks (a real
+        re-acquisition), or immediately for a different target / after a gap.
+        """
+        last = self._aim_jump_last
+        if last is None or last[0] != track.track_id or not (0.0 < now - last[2] <= 0.35):
+            self._aim_jump_last = (track.track_id, err, now)
+            self._aim_jump_pending = None
+            return True
+        dt = now - last[2]
+        egx, egy = self._ego_vel
+        dx = err[0] - last[1][0] - egx * dt
+        dy = err[1] - last[1][1] - egy * dt
+        if max(abs(dx), abs(dy)) <= _AIM_JUMP_MAX:
+            self._aim_jump_last = (track.track_id, err, now)
+            self._aim_jump_pending = None
+            return True
+        pend = self._aim_jump_pending
+        if pend is not None and max(abs(err[0] - pend[0][0]), abs(err[1] - pend[0][1])) <= (
+            _AIM_JUMP_NEAR
+        ):
+            count = pend[1] + 1
+        else:
+            count = 1
+        if count >= _AIM_JUMP_CONFIRM:
+            self._aim_jump_last = (track.track_id, err, now)
+            self._aim_jump_pending = None
+            return True
+        self._aim_jump_pending = (err, count)
+        return False
 
     def _head_anchored_tilt(
         self,

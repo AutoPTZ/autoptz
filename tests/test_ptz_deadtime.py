@@ -304,3 +304,18 @@ def test_corrupt_store_is_ignored(tmp_path) -> None:
     path = tmp_path / "ptz_deadtime.json"
     path.write_text("{not json")
     assert load_learned("cam-a", path=path) is None
+
+
+def test_axis_without_fresh_excitation_keeps_its_learned_gain() -> None:
+    """Live (2026-11-26): with tilt now rarely moving (sustained-tilt gate), each
+    refit lacked tilt data and returned gain_tilt=0, overwriting the learned
+    -2.66 — tilt ran with NO dead-time compensation and overshot every move."""
+    m = DeadTimeModel()
+    m.seed({"delay_s": 0.5, "gain_pan": -3.0, "gain_tilt": -2.66, "r2": 0.87, "floor_tilt": -0.2})
+    _feed_plant(m, delay=0.5, g_pan=-3.0, g_tilt=0.0, seconds=20.0)  # pan-only excitation
+    # (g_tilt=0 + tilt commands → no usable tilt fit, like a tilt-gated session)
+    est = m.estimate(now=20.0)
+    assert est.confident
+    assert est.gain_pan == pytest.approx(-3.0, rel=0.15)
+    assert est.gain_tilt == pytest.approx(-2.66)
+    assert est.floor_tilt == pytest.approx(-0.2)

@@ -143,6 +143,7 @@ class DeadTimeModel:
                 self._trim(now)
                 fit = self._fit()
                 if fit.confident:
+                    fit = _keep_unfitted_axes(fit, self._good)
                     self._good = fit
                     self._est = fit
                 else:
@@ -294,6 +295,24 @@ def _fit_axis(x: NDArray[np.float64], y: NDArray[np.float64]) -> tuple[float, fl
     ):
         return gain, offset, score
     return 0.0, 0.0, 0.0
+
+
+def _keep_unfitted_axes(fit: DeadTimeEstimate, good: DeadTimeEstimate | None) -> DeadTimeEstimate:
+    """Carry over an axis the fresh fit couldn't identify (no excitation).
+
+    A confident fit can come from one axis alone (e.g. only pan moved in the
+    window); the other axis then reads gain 0 — "no evidence", not "no motion".
+    Overwriting a learned gain with that 0 silently switched off that axis's
+    compensation (tilt overshot every move once tilt moves became rare).
+    """
+    if good is None:
+        return fit
+    gp, fp, gt, ft = fit.gain_pan, fit.floor_pan, fit.gain_tilt, fit.floor_tilt
+    if gp == 0.0 and fp == 0.0:
+        gp, fp = good.gain_pan, good.floor_pan
+    if gt == 0.0 and ft == 0.0:
+        gt, ft = good.gain_tilt, good.floor_tilt
+    return DeadTimeEstimate(fit.delay_s, gp, gt, fit.r2, True, fp, ft)
 
 
 def _select_lag(
