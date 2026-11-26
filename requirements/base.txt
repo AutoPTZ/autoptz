@@ -36,7 +36,7 @@ msgpack==1.2.1
 # store, so the updater's TLS handshake to api.github.com failed silently —
 # the root cause of "Intel Macs can't check for updates". The checker uses
 # certifi's bundle when present (see autoptz/update/checker._ssl_context).
-certifi==2026.6.17
+certifi==2026.10.18
 
 # ── PTZ control ───────────────────────────────────────────────────────────────
 pyserial==3.5
