@@ -77,7 +77,7 @@ cyndilib>=0.1.1
 # ── detection + tracking ───────────────────────────────────────────
 # onnx is used to build synthetic test models, needed by boxmot, and used by
 # ModelManager's ultralytics export fallback (YOLO11 .pt → ONNX).
-onnx==1.21.0
+onnx==1.22.0
 
 # ── model bootstrap ─────────────────────────────────────────────────
 # ModelManager (engine/runtime/models.py) can download a prebuilt YOLO11 ONNX
