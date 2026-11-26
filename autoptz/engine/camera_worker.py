@@ -365,6 +365,9 @@ _FACE_TARGET_MATCH_THRESHOLD = 0.52
 _FACE_HEAD_HALF_WIDTH = 0.55
 _FACE_HEAD_MAX_REL_Y = 0.45
 _FACE_HEAD_ANCHOR_REL_Y = 0.10
+# Head-anchored tilt: time constant (s) for the torso/box framing offset that
+# rides on top of the head position (see _head_anchored_tilt).
+_TILT_ANCHOR_TAU_S = 2.5
 _REID_RECOVERY_CONFIRM_STABLE = 3
 _REID_RECOVERY_CONFIRM_RESPONSIVE = 1
 _REID_RECOVERY_MARGIN = 0.08
@@ -870,6 +873,11 @@ class CameraWorker:
         self._last_applied_fps: float | None = None
         self._quality_active = "auto"
         self._quality_backlog_until = 0.0
+        # Head-anchored tilt state: (track_id, ref_kind, offset, last_t, last_out).
+        self._tilt_anchor: tuple[int, str, float, float, float] | None = None
+        # Dead-time model persistence (per camera): last save time + payload.
+        self._deadtime_saved_t = -1e9
+        self._deadtime_saved: dict[str, float] | None = None
         self._quality_reason = "Auto quality monitoring."
         self._quality_interval = max(1, int(getattr(config.tracking, "detect_interval", 1) or 1))
 
@@ -1667,6 +1675,7 @@ class CameraWorker:
         if self._deadtime is not None and self._current_inference_capture_ts > 0:
             kwargs["capture_t"] = self._current_inference_capture_ts
             now = time.monotonic()
+        self._maybe_persist_deadtime(time.monotonic())
         if self._ptz_pump:
             ctrl.update(err, vel, height, track_active, **kwargs)
             return
@@ -1674,6 +1683,45 @@ class CameraWorker:
         self._ptz_last_cmd = (pan, tilt, zoom)
         if log_label is not None:
             self._log_ptz_cmd(log_label, pan, tilt, zoom)
+
+    def _seed_deadtime(self) -> None:
+        """Start dead-time compensation from this camera's last learned model.
+
+        The command→video delay is a property of the camera + network, so a
+        restart shouldn't relearn it from scratch (the first move after launch
+        used to overshoot a full frame while the model warmed up).
+        """
+        if self._deadtime is None:
+            return
+        try:
+            from autoptz.engine.ptz.deadtime import load_learned
+
+            snap = load_learned(self.camera_id)
+        except Exception:  # noqa: BLE001
+            snap = None
+        if snap:
+            self._deadtime.seed(snap)
+            self._deadtime_saved = snap
+            log.info(
+                "camera_id=%s PTZ dead-time seeded from last session: %.0f ms",
+                self.camera_id,
+                float(snap.get("delay_s", 0.0)) * 1000.0,
+            )
+
+    def _maybe_persist_deadtime(self, now: float) -> None:
+        if self._deadtime is None or now - self._deadtime_saved_t < 30.0:
+            return
+        self._deadtime_saved_t = now
+        try:
+            snap = self._deadtime.snapshot(now)
+            if not snap or snap == self._deadtime_saved:
+                return
+            from autoptz.engine.ptz.deadtime import save_learned
+
+            save_learned(self.camera_id, snap)
+            self._deadtime_saved = snap
+        except Exception:  # noqa: BLE001
+            log.debug("camera_id=%s dead-time persist failed", self.camera_id, exc_info=True)
 
     @_appearance_guarded
     def _drive_ptz_auto(
@@ -1757,6 +1805,7 @@ class CameraWorker:
                 # by definition not "fresh," that's the point of following it.
                 err, height = self._track_error(target, frame, now, tracks=tracks)
                 vel = self._estimate_aim_velocity(err, now)
+                err = self._head_anchored_tilt(target, err, frame, now)
                 active = True
             else:
                 fh = max(1, int(frame.shape[0]))
@@ -1766,6 +1815,7 @@ class CameraWorker:
                 if usable and not occluded:
                     err, height = self._track_error(target, frame, now, tracks=tracks)
                     vel = self._estimate_aim_velocity(err, now)
+                    err = self._head_anchored_tilt(target, err, frame, now)
                     active = True
                 else:
                     # Bad/partial boxes are not evidence.  Do not update aim velocity
@@ -2684,6 +2734,56 @@ class CameraWorker:
         count = count + 1 if prev_id == track_id else 1
         self._reid_recover_candidate = (track_id, count)
         return count >= required
+
+    def _head_anchored_tilt(
+        self,
+        track: TrackInfo,
+        err: tuple[float, float],
+        frame: NDArray[np.uint8],
+        now: float,
+    ) -> tuple[float, float]:
+        """Stabilise the PTZ tilt error on the subject's head (complementary filter).
+
+        The fused torso/box aim is the right *framing* but a poor *motion* signal:
+        its vertical point moves whenever pose confidence dips or the box bottom
+        flickers behind a pulpit/keyboard, while the head stays put. Here tilt
+        follows the head instantly and only low-passes (τ≈2.5 s) the fused aim's
+        offset from it — real head motion passes through, flicker doesn't.
+
+        Head = top of the arm-invariant torso box when pose is cached (raised arms
+        don't move it), else the detection-box top. Falls back to the raw error
+        when the head is clipped at the frame top (we must tilt up) or disabled.
+        Only the PTZ error is affected; the on-screen aim and framing logic are not.
+        """
+        if not getattr(self.config.ptz, "tilt_head_anchor", True):
+            return err
+        h = int(frame.shape[0]) if frame is not None else 0
+        if h <= 0:
+            return err
+        tb = None
+        if getattr(self.config.tracking, "aim_body_mode", "torso") == "torso":
+            try:
+                tb = self._torso_stable_box(track.track_id)
+            except Exception:  # noqa: BLE001
+                tb = None
+        top = float(tb[1]) if tb is not None else float(track.bbox.y1)
+        ref = "torso" if tb is not None else "bbox"
+        if top <= 2.0:  # head clipped at the frame top: the box top isn't the head
+            self._tilt_anchor = None
+            return err
+        head_e = -((top - h * 0.5) / (h * 0.5))
+        ex, ey = err
+        st = self._tilt_anchor
+        if st is None or st[0] != track.track_id or now < st[3]:
+            offset = ey - head_e  # fresh target: start exactly on the raw error
+        elif st[1] != ref:
+            offset = st[4] - head_e  # reference switched: bumpless transfer
+        else:
+            alpha = 1.0 - math.exp(-max(0.0, now - st[3]) / _TILT_ANCHOR_TAU_S)
+            offset = st[2] + alpha * ((ey - head_e) - st[2])
+        out = head_e + offset
+        self._tilt_anchor = (track.track_id, ref, offset, now, out)
+        return (ex, out)
 
     def _track_error(
         self,
@@ -4034,6 +4134,7 @@ class CameraWorker:
             )
             if self.config.ptz.backend != "digital":
                 self._deadtime = self._ptz.deadtime
+                self._seed_deadtime()
             self._ptz_owned = True
             log.info(
                 "camera_id=%s PTZ control active (%s)", self.camera_id, self.config.ptz.backend

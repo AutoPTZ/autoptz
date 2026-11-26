@@ -234,3 +234,73 @@ def test_learns_minimum_tilt_speed_at_small_commands() -> None:
     dx, dy = model.pending_motion(20.8, 20.8)
     assert dx == 0.0
     assert dy == pytest.approx(-0.325 * fit.delay_s, abs=0.01)
+
+
+# ── sticky delay + persistence ───────────────────────────────────────────────
+# Live (2026-11-26): the fit quality was nearly flat across lags (tilt R² 0.37,
+# 0.37, 0.34, 0.31, 0.31, 0.38, 0.42 for 0-0.6 s), so the learned delay wandered
+# 250-550 ms within one run; and every restart relearned from scratch — the
+# first move after launch overshot a full frame (pan -0.52 → +0.68).
+
+
+def test_delay_is_sticky_when_another_lag_is_only_marginally_better() -> None:
+    from autoptz.engine.ptz.deadtime import _select_lag
+
+    scores = {0.30: 0.43, 0.45: 0.40, 0.60: 0.41}
+    assert _select_lag(scores, prev_lag=0.60) == 0.60
+    assert _select_lag(scores, prev_lag=None) == 0.30
+
+
+def test_delay_switches_when_another_lag_is_clearly_better() -> None:
+    from autoptz.engine.ptz.deadtime import _select_lag
+
+    assert _select_lag({0.30: 0.55, 0.60: 0.40}, prev_lag=0.60) == 0.30
+
+
+def test_snapshot_seeds_a_new_model_so_compensation_works_at_once() -> None:
+    m = DeadTimeModel()
+    _feed_plant(m, delay=0.6, g_pan=-2.5, g_tilt=3.0)
+    snap = m.snapshot(now=20.0)
+    assert snap is not None
+
+    fresh = DeadTimeModel()
+    fresh.seed(snap)
+    est = fresh.estimate(now=0.0)
+    assert est.confident
+    assert est.delay_s == pytest.approx(0.6, abs=0.1)
+    fresh.record_command(0.0, 0.25, 0.0)
+    px, _ = fresh.pending_motion(capture_t=0.95, now=1.0)
+    assert px == pytest.approx(est.gain_pan * 0.25 * (0.05 + est.delay_s), rel=0.05)
+
+
+def test_fresh_confident_fit_replaces_the_seed() -> None:
+    fresh = DeadTimeModel()
+    fresh.seed({"delay_s": 0.3, "gain_pan": -1.0, "gain_tilt": 1.0, "r2": 0.9})
+    _feed_plant(fresh, delay=0.6, g_pan=-2.5, g_tilt=3.0)
+    est = fresh.estimate(now=20.0)
+    assert est.delay_s == pytest.approx(0.6, abs=0.1)
+    assert est.gain_pan == pytest.approx(-2.5, rel=0.15)
+
+
+def test_unconfident_model_has_no_snapshot() -> None:
+    assert DeadTimeModel().snapshot(now=0.0) is None
+
+
+def test_learned_model_round_trips_through_disk(tmp_path) -> None:
+    from autoptz.engine.ptz.deadtime import load_learned, save_learned
+
+    path = tmp_path / "ptz_deadtime.json"
+    snap = {"delay_s": 0.55, "gain_pan": -2.4, "gain_tilt": 2.9, "r2": 0.6}
+    save_learned("cam-a", snap, path=path)
+    save_learned("cam-b", {**snap, "delay_s": 0.2}, path=path)
+    assert load_learned("cam-a", path=path) == snap
+    assert load_learned("cam-b", path=path)["delay_s"] == 0.2
+    assert load_learned("missing", path=path) is None
+
+
+def test_corrupt_store_is_ignored(tmp_path) -> None:
+    from autoptz.engine.ptz.deadtime import load_learned
+
+    path = tmp_path / "ptz_deadtime.json"
+    path.write_text("{not json")
+    assert load_learned("cam-a", path=path) is None

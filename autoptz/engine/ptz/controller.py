@@ -16,6 +16,7 @@ import logging
 import math
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
@@ -93,6 +94,9 @@ _FRAMING_DEADBAND = 0.35
 # zone centre regardless of zone size — a big safe zone must never let the
 # subject sit at/over the frame edge.
 _EDGE_GUARD = 0.9
+# Move/settle: an exit at least this far beyond the zone (normalised radius)
+# starts a move immediately — the persistence wait is only for marginal exits.
+_URGENT_EXIT = 2.0
 
 
 # ── one-euro filter ───────────────────────────────────────────────────────────
@@ -353,6 +357,12 @@ class PTZController:
 
         # Framing-box hold latch (hysteresis): True while parked inside the box.
         self._holding: bool = False
+        # Move/settle state: when a marginal exit from the hold zone began (None =
+        # inside), and each axis's direction for the current move (0 = none yet).
+        self._exit_since: float | None = None
+        self._move_dir: list[int] = [0, 0]
+        # Recent (t, vertical control error) for the tilt sustained-shift gate.
+        self._ey_hist: deque[tuple[float, float]] = deque()
 
         # Auto-zoom state: heavily-smoothed subject height + slewed zoom command,
         # so zoom is slow/stable and only reacts to sustained size changes.
@@ -688,6 +698,7 @@ class PTZController:
                 # case the tuning changed while we were searching)
                 self._filt_ex.reset()
                 self._filt_ey.reset()
+                self._ey_hist.clear()
                 self._apply_smoothing()
                 self._prev_ex_f = 0.0
                 self._prev_ey_f = 0.0
@@ -784,7 +795,9 @@ class PTZController:
         #    ``lead_time_auto``), so the camera leads real motion without nudging a
         #    stationary subject.  The velocity is ego-corrected, so this leads the
         #    subject's world motion, not the camera's own pan.
-        ex, ey, holding = self._framing_error(ex, ey, cfg)
+        ey_meas = ey
+        self._note_ey(cfg, t, ey)
+        ex, ey, holding = self._framing_error(ex, ey, cfg, t)
         if holding:
             vx = vy = 0.0
         else:
@@ -865,6 +878,18 @@ class PTZController:
             pan_cmd *= damp
             tilt_cmd *= damp
 
+        # 5b'. move/settle — within one move an axis never reverses for a small
+        #      crossover (overshoot or aim blip): it settles (0) instead. A real
+        #      reversal (the subject went the other way, beyond the zone) is still
+        #      followed and becomes the new move direction.
+        if holding:
+            self._move_dir = [0, 0]
+        else:
+            pan_cmd = self._settle_axis(0, pan_cmd, ex_f, self._axis_zone(cfg, 0))
+            tilt_cmd = self._settle_axis(1, tilt_cmd, ey_f, self._axis_zone(cfg, 1))
+            if not self._tilt_shift_sustained(cfg, t, ey_meas):
+                tilt_cmd = 0.0
+
         # 5c. slew-rate limit — cap acceleration so the head ramps smoothly toward
         #     the target speed instead of jumping there (no "speeds out of nowhere").
         max_accel = float(getattr(cfg, "max_accel", 0.0))
@@ -902,7 +927,9 @@ class PTZController:
 
         return pan_cmd, tilt_cmd
 
-    def _framing_error(self, ex: float, ey: float, cfg: Any) -> tuple[float, float, bool]:
+    def _framing_error(
+        self, ex: float, ey: float, cfg: Any, t: float = 0.0
+    ) -> tuple[float, float, bool]:
         """Map measured (frame-centre) error → control error toward the setpoint.
 
         Returns ``(control_ex, control_ey, holding)``.  The PD drives the control
@@ -922,7 +949,7 @@ class PTZController:
         boundary doesn't start/stop chatter.
         """
         if not getattr(cfg, "safe_zone_enabled", False):
-            holding = self._update_hold(ex, ey, cfg)
+            holding = self._update_hold(ex, ey, cfg, t)
             return (0.0, 0.0, True) if holding else (ex, ey, False)
 
         cx = float(getattr(cfg, "safe_zone_x", 0.0))
@@ -945,9 +972,10 @@ class PTZController:
         # Latch ON inside the inner deadband; release only past the OUTER zone edge
         # (×(1+hyst)) — a wide quiet band, then ease all the way to centre.
         inside_db = _zone_norm(dx, dy, dbx, dby, roundness) <= 1.0
-        outside_zone = _zone_norm(dx, dy, hw, hh, roundness) > (1.0 + _HOLD_HYSTERESIS) ** 2
+        zone_n = _zone_norm(dx, dy, hw, hh, roundness)
+        outside_zone = zone_n > (1.0 + _HOLD_HYSTERESIS) ** 2
         if self._holding:
-            if outside_zone:
+            if self._confirm_exit(outside_zone, zone_n > _URGENT_EXIT**2, t, cfg):
                 self._holding = False
         elif inside_db:
             self._holding = True
@@ -957,7 +985,28 @@ class PTZController:
         band = float(getattr(cfg, "nonlinear_band", 0.0))
         return _soft_deadband(dx, dbx, band), _soft_deadband(dy, dby, band), False
 
-    def _update_hold(self, ex: float, ey: float, cfg: Any) -> bool:
+    def _confirm_exit(self, outside: bool, urgent: bool, t: float, cfg: Any) -> bool:
+        """Release the hold only for a *real* exit (move/settle persistence).
+
+        A marginal exit must persist ``move_confirm_ms`` (an aim blip — pose/box
+        source flicker, a momentary mis-detection — used to re-centre the camera
+        on itself); an urgent one (far outside the zone) releases at once.
+        """
+        if not outside:
+            self._exit_since = None
+            return False
+        if urgent:
+            self._exit_since = None
+            return True
+        confirm_s = max(0.0, float(getattr(cfg, "move_confirm_ms", 0))) / 1000.0
+        if self._exit_since is None:
+            self._exit_since = t
+        if t - self._exit_since + 1e-9 >= confirm_s:
+            self._exit_since = None
+            return True
+        return False
+
+    def _update_hold(self, ex: float, ey: float, cfg: Any, t: float = 0.0) -> bool:
         """Return whether to HOLD inside the per-axis dead-zone, with hysteresis.
 
         Used only when the safe zone is OFF (the safe-zone case is handled by
@@ -971,12 +1020,64 @@ class PTZController:
         m = 1.0 + _HOLD_HYSTERESIS
         outside = abs(ex) > dzx * m or abs(ey) > dzy * m
 
+        urgent = abs(ex) > dzx * _URGENT_EXIT or abs(ey) > dzy * _URGENT_EXIT
         if self._holding:
-            if outside:
+            if self._confirm_exit(outside, urgent, t, cfg):
                 self._holding = False
         elif inside:
             self._holding = True
         return self._holding
+
+    def _note_ey(self, cfg: Any, t: float, ey: float) -> None:
+        window = max(0.0, float(getattr(cfg, "tilt_settle_ms", 0))) / 1000.0
+        self._ey_hist.append((t, ey))
+        while self._ey_hist and self._ey_hist[0][0] < t - window:
+            self._ey_hist.popleft()
+
+    def _tilt_shift_sustained(self, cfg: Any, t: float, ey: float) -> bool:
+        """True when tilt should move: the vertical offset is *sustained*.
+
+        Tilt follows the median vertical error over ``tilt_settle_ms``: bobbing,
+        leaning over a keyboard or raising hands averages out and never tilts;
+        sitting/standing (a lasting shift) gets through after ~half the window.
+        Near the frame edge it always tilts (don't lose the subject).
+        """
+        window_ms = float(getattr(cfg, "tilt_settle_ms", 0))
+        if window_ms <= 0.0 or abs(ey) >= _EDGE_GUARD:
+            return True
+        if not self._ey_hist:
+            return True
+        vals = sorted(v for _, v in self._ey_hist)
+        med = vals[len(vals) // 2]
+        cy = (
+            float(getattr(cfg, "safe_zone_y", 0.0))
+            if getattr(cfg, "safe_zone_enabled", False)
+            else 0.0
+        )
+        return abs(med - cy) > self._axis_zone(cfg, 1)
+
+    @staticmethod
+    def _axis_zone(cfg: Any, axis: int) -> float:
+        """Half-size of the hold zone on one axis (error-space units)."""
+        if getattr(cfg, "safe_zone_enabled", False):
+            key = "safe_zone_w" if axis == 0 else "safe_zone_h"
+            return float(getattr(cfg, key, 0.15))
+        key = "deadzone_x" if axis == 0 else "deadzone_y"
+        return float(getattr(cfg, key, 0.05)) * (1.0 + _HOLD_HYSTERESIS)
+
+    def _settle_axis(self, axis: int, cmd: float, err: float, zone: float) -> float:
+        cur = self._move_dir[axis]
+        if abs(cmd) < 1e-3:
+            # Near-zero: never let a tiny opposite command through as a reversal.
+            return 0.0 if cur != 0 and cmd * cur < 0.0 else cmd
+        sign = 1 if cmd > 0.0 else -1
+        if cur == 0 or sign == cur:
+            self._move_dir[axis] = sign
+            return cmd
+        if abs(err) > zone:  # genuinely the other way, well outside the zone
+            self._move_dir[axis] = sign
+            return cmd
+        return 0.0
 
     def _osc_damping(self, pan_cmd: float, tilt_cmd: float) -> float:
         """Return a 0<d≤1 damping factor that shrinks while the command hunts.

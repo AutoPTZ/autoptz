@@ -33,10 +33,15 @@ estimate can't fling the aim.
 from __future__ import annotations
 
 import bisect
+import json
+import logging
 import math
+import os
 import threading
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -52,6 +57,11 @@ _MIN_R2 = 0.35  # fit quality required to trust the model
 _REFIT_EVERY_S = 1.0
 _MIN_GAIN = 0.1  # reject fits to nearly stationary video
 _MAX_GAIN = 8.0
+# A lag must beat the current one by this much R² to replace it. Live fits were
+# nearly flat across lags, so without this the delay wandered 250-550 ms.
+_LAG_SWITCH_MARGIN = 0.05
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -86,6 +96,10 @@ class DeadTimeModel:
         self._blank_until = -1.0
         self._est = DeadTimeEstimate()
         self._last_fit_t = -1e9
+        # Last confident estimate (seeded from disk, or the latest good fit). Used
+        # whenever the live window lacks excitation, so compensation stays on
+        # between moves and from the first move after a restart.
+        self._good: DeadTimeEstimate | None = None
 
     # ── inputs ──────────────────────────────────────────────────────────────
 
@@ -115,6 +129,8 @@ class DeadTimeModel:
             self._obs.clear()
             self._cmd_t.clear()
             self._cmd.clear()
+            # A preset/home can change zoom (→ gain): relearn rather than trust it.
+            self._good = None
             self._est = DeadTimeEstimate()
 
     # ── outputs ─────────────────────────────────────────────────────────────
@@ -125,8 +141,49 @@ class DeadTimeModel:
             if now - self._last_fit_t >= _REFIT_EVERY_S:
                 self._last_fit_t = now
                 self._trim(now)
-                self._est = self._fit()
+                fit = self._fit()
+                if fit.confident:
+                    self._good = fit
+                    self._est = fit
+                else:
+                    self._est = self._good if self._good is not None else fit
             return self._est
+
+    def snapshot(self, now: float) -> dict[str, float] | None:
+        """The learned model to persist, or None until it is confident."""
+        est = self.estimate(now)
+        if not est.confident:
+            return None
+        return {
+            "delay_s": est.delay_s,
+            "gain_pan": est.gain_pan,
+            "gain_tilt": est.gain_tilt,
+            "r2": est.r2,
+            "floor_pan": est.floor_pan,
+            "floor_tilt": est.floor_tilt,
+        }
+
+    def seed(self, snap: dict[str, Any]) -> None:
+        """Start from a previously learned model (e.g. from the last session)."""
+        try:
+            est = DeadTimeEstimate(
+                delay_s=float(snap["delay_s"]),
+                gain_pan=float(snap["gain_pan"]),
+                gain_tilt=float(snap["gain_tilt"]),
+                r2=float(snap.get("r2", 0.0)),
+                confident=True,
+                floor_pan=float(snap.get("floor_pan", 0.0)),
+                floor_tilt=float(snap.get("floor_tilt", 0.0)),
+            )
+        except (KeyError, TypeError, ValueError):
+            return
+        if not (_LAG_MIN_S <= est.delay_s <= _LAG_MAX_S):
+            return
+        if abs(est.gain_pan) > _MAX_GAIN or abs(est.gain_tilt) > _MAX_GAIN:
+            return
+        with self._lock:
+            self._good = est
+            self._est = est
 
     def pending_motion(self, capture_t: float, now: float) -> tuple[float, float]:
         """Commanded camera motion not yet visible in a frame captured at ``capture_t``.
@@ -181,7 +238,7 @@ class DeadTimeModel:
         obs = np.asarray(self._obs)
         times = np.asarray(self._cmd_t)
         commands = np.asarray(self._cmd)
-        best = DeadTimeEstimate()
+        candidates: dict[float, DeadTimeEstimate] = {}
         for lag in np.arange(_LAG_MIN_S, _LAG_MAX_S + _LAG_STEP_S / 2, _LAG_STEP_S):
             indices = np.searchsorted(times, obs[:, 0] - lag, side="right") - 1
             valid = indices >= 0
@@ -192,11 +249,16 @@ class DeadTimeModel:
                 commands[indices[valid], 1], obs[valid, 2]
             )
             score = max(pan_score, tilt_score)
-            if score > best.r2:
-                best = DeadTimeEstimate(
-                    float(lag), pan_gain, tilt_gain, score, True, pan_floor, tilt_floor
+            if score > 0.0:
+                key = round(float(lag), 3)
+                candidates[key] = DeadTimeEstimate(
+                    key, pan_gain, tilt_gain, score, True, pan_floor, tilt_floor
                 )
-        return best
+        if not candidates:
+            return DeadTimeEstimate()
+        prev = round(self._good.delay_s, 3) if self._good is not None else None
+        lag = _select_lag({k: v.r2 for k, v in candidates.items()}, prev_lag=prev)
+        return candidates[lag] if lag is not None else DeadTimeEstimate()
 
 
 def _fit_axis(x: NDArray[np.float64], y: NDArray[np.float64]) -> tuple[float, float, float]:
@@ -232,3 +294,56 @@ def _fit_axis(x: NDArray[np.float64], y: NDArray[np.float64]) -> tuple[float, fl
     ):
         return gain, offset, score
     return 0.0, 0.0, 0.0
+
+
+def _select_lag(
+    scores: dict[float, float],
+    prev_lag: float | None,
+    margin: float = _LAG_SWITCH_MARGIN,
+) -> float | None:
+    """Best-scoring lag, but keep ``prev_lag`` unless the best beats it by ``margin``."""
+    if not scores:
+        return None
+    best = max(scores, key=lambda k: scores[k])
+    if prev_lag is not None and prev_lag in scores and scores[best] < scores[prev_lag] + margin:
+        return prev_lag
+    return best
+
+
+# ── persistence (per camera, across restarts) ───────────────────────────────
+
+
+def _store_path() -> Path:
+    from autoptz.config.store import default_db_path
+
+    return default_db_path().parent / "ptz_deadtime.json"
+
+
+def load_learned(camera_id: str, path: Path | None = None) -> dict[str, float] | None:
+    """The persisted model for ``camera_id`` (None if absent/unreadable)."""
+    p = path or _store_path()
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    entry = data.get(camera_id) if isinstance(data, dict) else None
+    return dict(entry) if isinstance(entry, dict) else None
+
+
+def save_learned(camera_id: str, snap: dict[str, float], path: Path | None = None) -> None:
+    """Persist ``snap`` for ``camera_id`` (atomic replace; other cameras kept)."""
+    p = path or _store_path()
+    try:
+        try:
+            data = json.loads(p.read_text())
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data[camera_id] = {k: float(v) for k, v in snap.items()}
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
+        os.replace(tmp, p)
+    except OSError:
+        log.debug("could not persist PTZ dead-time model for %s", camera_id, exc_info=True)
