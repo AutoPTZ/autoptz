@@ -1914,3 +1914,23 @@ class TestSupervisorModelLifecycle:
         sup = _make_supervisor(client, factory=_FeatureFakeWorker)
         sup.apply_model_cache_changed()  # not started → safe no-op
         assert sup.is_running is False
+
+
+def test_saved_target_does_not_arm_ptz_follow_on_start() -> None:
+    """A saved identity/manual target restores WHO to follow, not that follow is
+    armed. The UI restores every camera with follow OFF (green box); the worker
+    used to start armed whenever a target was saved, so the PTZ drove the camera
+    while the operator saw green (field report 2026-11-26)."""
+    from autoptz.config.models import CameraConfig, SourceConfig, TargetConfig
+    from autoptz.engine.camera_worker import CameraWorker
+
+    for mode in ("identity", "manual"):
+        cfg = CameraConfig(
+            id="arm-test-0001",
+            name="Arm",
+            source=SourceConfig(type="ndi", address="ndi://X"),
+            target=TargetConfig(mode=mode, identity_id="pid" if mode == "identity" else None),
+        )
+        w = CameraWorker("arm-test-0001", cfg, lambda _m: None)
+        assert w._tracking_enabled is False, mode
+        assert w._target_identity_id == ("pid" if mode == "identity" else None)

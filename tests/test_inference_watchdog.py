@@ -49,12 +49,16 @@ def _make_worker(camera_id: str = "watchdog1234abcd", *, tracking_on: bool = Tru
     """Construct a CameraWorker without starting it."""
     from autoptz.engine.camera_worker import CameraWorker
 
-    return CameraWorker(
+    w = CameraWorker(
         camera_id,
         _camera_config(camera_id, tracking_on=tracking_on),
         lambda _msg: None,
         frame_source=_FakeSource(),
     )
+    # Follow starts disarmed regardless of the saved target; arm it the way the
+    # UI does (enable_tracking) when the test wants tracking on.
+    w._apply_command("enable_tracking", tracking_on)
+    return w
 
 
 class _FakePTZBackend:

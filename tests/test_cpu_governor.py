@@ -402,3 +402,31 @@ class TestAutoCadenceStability:
         for _ in range(5):
             worker._effective_detect_interval()
         assert worker._quality_interval == 4
+
+    def test_frame_backlog_relaxes_cadence_and_holds(self, worker, monkeypatch) -> None:
+        # Live NDI, 6+ people: projected cost looked fine (async face excluded) but
+        # frames aged to p90 ~165 ms at full cadence. Measured frame age is the
+        # ground truth: relax, and don't re-upgrade until a cooldown passes.
+        import autoptz.engine.camera_worker as cw
+
+        clock = [1000.0]
+        monkeypatch.setattr(cw, "_governor_clock", lambda: clock[0])
+        self._costs(worker, monkeypatch, detect=10.0, track=3.0, age=90.0)
+        worker._effective_detect_interval()
+        assert worker._quality_interval >= 2
+        relaxed = worker._quality_interval
+
+        # Backlog clears, but we're inside the cooldown → no upgrade yet.
+        self._costs(worker, monkeypatch, detect=10.0, track=3.0, age=20.0)
+        clock[0] += 3.0
+        assert worker._effective_detect_interval() == relaxed
+
+        # After the cooldown, light load + no backlog → full cadence again.
+        clock[0] += cw._BACKLOG_UPGRADE_COOLDOWN_S + 0.1
+        for _ in range(3):
+            worker._effective_detect_interval()
+        assert worker._quality_interval == 1
+
+    def test_no_backlog_no_change(self, worker, monkeypatch) -> None:
+        self._costs(worker, monkeypatch, detect=10.0, track=3.0, age=25.0)
+        assert worker._effective_detect_interval() == 1

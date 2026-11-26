@@ -143,6 +143,17 @@ _MANUAL_OVERRIDE_WINDOW_S = 1.5
 _FACE_INTERVAL_S = 0.25
 _FACE_TTL_S = 0.12
 _STAGE_WINDOW = 60
+# Auto-quality backlog guard: when frames reach the end of inference older than
+# this many frame budgets, the pipeline is falling behind regardless of what the
+# per-stage cost model projects (e.g. async face/ReID competing for CPU/GIL).
+_BACKLOG_RELAX_BUDGETS = 1.5
+_BACKLOG_UPGRADE_COOLDOWN_S = 10.0
+
+
+def _governor_clock() -> float:
+    return time.monotonic()
+
+
 _STAGE_FRESH_S = 2.0
 # Inference-hang watchdog: if the inference thread hasn't completed a tick in
 # this many seconds, the capture thread halts PTZ motion and surfaces a
@@ -349,6 +360,11 @@ _POSE_JUMP_SCALE = 0.65
 _POSE_TARGET_LOCK_MIN_CONF = 0.45
 _FACE_LEARN_MATCH_THRESHOLD = 0.58
 _FACE_TARGET_MATCH_THRESHOLD = 0.52
+# Face→body association: a face is a track's head only inside this band of the
+# box (|dx| in half-widths from centre; rel_y as a fraction of height from top).
+_FACE_HEAD_HALF_WIDTH = 0.55
+_FACE_HEAD_MAX_REL_Y = 0.45
+_FACE_HEAD_ANCHOR_REL_Y = 0.10
 _REID_RECOVERY_CONFIRM_STABLE = 3
 _REID_RECOVERY_CONFIRM_RESPONSIVE = 1
 _REID_RECOVERY_MARGIN = 0.08
@@ -561,7 +577,11 @@ class CameraWorker:
         self._ptz_last_cmd: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
         # tracking state
-        self._tracking_enabled = config.target.mode != "off"
+        # PTZ follow starts DISARMED: a saved target restores *who* to follow, not
+        # that follow is on. The UI restores every camera with follow off (green
+        # box) and arms it with an explicit enable_tracking (red). Starting armed
+        # here drove the camera while the operator saw green.
+        self._tracking_enabled = False
         # Set True by the capture-thread watchdog when inference appears hung;
         # cleared automatically when inference resumes.
         self._watchdog_stalled: bool = False
@@ -843,6 +863,7 @@ class CameraWorker:
         self._tracker_switch: SwitchStateInfo | None = None
         self._last_applied_fps: float | None = None
         self._quality_active = "auto"
+        self._quality_backlog_until = 0.0
         self._quality_reason = "Auto quality monitoring."
         self._quality_interval = max(1, int(getattr(config.tracking, "detect_interval", 1) or 1))
 
@@ -4688,6 +4709,11 @@ class CameraWorker:
             self._track_ms = (_t2 - _t1) * 1000.0
             self._record_stage("detect", self._detect_ms)
             self._record_stage("track", self._track_ms)
+            if self._current_inference_capture_ts > 0:
+                # Frame age at end of detect+track: the governor's backlog signal.
+                self._record_stage(
+                    "age", (time.monotonic() - self._current_inference_capture_ts) * 1000.0
+                )
             # Detect/track succeeded this tick — clear any stale inference error so
             # a single transient failure does not pin last_error on every later
             # healthy telemetry (the camera would otherwise look permanently
@@ -4858,8 +4884,16 @@ class CameraWorker:
             tid: self._face_for_pending_enroll(frame, observations, tracks, tid, click)
             for tid, (_iid, _name, click) in self._pending_enroll.items()
         }
-        for obs in observations:
-            track = self._track_for_face(obs, tracks)
+        assigned = self._assign_faces(observations, tracks)
+        # An operator's click-to-enroll choice outranks the head-region heuristic.
+        by_id = {t.track_id: t for t in tracks}
+        clicked_track = {
+            id(obs): by_id[tid]
+            for tid, obs in pending_faces.items()
+            if obs is not None and tid in by_id
+        }
+        for obs, auto_track in zip(observations, assigned, strict=True):
+            track = clicked_track.get(id(obs), auto_track)
             # Click-to-assign: if this face sits on a track the operator named,
             # bind its embedding (+ a fresh crop) to that identity so the person
             # is recognised later, then keep showing the assigned name.
@@ -4999,8 +5033,7 @@ class CameraWorker:
         # only when the "Face boxes" overlay is enabled.
         faces_out: list[FaceBox] = []
         face_track_ids: set[int] = set()
-        for obs in observations:
-            tr = self._track_for_face(obs, tracks)
+        for obs, tr in zip(observations, self._assign_faces(observations, tracks), strict=True):
             if tr is None:
                 continue
             face_track_ids.add(tr.track_id)
@@ -5029,20 +5062,59 @@ class CameraWorker:
         obs: Any,
         tracks: list[TrackInfo],
     ) -> TrackInfo | None:
-        """Return the track whose bbox contains the face centre (closest wins)."""
-        best: TrackInfo | None = None
-        best_d = float("inf")
-        for t in tracks:
-            if getattr(t, "lost", False):
+        """Return the track whose HEAD region holds this face (see _assign_faces)."""
+        return CameraWorker._assign_faces([obs], tracks)[0]
+
+    @staticmethod
+    def _head_cost(obs: Any, track: TrackInfo) -> float | None:
+        """How well a face fits a track's head, or None if it can't be its head.
+
+        A face belongs at the top-centre of its own body box. Containment alone is
+        not enough: an occluded person's face often sits inside the front
+        person's box (or a box whose *centre* happens to be nearer), which bound
+        their identity to the wrong body and locked identity targets onto the
+        wrong person.
+        """
+        if getattr(track, "lost", False):
+            return None
+        bb = track.bbox
+        w = float(bb.x2 - bb.x1)
+        h = float(bb.y2 - bb.y1)
+        if w <= 0.0 or h <= 0.0:
+            return None
+        cx = (bb.x1 + bb.x2) * 0.5
+        dx = (float(obs.cx) - cx) / (w * 0.5)
+        rel_y = (float(obs.cy) - float(bb.y1)) / h
+        # Head band: central horizontal span, upper part of the box (loose enough
+        # for half-body / seated boxes where the head fills more of the height).
+        if abs(dx) > _FACE_HEAD_HALF_WIDTH or not (-0.05 <= rel_y <= _FACE_HEAD_MAX_REL_Y):
+            return None
+        dy = (rel_y - _FACE_HEAD_ANCHOR_REL_Y) / _FACE_HEAD_MAX_REL_Y
+        return dx * dx + dy * dy
+
+    @staticmethod
+    def _assign_faces(observations: list[Any], tracks: list[TrackInfo]) -> list[TrackInfo | None]:
+        """One-to-one face→track assignment by head-region fit (aligned to input).
+
+        Greedy on the best fit first; each track takes at most one face per pass,
+        so a second face inside the same box (someone standing behind) stays
+        unbound instead of overwriting that track's identity.
+        """
+        pairs: list[tuple[float, int, int]] = []
+        for oi, obs in enumerate(observations):
+            for ti, track in enumerate(tracks):
+                cost = CameraWorker._head_cost(obs, track)
+                if cost is not None:
+                    pairs.append((cost, oi, ti))
+        pairs.sort()
+        out: list[TrackInfo | None] = [None] * len(observations)
+        used_tracks: set[int] = set()
+        for _cost, oi, ti in pairs:
+            if out[oi] is not None or ti in used_tracks:
                 continue
-            bb = t.bbox
-            if bb.x1 <= obs.cx <= bb.x2 and bb.y1 <= obs.cy <= bb.y2:
-                tcx = (bb.x1 + bb.x2) * 0.5
-                tcy = (bb.y1 + bb.y2) * 0.5
-                d = (tcx - obs.cx) ** 2 + (tcy - obs.cy) ** 2
-                if d < best_d:
-                    best_d, best = d, t
-        return best
+            out[oi] = tracks[ti]
+            used_tracks.add(ti)
+        return out
 
     def _enroll_click_frame_point(
         self,
@@ -5430,13 +5502,23 @@ class CameraWorker:
 
         names = [lv[0] for lv in levels]
         idx = names.index(self._quality_active) if self._quality_active in names else 0
+        start = idx
         # Walk down while the current level is over its line …
         while idx < len(levels) - 1 and _ratio(idx) >= levels[idx][2]:
             idx += 1
+        # Measured backlog overrides the model: frames ageing past the budget
+        # means we're falling behind → one level cheaper, and hold off upgrades.
+        now_g = _governor_clock()
+        backlog = budget > 0 and self._stage_avg("age") > _BACKLOG_RELAX_BUDGETS * budget
+        if backlog:
+            self._quality_backlog_until = now_g + _BACKLOG_UPGRADE_COOLDOWN_S
+            if idx == start and idx < len(levels) - 1:
+                idx += 1
         # … then up while the better level fits. (Can't undo a step down: each
         # level's upgrade line sits below its downgrade line.)
-        while idx > 0 and _ratio(idx - 1) < levels[idx - 1][3]:
-            idx -= 1
+        if idx == start and now_g >= getattr(self, "_quality_backlog_until", 0.0):
+            while idx > 0 and _ratio(idx - 1) < levels[idx - 1][3]:
+                idx -= 1
         active, interval, _down, _up, reason = levels[idx]
         if interval != self._quality_interval or active != self._quality_active:
             self._add_event("quality", reason)
