@@ -71,9 +71,32 @@ def test_slow_framing_offset_is_still_honoured() -> None:
     assert abs(out - 0.25) < 0.01
 
 
-def test_head_clipped_at_frame_top_uses_raw_error() -> None:
+def test_clipped_head_tilts_gently_up_regardless_of_aim_noise() -> None:
+    """Live (392-408 s): head out of frame for 15 s, the fused aim jumped
+    -0.7 ↔ +0.6 (even off-frame, -1.5) and tilt went up and down. With the head
+    clipped, the only sensible move is a gentle, steady tilt UP to reveal it."""
     w = _worker()
-    assert w._head_anchored_tilt(_track(0.0, 600.0), (0.0, 0.6), FRAME, 100.0) == (0.0, 0.6)
+    outs = []
+    t = 100.0
+    for i in range(30):
+        raw = (0.0, 0.6 if i % 2 else -0.7)
+        outs.append(w._head_anchored_tilt(_track(0.0, 600.0 + 10 * (i % 3)), raw, FRAME, t)[1])
+        t += 1 / 30
+    assert all(o > 0.2 for o in outs)  # always up, enough to leave the hold zone
+    assert max(outs) - min(outs) < 1e-9  # and perfectly steady
+
+
+def test_subject_filling_the_frame_holds_tilt() -> None:
+    w = _worker()
+    assert w._head_anchored_tilt(_track(0.0, 1075.0), (0.1, -0.7), FRAME, 100.0) == (0.1, 0.0)
+
+
+def test_unclipping_resumes_head_anchoring_without_a_jump() -> None:
+    w = _worker()
+    w._head_anchored_tilt(_track(0.0, 600.0), (0.0, -0.7), FRAME, 100.0)
+    first = w._head_anchored_tilt(_track(40.0, 640.0), (0.0, 0.3), FRAME, 100.0 + 1 / 30)
+    # fresh start on the raw error once the head is visible
+    assert first[0] == 0.0 and abs(first[1] - 0.3) < 1e-9
 
 
 def test_new_target_track_starts_from_its_own_raw_error() -> None:

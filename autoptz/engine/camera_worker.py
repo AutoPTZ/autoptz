@@ -371,6 +371,10 @@ _TILT_ANCHOR_TAU_S = 2.5
 # Impossible-jump guard: a same-target aim change larger than this (error-space
 # half-frames, after removing the camera's own measured motion) within one tick
 # is held until the new position repeats for _AIM_JUMP_CONFIRM ticks.
+# Head clipped by the frame top: tilt gently UP at this steady error (just past
+# the tilt hold zone) to reveal it; hold tilt when the subject fills the frame.
+_CLIPPED_HEAD_TILT_UP = 0.35
+_FILLS_FRAME_FRAC = 0.9
 _AIM_JUMP_MAX = 0.5
 _AIM_JUMP_CONFIRM = 3
 _AIM_JUMP_NEAR = 0.15
@@ -2819,9 +2823,16 @@ class CameraWorker:
                 tb = None
         top = float(tb[1]) if tb is not None else float(track.bbox.y1)
         ref = "torso" if tb is not None else "bbox"
-        if top <= 2.0:  # head clipped at the frame top: the box top isn't the head
+        if float(track.bbox.y1) <= 2.0 or top <= 2.0:
+            # Head clipped by the frame top: there is no head to anchor on, and the
+            # torso/box aim is pure noise here (live: it jumped -0.7 ↔ +0.6, even
+            # off-frame). Tilt gently and steadily UP to reveal the head — unless
+            # the subject fills the frame, where tilting can't frame them: hold.
             self._tilt_anchor = None
-            return err
+            box_h = float(track.bbox.y2) - float(track.bbox.y1)
+            if box_h >= _FILLS_FRAME_FRAC * h:
+                return (err[0], 0.0)
+            return (err[0], _CLIPPED_HEAD_TILT_UP)
         head_e = -((top - h * 0.5) / (h * 0.5))
         ex, ey = err
         st = self._tilt_anchor
