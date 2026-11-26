@@ -323,6 +323,10 @@ def run(argv: list[str] | None = None) -> int:
     client = EngineClient(store=store)
     frames = ShmFrameSource()
 
+    from autoptz.ui.telemetry_recorder import install_from_env  # noqa: PLC0415
+
+    install_from_env(client)  # opt-in: AUTOPTZ_TELEMETRY_LOG=/path.jsonl
+
     # ── in-app logging viewer ──────────────────────────────────────────────────
     # A ring-buffered model fed by a logging.Handler on the root logger; the Logs
     # panel binds to it.  INFO by default in-app, while existing stderr/terminal

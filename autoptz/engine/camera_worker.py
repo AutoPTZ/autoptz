@@ -5359,10 +5359,20 @@ class CameraWorker:
         clock (``_FACE_INTERVAL_S`` / ``_POSE_INTERVAL_S``) so per-frame they cost
         proportionally less the higher the source fps.
         """
+        return self._projected_cost_ms(self._quality_interval)
+
+    def _projected_cost_ms(self, interval: int) -> float:
+        """Per-displayed-frame cost if the detector ran every ``interval`` frames."""
         fps = max(1.0, self._target_fps())
-        detect = self._stage_avg("detect") / max(1, self._quality_interval)
+        detect = self._stage_avg("detect") / max(1, interval)
         track = self._stage_avg("track")
-        face = self._stage_avg("face") * min(1.0, (1.0 / _FACE_INTERVAL_S) / fps)
+        # Face (+ReID) on the async appearance thread is off the frame path: it
+        # doesn't delay frames, so it must not throttle the detector. Its CPU
+        # cost is still felt via the system-CPU-pressure clamp.
+        if getattr(self, "_async_appearance", False):
+            face = 0.0
+        else:
+            face = self._stage_avg("face") * min(1.0, (1.0 / _FACE_INTERVAL_S) / fps)
         pose = self._stage_avg("pose") * min(1.0, (1.0 / _POSE_INTERVAL_S) / fps)
         return detect + track + face + pose
 
@@ -5386,22 +5396,48 @@ class CameraWorker:
             self._quality_interval = base
             return self._quality_interval
 
+        # Levels ordered best → cheapest. Each level's ratio is the PROJECTED
+        # cost at that level's cadence (not the cost measured at the current
+        # cadence — that is self-referential: relaxing the cadence makes the
+        # measured cost look cheap, which used to trigger an immediate upgrade
+        # back, flipping 2↔4 several times a second and shredding tracking).
+        # Downgrade when the current level is over its line; upgrade only when
+        # the NEXT better level would fit under a lower line (hysteresis).
         budget = self._frame_budget_ms()
-        cost = self._amortized_cost_ms()
-        ratio = cost / budget if budget > 0 else 0.0
-        if self._system_cpu_pressure >= 85.0:
-            ratio = max(ratio, 0.92)  # Machine is hot → push toward balanced/low.
-        prev = self._quality_active
-        if ratio >= 0.90 or (prev in ("balanced", "low") and ratio >= 0.70):
-            if ratio >= 1.10:
-                interval, active = max(base, 4), "low"
-                reason = "Auto quality: over frame budget; detector cadence relaxed."
-            else:
-                interval, active = max(base, 2), "balanced"
-                reason = "Auto quality: near frame budget; detector cadence balanced."
-        else:
-            interval, active = base, "high"
-            reason = "Auto quality: latency headroom stable; full cadence."
+        hot = self._system_cpu_pressure >= 85.0
+        levels = (
+            # (active, interval, downgrade_at, upgrade_below, reason)
+            ("high", base, 0.90, 0.70, "Auto quality: latency headroom stable; full cadence."),
+            (
+                "balanced",
+                max(base, 2),
+                1.10,
+                0.95,
+                "Auto quality: near frame budget; detector cadence balanced.",
+            ),
+            (
+                "low",
+                max(base, 4),
+                float("inf"),
+                0.0,
+                "Auto quality: over frame budget; detector cadence relaxed.",
+            ),
+        )
+
+        def _ratio(level: int) -> float:
+            r = self._projected_cost_ms(levels[level][1]) / budget if budget > 0 else 0.0
+            return max(r, 0.92) if hot else r  # Machine is hot → push toward cheaper.
+
+        names = [lv[0] for lv in levels]
+        idx = names.index(self._quality_active) if self._quality_active in names else 0
+        # Walk down while the current level is over its line …
+        while idx < len(levels) - 1 and _ratio(idx) >= levels[idx][2]:
+            idx += 1
+        # … then up while the better level fits. (Can't undo a step down: each
+        # level's upgrade line sits below its downgrade line.)
+        while idx > 0 and _ratio(idx - 1) < levels[idx - 1][3]:
+            idx -= 1
+        active, interval, _down, _up, reason = levels[idx]
         if interval != self._quality_interval or active != self._quality_active:
             self._add_event("quality", reason)
         self._quality_interval = interval
