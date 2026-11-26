@@ -25,7 +25,7 @@ onnxruntime==1.24.1; platform_system != "Darwin" or platform_machine != "x86_64"
 numpy==1.26.4; platform_system == "Darwin" and platform_machine == "x86_64"
 numpy==2.2.6; platform_system != "Darwin" or platform_machine != "x86_64"
 opencv-contrib-python==4.11.0.86
-Pillow==12.2.0
+Pillow==12.3.0
 
 # ── config & serialization ────────────────────────────────────────────────────
 pydantic==2.11.3
